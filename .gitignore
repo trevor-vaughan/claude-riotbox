@@ -1,0 +1,4 @@
+# Build artifacts created by build.sh
+configs/
+
+.claude/

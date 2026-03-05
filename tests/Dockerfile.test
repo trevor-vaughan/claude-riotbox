@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Lightweight test image for setup.sh and install.sh
+# CentOS Stream 10 with podman, just, fuse-overlayfs, and bats.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM quay.io/centos/centos:stream10
+
+RUN dnf -y install \
+        bash \
+        git \
+        podman \
+        fuse-overlayfs \
+        jq \
+    && dnf clean all
+
+# bats
+RUN git clone --depth 1 https://github.com/bats-core/bats-core.git /tmp/bats && \
+    /tmp/bats/install.sh /usr/local && \
+    rm -rf /tmp/bats
+
+# just
+RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | \
+    bash -s -- --to /usr/local/bin
+
+# Non-root test user
+ARG HOST_UID=1000
+RUN useradd -m -u ${HOST_UID} -s /bin/bash testuser 2>/dev/null || \
+    useradd -m -s /bin/bash testuser
+
+USER testuser
+WORKDIR /home/testuser/riotbox
