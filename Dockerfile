@@ -96,7 +96,7 @@ RUN dnf -y update && \
         patch \
         sudo \
     && dnf -y install epel-release \
-    && dnf -y install ripgrep \
+    && dnf -y install ripgrep plantuml chromium \
     && dnf clean all
 
 # ── Common dev libraries (pre-installed to save Claude from installing them) ──
@@ -155,7 +155,7 @@ COPY --from=tools /tools/bats /tmp/bats
 RUN /tmp/bats/install.sh /usr/local && rm -rf /tmp/bats && bats --version
 
 # ── semgrep (Python package — must be installed in the runtime stage) ─────────
-RUN pip3 install --break-system-packages semgrep && semgrep --version
+RUN pip3 install --no-cache-dir --break-system-packages semgrep && semgrep --version
 
 # ── Podman-in-podman (nested containers) ──────────────────────────────────────
 # Pre-installed so RIOTBOX_NESTED=1 works without rebuilding the image.
@@ -344,10 +344,14 @@ RUN git config --global user.name "Claude (riotbox)" && \
     git config --global receive.denyNonFastForwards true && \
     git config --global receive.denyDeletes true
 
-# ── Plugin list (edit container/plugins.json to customize) ───────────────────
-COPY --chown=claude:claude container/plugins.json /home/claude/.riotbox/plugins.json
+# ── Diagram tools (for validating generated diagrams) ────────────────────────
+# Skip puppeteer's bundled Chromium (~580 MB) — use the system package instead.
+ENV PUPPETEER_SKIP_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+RUN npm install -g @mermaid-js/mermaid-cli && mmdc --version
 
-# ── Riotbox wrapper (shadows the npm-installed claude via PATH priority) ─────
+# ── Riotbox scripts ──────────────────────────────────────────────────────────
+COPY --chown=claude:claude container/find-real-claude.sh /home/claude/.riotbox/find-real-claude.sh
 COPY --chown=claude:claude container/claude-wrapper.sh /home/claude/.riotbox/bin/claude
 RUN chmod +x /home/claude/.riotbox/bin/claude
 
@@ -361,3 +365,21 @@ CMD ["bash"]
 
 # ── Claude Code (LAST — changes most frequently, preserves layer cache) ─────
 RUN npm install -g @anthropic-ai/claude-code && claude --version
+
+# ── Pre-stage plugins (no auth needed — just clones a public GitHub repo) ────
+# Installed to a staging dir because ~/.claude is bind-mounted at runtime.
+# The entrypoint copies from here into the session dir on first run, avoiding
+# network access and ~14 Node.js process spawns at startup.
+RUN mkdir -p /home/claude/.riotbox/plugins-staging && \
+    HOME_ORIG="${HOME}" && \
+    export HOME=/home/claude/.riotbox/plugins-staging && \
+    mkdir -p "${HOME}/.claude/plugins/cache" && \
+    claude plugin marketplace add anthropics/claude-plugins-official && \
+    for p in \
+        frontend-design feature-dev code-simplifier commit-commands \
+        security-guidance claude-code-setup claude-md-management \
+        rust-analyzer-lsp typescript-lsp pyright-lsp gopls-lsp \
+        jdtls-lsp lua-lsp semgrep; do \
+        claude plugin install "$p" || true; \
+    done && \
+    export HOME="${HOME_ORIG}"

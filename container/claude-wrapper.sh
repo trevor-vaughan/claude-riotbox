@@ -11,17 +11,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-# Find the real claude binary by searching PATH minus this wrapper's directory
-REAL_CLAUDE=""
-IFS=: read -ra path_entries <<< "${PATH}"
-for dir in "${path_entries[@]}"; do
-    [[ "${dir}" == */.riotbox/bin ]] && continue
-    if [ -x "${dir}/claude" ]; then
-        REAL_CLAUDE="${dir}/claude"
-        break
-    fi
-done
-
+# Find the real claude binary (skipping this wrapper)
+source "${HOME}/.riotbox/find-real-claude.sh"
 if [ -z "${REAL_CLAUDE}" ]; then
     echo "ERROR: could not find the real claude binary" >&2
     exit 1

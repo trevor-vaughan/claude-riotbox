@@ -107,6 +107,30 @@ claude-riotbox reown
 | `claude-riotbox backups` | List available project backups |
 | `claude-riotbox restore <name>` | Show recovery options for a backed-up project |
 
+## Pre-installed tools
+
+The image comes with a broad set of tools pre-installed so Claude can start working immediately without spending time on setup.
+
+**Development toolchains** (auto-detected from your host):
+- Node.js (via nvm), Python/uv, Rust/cargo, Go, Ruby/RVM
+
+**Security scanners:**
+- [trivy](https://github.com/aquasecurity/trivy), [grype](https://github.com/anchore/grype), [syft](https://github.com/anchore/syft), [semgrep](https://semgrep.dev/), ShellCheck
+
+**Testing:**
+- [bats](https://github.com/bats-core/bats-core) (bash testing)
+
+**Diagram validation:**
+- `plantuml` — UML diagram generation and validation
+- `mmdc` ([mermaid-cli](https://github.com/mermaid-js/mermaid-cli)) — Mermaid diagram rendering
+
+**Containers:**
+- podman, fuse-overlayfs, slirp4netns (for nested container support)
+
+## Plugins
+
+Claude Code [plugins](https://docs.anthropic.com/en/docs/claude-code/plugins) (skills, LSP servers, etc.) are pre-installed at image build time and copied into each session on first run. The plugin list is defined in the `Dockerfile` — edit the staging `RUN` block and rebuild to customize.
+
 ## Auto-detected mounts
 
 At runtime, `scripts/detect-mounts.sh` generates mount flags for the container. This uses an allowlist — only explicitly listed paths are ever mounted.

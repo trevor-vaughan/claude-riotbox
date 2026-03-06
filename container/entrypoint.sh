@@ -30,42 +30,54 @@ if [ -f ~/.claude/.claude.json ] && [ ! -f ~/.claude.json ]; then
     cp ~/.claude/.claude.json ~/.claude.json
 fi
 
-# Seed Claude Code settings on first run.
-# Only written if not already present — preserves per-session changes.
+# Seed Claude Code settings on first run, or migrate stale settings.
+# Plugins are now installed via the CLI — remove any legacy enabledPlugins
+# field so Claude Code doesn't try to resolve plugins it can't find.
 if [ ! -f ~/.claude/settings.json ]; then
     jq -n '{
         promptSuggestionEnabled: false,
         skipDangerousModePermissionPrompt: true,
         autoCompact: true
     }' > ~/.claude/settings.json
+elif jq -e '.enabledPlugins' ~/.claude/settings.json &>/dev/null; then
+    jq 'del(.enabledPlugins)' ~/.claude/settings.json > ~/.claude/settings.json.tmp \
+        && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
 fi
 
-# Install plugins via the CLI on first run. Uses the official marketplace
-# so Claude Code resolves LSP servers, skills, etc. correctly.
-# Plugin list is read from ~/.riotbox/plugins.json (edit container/plugins.json
-# in the repo to customize, then rebuild).
-PLUGINS_FILE="${HOME}/.riotbox/plugins.json"
-if [ -f "${PLUGINS_FILE}" ] && command -v jq &>/dev/null; then
-    # Check if plugins are already installed (idempotent across restarts)
-    if [ ! -f ~/.claude/plugins/installed_plugins.json ] || \
-       [ "$(jq '.plugins | length' ~/.claude/plugins/installed_plugins.json 2>/dev/null)" = "0" ]; then
-        echo "Installing plugins..."
-        # Use the real claude binary — the .riotbox wrapper adds session
-        # flags that aren't valid for subcommands like "plugin install".
-        REAL_CLAUDE=""
-        IFS=: read -ra _path_entries <<< "${PATH}"
-        for _dir in "${_path_entries[@]}"; do
-            [[ "${_dir}" == */.riotbox/* ]] && continue
-            [ -x "${_dir}/claude" ] && REAL_CLAUDE="${_dir}/claude" && break
-        done
-        # Add the official marketplace if not already registered
-        "${REAL_CLAUDE}" plugin marketplace add anthropics/claude-plugins-official 2>/dev/null || true
-        # Install each plugin from the list
-        for plugin in $(jq -r 'keys[]' "${PLUGINS_FILE}"); do
-            echo "  ${plugin}"
-            "${REAL_CLAUDE}" plugin install "${plugin}" 2>/dev/null || true
-        done
+# Plugins: copy pre-staged plugins into the session dir on first run.
+# Plugins are pre-installed at build time into ~/.riotbox/plugins-staging/
+# to avoid network access and Node.js spawns at startup.
+RIOTBOX_MARKETPLACE="claude-plugins-official"
+STAGING_DIR="${HOME}/.riotbox/plugins-staging/.claude"
+
+installed="$(jq -r '.plugins | length' ~/.claude/plugins/installed_plugins.json 2>/dev/null || echo 0)"
+if [ "${installed}" = "0" ] && [ -d "${STAGING_DIR}/plugins" ]; then
+    echo "Copying pre-staged plugins..."
+    # Copy plugin cache and metadata from the build-time staging dir
+    cp -a "${STAGING_DIR}/plugins/"* ~/.claude/plugins/
+    # Fix paths — staging used a different HOME
+    sed -i "s|${STAGING_DIR}|${HOME}/.claude|g" \
+        ~/.claude/plugins/installed_plugins.json \
+        ~/.claude/plugins/known_marketplaces.json 2>/dev/null || true
+    # Merge marketplace registration into settings.json
+    if [ -f "${STAGING_DIR}/settings.json" ]; then
+        marketplaces="$(jq '.extraKnownMarketplaces // {}' "${STAGING_DIR}/settings.json")"
+        jq --argjson m "${marketplaces}" '.extraKnownMarketplaces = ($m + (.extraKnownMarketplaces // {}))' \
+            ~/.claude/settings.json > ~/.claude/settings.json.tmp \
+            && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
     fi
+fi
+
+# Ensure all installed plugins are enabled in settings.json.
+# Done via jq (pure JSON) instead of `claude plugin enable` to avoid
+# spawning a Node.js process per plugin on every startup.
+if [ -f ~/.claude/plugins/installed_plugins.json ]; then
+    # Build enabledPlugins map from installed_plugins.json keys
+    new_enabled="$(jq '.plugins | keys | map({(.): true}) | add // {}' \
+        ~/.claude/plugins/installed_plugins.json)"
+    jq --argjson p "${new_enabled}" '.enabledPlugins = ($p + (.enabledPlugins // {}))' \
+        ~/.claude/settings.json > ~/.claude/settings.json.tmp \
+        && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
 fi
 
 if [ $# -eq 0 ]; then
