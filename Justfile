@@ -33,7 +33,7 @@ shell *projects:
 # Run tests (shortcut)
 # filter - bats filter regex or test file path (default: all tests)
 reown *ref="":
-    just -f "{{justfile()}}" setup reown {{ref}}
+    cd "{{invocation_directory()}}" && just -f "{{justfile()}}" setup reown {{ref}}
 
 # Continue the last Claude session (shortcut)
 # projects - project directories to mount (default: cwd)

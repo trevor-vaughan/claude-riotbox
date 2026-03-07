@@ -73,8 +73,8 @@ mounts:
     {{root}}/scripts/detect-mounts.sh | while read -r flag path; do echo "  ${path}"; done
 
 # Rewrite Claude's commits to use your git identity
-# ref - git ref or --all (default: interactive)
-reown ref="":
+# args - git ref, --all, --force (default: interactive)
+reown *args="":
     #!/usr/bin/env bash
     cd "{{caller_dir}}"
-    exec "{{root}}/scripts/reown-commits.sh" {{ref}}
+    exec "{{root}}/scripts/reown-commits.sh" {{args}}

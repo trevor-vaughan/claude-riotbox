@@ -10,10 +10,21 @@
 #   ./reown-commits.sh                     # rewrite since last checkpoint
 #   ./reown-commits.sh <since-ref>         # rewrite since a specific ref
 #   ./reown-commits.sh --all               # rewrite ALL claude-authored commits
+#   ./reown-commits.sh --force             # skip confirmation prompt
 #
 # Your name/email are read from your git config.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
+
+# Parse arguments
+FORCE=false
+REF_ARG=""
+for arg in "$@"; do
+    case "${arg}" in
+        --force|-f) FORCE=true ;;
+        *)          REF_ARG="${arg}" ;;
+    esac
+done
 
 YOUR_NAME="$(git config user.name)"
 YOUR_EMAIL="$(git config user.email)"
@@ -24,12 +35,12 @@ if [ -z "${YOUR_NAME}" ] || [ -z "${YOUR_EMAIL}" ]; then
 fi
 
 # Determine the range of commits to rewrite
-if [ "${1:-}" = "--all" ]; then
+if [ "${REF_ARG}" = "--all" ]; then
     REF_RANGE="--all"
     echo "Rewriting ALL Claude-authored commits..."
-elif [ -n "${1:-}" ]; then
-    REF_RANGE="${1}..HEAD"
-    echo "Rewriting Claude-authored commits since ${1}..."
+elif [ -n "${REF_ARG}" ]; then
+    REF_RANGE="${REF_ARG}..HEAD"
+    echo "Rewriting Claude-authored commits since ${REF_ARG}..."
 else
     # Find the most recent checkpoint commit
     CHECKPOINT="$(git log --oneline --grep='checkpoint: pre-claude' -1 --format='%H' 2>/dev/null || true)"
@@ -38,16 +49,16 @@ else
         echo "Rewriting Claude-authored commits since checkpoint $(git log -1 --format='%h %s' "${CHECKPOINT}")..."
     else
         echo "No checkpoint commit found. Specify a ref or use --all."
-        echo "Usage: $0 [<since-ref>|--all]"
+        echo "Usage: $0 [<since-ref>|--all] [--force]"
         exit 1
     fi
 fi
 
 # Count commits that will be affected
 if [ "${REF_RANGE}" = "--all" ]; then
-    COUNT="$(git log --all --author='claude' --format='%H' | wc -l)"
+    COUNT="$(git log --all --author='claude@riotbox' --format='%H' | wc -l)"
 else
-    COUNT="$(git log "${REF_RANGE}" --author='claude' --format='%H' | wc -l)"
+    COUNT="$(git log "${REF_RANGE}" --author='claude@riotbox' --format='%H' | wc -l)"
 fi
 
 if [ "${COUNT}" -eq 0 ]; then
@@ -59,8 +70,17 @@ echo "Found ${COUNT} commit(s) to rewrite."
 echo "  New author: ${YOUR_NAME} <${YOUR_EMAIL}>"
 echo ""
 
+if [ "${FORCE}" != true ]; then
+    read -rp "Proceed with rewrite? [y/N] " confirm
+    if [[ ! "${confirm}" =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
+    echo ""
+fi
+
 # Use git filter-branch to rewrite author/committer
-# Only touches commits where the author name contains "claude"
+# Only touches commits where the author email is claude@riotbox
 export YOUR_NAME YOUR_EMAIL
 # If commit signing is configured, re-sign rewritten commits.
 # filter-branch uses git commit-tree internally, which doesn't respect
@@ -73,7 +93,7 @@ fi
 export SIGN_FLAG
 
 git filter-branch -f --tag-name-filter cat --env-filter '
-if echo "${GIT_AUTHOR_NAME}" | grep -qi "claude"; then
+if [ "${GIT_AUTHOR_EMAIL}" = "claude@riotbox" ]; then
     export GIT_AUTHOR_NAME="${YOUR_NAME}"
     export GIT_AUTHOR_EMAIL="${YOUR_EMAIL}"
     export GIT_COMMITTER_NAME="${YOUR_NAME}"
