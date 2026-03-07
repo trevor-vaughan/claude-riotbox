@@ -40,6 +40,7 @@ Finally...it was fun!
   - `ANTHROPIC_API_KEY` environment variable, **or**
   - `~/.claude.json` with OAuth tokens (created by running `claude` on the host and completing the OAuth flow)
 
+- [git-filter-repo](https://github.com/newren/git-filter-repo) (required for `reown` — `pip install git-filter-repo`)
 - (Optional) nvm, uv, Go, rustup, RVM installed locally — the build mirrors whatever it finds
 
 ## Setup
@@ -100,7 +101,7 @@ claude-riotbox reown
 | `claude-riotbox clean` | Remove the riotbox image |
 | `claude-riotbox reown` | Rewrite Claude-authored commits to your git identity |
 | `claude-riotbox reown <ref>` | Rewrite only commits since a specific ref |
-| `claude-riotbox reown --all` | Rewrite all Claude-authored commits in the repo |
+| `claude-riotbox reown --all` | Rewrite all Claude-authored commits on the current branch |
 | `claude-riotbox mounts` | Show auto-detected mounts (useful for debugging) |
 | `claude-riotbox nested-run "<task>" [dir]` | Run with podman-in-podman support (disables SELinux) |
 | `claude-riotbox nested-shell [dir]` | Shell with podman-in-podman support (disables SELinux) |
@@ -200,10 +201,10 @@ After a riotbox run, Claude's commits will have the container's git identity. Us
 cd /path/to/project
 claude-riotbox reown              # rewrites since the last checkpoint
 claude-riotbox reown abc123       # rewrites since a specific commit
-claude-riotbox reown --all        # rewrites all claude-authored commits
+claude-riotbox reown --all        # rewrites all claude-authored commits on current branch
 ```
 
-> **Note:** This uses `git filter-branch` under the hood, which rewrites commit hashes. Only use this on commits that haven't been pushed to a shared remote, or be prepared to force-push. Original refs are backed up under `refs/original/`.
+> **Note:** This uses `git filter-repo` under the hood, which rewrites commit hashes. Only use this on commits that haven't been pushed to a shared remote, or be prepared to force-push. A backup tag (`backup/pre-reown-<timestamp>`) is created before rewriting — use `git diff <backup-tag>..<branch>` to verify the result.
 
 ## What could go wrong
 

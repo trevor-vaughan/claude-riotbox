@@ -7,6 +7,7 @@ FROM quay.io/centos/centos:stream10
 RUN dnf -y install \
         bash \
         git \
+        gnupg2 \
         podman \
         fuse-overlayfs \
         jq \
@@ -16,6 +17,12 @@ RUN dnf -y install \
 RUN git clone --depth 1 https://github.com/bats-core/bats-core.git /tmp/bats && \
     /tmp/bats/install.sh /usr/local && \
     rm -rf /tmp/bats
+
+# git-filter-repo (single-file Python script)
+RUN dnf -y install python3 && dnf clean all && \
+    curl -sSfL https://raw.githubusercontent.com/newren/git-filter-repo/main/git-filter-repo \
+        -o /usr/local/bin/git-filter-repo && \
+    chmod +x /usr/local/bin/git-filter-repo
 
 # just
 RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | \

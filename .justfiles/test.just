@@ -40,7 +40,7 @@ _bats +args: _build
 list:
     @grep -h '^@test ' "{{root}}"/tests/*.bats | sed 's/@test "\(.*\)".*/\1/'
 
-# Run tests (setup.sh, install.sh)
+# Run tests (setup.sh, install.sh, reown-commits.sh)
 # filter - bats filter regex or test file path (default: all tests)
 run *filter="":
     #!/usr/bin/env bash
