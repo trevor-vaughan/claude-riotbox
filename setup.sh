@@ -98,21 +98,17 @@ else
     fi
 fi
 
-# ── 2. just ──────────────────────────────────────────────────────────────────
-step "2. Command runner (just)"
+# ── 2. task ──────────────────────────────────────────────────────────────────
+step "2. Command runner (task)"
 
-if command -v just &>/dev/null; then
-    ok "just $(just --version | awk '{print $NF}')"
+if command -v task &>/dev/null; then
+    ok "task $(task --version | awk '{print $NF}')"
 else
-    fail "just not found."
-    echo "  Install from: https://github.com/casey/just#installation"
-    if command -v cargo &>/dev/null; then
-        if ask_yn "Install just via cargo?"; then
-            cargo install just
-            ok "just installed via cargo"
-        else
-            ERRORS=$((ERRORS + 1))
-        fi
+    fail "task not found."
+    echo "  Install from: https://taskfile.dev/installation/"
+    if ask_yn "Install task via install script?"; then
+        sudo sh -c 'curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin'
+        ok "task installed"
     else
         ERRORS=$((ERRORS + 1))
     fi

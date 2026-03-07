@@ -27,14 +27,14 @@ Finally...it was fun!
 ## How it works
 
 1. **`scripts/build.sh`** introspects your local environment (nvm, uv, Go, Rust/rustup, Ruby/RVM, UID, tool configs) and passes them as build args.
-2. The **Dockerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, bats), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. Claude Code is installed last for optimal layer caching.
+2. The **Dockerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. Claude Code is installed last for optimal layer caching.
 3. At runtime your project directory is bind-mounted into the container. Auth credentials (`~/.claude.json`, `~/.claude/.credentials.json`) are copied — not mounted — into an isolated session directory so multiple containers can run concurrently without file contention.
 4. A **wrapper script** shadows the `claude` binary to add autonomous-mode flags and a system prompt with commit discipline guidelines.
 
 ## Prerequisites
 
 - [Podman](https://podman.io/) or Docker (podman preferred, auto-detected)
-- [just](https://github.com/casey/just) command runner
+- [task](https://taskfile.dev) command runner
 - [fuse-overlayfs](https://github.com/containers/fuse-overlayfs) (required for podman — see [Podman setup](#podman-setup))
 - One of:
   - `ANTHROPIC_API_KEY` environment variable, **or**
@@ -132,7 +132,7 @@ The image comes with a broad set of tools pre-installed so Claude can start work
 
 Claude Code [plugins](https://docs.anthropic.com/en/docs/claude-code/plugins) (skills, LSP servers, etc.) are pre-installed at image build time and copied into each session on first run. The plugin list is defined in the `Dockerfile` — edit the staging `RUN` block and rebuild to customize.
 
-**Skills** from your host `~/.claude/skills/` are copied into the session directory at every launch, so newly installed skills are available immediately. Symlinks are dereferenced during copy. Removed or renamed skills persist in the session cache — run `just reset-session` to clear stale entries.
+**Skills** from your host `~/.claude/skills/` are copied into the session directory at every launch, so newly installed skills are available immediately. Symlinks are dereferenced during copy. Removed or renamed skills persist in the session cache — run `claude-riotbox session:reset-session` to clear stale entries.
 
 ## Auto-detected mounts
 
@@ -222,6 +222,7 @@ The riotbox includes several layers of protection, but none are foolproof:
 
 - **Local bare backup**: Before every `run`, all refs and tags are pushed to a bare clone at `~/.claude-riotbox/backups/<project>.git`. This backup lives outside the container's mount tree — Claude cannot access or modify it. Even if Claude deletes every file and rewrites all history, the backup is intact.
 - **Checkpoint tags**: A git tag (`claude-checkpoint/<timestamp>`) is created on the current HEAD before each run. Tags survive history rewrites inside the container.
+- **Session branches**: On `shell` and `launch` sessions, the container offers to create a `riotbox/<id>` branch. Claude works there; on exit the branch is fast-forward merged back so the full commit history lands seamlessly on your branch. See [Session branches](#session-branches).
 - **Non-git-repo warning**: If a project directory isn't a git repo, the riotbox warns you that there's no checkpoint protection.
 - **Git guardrails**: Inside the container, `receive.denyNonFastForwards` and `receive.denyDeletes` are enabled to prevent the most destructive git operations.
 - **Container isolation**: Claude can't access your SSH keys, cloud credentials, or anything outside the mounted directories.
@@ -246,12 +247,53 @@ git reset --hard claude-checkpoint/<timestamp>
 git clone ~/.claude-riotbox/backups/my-project.git my-project-restored
 ```
 
+### Session branches
+
+When you start an interactive session (`claude-riotbox shell` or `claude-riotbox launch`) against a single-repo workspace, the container prompts you to create a session branch:
+
+```
+  Git repo detected on branch 'main'.
+  Create session branch 'riotbox/20260309-143022-a1b2c3d4'? [y/N]
+```
+
+If you say yes, Claude works on `riotbox/<id>` instead of your current branch. On clean exit, the session branch is fast-forward merged back so all commits land directly on your branch with their original messages and timestamps:
+
+```
+  [session-branch] Session complete. Merging riotbox/... → main...
+  [session-branch] 7 commit(s) to fast-forward.
+  [session-branch] Fast-forward complete. 7 commit(s) on main, session branch removed.
+```
+
+**If the fast-forward fails** (the base branch has diverged since the session started): the session branch is preserved and a recovery hint is printed. No data is lost.
+
+**If the container is hard-killed** (SIGKILL, OOM): teardown doesn't run, but the session branch persists on disk and can be merged manually:
+
+```sh
+git checkout main
+git merge --ff-only riotbox/<id>
+```
+
+**Controlling session branch behavior** via environment variable:
+
+| Value | Behavior |
+|---|---|
+| *(unset)* | Prompt at session start (default for `shell`/`launch`) |
+| `SESSION_BRANCH=1` | Auto-create, no prompt |
+| `SESSION_BRANCH=0` | Skip silently (default for `run`) |
+
+```sh
+SESSION_BRANCH=1 claude-riotbox shell   # always create a session branch
+SESSION_BRANCH=0 claude-riotbox shell   # never create one
+```
+
+Session branching is automatically disabled for `claude-riotbox run` (non-interactive) since those runs are scripted and already checkpoint before starting.
+
 ### Recommendations
 
 - **Always use git repos.** The checkpoint and backup mechanisms are your primary safety net.
 - **Push to a remote before running Claude.** Belt and suspenders.
 - **Review changes before merging.** Use `git diff claude-checkpoint/<tag>..HEAD` to see everything Claude did.
-- **Use branches.** Run Claude on a feature branch, not main.
+- **Use branches.** Run Claude on a feature branch, not main. Session branching automates this.
 
 ## Security model
 

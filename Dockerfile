@@ -4,7 +4,7 @@
 # Secrets (ANTHROPIC_API_KEY, ~/.claude) are NEVER baked in — mount at runtime.
 #
 # Multi-stage build:
-#   tools   — downloads standalone binaries (trivy, grype, syft, bats)
+#   tools   — downloads standalone binaries (trivy, grype, syft, task, venom)
 #   runtime — final image with toolchains + copied binaries
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -16,7 +16,7 @@
 # Run: podman inspect quay.io/centos/centos:stream10 --format '{{index .RepoDigests 0}}'
 FROM quay.io/centos/centos:stream10 AS tools
 
-RUN dnf -y install curl git tar gzip && dnf clean all
+RUN dnf -y install curl tar gzip && dnf clean all
 
 WORKDIR /tools
 
@@ -35,8 +35,17 @@ RUN curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | 
     sh -s -- -b /tools/bin && \
     /tools/bin/syft version
 
-# bats — bash testing framework
-RUN git clone --depth 1 https://github.com/bats-core/bats-core.git /tools/bats
+# task — task runner for Taskfiles (https://taskfile.dev)
+RUN curl -sL https://taskfile.dev/install.sh | sh -s -- -b /tools/bin && \
+    /tools/bin/task --version
+
+# venom — integration test framework (https://github.com/ovh/venom)
+RUN ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/') && \
+    curl -LO "https://github.com/ovh/venom/releases/latest/download/venom.linux-${ARCH}" && \
+    mv "venom.linux-${ARCH}" /tools/bin/venom && \
+    chmod +x /tools/bin/venom && \
+    /tools/bin/venom version
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Stage 2: Runtime image
@@ -54,12 +63,6 @@ ARG RUST_TOOLCHAINS="stable"
 ARG RUBY_VERSIONS="3.2.9"
 ARG RUBY_DEFAULT="3.2.9"
 ARG HOST_UID=1000
-
-# ── Fixed paths ───────────────────────────────────────────────────────────────
-ENV HOME=/home/claude
-ENV NVM_DIR=/home/claude/.nvm
-ENV GOPATH=/home/claude/go
-ENV PATH=/home/claude/.riotbox/bin:/home/claude/.local/bin:/home/claude/.cargo/bin:/home/claude/go/bin:/usr/lib/golang/bin:/home/claude/bin:${PATH}
 
 # ── System packages ───────────────────────────────────────────────────────────
 # Combined into one layer to avoid intermediate bloat from dnf metadata.
@@ -96,7 +99,7 @@ RUN dnf -y update && \
         patch \
         sudo \
     && dnf -y install epel-release \
-    && dnf -y install ripgrep plantuml chromium \
+    && dnf -y install ripgrep plantuml chromium bats \
     && dnf clean all
 
 # ── Common dev libraries (pre-installed to save Claude from installing them) ──
@@ -138,42 +141,42 @@ RUN if [ -n "${GO_VERSION}" ]; then \
         dnf -y install golang && dnf clean all && go version; \
     fi
 
-# ── Non-root user — UID matches host so mounted volume files are owned correctly
-# Falls back to auto-assigned UID if HOST_UID conflicts with an existing user.
-# sudo with NOPASSWD is intentional: Claude needs to dnf-install build deps,
-# and the container is disposable — this grants no host privileges.
-# chown is needed because earlier ENV/mkdir steps may create dirs as root.
-RUN useradd -m -u ${HOST_UID} -s /bin/bash claude 2>/dev/null || \
-    useradd -m -s /bin/bash claude && \
-    mkdir -p /workspace && chown claude /workspace && \
-    chown -R claude:claude /home/claude && \
-    echo "claude ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/claude
-
-# ── Security tools from builder stage ─────────────────────────────────────────
-COPY --from=tools --chown=claude:claude /tools/bin/ /home/claude/.local/bin/
-COPY --from=tools /tools/bats /tmp/bats
-RUN /tmp/bats/install.sh /usr/local && rm -rf /tmp/bats && bats --version
+# ── Podman-in-podman (nested containers) ──────────────────────────────────────
+# Pre-installed so RIOTBOX_NESTED=1 works without rebuilding the image.
+# slirp4netns provides rootless networking; fuse-overlayfs for storage.
+RUN dnf -y install podman fuse-overlayfs slirp4netns && dnf clean all
 
 # ── semgrep (Python package — must be installed in the runtime stage) ─────────
 RUN pip3 install --no-cache-dir --break-system-packages semgrep pyyaml && semgrep --version
 
-# ── Podman-in-podman (nested containers) ──────────────────────────────────────
-# Pre-installed so RIOTBOX_NESTED=1 works without rebuilding the image.
-# slirp4netns provides rootless networking; fuse-overlayfs for storage.
-RUN dnf -y install podman fuse-overlayfs slirp4netns && dnf clean all && \
+# ── Non-root user + root-phase config ─────────────────────────────────────────
+# User creation, dnf config, and system prompt dir. The chown -R happens later
+# (after COPY/pip that create root-owned dirs under /home/claude).
+RUN useradd -m -u ${HOST_UID} -s /bin/bash claude 2>/dev/null || \
+    useradd -m -s /bin/bash claude && \
+    mkdir -p /workspace && chown claude /workspace && \
+    echo "claude ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/claude && \
+    # Subordinate UID/GID ranges for rootless podman-in-podman
     echo "claude:100000:65536" >> /etc/subuid && \
-    echo "claude:100000:65536" >> /etc/subgid
+    echo "claude:100000:65536" >> /etc/subgid && \
+    # dnf non-interactive by default
+    mkdir -p /etc/dnf/dnf.conf.d && \
+    printf '[main]\nassumeyes=True\n' > /etc/dnf/dnf.conf.d/riotbox.conf && \
+    # System prompt (default — override at ~/.riotbox/CLAUDE.md)
+    mkdir -p /etc/riotbox
 
-# ── dnf non-interactive by default ───────────────────────────────────────────
-RUN mkdir -p /etc/dnf/dnf.conf.d && \
-    printf '[main]\nassumeyes=True\n' > /etc/dnf/dnf.conf.d/riotbox.conf
+COPY container/CLAUDE.md /etc/riotbox/CLAUDE.md
 
-# ── System prompt (default — override at ~/.riotbox/system-prompt.md) ────────
-RUN mkdir -p /etc/riotbox
-COPY container/riotbox-system-prompt.md /etc/riotbox/system-prompt.md
+# ── Security tools + task/venom from builder stage ───────────────────────────
+COPY --from=tools --chown=claude:claude /tools/bin/ /home/claude/.local/bin/
 
-# Fix ownership after root-stage installs (COPY, semgrep) that create dirs
-# under /home/claude as root.
+# ── Fixed paths (set after useradd so HOME points to the real user dir) ──────
+ENV HOME=/home/claude
+ENV NVM_DIR=/home/claude/.nvm
+ENV GOPATH=/home/claude/go
+ENV PATH=/home/claude/.riotbox/bin:/home/claude/.local/bin:/home/claude/.cargo/bin:/home/claude/go/bin:/usr/lib/golang/bin:/home/claude/bin:${PATH}
+
+# Fix ownership after root-stage COPY that creates dirs under /home/claude.
 RUN chown -R claude:claude /home/claude
 
 USER claude
@@ -206,7 +209,7 @@ RUN if [ "${UV_VERSION}" = "latest" ]; then \
     fi && \
     /home/claude/.local/bin/uv --version
 
-# ── Rust (via rustup) ────────────────────────────────────────────────────────
+# ── Rust (via rustup) + cargo-binstall for pre-built binaries ────────────────
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- -y --default-toolchain stable && \
     bash -c "\
@@ -215,7 +218,11 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
             echo \"==> rustup install \$tc\" && \
             rustup toolchain install \$tc; \
         done && \
-        rustc --version && cargo --version \
+        rustc --version && cargo --version && \
+        ARCH=\$(uname -m) && \
+        curl -LSfs https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-\${ARCH}-unknown-linux-musl.tgz \
+            | tar xz -C /home/claude/.cargo/bin && \
+        cargo binstall --no-confirm ast-grep && sg --version \
     "
 
 # ── Ruby (via RVM, if versions specified) ────────────────────────────────
@@ -236,35 +243,47 @@ RUN if [ -n "${RUBY_VERSIONS}" ]; then \
         "; \
     fi
 
-# ── just (command runner for justfiles) ───────────────────────────────────────
-RUN cargo install just && just --version
-
 # ── Go tools (installed after user is set up) ───────────────────────────────
 RUN if command -v go &>/dev/null; then \
         mkdir -p /home/claude/go /home/claude/.cache/go-build && \
         go install golang.org/x/tools/gopls@latest; \
     fi
 
-# ── Pre-create mount targets so bind mounts don't create root-owned dirs ─────
+# ── User-phase config (mount targets, podman, gem, git, shell) ───────────────
+# All lightweight config writes combined into one layer.
 RUN mkdir -p \
-    /home/claude/.riotbox/bin \
-    /home/claude/bin \
-    /home/claude/.npm \
-    /home/claude/.cargo/registry \
-    /home/claude/go/pkg \
-    /home/claude/.cache/pip \
-    /home/claude/.cache/uv \
-    /home/claude/.bundle/cache \
-    /home/claude/.m2/repository \
-    /home/claude/.gradle/caches \
-    /home/claude/.bun/install
-
-# ── Inner podman config (for nested container support) ───────────────────────
-RUN mkdir -p /home/claude/.config/containers && \
+        /home/claude/.riotbox/bin \
+        /home/claude/bin \
+        /home/claude/.npm \
+        /home/claude/.cargo/registry \
+        /home/claude/go/pkg \
+        /home/claude/.cache/pip \
+        /home/claude/.cache/uv \
+        /home/claude/.bundle/cache \
+        /home/claude/.m2/repository \
+        /home/claude/.gradle/caches \
+        /home/claude/.bun/install \
+        /home/claude/.config/containers && \
+    # Inner podman config (for nested container support)
     printf '[storage]\ndriver = "overlay"\n\n[storage.options.overlay]\nmount_program = "/usr/bin/fuse-overlayfs"\n' \
         > /home/claude/.config/containers/storage.conf && \
     printf '[containers]\ninit = false\n' \
-        > /home/claude/.config/containers/containers.conf
+        > /home/claude/.config/containers/containers.conf && \
+    # Gem / Bundler — skip docs, parallel installs
+    echo 'gem: --no-document' > /home/claude/.gemrc && \
+    printf 'BUNDLE_JOBS: "4"\nBUNDLE_RETRY: "3"\n' > /home/claude/.bundle/config && \
+    # Git config (Claude commits as itself so reown-commits.sh can identify its work)
+    git config --global user.name "Claude (riotbox)" && \
+    git config --global user.email "claude@riotbox" && \
+    git config --global commit.gpgsign false && \
+    git config --global tag.gpgsign false && \
+    git config --global core.pager "" && \
+    git config --global advice.detachedHead false && \
+    git config --global advice.addIgnoredFile false && \
+    git config --global init.defaultBranch main && \
+    git config --global --add safe.directory /workspace && \
+    git config --global receive.denyNonFastForwards true && \
+    git config --global receive.denyDeletes true
 
 # ── Shell config ──────────────────────────────────────────────────────────────
 RUN cat >> /home/claude/.bashrc <<'BASHRC'
@@ -327,29 +346,9 @@ export GOFLAGS="-mod=mod"
 export MAKEFLAGS="-j$(nproc)"
 BASHRC
 
-# ── Gem / Bundler — skip docs, parallel installs ────────────────────────────
-RUN echo 'gem: --no-document' > /home/claude/.gemrc && \
-    mkdir -p /home/claude/.bundle && \
-    printf 'BUNDLE_JOBS: "4"\nBUNDLE_RETRY: "3"\n' > /home/claude/.bundle/config
-
 # ── Tool configs (.npmrc, pip.conf, etc.) copied from host by build.sh ────────
 # configs/ is always created by build.sh (even if empty)
 COPY --chown=claude:claude configs/ /home/claude/
-
-# ── Git config (baked in — no host .gitconfig is copied) ─────────────────────
-# Claude commits as itself so reown-commits.sh can identify its work.
-# GPG signing disabled (no keys in container). No pager (non-interactive).
-RUN git config --global user.name "Claude (riotbox)" && \
-    git config --global user.email "claude@riotbox" && \
-    git config --global commit.gpgsign false && \
-    git config --global tag.gpgsign false && \
-    git config --global core.pager "" && \
-    git config --global advice.detachedHead false && \
-    git config --global advice.addIgnoredFile false && \
-    git config --global init.defaultBranch main && \
-    git config --global --add safe.directory /workspace && \
-    git config --global receive.denyNonFastForwards true && \
-    git config --global receive.denyDeletes true
 
 # ── Diagram tools (for validating generated diagrams) ────────────────────────
 # Skip puppeteer's bundled Chromium (~580 MB) — use the system package instead.
@@ -360,13 +359,16 @@ RUN npm install -g @mermaid-js/mermaid-cli && mmdc --version
 # ── Riotbox scripts ──────────────────────────────────────────────────────────
 COPY --chown=claude:claude container/find-real-claude.sh /home/claude/.riotbox/find-real-claude.sh
 COPY --chown=claude:claude container/claude-wrapper.sh /home/claude/.riotbox/bin/claude
-RUN chmod +x /home/claude/.riotbox/bin/claude
+RUN chmod +x /home/claude/.riotbox/bin/claude /home/claude/.riotbox/find-real-claude.sh
 
 WORKDIR /workspace
 
 # ── Entrypoint ──────────────────────────────────────────────────────────────
+COPY --chown=claude:claude container/inject-claude-md.sh /home/claude/.riotbox/inject-claude-md.sh
+COPY --chown=claude:claude container/session-branch.sh /home/claude/.riotbox/session-branch.sh
 COPY --chown=claude:claude container/entrypoint.sh /home/claude/.riotbox/entrypoint.sh
-RUN chmod +x /home/claude/.riotbox/entrypoint.sh
+RUN chmod +x /home/claude/.riotbox/entrypoint.sh /home/claude/.riotbox/inject-claude-md.sh \
+    /home/claude/.riotbox/session-branch.sh
 ENTRYPOINT ["/home/claude/.riotbox/entrypoint.sh"]
 CMD ["bash"]
 
@@ -377,16 +379,13 @@ RUN npm install -g @anthropic-ai/claude-code && claude --version
 # Installed to a staging dir because ~/.claude is bind-mounted at runtime.
 # The entrypoint copies from here into the session dir on first run, avoiding
 # network access and ~14 Node.js process spawns at startup.
-RUN mkdir -p /home/claude/.riotbox/plugins-staging && \
-    HOME_ORIG="${HOME}" && \
-    export HOME=/home/claude/.riotbox/plugins-staging && \
-    mkdir -p "${HOME}/.claude/plugins/cache" && \
-    claude plugin marketplace add anthropics/claude-plugins-official && \
+RUN STAGING_DIR=/home/claude/.riotbox/plugins-staging/.claude && \
+    mkdir -p "${STAGING_DIR}/plugins/cache" && \
+    CLAUDE_CONFIG_DIR="${STAGING_DIR}" claude plugin marketplace add anthropics/claude-plugins-official && \
     for p in \
         frontend-design feature-dev code-simplifier commit-commands \
         security-guidance claude-code-setup claude-md-management \
         rust-analyzer-lsp typescript-lsp pyright-lsp gopls-lsp \
         jdtls-lsp lua-lsp semgrep; do \
-        claude plugin install "$p" || true; \
-    done && \
-    export HOME="${HOME_ORIG}"
+        CLAUDE_CONFIG_DIR="${STAGING_DIR}" claude plugin install "$p" || true; \
+    done

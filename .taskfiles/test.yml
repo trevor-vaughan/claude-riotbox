@@ -1,0 +1,38 @@
+version: '3'
+
+vars:
+  TEST_IMAGE: claude-riotbox-test
+  CONTAINER_CMD:
+    sh: command -v podman 2>/dev/null || echo docker
+  USERNS_FLAG:
+    sh: if command -v podman &>/dev/null; then echo "--userns=keep-id"; fi
+  INIT_FLAG:
+    sh: if command -v podman &>/dev/null; then echo "--init=false"; fi
+
+tasks:
+  default:
+    desc: List tasks in this module
+    silent: true
+    cmd: task tests --list
+
+  build:
+    internal: true
+    cmds:
+      - |
+        echo "Building test image..."
+        {{.CONTAINER_CMD}} build \
+            --build-arg "HOST_UID=$(id -u)" \
+            -f "{{.ROOT_DIR}}/tests/Dockerfile.test" \
+            -t "{{.TEST_IMAGE}}" \
+            "{{.ROOT_DIR}}"
+
+  list:
+    desc: List available tests
+    cmd: grep -h '^@test ' "{{.ROOT_DIR}}"/tests/*.bats | sed 's/@test "\(.*\)".*/\1/'
+
+  run:
+    desc: Run tests (setup.sh, install.sh, reown-commits.sh)
+    deps: [build]
+    vars:
+      ARGS: "{{.ARGS | default .CLI_ARGS}}"
+    cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/run-tests.sh {{.ARGS}}"

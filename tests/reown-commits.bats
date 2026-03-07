@@ -38,6 +38,10 @@ setup() {
     git config user.email "${HUMAN_EMAIL}"
     git config init.defaultBranch main
     git remote add origin "${BARE_DIR}"
+
+    # Isolate from the host's global git config (commit.gpgsign, signingkey,
+    # core.hooksPath, etc.) so tests don't depend on the machine they run on.
+    export GIT_CONFIG_GLOBAL="${TEST_DIR}/isolated.gitconfig"
 }
 
 teardown() {
@@ -448,19 +452,19 @@ generate_test_gpg_key() {
     [[ "$output" == *"GPG signing not enabled"* ]]
 }
 
-@test "reown warns when gpgsign is true but no signingkey configured" {
+@test "reown errors when gpgsign is true but no signingkey configured" {
     command -v gpg &>/dev/null || skip "gpg not installed"
 
     human_commit "initial"
     human_commit "checkpoint: pre-claude"
     claude_commit "work"
 
-    git config commit.gpgsign true
+    git config --global commit.gpgsign true
     # Deliberately do NOT set user.signingkey
 
     run "${REOWN}" --force
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"no user.signingkey configured"* ]]
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no user.signingkey is configured"* ]]
 }
 
 # ── Content integrity ────────────────────────────────────────────────────────

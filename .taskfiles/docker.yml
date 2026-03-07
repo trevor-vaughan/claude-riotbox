@@ -1,0 +1,28 @@
+version: '3'
+
+vars:
+  IMAGE_NAME: '{{.IMAGE_NAME | default "claude-riotbox"}}'
+  CONTAINER_CMD:
+    sh: command -v podman 2>/dev/null || echo docker
+
+tasks:
+  default:
+    desc: List tasks in this module
+    silent: true
+    cmd: task docker --list
+
+  build:
+    desc: Build the riotbox image (detects your local toolchains)
+    cmd: "{{.ROOT_DIR}}/scripts/build.sh"
+
+  rebuild:
+    desc: Rebuild from scratch (no cache)
+    env:
+      DOCKER_EXTRA_ARGS: "--no-cache"
+    cmd: "{{.ROOT_DIR}}/scripts/build.sh"
+
+  clean:
+    desc: Remove the riotbox image
+    cmds:
+      - "{{.CONTAINER_CMD}} rmi {{.IMAGE_NAME}} 2>/dev/null || true"
+      - echo "Image removed"

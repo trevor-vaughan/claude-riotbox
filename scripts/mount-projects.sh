@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # mount-projects.sh — Resolves project directories into container mount flags.
 #
-# Sourced (not executed) by justfile recipes. Sets these variables:
+# Sourced (not executed) by taskfile scripts. Sets these variables:
 #   PROJECT_DIRS         — bash array of resolved host paths
 #   PROJECT_VOLUME_FLAGS — -v flags for podman/docker run (includes riotbox session mount)
 #   PROJECT_SUMMARY      — human-readable list for status output
@@ -188,9 +188,11 @@ setup_projects() {
     # dirs or dev checkouts), so we copy with -L to dereference them.
     # The session dir is mounted at ~/.claude in the container, so skills
     # land at ~/.claude/skills/ where Claude Code expects them.
-    # Note: this merges into an existing skills/ dir — removed or renamed
-    # skills won't disappear until the session dir is reset (just reset-session).
+    # We remove and re-copy on each launch so renamed/removed skills don't
+    # linger and so type mismatches (file vs dir) from prior runs don't cause
+    # cp to fail.
     if [ -d "${HOME}/.claude/skills" ]; then
+        rm -rf "${riotbox_session_dir}/skills"
         cp -rL "${HOME}/.claude/skills" "${riotbox_session_dir}/"
     fi
 

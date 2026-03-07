@@ -30,6 +30,12 @@ done
 # Ensure Claude Code directories exist
 mkdir -p ~/.claude/debug ~/.claude/plugins/cache
 
+# Inject riotbox system prompt as ~/.claude/CLAUDE.md so it persists through
+# context compression (re-injected as system reminders throughout the conversation).
+RIOTBOX_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${RIOTBOX_SCRIPT_DIR}/inject-claude-md.sh"
+source "${RIOTBOX_SCRIPT_DIR}/session-branch.sh"
+
 # Seed Claude Code settings on first run, or migrate stale settings.
 # Plugins are now installed via the CLI — remove any legacy enabledPlugins
 # field so Claude Code doesn't try to resolve plugins it can't find.
@@ -80,8 +86,24 @@ if [ -f ~/.claude/plugins/installed_plugins.json ]; then
         && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
 fi
 
+# Session branch: create a dedicated branch for this session (if repo detected
+# and not suppressed). Must run after all setup is complete, before the main
+# command, so Claude starts on the right branch.
+session_branch_setup
+
+# Run the main command without exec so this shell survives to run teardown.
+# exec was originally used to avoid bash -lc semantics — sourcing .bashrc above
+# already handles that. Foreground child processes inherit the TTY regardless.
 if [ $# -eq 0 ]; then
-    exec bash
+    bash
 else
-    exec "$@"
+    "$@"
 fi
+_exit_code=$?
+
+# Session branch: squash-merge back to the original branch on clean exit.
+# On hard kill (SIGKILL) this won't run — the session branch persists on disk
+# and can be merged manually.
+session_branch_teardown
+
+exit $_exit_code

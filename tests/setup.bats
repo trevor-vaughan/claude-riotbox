@@ -31,9 +31,9 @@ run_setup() {
     [[ "$output" == *"[ok]"*"podman"* ]]
 }
 
-@test "setup.sh detects just" {
+@test "setup.sh detects task" {
     run_setup
-    [[ "$output" == *"[ok]"*"just"* ]]
+    [[ "$output" == *"[ok]"*"task"* ]]
 }
 
 @test "setup.sh detects fuse-overlayfs" {
@@ -112,9 +112,9 @@ TOML
     [ -x "${HOME}/bin/claude-riotbox" ]
 }
 
-@test "setup.sh wrapper references correct justfile" {
+@test "setup.sh wrapper references correct riotbox directory" {
     run_setup
-    grep -q "${RIOTBOX_DIR}/Justfile" "${HOME}/bin/claude-riotbox"
+    grep -q "RIOTBOX_DIR=\"${RIOTBOX_DIR}\"" "${HOME}/bin/claude-riotbox"
 }
 
 @test "setup.sh skips CLI install if already present" {

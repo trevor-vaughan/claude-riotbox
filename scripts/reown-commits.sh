@@ -60,13 +60,47 @@ if [ -z "${YOUR_NAME}" ] || [ -z "${YOUR_EMAIL}" ]; then
     exit 1
 fi
 
+# ── GPG pre-flight check ─────────────────────────────────────────────────────
+# Fail fast before touching history if GPG signing is enabled but the key is
+# not available. filter-repo runs first (Pass 1), so a signing failure in
+# Pass 2 would leave the repo in a rewritten-but-unsigned state.
+
+if [ "$(git config --bool commit.gpgsign 2>/dev/null)" = "true" ]; then
+    SIGNING_KEY="$(git config user.signingkey 2>/dev/null || true)"
+    if [ -z "${SIGNING_KEY}" ]; then
+        echo "ERROR: commit.gpgsign is true but no user.signingkey is configured." >&2
+        echo "Set it with:  git config --global user.signingkey <key-id>" >&2
+        exit 1
+    fi
+    if ! echo "riotbox-gpg-preflight" \
+            | gpg --local-user "${SIGNING_KEY}" --sign --batch --no-tty --pinentry-mode loopback --output /dev/null 2>/dev/null; then
+        echo "ERROR: GPG key '${SIGNING_KEY}' is not unlocked or not accessible." >&2
+        echo "Unlock your key before running reown. For example:" >&2
+        echo "  echo test | gpg --local-user ${SIGNING_KEY} --sign --output /dev/null" >&2
+        exit 1
+    fi
+    echo "GPG key ${SIGNING_KEY} is unlocked and ready."
+    echo ""
+fi
+
 # ── Determine the range of commits to rewrite ───────────────────────────────
+
+GIT_TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "${GIT_TOPLEVEL}" ]; then
+    echo "ERROR: not inside a git repository." >&2
+    echo "  CWD: $(pwd)" >&2
+    exit 1
+fi
 
 CURRENT_BRANCH="$(git branch --show-current)"
 if [ -z "${CURRENT_BRANCH}" ]; then
     echo "ERROR: detached HEAD state — checkout a branch first." >&2
     exit 1
 fi
+
+echo "Repository: ${GIT_TOPLEVEL}"
+echo "Branch:     ${CURRENT_BRANCH}"
+echo ""
 
 if [ "${REF_ARG}" = "--all" ]; then
     RANGE_DESC="all Claude-authored commits on ${CURRENT_BRANCH}"
@@ -103,9 +137,25 @@ if [ "${CLAUDE_COUNT}" -eq 0 ]; then
 fi
 
 echo "Found ${CLAUDE_COUNT} Claude-authored commit(s) in range (${RANGE_DESC})."
-echo "  ${TOTAL_IN_RANGE} total commit(s) will be rewritten (hash chain)."
+echo "  ${TOTAL_IN_RANGE} total commit(s) in hash chain will be rewritten."
 echo "  New author: ${YOUR_NAME} <${YOUR_EMAIL}>"
 echo ""
+
+# List the Claude-authored commits that will be rewritten
+echo "Commits to reown:"
+git --no-pager log "${LOG_RANGE[@]}" --author="${CLAUDE_EMAIL}" --format="  %C(yellow)%h%Creset %s" --reverse
+echo ""
+
+# Show any non-Claude commits in the range (they get rewritten too due to hash chain)
+NON_CLAUDE_COUNT=$(( TOTAL_IN_RANGE - CLAUDE_COUNT ))
+if [ "${NON_CLAUDE_COUNT}" -gt 0 ]; then
+    echo "Also in range (${NON_CLAUDE_COUNT} commit(s) by other authors — hashes will change):"
+    # --invert-grep only works with --grep, not --author; use grep -v to exclude
+    git log "${LOG_RANGE[@]}" --format="%ae %C(dim)%h%Creset %s %C(dim)(%an)%Creset" --reverse \
+        | grep -v "^${CLAUDE_EMAIL} " \
+        | sed 's/^[^ ]* /  /'
+    echo ""
+fi
 
 if [ "${FORCE}" != true ]; then
     read -rp "Proceed with rewrite? [y/N] " confirm
@@ -131,13 +181,6 @@ declare -A REMOTES
 while IFS= read -r remote_name; do
     REMOTES["${remote_name}"]="$(git remote get-url "${remote_name}")"
 done < <(git remote)
-
-# ── Save rebase base commit before rewrite ───────────────────────────────────
-
-REBASE_BASE=""
-if [ "${TOTAL_IN_RANGE}" -gt 0 ]; then
-    REBASE_BASE="$(git rev-parse "HEAD~${TOTAL_IN_RANGE}" 2>/dev/null || true)"
-fi
 
 # ── Pass 1: Rewrite author/committer via filter-repo ────────────────────────
 
@@ -175,21 +218,18 @@ done
 
 if [ "$(git config --bool commit.gpgsign 2>/dev/null)" = "true" ]; then
     SIGNING_KEY="$(git config user.signingkey 2>/dev/null || true)"
-    if [ -z "${SIGNING_KEY}" ]; then
-        echo "" >&2
-        echo "WARNING: commit.gpgsign is true but no user.signingkey configured." >&2
-        echo "Skipping re-signing. Commits will be unsigned." >&2
-    elif [ "${TOTAL_IN_RANGE}" -gt 0 ]; then
+    if [ "${TOTAL_IN_RANGE}" -gt 0 ]; then
         echo ""
         echo "Pass 2: Re-signing ${TOTAL_IN_RANGE} rewritten commit(s) with GPG key ${SIGNING_KEY}..."
 
         REBASE_ARGS=(--committer-date-is-author-date --exec 'git commit --amend --no-edit -S -n')
 
-        if [ -n "${REBASE_BASE}" ]; then
-            # Find the corresponding new commit for the pre-rewrite base
+        # Re-verify the upstream ref post-filter-repo: filter-repo only rewrites
+        # commits unique to this branch, so HEAD~N may not exist if the range
+        # abuts or includes the root of the rewritten portion.
+        if git rev-parse --verify "HEAD~${TOTAL_IN_RANGE}" &>/dev/null; then
             git rebase "${REBASE_ARGS[@]}" "HEAD~${TOTAL_IN_RANGE}"
         else
-            # Range includes root commit
             git rebase "${REBASE_ARGS[@]}" --root
         fi
 

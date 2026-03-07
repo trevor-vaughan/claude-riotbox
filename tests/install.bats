@@ -24,14 +24,19 @@ teardown() {
     [ -x "${TEST_DIR}/claude-riotbox" ]
 }
 
-@test "wrapper references the correct justfile path" {
+@test "wrapper references the correct riotbox directory" {
     "${RIOTBOX_DIR}/install.sh" "${TEST_DIR}"
-    grep -q "JUSTFILE=\"${RIOTBOX_DIR}/Justfile\"" "${TEST_DIR}/claude-riotbox"
+    grep -q "RIOTBOX_DIR=\"${RIOTBOX_DIR}\"" "${TEST_DIR}/claude-riotbox"
 }
 
-@test "wrapper defaults path arguments to 'shell' command" {
+@test "wrapper routes path arguments to shell command" {
     "${RIOTBOX_DIR}/install.sh" "${TEST_DIR}"
-    grep -q 'shell "$@"' "${TEST_DIR}/claude-riotbox"
+    grep -q 'run_task shell -- "${cmd}" "$@"' "${TEST_DIR}/claude-riotbox"
+}
+
+@test "wrapper routes no-args to shell in CWD" {
+    "${RIOTBOX_DIR}/install.sh" "${TEST_DIR}"
+    grep -q 'run_task shell -- \.' "${TEST_DIR}/claude-riotbox"
 }
 
 @test "install.sh is idempotent" {

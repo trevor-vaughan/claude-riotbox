@@ -1,0 +1,15 @@
+version: '3'
+
+tasks:
+  default:
+    desc: List tasks in this module
+    silent: true
+    cmd: task backup --list
+
+  restore:
+    desc: Restore a project from its backup after a botched run
+    cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/backup-restore.sh {{.CLI_ARGS}}"
+
+  list:
+    desc: List available backups
+    cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/backup-list.sh"

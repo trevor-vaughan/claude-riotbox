@@ -1,4 +1,4 @@
-# Never bake secrets into the image
+# Never bake secrets or host identity into the image
 configs/.env
 configs/.env.*
 configs/**/.env
@@ -8,6 +8,7 @@ configs/**/*.key
 configs/**/*.token
 configs/**/credentials*
 configs/**/secrets*
+configs/.gitconfig
 
 # Git noise
 .git

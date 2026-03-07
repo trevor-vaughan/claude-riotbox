@@ -28,6 +28,10 @@ RUN dnf -y install python3 && dnf clean all && \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | \
     bash -s -- --to /usr/local/bin
 
+# task
+RUN curl --proto '=https' --tlsv1.2 -sSf https://taskfile.dev/install.sh | \
+    sh -s -- -b /usr/local/bin
+
 # Non-root test user
 ARG HOST_UID=1000
 RUN useradd -m -u ${HOST_UID} -s /bin/bash testuser 2>/dev/null || \

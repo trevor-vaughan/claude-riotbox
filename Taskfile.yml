@@ -1,0 +1,63 @@
+version: '3'
+
+includes:
+  docker:
+    taskfile: .taskfiles/docker.yml
+  session:
+    taskfile: .taskfiles/session.yml
+  backup:
+    taskfile: .taskfiles/backup.yml
+  setup:
+    taskfile: .taskfiles/setup.yml
+  tests:
+    taskfile: .taskfiles/test.yml
+
+dotenv: [".env"]
+
+tasks:
+  default:
+    desc: List all available tasks
+    silent: true
+    cmd: task --list
+
+  build:
+    desc: Build the riotbox image (shortcut)
+    cmds:
+      - task: docker:build
+
+  run:
+    desc: Run Claude with a task prompt (shortcut)
+    cmds:
+      - task: session:run
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
+  shell:
+    desc: Open a shell inside the riotbox (shortcut)
+    cmds:
+      - task: session:shell
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
+  resume:
+    desc: Continue the last Claude session (shortcut)
+    cmds:
+      - task: session:resume
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
+  reown:
+    desc: Rewrite Claude's commits to use your git identity
+    dir: "{{.USER_WORKING_DIR}}"
+    cmd: "{{.ROOT_DIR}}/scripts/reown-commits.sh {{.CLI_ARGS}}"
+
+  test:
+    desc: Run tests (shortcut)
+    cmds:
+      - task: tests:run
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
+  check:
+    desc: Run all quality gates
+    deps: [test]

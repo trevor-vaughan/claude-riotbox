@@ -10,24 +10,86 @@ TARGET_DIR="${1:-${HOME}/bin}"
 
 mkdir -p "${TARGET_DIR}"
 
-cat > "${TARGET_DIR}/claude-riotbox" <<WRAPPER
+cat > "${TARGET_DIR}/claude-riotbox" <<'WRAPPER'
 #!/usr/bin/env bash
-JUSTFILE="${SCRIPT_DIR}/Justfile"
-# If ALL arguments are existing paths, default to "shell <paths...>"
-if [ \$# -ge 1 ]; then
-    all_paths=true
-    for arg in "\$@"; do
-        if [ ! -e "\$arg" ]; then
-            all_paths=false
-            break
-        fi
+# ─────────────────────────────────────────────────────────────────────────────
+# claude-riotbox — CLI wrapper for Claude Riotbox
+#
+# Primary commands (no -- separator needed):
+#   claude-riotbox                       → shell in CWD
+#   claude-riotbox .                     → shell in .
+#   claude-riotbox . ../other            → shell with multiple projects
+#   claude-riotbox run "prompt" . ../o   → run with prompt + projects
+#   claude-riotbox shell . ../other      → explicit shell
+#   claude-riotbox resume .              → resume last session
+#   claude-riotbox reown [flags]         → rewrite Claude's commits
+#
+# Everything else passes through to task:
+#   claude-riotbox build                 → task build
+#   claude-riotbox test                  → task test
+#   claude-riotbox session:audit -- ...  → task session:audit -- ...
+# ─────────────────────────────────────────────────────────────────────────────
+RIOTBOX_DIR="@@RIOTBOX_DIR@@"
+
+# Resolve the Taskfile for pass-through commands
+run_task() { exec task --taskfile "${RIOTBOX_DIR}/Taskfile.yml" "$@"; }
+
+# Check if ALL arguments are existing paths
+all_paths() {
+    [ $# -ge 1 ] || return 1
+    for arg in "$@"; do
+        [ -e "$arg" ] || return 1
     done
-    if [ "\$all_paths" = true ]; then
-        exec just -f "\${JUSTFILE}" -- shell "\$@"
-    fi
+}
+
+# No arguments → shell in CWD
+if [ $# -eq 0 ]; then
+    run_task shell -- .
 fi
-exec just -f "\${JUSTFILE}" -- "\$@"
+
+cmd="$1"
+shift
+
+case "${cmd}" in
+    run)
+        # run <prompt> [projects...]
+        # First arg is the prompt, rest are project paths
+        run_task run -- "$@"
+        ;;
+    shell)
+        # shell [projects...]
+        if [ $# -eq 0 ]; then
+            run_task shell -- .
+        else
+            run_task shell -- "$@"
+        fi
+        ;;
+    resume)
+        # resume [projects...]
+        if [ $# -eq 0 ]; then
+            run_task resume -- .
+        else
+            run_task resume -- "$@"
+        fi
+        ;;
+    reown)
+        # reown [flags...] — runs from CWD
+        run_task reown -- "$@"
+        ;;
+    *)
+        # If cmd + remaining args are all paths → shell shortcut
+        if all_paths "${cmd}" "$@"; then
+            run_task shell -- "${cmd}" "$@"
+        else
+            # Pass through to task (build, test, clean, etc.)
+            run_task "${cmd}" "$@"
+        fi
+        ;;
+esac
 WRAPPER
+
+# Inject the actual riotbox directory path
+sed -i "s|@@RIOTBOX_DIR@@|${SCRIPT_DIR}|g" "${TARGET_DIR}/claude-riotbox"
 
 chmod +x "${TARGET_DIR}/claude-riotbox"
 echo "Installed: ${TARGET_DIR}/claude-riotbox"

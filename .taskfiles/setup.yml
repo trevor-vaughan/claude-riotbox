@@ -1,0 +1,27 @@
+version: '3'
+
+tasks:
+  default:
+    desc: List tasks in this module
+    silent: true
+    cmd: task setup --list
+
+  install:
+    desc: Install claude-riotbox CLI wrapper to ~/bin (or specify dir)
+    cmd: "{{.ROOT_DIR}}/install.sh {{.CLI_ARGS | default \"$HOME/bin\"}}"
+
+  install-hooks:
+    desc: Install git pre-push hook (blocks pushes with claude@riotbox commits)
+    env:
+      ROOT_DIR: "{{.ROOT_DIR}}"
+    cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/install-hooks.sh {{.CLI_ARGS}}"
+
+  mounts:
+    desc: Show what would be mounted from your home directory
+    cmd: |
+      echo "Auto-detected mounts:"
+      {{.ROOT_DIR}}/scripts/detect-mounts.sh | while read -r flag path; do echo "  ${path}"; done
+
+  reown:
+    desc: Rewrite Claude's commits to use your git identity
+    cmd: "{{.ROOT_DIR}}/scripts/reown-commits.sh {{.CLI_ARGS}}"

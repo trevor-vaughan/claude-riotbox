@@ -12,11 +12,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install just
-        uses: extractions/setup-just@v2
+      - name: Install task
+        run: |
+          sudo sh -c 'curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin'
+          task --version
 
       - name: Ensure podman is available
         run: command -v podman || sudo apt-get update && sudo apt-get install -y podman
 
       - name: Run tests
-        run: just test
+        run: task test

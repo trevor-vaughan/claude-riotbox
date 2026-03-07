@@ -130,6 +130,7 @@ fi
 
 # ── 7. Collect tool configs into configs/ (never secrets) ─────────────────────
 CONFIGS_DIR="${PROJECT_DIR}/configs"
+rm -rf "${CONFIGS_DIR}"
 mkdir -p "${CONFIGS_DIR}"
 
 copy_if_exists() {
@@ -188,5 +189,5 @@ echo ""
 echo "✅  Done. Image '${IMAGE_NAME}' is ready."
 echo ""
 echo "Quick start:"
-echo "  just run \"implement the feature in SPEC.md\""
-echo "  just shell"
+echo "  task run -- \"implement the feature in SPEC.md\""
+echo "  task shell"
