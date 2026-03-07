@@ -37,13 +37,13 @@
 
 ## Assessment Metadata
 
-| Field | Value |
-|---|---|
-| **Repository** | Claude_Sandbox |
-| **Commit** | `5b942f1` |
-| **Assessment Date** | 2026-03-06 |
-| **Analyst** | Claude (claude-opus-4-6) |
-| **Confidence** | Medium |
+| Field               | Value                    |
+|---------------------|--------------------------|
+| **Repository**      | Claude_Sandbox           |
+| **Commit**          | `5b942f1`                |
+| **Assessment Date** | 2026-03-06               |
+| **Analyst**         | Claude (claude-opus-4-6) |
+| **Confidence**      | Medium                   |
 
 ## Scope
 
@@ -52,32 +52,32 @@ Full repository. All shell scripts, Dockerfile, justfile, and container entrypoi
 
 ## Analysis Tools
 
-| Tool | Version | Configuration | Result |
-|---|---|---|---|
-| semgrep | `1.154.0` | configs: auto (includes p/default, p/owasp-top-ten, p/secrets) | 0 findings - codebase is shell scripts and Dockerfile only; limited rule coverage |
-| trivy | `0.69.3` | scanners: vuln, secret, misconfig | 1 LOW misconfiguration (DS-0026: no HEALTHCHECK in Dockerfile); 0 vulns; 0 secrets |
-| syft | `1.42.1` |  | 0 packages detected - no application dependency manifests present |
-| grype | `0.109.0` |  | 0 vulnerability matches |
+| Tool    | Version   | Configuration                                                  | Result                                                                             |
+|---------|-----------|----------------------------------------------------------------|------------------------------------------------------------------------------------|
+| semgrep | `1.154.0` | configs: auto (includes p/default, p/owasp-top-ten, p/secrets) | 0 findings - codebase is shell scripts and Dockerfile only; limited rule coverage  |
+| trivy   | `0.69.3`  | scanners: vuln, secret, misconfig                              | 1 LOW misconfiguration (DS-0026: no HEALTHCHECK in Dockerfile); 0 vulns; 0 secrets |
+| syft    | `1.42.1`  |                                                                | 0 packages detected - no application dependency manifests present                  |
+| grype   | `0.109.0` |                                                                | 0 vulnerability matches                                                            |
 
 ## Not Assessed
 
-| Area | Reason | Gap Type | Recommended Action |
-|---|---|---|---|
-| Runtime and dynamic behaviour | Static analysis only - no DAST or container runtime testing performed | Methodology | Run container with test harness; verify mount isolation, network policy enforcement, and privilege boundaries at runtime |
-| Social engineering and physical vectors | Outside scope of static analysis methodology | Methodology | Address in security awareness and physical security programme |
-| Third-party and vendor code not in the repository | npm-installed @anthropic-ai/claude-code, nvm, uv, rustup, RVM, trivy, grype, syft, and bats are fetched at build time but their source is not in this repository | Methodology | Audit upstream dependencies separately; consider SBOM generation for the built container image |
-| Shell script injection and argument handling | Semgrep has limited shell/bash rule coverage; many injection patterns in shell scripts are not detectable by available SAST rules | Tooling | Use ShellCheck with stricter rulesets and manual review of variable expansion in command construction |
-| Container image contents at runtime | SBOM was generated against the source directory, not the built container image; runtime dependencies (dnf packages, npm globals) are not inventoried | Tooling | Run syft and grype against the built container image (syft docker:claude-riotbox) to inventory all runtime packages |
+| Area                                              | Reason                                                                                                                                                           | Gap Type    | Recommended Action                                                                                                       |
+|---------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------|--------------------------------------------------------------------------------------------------------------------------|
+| Runtime and dynamic behaviour                     | Static analysis only - no DAST or container runtime testing performed                                                                                            | Methodology | Run container with test harness; verify mount isolation, network policy enforcement, and privilege boundaries at runtime |
+| Social engineering and physical vectors           | Outside scope of static analysis methodology                                                                                                                     | Methodology | Address in security awareness and physical security programme                                                            |
+| Third-party and vendor code not in the repository | npm-installed @anthropic-ai/claude-code, nvm, uv, rustup, RVM, trivy, grype, syft, and bats are fetched at build time but their source is not in this repository | Methodology | Audit upstream dependencies separately; consider SBOM generation for the built container image                           |
+| Shell script injection and argument handling      | Semgrep has limited shell/bash rule coverage; many injection patterns in shell scripts are not detectable by available SAST rules                                | Tooling     | Use ShellCheck with stricter rulesets and manual review of variable expansion in command construction                    |
+| Container image contents at runtime               | SBOM was generated against the source directory, not the built container image; runtime dependencies (dnf packages, npm globals) are not inventoried             | Tooling     | Run syft and grype against the built container image (syft docker:claude-riotbox) to inventory all runtime packages      |
 
 ## Finding Summary
 
-| Severity | Count |
-|---|---|
-| 🔴 Critical | 0 |
-| 🟠 High | 2 |
-| 🟡 Medium | 2 |
-| 🟢 Low | 2 |
-| **Total** | **6** |
+| Severity    | Count |
+|-------------|-------|
+| 🔴 Critical | 0     |
+| 🟠 High     | 2     |
+| 🟡 Medium   | 2     |
+| 🟢 Low      | 2     |
+| **Total**   | **6** |
 
 ## Risk Matrix
 
@@ -91,12 +91,12 @@ quadrantChart
     quadrant-2 Review
     quadrant-3 Monitor
     quadrant-4 Address
-    H-001 [0.25, 1.0]
-    H-002 [0.25, 1.0]
-    M-003 [0.5, 0.5]
-    M-004 [0.25, 0.75]
-    L-005 [0.25, 0.25]
-    L-006 [0.0, 0.75]
+    H-001: [0.25, 1]
+    H-002: [0.25, 1]
+    M-003: [0.5, 0.5]
+    M-004: [0.25, 0.75]
+    L-005: [0.25, 0.25]
+    L-006: [0.0, 0.75]
 ```
 
 ## Data Flow Diagram

@@ -26,7 +26,7 @@ teardown() {
 
 @test "wrapper references the correct justfile path" {
     "${RIOTBOX_DIR}/install.sh" "${TEST_DIR}"
-    grep -q "JUSTFILE=\"${RIOTBOX_DIR}/justfile\"" "${TEST_DIR}/claude-riotbox"
+    grep -q "JUSTFILE=\"${RIOTBOX_DIR}/Justfile\"" "${TEST_DIR}/claude-riotbox"
 }
 
 @test "wrapper defaults path arguments to 'shell' command" {

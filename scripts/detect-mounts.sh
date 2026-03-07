@@ -20,11 +20,14 @@ FUNCTIONAL_MOUNTS=(
     "bin"
 )
 
-# ── Auth token ────────────────────────────────────────────────────────────────
-# NOT mounted — copied into the session directory by mount-projects.sh instead.
-# Bind-mounting a 600-permission file fails with --userns=keep-id (UID maps
-# to root, owner-only perms block access). Copying gives each container its
-# own writable copy, which also avoids EBUSY with concurrent runs.
+# ── Auth tokens ───────────────────────────────────────────────────────────────
+# Credentials (~/.claude/.credentials.json) are bind-mounted RW by
+# mount-projects.sh as a nested mount inside the session dir. This lets
+# Claude Code refresh OAuth tokens in-session with writes going directly
+# to the host file (no copy/writeback needed).
+# Config (~/.claude.json) is copied into the session dir for account metadata.
+# CLAUDE_CONFIG_DIR is set in the entrypoint so Claude Code finds both files
+# inside the bind-mounted session dir.
 
 # ── Riotbox session data ─────────────────────────────────────────────────────
 # Session isolation is handled by mount-projects.sh, which mounts a

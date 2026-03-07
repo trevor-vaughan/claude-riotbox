@@ -62,13 +62,25 @@ echo ""
 # Use git filter-branch to rewrite author/committer
 # Only touches commits where the author name contains "claude"
 export YOUR_NAME YOUR_EMAIL
-git filter-branch -f --env-filter '
+# If commit signing is configured, re-sign rewritten commits.
+# filter-branch uses git commit-tree internally, which doesn't respect
+# commit.gpgsign — we need an explicit --commit-filter to pass -S.
+SIGN_FLAG=""
+if git config --bool commit.gpgsign 2>/dev/null | grep -q true; then
+    SIGN_FLAG="-S"
+    echo "GPG signing enabled — rewritten commits will be signed."
+fi
+export SIGN_FLAG
+
+git filter-branch -f --tag-name-filter cat --env-filter '
 if echo "${GIT_AUTHOR_NAME}" | grep -qi "claude"; then
     export GIT_AUTHOR_NAME="${YOUR_NAME}"
     export GIT_AUTHOR_EMAIL="${YOUR_EMAIL}"
     export GIT_COMMITTER_NAME="${YOUR_NAME}"
     export GIT_COMMITTER_EMAIL="${YOUR_EMAIL}"
 fi
+' --commit-filter '
+git commit-tree ${SIGN_FLAG} "$@"
 ' -- ${REF_RANGE}
 
 echo ""

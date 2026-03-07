@@ -14,6 +14,14 @@ export CLAUDE_CODE_DISABLE_TELEMETRY=1
 export DO_NOT_TRACK=1
 export CLAUDE_CODE_SKIP_UPDATE_CHECK=1
 
+# Point Claude Code's config dir at the bind-mounted session directory.
+# This ensures ALL reads and writes (config, credentials, lock files) happen
+# on the persistent bind mount instead of the ephemeral overlay filesystem.
+# Without this, ~/.claude.json lives on the overlay and token refresh can
+# fail when Claude Code's saveConfigWithLock detects a mismatch between the
+# in-memory cache and the on-disk file (GH #3117 protection).
+export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+
 # Mark multi-project mount subdirectories as safe for git
 for d in /workspace/*/; do
     [ -d "${d}.git" ] && git config --global --add safe.directory "${d%/}"
@@ -21,14 +29,6 @@ done
 
 # Ensure Claude Code directories exist
 mkdir -p ~/.claude/debug ~/.claude/plugins/cache
-
-# Auth token: copied into the session directory on the host side by
-# mount-projects.sh. Copy (not symlink) to where Claude Code expects it —
-# symlinks break because Claude does atomic rename() which fails across
-# mount boundaries.
-if [ -f ~/.claude/.claude.json ] && [ ! -f ~/.claude.json ]; then
-    cp ~/.claude/.claude.json ~/.claude.json
-fi
 
 # Seed Claude Code settings on first run, or migrate stale settings.
 # Plugins are now installed via the CLI — remove any legacy enabledPlugins

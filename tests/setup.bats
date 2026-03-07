@@ -114,7 +114,7 @@ TOML
 
 @test "setup.sh wrapper references correct justfile" {
     run_setup
-    grep -q "${RIOTBOX_DIR}/justfile" "${HOME}/bin/claude-riotbox"
+    grep -q "${RIOTBOX_DIR}/Justfile" "${HOME}/bin/claude-riotbox"
 }
 
 @test "setup.sh skips CLI install if already present" {

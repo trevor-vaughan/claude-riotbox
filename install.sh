@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Installs the claude-riotbox wrapper script to ~/bin (or a custom directory).
-# Usage: ./install.sh [target-dir]
+# ─────────────────────────────────────────────────────────────────────────────
+# install.sh — Install the claude-riotbox CLI wrapper.
+# Usage: ./install.sh [target_dir]
+# ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,10 +10,9 @@ TARGET_DIR="${1:-${HOME}/bin}"
 
 mkdir -p "${TARGET_DIR}"
 
-cat > "${TARGET_DIR}/claude-riotbox" <<EOF
+cat > "${TARGET_DIR}/claude-riotbox" <<WRAPPER
 #!/usr/bin/env bash
-JUSTFILE="${SCRIPT_DIR}/justfile"
-
+JUSTFILE="${SCRIPT_DIR}/Justfile"
 # If ALL arguments are existing paths, default to "shell <paths...>"
 if [ \$# -ge 1 ]; then
     all_paths=true
@@ -25,9 +26,8 @@ if [ \$# -ge 1 ]; then
         exec just -f "\${JUSTFILE}" -- shell "\$@"
     fi
 fi
-
 exec just -f "\${JUSTFILE}" -- "\$@"
-EOF
+WRAPPER
 
 chmod +x "${TARGET_DIR}/claude-riotbox"
 echo "Installed: ${TARGET_DIR}/claude-riotbox"

@@ -131,6 +131,8 @@ The image comes with a broad set of tools pre-installed so Claude can start work
 
 Claude Code [plugins](https://docs.anthropic.com/en/docs/claude-code/plugins) (skills, LSP servers, etc.) are pre-installed at image build time and copied into each session on first run. The plugin list is defined in the `Dockerfile` — edit the staging `RUN` block and rebuild to customize.
 
+**Skills** from your host `~/.claude/skills/` are copied into the session directory at every launch, so newly installed skills are available immediately. Symlinks are dereferenced during copy. Removed or renamed skills persist in the session cache — run `just reset-session` to clear stale entries.
+
 ## Auto-detected mounts
 
 At runtime, `scripts/detect-mounts.sh` generates mount flags for the container. This uses an allowlist — only explicitly listed paths are ever mounted.
@@ -141,6 +143,7 @@ At runtime, `scripts/detect-mounts.sh` generates mount flags for the container. 
 |---|---|---|
 | `~/.claude-riotbox/<session>/` | `~/.claude` | bind mount (`:z`) |
 | `~/.claude.json`, `~/.claude/.credentials.json` | copied into session dir | file copy |
+| `~/.claude/skills/` | copied into session dir | file copy (symlinks dereferenced) |
 | `~/bin` | `~/bin` | bind mount (read-only) |
 
 Riotbox sessions are isolated from your host `~/.claude` — it is never mounted. Auth files are copied (not mounted) so each container gets its own writable copy, avoiding file contention with concurrent runs.

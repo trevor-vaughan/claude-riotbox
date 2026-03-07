@@ -155,7 +155,7 @@ COPY --from=tools /tools/bats /tmp/bats
 RUN /tmp/bats/install.sh /usr/local && rm -rf /tmp/bats && bats --version
 
 # ── semgrep (Python package — must be installed in the runtime stage) ─────────
-RUN pip3 install --no-cache-dir --break-system-packages semgrep && semgrep --version
+RUN pip3 install --no-cache-dir --break-system-packages semgrep pyyaml && semgrep --version
 
 # ── Podman-in-podman (nested containers) ──────────────────────────────────────
 # Pre-installed so RIOTBOX_NESTED=1 works without rebuilding the image.
@@ -167,6 +167,10 @@ RUN dnf -y install podman fuse-overlayfs slirp4netns && dnf clean all && \
 # ── dnf non-interactive by default ───────────────────────────────────────────
 RUN mkdir -p /etc/dnf/dnf.conf.d && \
     printf '[main]\nassumeyes=True\n' > /etc/dnf/dnf.conf.d/riotbox.conf
+
+# ── System prompt (default — override at ~/.riotbox/system-prompt.md) ────────
+RUN mkdir -p /etc/riotbox
+COPY container/riotbox-system-prompt.md /etc/riotbox/system-prompt.md
 
 # Fix ownership after root-stage installs (COPY, semgrep) that create dirs
 # under /home/claude as root.
@@ -231,6 +235,9 @@ RUN if [ -n "${RUBY_VERSIONS}" ]; then \
             ruby --version \
         "; \
     fi
+
+# ── just (command runner for justfiles) ───────────────────────────────────────
+RUN cargo install just && just --version
 
 # ── Go tools (installed after user is set up) ───────────────────────────────
 RUN if command -v go &>/dev/null; then \
