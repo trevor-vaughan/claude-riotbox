@@ -4,10 +4,6 @@ vars:
   TEST_IMAGE: claude-riotbox-test
   CONTAINER_CMD:
     sh: command -v podman 2>/dev/null || echo docker
-  USERNS_FLAG:
-    sh: if command -v podman &>/dev/null; then echo "--userns=keep-id"; fi
-  INIT_FLAG:
-    sh: if command -v podman &>/dev/null; then echo "--init=false"; fi
 
 tasks:
   default:

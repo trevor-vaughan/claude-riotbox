@@ -49,14 +49,14 @@ session_branch_setup() {
     elif [[ "${SESSION_BRANCH:-}" == "0" ]]; then
         return 0
     else
-        # Interactive prompt — default N
+        # Interactive prompt — default Y (empty answer creates the branch)
         echo ""
         echo "  Git repo detected on branch '${current_branch}'."
-        printf "  Create session branch '%s'? [y/N] " "${branch_name}"
+        printf "  Create session branch '%s'? [Y/n] " "${branch_name}"
         local answer
         read -r answer
         echo ""
-        if [[ "${answer}" =~ ^[Yy]$ ]]; then
+        if [[ ! "${answer}" =~ ^[Nn]$ ]]; then
             do_branch=true
         fi
     fi

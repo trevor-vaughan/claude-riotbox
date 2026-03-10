@@ -12,9 +12,11 @@ tasks:
 
   install-hooks:
     desc: Install git pre-push hook (blocks pushes with claude@riotbox commits)
+    vars:
+      ARGS: "{{.ARGS | default .CLI_ARGS}}"
     env:
       ROOT_DIR: "{{.ROOT_DIR}}"
-    cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/install-hooks.sh {{.CLI_ARGS}}"
+    cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/install-hooks.sh {{.ARGS}}"
 
   mounts:
     desc: Show what would be mounted from your home directory
@@ -24,4 +26,7 @@ tasks:
 
   reown:
     desc: Rewrite Claude's commits to use your git identity
-    cmd: "{{.ROOT_DIR}}/scripts/reown-commits.sh {{.CLI_ARGS}}"
+    dir: "{{.USER_WORKING_DIR}}"
+    vars:
+      ARGS: "{{.ARGS | default .CLI_ARGS}}"
+    cmd: "{{.ROOT_DIR}}/scripts/reown-commits.sh {{.ARGS}}"

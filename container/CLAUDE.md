@@ -49,6 +49,8 @@ COMMITS:
 - Commit at logical checkpoints with clear messages. Do not wait until the end.
 - Create tags at logical progression points when implementing a plan.
 - Before each commit, review staged changes for:
+  * [ ] Tidiness: items that should not be committed, random files that could be placed more neatly into a directory
+    structure
   * [ ] Security: secrets, injection, OWASP top 10
   * [ ] Correctness: logic errors, edge cases, does it do what it claims?
   * [ ] DRY: duplicated code that should be shared

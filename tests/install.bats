@@ -34,9 +34,10 @@ teardown() {
     grep -q 'run_task shell -- "${cmd}" "$@"' "${TEST_DIR}/claude-riotbox"
 }
 
-@test "wrapper routes no-args to shell in CWD" {
+@test "wrapper shows help when no args given" {
     "${RIOTBOX_DIR}/install.sh" "${TEST_DIR}"
-    grep -q 'run_task shell -- \.' "${TEST_DIR}/claude-riotbox"
+    grep -q 'usage' "${TEST_DIR}/claude-riotbox"
+    grep -q 'exit 0' "${TEST_DIR}/claude-riotbox"
 }
 
 @test "install.sh is idempotent" {

@@ -2,9 +2,29 @@
 set -euo pipefail
 # Run Claude with a task prompt, checkpointing all project repos first.
 # Required env: CONTAINER_CMD, IMAGE_NAME, ROOT_DIR
-# Arguments: task [projects...]
+# Arguments: prompt [projects...]
 
-task_prompt="${1:?Usage: run.sh <task> [projects...]}"
+if [ $# -eq 0 ]; then
+    cat >&2 <<EOF
+Error: a prompt is required.
+
+Usage:
+  task run -- "prompt" [project ...]
+  claude-riotbox run "prompt" [project ...]
+
+A prompt describes what Claude should do. Projects default to the current
+directory if not specified. All project repos are checkpointed before
+Claude runs so you can restore them if something goes wrong.
+
+Examples:
+  task run -- "fix the failing tests"
+  task run -- "add error handling to the API" . ../shared-lib
+  claude-riotbox run "refactor the auth module" .
+EOF
+    exit 1
+fi
+
+task_prompt="$1"
 shift
 projects="${*:-}"
 

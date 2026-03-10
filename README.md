@@ -28,7 +28,7 @@ Finally...it was fun!
 
 1. **`scripts/build.sh`** introspects your local environment (nvm, uv, Go, Rust/rustup, Ruby/RVM, UID, tool configs) and passes them as build args.
 2. The **Dockerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. Claude Code is installed last for optimal layer caching.
-3. At runtime your project directory is bind-mounted into the container. Auth credentials (`~/.claude.json`, `~/.claude/.credentials.json`) are copied — not mounted — into an isolated session directory so multiple containers can run concurrently without file contention.
+3. At runtime your project directory is bind-mounted into the container. Auth credentials are synced into an isolated session directory: `~/.claude/.credentials.json` is bind-mounted read-write (so token refreshes write back to the host), and `~/.claude.json` is copied so each container gets a writable snapshot without host contention.
 4. A **wrapper script** shadows the `claude` binary to add autonomous-mode flags and a system prompt with commit discipline guidelines.
 
 ## Prerequisites
@@ -98,15 +98,16 @@ claude-riotbox reown
 | `claude-riotbox rebuild` | Force a clean rebuild with no layer cache |
 | `claude-riotbox run "<task>" [dir]` | Run Claude autonomously (defaults to current directory) |
 | `claude-riotbox shell [dir]` | Interactive shell (defaults to current directory) |
-| `claude-riotbox clean` | Remove the riotbox image |
+| `claude-riotbox resume [dir]` | Continue the last Claude session |
 | `claude-riotbox reown` | Rewrite Claude-authored commits to your git identity |
 | `claude-riotbox reown <ref>` | Rewrite only commits since a specific ref |
 | `claude-riotbox reown --all` | Rewrite all Claude-authored commits on the current branch |
 | `claude-riotbox mounts` | Show auto-detected mounts (useful for debugging) |
 | `claude-riotbox nested-run "<task>" [dir]` | Run with podman-in-podman support (disables SELinux) |
 | `claude-riotbox nested-shell [dir]` | Shell with podman-in-podman support (disables SELinux) |
-| `claude-riotbox backups` | List available project backups |
-| `claude-riotbox restore <name>` | Show recovery options for a backed-up project |
+| `claude-riotbox session-list` | List all riotbox sessions |
+| `claude-riotbox session-remove [key/path]` | Remove a session by key or project path (or `--all`) |
+| `claude-riotbox session-reset` | Reset session cache (forces fresh skill/config copy) |
 
 ## Pre-installed tools
 
@@ -119,7 +120,8 @@ The image comes with a broad set of tools pre-installed so Claude can start work
 - [trivy](https://github.com/aquasecurity/trivy), [grype](https://github.com/anchore/grype), [syft](https://github.com/anchore/syft), [semgrep](https://semgrep.dev/), ShellCheck
 
 **Testing:**
-- [bats](https://github.com/bats-core/bats-core) (bash testing)
+- [bats](https://github.com/bats-core/bats-core) (bash unit testing)
+- [venom](https://github.com/ovh/venom) (integration and end-to-end test suites)
 
 **Diagram validation:**
 - `plantuml` — UML diagram generation and validation
@@ -132,7 +134,39 @@ The image comes with a broad set of tools pre-installed so Claude can start work
 
 Claude Code [plugins](https://docs.anthropic.com/en/docs/claude-code/plugins) (skills, LSP servers, etc.) are pre-installed at image build time and copied into each session on first run. The plugin list is defined in the `Dockerfile` — edit the staging `RUN` block and rebuild to customize.
 
-**Skills** from your host `~/.claude/skills/` are copied into the session directory at every launch, so newly installed skills are available immediately. Symlinks are dereferenced during copy. Removed or renamed skills persist in the session cache — run `claude-riotbox session:reset-session` to clear stale entries.
+**Skills** from your host `~/.claude/skills/` are copied into the session directory at every launch, so newly installed skills are available immediately. Symlinks are dereferenced during copy. Removed or renamed skills persist in the session cache — run `claude-riotbox session-reset` to clear stale entries.
+
+## Status bar customization
+
+Claude Code can display a custom status line beneath the input box. To enable it, create an executable script at `~/.claude/statusline-command.sh` on your host. The riotbox copies it into the session directory on every launch and wires it into Claude Code's settings automatically.
+
+The script receives a JSON object on stdin and its stdout is displayed in the status bar. The JSON includes:
+
+```json
+{
+  "context_window": {
+    "used_percentage": 42.0,
+    "total_input_tokens": 50000,
+    "total_output_tokens": 5000
+  },
+  "model": {
+    "id": "claude-sonnet-4-6",
+    "display_name": "Claude Sonnet 4.6"
+  }
+}
+```
+
+A minimal example that shows context usage:
+
+```sh
+#!/usr/bin/env bash
+input=$(cat)
+pct=$(echo "$input" | jq -r '.context_window.used_percentage // "?"')
+model=$(echo "$input" | jq -r '.model.display_name // "unknown"')
+echo "${model} | ctx ${pct}%"
+```
+
+The riotbox ships a more complete default script with a Unicode progress bar and color coding — run `/statusline` inside Claude Code to regenerate or customise it.
 
 ## Auto-detected mounts
 
@@ -143,25 +177,27 @@ At runtime, `scripts/detect-mounts.sh` generates mount flags for the container. 
 | Host path | Container path | How |
 |---|---|---|
 | `~/.claude-riotbox/<session>/` | `~/.claude` | bind mount (`:z`) |
-| `~/.claude.json`, `~/.claude/.credentials.json` | copied into session dir | file copy |
+| `~/.claude/.credentials.json` | `~/.claude/.credentials.json` | nested bind mount (`:z`, read-write) |
+| `~/.claude.json` | copied into session dir | file copy |
 | `~/.claude/skills/` | copied into session dir | file copy (symlinks dereferenced) |
+| `~/.claude/statusline-command.sh` | copied into session dir | file copy (chmod +x enforced) |
 | `~/bin` | `~/bin` | bind mount (read-only) |
 
-Riotbox sessions are isolated from your host `~/.claude` — it is never mounted. Auth files are copied (not mounted) so each container gets its own writable copy, avoiding file contention with concurrent runs.
+Riotbox sessions are isolated from your host `~/.claude` — it is never mounted directly. `.credentials.json` is bind-mounted read-write so OAuth token refreshes write directly back to the host file (rotating refresh tokens require this). `.claude.json` is copied so each container gets a writable snapshot without host contention.
 
 **Package caches** (named volumes, shared across containers):
 
 | Volume | Container path |
 |---|---|
-| `claude-cache-npm` | `~/.npm` |
-| `claude-cache-cargo` | `~/.cargo/registry` |
-| `claude-cache-go` | `~/go/pkg` |
-| `claude-cache-pip` | `~/.cache/pip` |
-| `claude-cache-uv` | `~/.cache/uv` |
-| `claude-cache-bundler` | `~/.bundle/cache` |
-| `claude-cache-m2` | `~/.m2/repository` |
-| `claude-cache-gradle` | `~/.gradle/caches` |
-| `claude-cache-bun` | `~/.bun/install` |
+| `riotbox-cache-npm` | `~/.npm` |
+| `riotbox-cache-cargo` | `~/.cargo/registry` |
+| `riotbox-cache-go` | `~/go/pkg` |
+| `riotbox-cache-pip` | `~/.cache/pip` |
+| `riotbox-cache-uv` | `~/.cache/uv` |
+| `riotbox-cache-bundler` | `~/.bundle/cache` |
+| `riotbox-cache-m2` | `~/.m2/repository` |
+| `riotbox-cache-gradle` | `~/.gradle/caches` |
+| `riotbox-cache-bun` | `~/.bun/install` |
 
 Package caches use named podman/docker volumes rather than bind mounts. This avoids SELinux relabeling overhead — bind-mounting gigabytes of cache with `:z` causes recursive `chcon` on every container start, which can take minutes. Named volumes get `container_file_t` automatically. The tradeoff is that caches are not shared with the host.
 
@@ -169,10 +205,9 @@ Sensitive directories (`.ssh`, `.gnupg`, `.kube`, `.aws`, etc.) are never mounte
 
 ## Claude wrapper
 
-Inside the container, `claude` is a wrapper script (`container/claude-wrapper.sh`) that shadows the npm-installed binary. It automatically:
+Inside the container, `claude` is a wrapper script (`container/claude-wrapper.sh`) that shadows the npm-installed binary. It passes `--dangerously-skip-permissions` — this is safe here because the container **is** the riotbox. Claude can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
 
-- Passes `--dangerously-skip-permissions` — this is safe here because the container **is** the riotbox. Claude can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
-- Appends a system prompt instructing Claude to install whatever it needs, commit regularly, and perform a security/sanity/DRY/maintainability review before every commit.
+The entrypoint injects a system prompt as `~/.claude/CLAUDE.md` (via `inject-claude-md.sh`) instructing Claude to install whatever it needs, commit regularly, and perform a security/sanity/DRY/maintainability review before every commit. Injecting via CLAUDE.md rather than `--append-system-prompt` means it survives context compression — Claude Code re-injects CLAUDE.md contents as system reminders throughout a long session.
 
 ## Nested containers (podman-in-podman)
 
@@ -205,6 +240,8 @@ claude-riotbox reown --all        # rewrites all claude-authored commits on curr
 ```
 
 > **Note:** This uses `git filter-repo` under the hood, which rewrites commit hashes. Only use this on commits that haven't been pushed to a shared remote, or be prepared to force-push. A backup tag (`backup/pre-reown-<timestamp>`) is created before rewriting — use `git diff <backup-tag>..<branch>` to verify the result.
+>
+> `reown` recognises both the current container identity (`claude@riotbox`) and the legacy identity (`riotbox@local`) used by older versions of riotbox, so old squash-merge commits are also caught.
 
 ## What could go wrong
 
@@ -222,7 +259,7 @@ The riotbox includes several layers of protection, but none are foolproof:
 
 - **Local bare backup**: Before every `run`, all refs and tags are pushed to a bare clone at `~/.claude-riotbox/backups/<project>.git`. This backup lives outside the container's mount tree — Claude cannot access or modify it. Even if Claude deletes every file and rewrites all history, the backup is intact.
 - **Checkpoint tags**: A git tag (`claude-checkpoint/<timestamp>`) is created on the current HEAD before each run. Tags survive history rewrites inside the container.
-- **Session branches**: On `shell` and `launch` sessions, the container offers to create a `riotbox/<id>` branch. Claude works there; on exit the branch is fast-forward merged back so the full commit history lands seamlessly on your branch. See [Session branches](#session-branches).
+- **Session branches**: On `shell` sessions, the container offers to create a `riotbox/<id>` branch. Claude works there; on exit the branch is fast-forward merged back so the full commit history lands seamlessly on your branch. See [Session branches](#session-branches).
 - **Non-git-repo warning**: If a project directory isn't a git repo, the riotbox warns you that there's no checkpoint protection.
 - **Git guardrails**: Inside the container, `receive.denyNonFastForwards` and `receive.denyDeletes` are enabled to prevent the most destructive git operations.
 - **Container isolation**: Claude can't access your SSH keys, cloud credentials, or anything outside the mounted directories.
@@ -232,12 +269,6 @@ The riotbox includes several layers of protection, but none are foolproof:
 If Claude makes a mess, you have several recovery options:
 
 ```sh
-# List available backups and their checkpoints
-claude-riotbox backups
-
-# Show recovery instructions for a specific project
-claude-riotbox restore my-project
-
 # Fetch everything from the backup into your project
 cd /path/to/my-project
 git fetch ~/.claude-riotbox/backups/my-project.git --all --tags
@@ -249,11 +280,11 @@ git clone ~/.claude-riotbox/backups/my-project.git my-project-restored
 
 ### Session branches
 
-When you start an interactive session (`claude-riotbox shell` or `claude-riotbox launch`) against a single-repo workspace, the container prompts you to create a session branch:
+When you start an interactive session (`claude-riotbox shell`) against a single-repo workspace, the container prompts you to create a session branch:
 
 ```
   Git repo detected on branch 'main'.
-  Create session branch 'riotbox/20260309-143022-a1b2c3d4'? [y/N]
+  Create session branch 'riotbox/20260309-143022-a1b2c3d4'? [Y/n]
 ```
 
 If you say yes, Claude works on `riotbox/<id>` instead of your current branch. On clean exit, the session branch is fast-forward merged back so all commits land directly on your branch with their original messages and timestamps:
@@ -277,7 +308,7 @@ git merge --ff-only riotbox/<id>
 
 | Value | Behavior |
 |---|---|
-| *(unset)* | Prompt at session start (default for `shell`/`launch`) |
+| *(unset)* | Prompt at session start (default for `shell`) |
 | `SESSION_BRANCH=1` | Auto-create, no prompt |
 | `SESSION_BRANCH=0` | Skip silently (default for `run`) |
 
@@ -303,7 +334,8 @@ Session branching is automatically disabled for `claude-riotbox run` (non-intera
 |---|---|---|
 | Project directory | read-write bind mount (`:z`) | Your code — Claude needs full access |
 | Session data (`~/.claude-riotbox/`) | bind mount (`:z`) | Isolated per project set |
-| Auth credentials | file copy into session dir | Not bind-mounted — each container gets its own copy |
+| `~/.claude/.credentials.json` | nested bind mount (RW) | OAuth token refreshes must write back to host |
+| `~/.claude.json` | file copy into session dir | Each container gets a writable snapshot |
 | User scripts (`~/bin`) | read-only bind mount | Available but not writable |
 | Package caches | named volumes | Shared across containers, not with host |
 | Network | enabled | Claude needs npm/PyPI/crates.io etc. |
@@ -316,7 +348,7 @@ Session branching is automatically disabled for `claude-riotbox run` (non-intera
 
 - **Sudo**: the container user has passwordless `sudo`. Claude often needs to `dnf install` build dependencies, and the container is disposable. This does **not** grant any host privileges.
 - **UID mapping**: the container user's UID matches your host UID. With podman, `--userns=keep-id` preserves this mapping in rootless mode, requiring `fuse-overlayfs` for acceptable performance on large images.
-- **SELinux**: project and session bind mounts use `:z`. Package caches use named volumes to avoid relabeling overhead. Auth files are copied rather than mounted to avoid permission issues with `:z` on 600-permission files.
+- **SELinux**: project and session bind mounts use `:z`. Package caches use named volumes to avoid relabeling overhead. `.claude.json` is copied rather than mounted to avoid `:z` relabeling issues on 600-permission files; `.credentials.json` is bind-mounted RW inside the session directory (a nested mount that avoids the relabeling problem).
 - **Tool configs** (`.npmrc`, `.editorconfig`, etc.) are copied at build time — not mounted — so edits inside the container don't affect the host.
 - **Nested containers**: `RIOTBOX_NESTED=1` passes `--device /dev/fuse` and `--security-opt label=disable`. This disables SELinux confinement — the container is no longer restricted by SELinux policy. Only used when explicitly requested via `nested-run`/`nested-shell`.
 
@@ -417,7 +449,7 @@ cat ~/.claude/debug/latest
 
 **Symptom**: Claude Code starts but says you're not logged in.
 
-**Cause**: auth credentials aren't reaching the container. The riotbox copies `~/.claude.json` and `~/.claude/.credentials.json` from the host into the session directory before each run.
+**Cause**: auth credentials aren't reaching the container. Before each run, the riotbox copies `~/.claude.json` into the session directory and bind-mounts `~/.claude/.credentials.json` into it.
 
 **Check**:
 - Verify the files exist on the host: `ls -la ~/.claude.json ~/.claude/.credentials.json`

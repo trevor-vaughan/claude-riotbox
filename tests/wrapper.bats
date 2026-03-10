@@ -44,19 +44,14 @@ read_task_args() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# No arguments → shell in CWD
+# No arguments → show help
 # ─────────────────────────────────────────────────────────────────────────────
 
-@test "no args → shell in CWD" {
-    run_wrapper
-    read_task_args
-    [[ "${TASK_ARGS[0]}" == --taskfile* ]] || [[ "${TASK_ARGS[0]}" == "--taskfile" ]]
-    # Find the task name in the args
-    local found=false
-    for arg in "${TASK_ARGS[@]}"; do
-        if [ "$arg" = "shell" ]; then found=true; fi
-    done
-    [ "$found" = true ]
+@test "no args → show help" {
+    cd "${TEST_DIR}/projects"
+    run "${TEST_DIR}/bin/claude-riotbox"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Usage:"* ]]
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -147,6 +142,64 @@ read_task_args() {
     local args_str="${TASK_ARGS[*]}"
     [[ "$args_str" == *"resume"* ]]
     [[ "$args_str" == *"${TEST_DIR}/projects/foo"* ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# session-list command
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "session-list routes to task" {
+    run_wrapper session-list
+    read_task_args
+    local args_str="${TASK_ARGS[*]}"
+    [[ "$args_str" == *"session-list"* ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# session-remove command
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "session-remove routes to task" {
+    run_wrapper session-remove
+    read_task_args
+    local args_str="${TASK_ARGS[*]}"
+    [[ "$args_str" == *"session-remove"* ]]
+}
+
+@test "session-remove --all routes correctly" {
+    run_wrapper session-remove --all
+    read_task_args
+    local args_str="${TASK_ARGS[*]}"
+    [[ "$args_str" == *"session-remove"* ]]
+    [[ "$args_str" == *"--all"* ]]
+}
+
+@test "session-remove with path routes correctly" {
+    run_wrapper session-remove "${TEST_DIR}/projects/foo"
+    read_task_args
+    local args_str="${TASK_ARGS[*]}"
+    [[ "$args_str" == *"session-remove"* ]]
+    [[ "$args_str" == *"${TEST_DIR}/projects/foo"* ]]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# session-reset command
+# ─────────────────────────────────────────────────────────────────────────────
+
+@test "session-reset routes to task" {
+    run_wrapper session-reset
+    read_task_args
+    local args_str="${TASK_ARGS[*]}"
+    [[ "$args_str" == *"session-reset"* ]]
+}
+
+@test "session-reset all force routes correctly" {
+    run_wrapper session-reset all force
+    read_task_args
+    local args_str="${TASK_ARGS[*]}"
+    [[ "$args_str" == *"session-reset"* ]]
+    [[ "$args_str" == *"all"* ]]
+    [[ "$args_str" == *"force"* ]]
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

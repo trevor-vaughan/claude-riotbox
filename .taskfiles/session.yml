@@ -18,16 +18,6 @@ tasks:
       IMAGE_NAME: "{{.IMAGE_NAME}}"
     cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/ensure-image.sh"
 
-  launch:
-    internal: true
-    dir: "{{.USER_WORKING_DIR}}"
-    deps: [ensure-image]
-    env:
-      CONTAINER_CMD: "{{.CONTAINER_CMD}}"
-      IMAGE_NAME: "{{.IMAGE_NAME}}"
-      ROOT_DIR: "{{.ROOT_DIR}}"
-    cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/launch.sh {{.ARGS}}"
-
   run:
     desc: Run Claude with a task prompt
     dir: "{{.USER_WORKING_DIR}}"
@@ -110,6 +100,19 @@ tasks:
     cmds:
       - cmd: echo "WARNING{{":"}} Nested container mode disables SELinux confinement." >&2
       - "{{.ROOT_DIR}}/.taskfiles/scripts/launch.sh bash"
+
+  list-sessions:
+    desc: List riotbox sessions with project paths and last-used info
+    cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/list-sessions.sh"
+
+  remove-session:
+    desc: Remove one or more sessions by key or project path (or --all)
+    dir: "{{.USER_WORKING_DIR}}"
+    vars:
+      ARGS: "{{.ARGS | default .CLI_ARGS}}"
+    env:
+      ROOT_DIR: "{{.ROOT_DIR}}"
+    cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/remove-session.sh {{.ARGS}}"
 
   reset-session:
     desc: Reset session cache (forces fresh skill/config copy)

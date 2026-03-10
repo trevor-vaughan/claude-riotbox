@@ -2,9 +2,28 @@
 set -euo pipefail
 # Audit untrusted repo in read-only mode.
 # Required env: CONTAINER_CMD, IMAGE_NAME, ROOT_DIR
-# Arguments: task [projects...]
+# Arguments: prompt [projects...]
 
-task_prompt="${1:?Usage: audit.sh <task> [projects...]}"
+if [ $# -eq 0 ]; then
+    cat >&2 <<EOF
+Error: a prompt is required.
+
+Usage:
+  task audit -- "prompt" [project ...]
+  claude-riotbox audit "prompt" [project ...]
+
+A prompt describes what Claude should do. Projects default to the current
+directory if not specified.
+
+Examples:
+  task audit -- "review this code for security issues"
+  task audit -- "find SQL injection vulnerabilities" . ../shared-lib
+  claude-riotbox audit "check authentication logic" .
+EOF
+    exit 1
+fi
+
+task_prompt="$1"
 shift
 projects="${*:-}"
 

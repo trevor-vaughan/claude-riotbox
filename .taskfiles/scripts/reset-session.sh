@@ -5,6 +5,7 @@ set -euo pipefail
 # Arguments: [all] [force]
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
+source "${ROOT_DIR}/.taskfiles/scripts/session-summary.sh"
 session_root="${HOME}/.claude-riotbox"
 
 confirm() {
@@ -19,7 +20,7 @@ for flag in "$@"; do
     case "${flag}" in
         all)   all=true ;;
         force) force=true ;;
-        *)     echo "Unknown flag: ${flag}. Usage: reset-session [all] [force]" >&2; exit 1 ;;
+        *)     echo "Unknown flag: ${flag}. Usage: task reset-session -- [all] [force]" >&2; exit 1 ;;
     esac
 done
 
@@ -35,16 +36,22 @@ if [ "${all}" = true ]; then
         echo "No session dirs found."
         exit 0
     fi
-    confirm "Remove ${#dirs[@]} session dir(s)?" || { echo "Aborted."; exit 0; }
+    echo "Sessions to remove:"
+    for d in "${dirs[@]}"; do session_summary "${d}"; done
+    echo ""
+    confirm "Remove ${#dirs[@]} session(s)?" || { echo "Aborted."; exit 0; }
     for d in "${dirs[@]}"; do rm -rf "${d}"; done
-    echo "Removed ${#dirs[@]} session dir(s). Next run will create fresh copies."
+    echo "Removed ${#dirs[@]} session(s). Next run will create fresh copies."
 else
     resolve_projects ""
     if [ ! -d "${RIOTBOX_SESSION_DIR}" ]; then
         echo "No session dir found for $(pwd)."
         exit 0
     fi
-    confirm "Remove session dir for ${PROJECT_SUMMARY}?" || { echo "Aborted."; exit 0; }
+    echo "Session to remove:"
+    session_summary "${RIOTBOX_SESSION_DIR}"
+    echo ""
+    confirm "Remove this session?" || { echo "Aborted."; exit 0; }
     rm -rf "${RIOTBOX_SESSION_DIR}"
-    echo "Removed session for ${PROJECT_SUMMARY}. Next run will create a fresh copy."
+    echo "Removed. Next run will create a fresh copy."
 fi

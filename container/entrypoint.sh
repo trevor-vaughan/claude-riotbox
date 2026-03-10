@@ -74,6 +74,20 @@ if [ "${installed}" = "0" ] && [ -d "${STAGING_DIR}/plugins" ]; then
     fi
 fi
 
+# Wire up statusline-command.sh if present.
+# Claude Code reads settings.json key "statusLine" as an object:
+#   { "type": "command", "command": "<path>" }
+# A flat "statusCommand" string key is wrong and is silently ignored.
+if [ -f ~/.claude/statusline-command.sh ]; then
+    jq '.statusLine = {"type": "command", "command": "/home/claude/.claude/statusline-command.sh"}' \
+        ~/.claude/settings.json > ~/.claude/settings.json.tmp \
+        && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
+else
+    jq 'del(.statusLine)' \
+        ~/.claude/settings.json > ~/.claude/settings.json.tmp \
+        && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
+fi
+
 # Ensure all installed plugins are enabled in settings.json.
 # Done via jq (pure JSON) instead of `claude plugin enable` to avoid
 # spawning a Node.js process per plugin on every startup.
@@ -101,7 +115,7 @@ else
 fi
 _exit_code=$?
 
-# Session branch: squash-merge back to the original branch on clean exit.
+# Session branch: fast-forward merge back to the original branch on clean exit.
 # On hard kill (SIGKILL) this won't run — the session branch persists on disk
 # and can be merged manually.
 session_branch_teardown

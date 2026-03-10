@@ -149,6 +149,8 @@ setup_projects() {
     local riotbox_session_dir="${RIOTBOX_SESSION_DIR}"
     mkdir -p "${riotbox_session_dir}"
     chmod 700 "${riotbox_session_dir}"
+    # Write project paths so list-sessions can show them without decoding the key
+    printf '%s\n' "${PROJECT_DIRS[@]}" > "${riotbox_session_dir}/.projects"
     # Bail if a previous run without --userns=keep-id left dirs owned by
     # a subordinate UID.
     if [ ! -w "${riotbox_session_dir}" ]; then
@@ -158,42 +160,14 @@ setup_projects() {
     fi
     PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${riotbox_session_dir}:/home/claude/.claude:z"
 
-    # ── Auth: credentials (RW mount) + config (copy) ────────────────
-    # With CLAUDE_CONFIG_DIR set to ~/.claude in the container, Claude Code
-    # reads credentials from $CLAUDE_CONFIG_DIR/.credentials.json and config
-    # from $CLAUDE_CONFIG_DIR/.claude.json.
-    #
-    # Credentials (~/.claude/.credentials.json) are bind-mounted RW as a
-    # nested mount inside the session dir. This means token refresh writes
-    # go directly to the host file — no copy-on-start or write-back needed.
-    # OAuth uses rotating refresh tokens, so keeping the host file current
-    # is essential for subsequent runs.
-    #
-    # Config (~/.claude.json) is copied into the session dir. It contains
-    # account metadata needed for auth, but also host-specific state
-    # (UI preferences, project history) that shouldn't be modified by the
-    # container. The copy is writable so Claude Code can update oauthAccount
-    # fields during token refresh without error.
-    if [ -f "${HOME}/.claude/.credentials.json" ]; then
-        PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${HOME}/.claude/.credentials.json:/home/claude/.claude/.credentials.json:z"
-    fi
-    if [ -f "${HOME}/.claude.json" ]; then
-        dest="${riotbox_session_dir}/.claude.json"
-        cp "${HOME}/.claude.json" "${dest}"
-        chmod 600 "${dest}"
-    fi
-
-    # ── Skills: copy host-installed skills into session dir ────────────
-    # Skills may be symlinks to locations outside ~/.claude/ (e.g. plugin
-    # dirs or dev checkouts), so we copy with -L to dereference them.
-    # The session dir is mounted at ~/.claude in the container, so skills
-    # land at ~/.claude/skills/ where Claude Code expects them.
-    # We remove and re-copy on each launch so renamed/removed skills don't
-    # linger and so type mismatches (file vs dir) from prior runs don't cause
-    # cp to fail.
-    if [ -d "${HOME}/.claude/skills" ]; then
-        rm -rf "${riotbox_session_dir}/skills"
-        cp -rL "${HOME}/.claude/skills" "${riotbox_session_dir}/"
+    # ── Sync Claude config files into the session dir ─────────────────
+    # Delegates to sync-claude-settings.sh which handles credentials,
+    # config, skills, statusline-command.sh, etc. Any -v flags it prints
+    # (e.g. for the RW credentials bind mount) are appended to PROJECT_VOLUME_FLAGS.
+    local sync_flags
+    sync_flags="$("${ROOT_DIR}/scripts/sync-claude-settings.sh" "${HOME}/.claude" "${riotbox_session_dir}")"
+    if [ -n "${sync_flags}" ]; then
+        PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} ${sync_flags}"
     fi
 
     # ── Container name ────────────────────────────────────────────────

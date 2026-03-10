@@ -25,7 +25,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
+# Primary container identity (current)
 CLAUDE_EMAIL="claude@riotbox"
+# Legacy identity used by old squash-merge code (pre-ff-only fix)
+CLAUDE_EMAIL_LEGACY="riotbox@local"
 
 # ── Dependency check ─────────────────────────────────────────────────────────
 
@@ -45,7 +48,7 @@ for arg in "$@"; do
         --all)      REF_ARG="--all" ;;
         -*)
             echo "ERROR: Unknown option '${arg}'." >&2
-            echo "Usage: $0 [<since-ref>|--all] [--force]" >&2
+            echo "Usage: task reown -- [<since-ref>|--all] [--force]" >&2
             exit 1
             ;;
         *)  REF_ARG="${arg}" ;;
@@ -121,7 +124,7 @@ else
         LOG_RANGE=("${CHECKPOINT}..HEAD")
     else
         echo "No checkpoint commit found. Specify a ref or use --all."
-        echo "Usage: $0 [<since-ref>|--all] [--force]"
+        echo "Usage: task reown -- [<since-ref>|--all] [--force]"
         exit 1
     fi
 fi
@@ -129,7 +132,7 @@ fi
 # ── Count affected commits ──────────────────────────────────────────────────
 
 TOTAL_IN_RANGE="$(git rev-list --count "${LOG_RANGE[@]}")"
-CLAUDE_COUNT="$(git rev-list --count "${LOG_RANGE[@]}" --author="${CLAUDE_EMAIL}")"
+CLAUDE_COUNT="$(git rev-list --count "${LOG_RANGE[@]}" --author="${CLAUDE_EMAIL}" --author="${CLAUDE_EMAIL_LEGACY}")"
 
 if [ "${CLAUDE_COUNT}" -eq 0 ]; then
     echo "No Claude-authored commits found in range (${RANGE_DESC}). Nothing to do."
@@ -143,7 +146,7 @@ echo ""
 
 # List the Claude-authored commits that will be rewritten
 echo "Commits to reown:"
-git --no-pager log "${LOG_RANGE[@]}" --author="${CLAUDE_EMAIL}" --format="  %C(yellow)%h%Creset %s" --reverse
+git --no-pager log "${LOG_RANGE[@]}" --author="${CLAUDE_EMAIL}" --author="${CLAUDE_EMAIL_LEGACY}" --format="  %C(yellow)%h%Creset %s" --reverse
 echo ""
 
 # Show any non-Claude commits in the range (they get rewritten too due to hash chain)
@@ -152,7 +155,7 @@ if [ "${NON_CLAUDE_COUNT}" -gt 0 ]; then
     echo "Also in range (${NON_CLAUDE_COUNT} commit(s) by other authors — hashes will change):"
     # --invert-grep only works with --grep, not --author; use grep -v to exclude
     git log "${LOG_RANGE[@]}" --format="%ae %C(dim)%h%Creset %s %C(dim)(%an)%Creset" --reverse \
-        | grep -v "^${CLAUDE_EMAIL} " \
+        | grep -Ev "^${CLAUDE_EMAIL} |^${CLAUDE_EMAIL_LEGACY} " \
         | sed 's/^[^ ]* /  /'
     echo ""
 fi
@@ -175,12 +178,17 @@ echo "Backup tag created: ${BACKUP_TAG}/${CURRENT_BRANCH}"
 echo "  Restore with:  git reset --hard ${BACKUP_TAG}/${CURRENT_BRANCH}"
 echo ""
 
-# ── Save remote URLs (filter-repo removes them) ─────────────────────────────
+# ── Save remote URLs and upstream tracking (filter-repo removes both) ───────
 
 declare -A REMOTES
 while IFS= read -r remote_name; do
     REMOTES["${remote_name}"]="$(git remote get-url "${remote_name}")"
 done < <(git remote)
+
+# Capture upstream tracking ref so we can restore it after filter-repo wipes
+# refs/remotes/*. Without this, `git push` sees no remote tracking ref, fetches
+# from origin, and incorrectly tells the user to rebase instead of force-push.
+UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null || true)"
 
 # ── Pass 1: Rewrite author/committer via filter-repo ────────────────────────
 
@@ -188,7 +196,9 @@ MAILMAP="$(mktemp)"
 trap 'rm -f "${MAILMAP}"' EXIT
 
 # mailmap format: New Name <new@email> <old@email>
-echo "${YOUR_NAME} <${YOUR_EMAIL}> <${CLAUDE_EMAIL}>" > "${MAILMAP}"
+# Include both current and legacy container identities.
+printf '%s <%s> <%s>\n' "${YOUR_NAME}" "${YOUR_EMAIL}" "${CLAUDE_EMAIL}"        > "${MAILMAP}"
+printf '%s <%s> <%s>\n' "${YOUR_NAME}" "${YOUR_EMAIL}" "${CLAUDE_EMAIL_LEGACY}" >> "${MAILMAP}"
 
 echo "Pass 1: Rewriting author/committer fields..."
 
@@ -213,6 +223,17 @@ for remote_name in "${!REMOTES[@]}"; do
         echo "WARNING: Failed to restore remote '${remote_name}'." >&2
     fi
 done
+
+# Restore the upstream tracking ref so push commands know where to push.
+# filter-repo deletes refs/remotes/* for rewritten refs, so without this step
+# `git push` would not know the remote-side state and would suggest rebasing.
+if [ -n "${UPSTREAM}" ]; then
+    if git branch --set-upstream-to="${UPSTREAM}" "${CURRENT_BRANCH}" 2>/dev/null; then
+        echo "Restored upstream tracking: ${CURRENT_BRANCH} -> ${UPSTREAM}"
+    else
+        echo "NOTE: Could not restore upstream tracking to '${UPSTREAM}' — set it manually if needed." >&2
+    fi
+fi
 
 # ── Pass 2: Re-sign commits with GPG (if enabled) ───────────────────────────
 
@@ -245,6 +266,11 @@ echo "Done. ${CLAUDE_COUNT} commit(s) rewritten."
 echo ""
 echo "Review with:  git log --oneline -${TOTAL_IN_RANGE}"
 echo "Compare with: git diff ${BACKUP_TAG}/${CURRENT_BRANCH}..${CURRENT_BRANCH}"
+echo ""
+echo "IMPORTANT: History was rewritten — commit hashes have changed."
+echo "A normal 'git push' will be rejected because the remote has different hashes."
+echo "You must force-push:"
+echo "  git push --force-with-lease"
 echo ""
 echo "Once satisfied, delete the backup tag:"
 echo "  git tag -d ${BACKUP_TAG}/${CURRENT_BRANCH}"

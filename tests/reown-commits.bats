@@ -270,6 +270,21 @@ Co-Authored-By: Claude <noreply@anthropic.com>" >/dev/null
     [ "$(git remote get-url upstream)" = "${second_bare}" ]
 }
 
+@test "reown restores upstream tracking after filter-repo wipes remote tracking refs" {
+    human_commit "initial"
+    git push origin main >/dev/null 2>&1
+    git branch --set-upstream-to=origin/main main
+
+    human_commit "checkpoint: pre-claude"
+    claude_commit "work"
+
+    "${REOWN}" --force
+
+    local tracking
+    tracking="$(git rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null)"
+    [ "${tracking}" = "origin/main" ]
+}
+
 # ── Edge cases ───────────────────────────────────────────────────────────────
 
 @test "reown exits cleanly when no claude commits in range" {

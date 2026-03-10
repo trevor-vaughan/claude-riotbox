@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
 # install.sh — Install the claude-riotbox CLI wrapper.
 # Usage: ./install.sh [target_dir]
-# ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,76 +10,79 @@ mkdir -p "${TARGET_DIR}"
 
 cat > "${TARGET_DIR}/claude-riotbox" <<'WRAPPER'
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
 # claude-riotbox — CLI wrapper for Claude Riotbox
-#
-# Primary commands (no -- separator needed):
-#   claude-riotbox                       → shell in CWD
-#   claude-riotbox .                     → shell in .
-#   claude-riotbox . ../other            → shell with multiple projects
-#   claude-riotbox run "prompt" . ../o   → run with prompt + projects
-#   claude-riotbox shell . ../other      → explicit shell
-#   claude-riotbox resume .              → resume last session
-#   claude-riotbox reown [flags]         → rewrite Claude's commits
-#
-# Everything else passes through to task:
-#   claude-riotbox build                 → task build
-#   claude-riotbox test                  → task test
-#   claude-riotbox session:audit -- ...  → task session:audit -- ...
-# ─────────────────────────────────────────────────────────────────────────────
 RIOTBOX_DIR="@@RIOTBOX_DIR@@"
 
-# Resolve the Taskfile for pass-through commands
 run_task() { exec task --taskfile "${RIOTBOX_DIR}/Taskfile.yml" "$@"; }
 
-# Check if ALL arguments are existing paths
 all_paths() {
     [ $# -ge 1 ] || return 1
-    for arg in "$@"; do
-        [ -e "$arg" ] || return 1
-    done
+    for arg in "$@"; do [ -e "$arg" ] || return 1; done
 }
 
-# No arguments → shell in CWD
-if [ $# -eq 0 ]; then
-    run_task shell -- .
-fi
+usage() {
+    cat <<EOF
+Usage: claude-riotbox [command] [args...]
+
+Session commands:
+  .                            Open shell in current directory (default)
+  . ../other                   Open shell with multiple projects
+  shell [projects...]          Open a shell (explicit)
+  run "prompt" [projects...]   Run Claude with a prompt
+  resume [projects...]         Resume the last Claude session
+  reown [flags...]             Rewrite Claude's commits to your git identity
+  session-list                 List all riotbox sessions
+  session-remove [key/path]    Remove a session by key or project path (or --all)
+  session-reset [all] [force]  Reset session cache (forces fresh skill/config copy)
+
+Task runner:
+  task <task> [args...]        Pass a command through to the task runner
+                               e.g. task build, task test, task docker:clean
+
+Any unrecognized command is passed through to task automatically.
+EOF
+}
 
 cmd="$1"
 shift
 
+if [[ -z "$cmd" ]]; then
+    cmd="shell"
+fi
+
 case "${cmd}" in
+    help|-h|--help)
+        usage
+        ;;
     run)
-        # run <prompt> [projects...]
-        # First arg is the prompt, rest are project paths
         run_task run -- "$@"
         ;;
     shell)
-        # shell [projects...]
-        if [ $# -eq 0 ]; then
-            run_task shell -- .
-        else
-            run_task shell -- "$@"
-        fi
+        run_task shell -- "${@:-.}"
         ;;
     resume)
-        # resume [projects...]
-        if [ $# -eq 0 ]; then
-            run_task resume -- .
-        else
-            run_task resume -- "$@"
-        fi
+        run_task resume -- "${@:-.}"
         ;;
     reown)
-        # reown [flags...] — runs from CWD
         run_task reown -- "$@"
+        ;;
+    session-list)
+        run_task session-list
+        ;;
+    session-remove)
+        run_task session-remove -- "$@"
+        ;;
+    session-reset)
+        run_task session-reset -- "$@"
+        ;;
+    task)
+        run_task "$@"
         ;;
     *)
         # If cmd + remaining args are all paths → shell shortcut
         if all_paths "${cmd}" "$@"; then
             run_task shell -- "${cmd}" "$@"
         else
-            # Pass through to task (build, test, clean, etc.)
             run_task "${cmd}" "$@"
         fi
         ;;

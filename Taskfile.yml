@@ -5,8 +5,6 @@ includes:
     taskfile: .taskfiles/docker.yml
   session:
     taskfile: .taskfiles/session.yml
-  backup:
-    taskfile: .taskfiles/backup.yml
   setup:
     taskfile: .taskfiles/setup.yml
   tests:
@@ -16,45 +14,138 @@ dotenv: [".env"]
 
 tasks:
   default:
-    desc: List all available tasks
     silent: true
-    cmd: task --list
+    cmd: |
+      task --list 2>/dev/null | awk '
+        /^task:/ { next }
+        /^\* / {
+          line = substr($0, 3)
+          if (!match(line, /:[[:space:]]+/)) next
+          name = substr(line, 1, RSTART - 1)
+          desc = substr(line, RSTART + RLENGTH)
+          gsub(/^[[:space:]]+/, "", desc)
+          sep = index(name, ":")
+          if (sep > 0) {
+            ns = substr(name, 1, sep - 1)
+            short = substr(name, sep + 1)
+          } else {
+            ns = ""
+            short = name
+          }
+          if (short == "default") next
+          idx++
+          ns_arr[idx] = ns
+          short_arr[idx] = short
+          desc_arr[idx] = desc
+          if (!(ns in ns_seen)) {
+            ns_order[++ns_count] = ns
+            ns_seen[ns] = 1
+          }
+        }
+        END {
+          for (o = 1; o <= ns_count; o++) {
+            ns = ns_order[o]
+            print ""
+            print "----------"
+            print (ns == "" ? "tasks" : ns) ":"
+            for (i = 1; i <= idx; i++) {
+              if (ns_arr[i] == ns) {
+                printf "  %-24s %s\n", short_arr[i], desc_arr[i]
+              }
+            }
+            print "----------"
+          }
+          print ""
+        }
+      '
 
   build:
-    desc: Build the riotbox image (shortcut)
+    desc: "Alias for docker:build"
     cmds:
       - task: docker:build
 
   run:
-    desc: Run Claude with a task prompt (shortcut)
+    desc: "Alias for session:run"
     cmds:
       - task: session:run
         vars:
           ARGS: "{{.CLI_ARGS}}"
 
   shell:
-    desc: Open a shell inside the riotbox (shortcut)
+    desc: "Alias for session:shell"
     cmds:
       - task: session:shell
         vars:
           ARGS: "{{.CLI_ARGS}}"
 
   resume:
-    desc: Continue the last Claude session (shortcut)
+    desc: "Alias for session:resume"
     cmds:
       - task: session:resume
         vars:
           ARGS: "{{.CLI_ARGS}}"
 
   reown:
-    desc: Rewrite Claude's commits to use your git identity
-    dir: "{{.USER_WORKING_DIR}}"
-    cmd: "{{.ROOT_DIR}}/scripts/reown-commits.sh {{.CLI_ARGS}}"
+    desc: "Alias for setup:reown"
+    cmds:
+      - task: setup:reown
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
 
   test:
-    desc: Run tests (shortcut)
+    desc: "Alias for tests:run"
     cmds:
       - task: tests:run
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
+  rebuild:
+    desc: "Alias for docker:rebuild"
+    cmds:
+      - task: docker:rebuild
+
+  nested-run:
+    desc: "Alias for session:nested-run"
+    cmds:
+      - task: session:nested-run
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
+  nested-shell:
+    desc: "Alias for session:nested-shell"
+    cmds:
+      - task: session:nested-shell
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
+  session-list:
+    desc: "Alias for session:list-sessions"
+    cmds:
+      - task: session:list-sessions
+
+  session-remove:
+    desc: "Alias for session:remove-session"
+    cmds:
+      - task: session:remove-session
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
+  session-reset:
+    desc: "Alias for session:reset-session"
+    cmds:
+      - task: session:reset-session
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
+  mounts:
+    desc: "Alias for setup:mounts"
+    cmds:
+      - task: setup:mounts
+
+  install-hooks:
+    desc: "Alias for setup:install-hooks"
+    cmds:
+      - task: setup:install-hooks
         vars:
           ARGS: "{{.CLI_ARGS}}"
 
