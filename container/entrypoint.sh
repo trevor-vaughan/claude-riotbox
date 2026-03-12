@@ -53,7 +53,6 @@ fi
 # Plugins: copy pre-staged plugins into the session dir on first run.
 # Plugins are pre-installed at build time into ~/.riotbox/plugins-staging/
 # to avoid network access and Node.js spawns at startup.
-RIOTBOX_MARKETPLACE="claude-plugins-official"
 STAGING_DIR="${HOME}/.riotbox/plugins-staging/.claude"
 
 installed="$(jq -r '.plugins | length' ~/.claude/plugins/installed_plugins.json 2>/dev/null || echo 0)"

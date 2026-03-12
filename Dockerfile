@@ -40,6 +40,8 @@ RUN curl -sL https://taskfile.dev/install.sh | sh -s -- -b /tools/bin && \
     /tools/bin/task --version
 
 # venom — integration test framework (https://github.com/ovh/venom)
+# TODO(security): No checksums or signatures published upstream. Pin to a
+#   version and verify a self-computed SHA256 if supply-chain risk is a concern.
 RUN ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/') && \
     curl -LO "https://github.com/ovh/venom/releases/latest/download/venom.linux-${ARCH}" && \
     mv "venom.linux-${ARCH}" /tools/bin/venom && \
@@ -152,8 +154,8 @@ RUN pip3 install --no-cache-dir --break-system-packages semgrep pyyaml && semgre
 # ── Non-root user + root-phase config ─────────────────────────────────────────
 # User creation, dnf config, and system prompt dir. The chown -R happens later
 # (after COPY/pip that create root-owned dirs under /home/claude).
-RUN useradd -m -u ${HOST_UID} -s /bin/bash claude 2>/dev/null || \
-    useradd -m -s /bin/bash claude && \
+RUN useradd -l -m -u ${HOST_UID} -s /bin/bash claude 2>/dev/null || \
+    useradd -l -m -s /bin/bash claude && \
     mkdir -p /workspace && chown claude /workspace && \
     echo "claude ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/claude && \
     # Subordinate UID/GID ranges for rootless podman-in-podman
@@ -188,6 +190,7 @@ RUN curl -fsSL \
     | bash
 
 # Install every Node version detected on the host, then set the default
+# hadolint ignore=SC2016
 RUN set -e; echo '#!/usr/bin/env bash' > /tmp/install-node.sh; \
     echo 'set -e' >> /tmp/install-node.sh; \
     echo 'source ${NVM_DIR}/nvm.sh' >> /tmp/install-node.sh; \
@@ -220,6 +223,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
         done && \
         rustc --version && cargo --version && \
         ARCH=\$(uname -m) && \
+        # TODO(security): cargo-binstall publishes .sig files (minisign) but uses
+        #   ephemeral keys per release — no stable public key to verify against.
         curl -LSfs https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-\${ARCH}-unknown-linux-musl.tgz \
             | tar xz -C /home/claude/.cargo/bin && \
         cargo binstall --no-confirm ast-grep && sg --version \
@@ -244,7 +249,7 @@ RUN if [ -n "${RUBY_VERSIONS}" ]; then \
     fi
 
 # ── Go tools (installed after user is set up) ───────────────────────────────
-RUN if command -v go &>/dev/null; then \
+RUN if command -v go >/dev/null 2>&1; then \
         mkdir -p /home/claude/go /home/claude/.cache/go-build && \
         go install golang.org/x/tools/gopls@latest; \
     fi

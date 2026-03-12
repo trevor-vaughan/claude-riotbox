@@ -34,6 +34,7 @@ if [ "${RIOTBOX_NESTED:-}" = "1" ]; then
     NESTED_FLAGS="--device /dev/fuse --security-opt label=disable"
 fi
 
+# shellcheck disable=SC2086  # intentional word splitting for multi-flag vars
 ${CONTAINER_CMD} run --rm -it ${USERNS_FLAG} ${INIT_FLAG} \
     --name "${CONTAINER_NAME}" \
     ${NET_FLAG} \

@@ -7,8 +7,12 @@ includes:
     taskfile: .taskfiles/session.yml
   setup:
     taskfile: .taskfiles/setup.yml
+  lint:
+    taskfile: .taskfiles/lint.yml
   tests:
     taskfile: .taskfiles/test.yml
+  release:
+    taskfile: .taskfiles/release.yml
 
 dotenv: [".env"]
 
@@ -149,6 +153,11 @@ tasks:
         vars:
           ARGS: "{{.CLI_ARGS}}"
 
+  lint:
+    desc: "Alias for lint:run"
+    cmds:
+      - task: lint:run
+
   check:
     desc: Run all quality gates
-    deps: [test]
+    deps: [lint, test, tests:lint]

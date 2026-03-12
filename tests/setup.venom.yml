@@ -1,0 +1,306 @@
+name: setup.sh tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+testcases:
+  # -- Detection tests --
+
+  - name: Detects podman
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "podman"
+
+  - name: Detects task
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "task"
+
+  - name: Detects fuse-overlayfs
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "fuse-overlayfs"
+
+  - name: Warns about missing auth
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "No authentication found"
+
+  - name: Detects ANTHROPIC_API_KEY
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          ANTHROPIC_API_KEY="sk-test-fake-key" HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ANTHROPIC_API_KEY"
+
+  - name: Detects OAuth tokens
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          echo '{"token": "fake"}' > "${FAKE_HOME}/.claude.json"
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OAuth tokens"
+
+  # -- Config creation tests --
+
+  - name: Creates storage.conf
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          test -f "${FAKE_HOME}/.config/containers/storage.conf"
+          grep -q 'fuse-overlayfs' "${FAKE_HOME}/.config/containers/storage.conf"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: storage.conf has correct structure
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          conf="${FAKE_HOME}/.config/containers/storage.conf"
+          grep -q '^\[storage\]' "${conf}"
+          grep -q 'driver = "overlay"' "${conf}"
+          grep -q '^\[storage.options.overlay\]' "${conf}"
+          grep -q 'mount_program = "/usr/bin/fuse-overlayfs"' "${conf}"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Creates containers.conf
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          test -f "${FAKE_HOME}/.config/containers/containers.conf"
+          grep -q 'init = false' "${FAKE_HOME}/.config/containers/containers.conf"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Skips storage.conf if already correct
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/.config/containers"
+          cat > "${FAKE_HOME}/.config/containers/storage.conf" <<'TOML'
+          [storage]
+          driver = "overlay"
+
+          [storage.options.overlay]
+          mount_program = "/usr/bin/fuse-overlayfs"
+          mountopt = "metacopy=on"
+          TOML
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "storage.conf already configured"
+
+  - name: Skips containers.conf if already correct
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/.config/containers"
+          cat > "${FAKE_HOME}/.config/containers/containers.conf" <<'TOML'
+          [containers]
+          init = false
+          TOML
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "containers.conf already disables catatonit"
+
+  # -- Install tests --
+
+  - name: Installs the CLI wrapper
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          test -x "${FAKE_HOME}/bin/claude-riotbox"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Wrapper references correct riotbox directory
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" RIOTBOX_DIR="{{.riotbox_dir}}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          grep -q 'RIOTBOX_DIR=' "${FAKE_HOME}/bin/claude-riotbox"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Skips CLI install if already present
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build >/dev/null 2>&1
+          test -x "${FAKE_HOME}/bin/claude-riotbox"
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude-riotbox already installed"
+
+  # -- Idempotency tests --
+
+  - name: Is idempotent (two runs produce same config)
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build >/dev/null 2>&1
+          s1="$(sha256sum "${FAKE_HOME}/.config/containers/storage.conf" | awk '{print $1}')"
+          c1="$(sha256sum "${FAKE_HOME}/.config/containers/containers.conf" | awk '{print $1}')"
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build >/dev/null 2>&1
+          s2="$(sha256sum "${FAKE_HOME}/.config/containers/storage.conf" | awk '{print $1}')"
+          c2="$(sha256sum "${FAKE_HOME}/.config/containers/containers.conf" | awk '{print $1}')"
+          [ "${s1}" = "${s2}" ] && [ "${c1}" = "${c2}" ]
+        assertions:
+          - result.code ShouldEqual 0
+
+  # -- Build skip tests --
+
+  - name: Exits cleanly with --no-build
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          ANTHROPIC_API_KEY="sk-test-fake-key" HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Skipped (--no-build)"
+
+  # -- --yes mode tests --
+
+  - name: --yes does not auto-approve podman system reset
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "Podman storage reset complete"
+
+  - name: --yes disables color codes
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          output="$(HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1)"
+          if echo "${output}" | grep -qP '\033\['; then
+            echo "FAIL output contains ANSI escape sequences"
+            exit 1
+          fi
+          echo "no ANSI escapes found"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "no ANSI escapes found"
+
+  # -- Exit code tests --
+
+  - name: Exits 0 when everything is available
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          ANTHROPIC_API_KEY="sk-test-fake-key" HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Exits 0 with warnings (missing auth is a warning not error)
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "warning(s)"

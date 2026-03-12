@@ -106,6 +106,9 @@ if command -v task &>/dev/null; then
 else
     fail "task not found."
     echo "  Install from: https://taskfile.dev/installation/"
+    # TODO(security): curl-to-shell with sudo. The install script verifies
+    #   SHA256 checksums internally, but a MITM could replace the script itself.
+    #   Consider pinning to a known-good hash or requiring manual install.
     if ask_yn "Install task via install script?"; then
         sudo sh -c 'curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin'
         ok "task installed"

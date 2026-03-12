@@ -8,6 +8,7 @@ set -euo pipefail
 IMAGE_NAME="${IMAGE_NAME:-claude-riotbox}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+VERSION="$(cat "${PROJECT_DIR}/VERSION" 2>/dev/null || echo "unknown")"
 
 # Container runtime: prefer podman, fall back to docker
 if command -v podman &>/dev/null; then
@@ -21,7 +22,7 @@ fi
 echo "→ Container runtime: ${CONTAINER_CMD}"
 
 echo "══════════════════════════════════════════════════════"
-echo "  Claude Riotbox — environment introspection + build"
+echo "  Claude Riotbox v${VERSION} — environment introspection + build"
 echo "══════════════════════════════════════════════════════"
 
 # ── 1. Host UID (so volume-mounted files have correct ownership) ───────────────
@@ -170,8 +171,11 @@ echo "════════════════════════�
 echo "  Building image: ${IMAGE_NAME}"
 echo "══════════════════════════════════════════════════════"
 
+# shellcheck disable=SC2086  # intentional word splitting for extra args
 ${CONTAINER_CMD} build \
     ${DOCKER_EXTRA_ARGS:-} \
+    --label "org.opencontainers.image.version=${VERSION}" \
+    --label "org.opencontainers.image.title=claude-riotbox" \
     --build-arg "HOST_UID=${HOST_UID}" \
     --build-arg "NVM_INSTALLER_VERSION=${NVM_INSTALLER_VERSION}" \
     --build-arg "NODE_VERSIONS=${NODE_VERSIONS}" \

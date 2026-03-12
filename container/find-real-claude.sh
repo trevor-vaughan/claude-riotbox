@@ -11,6 +11,7 @@ IFS=: read -ra _path_entries <<< "${PATH}"
 for _dir in "${_path_entries[@]}"; do
     [[ "${_dir}" == */.riotbox/bin ]] && continue
     if [ -x "${_dir}/claude" ]; then
+        # shellcheck disable=SC2034  # used by caller after sourcing
         REAL_CLAUDE="${_dir}/claude"
         break
     fi

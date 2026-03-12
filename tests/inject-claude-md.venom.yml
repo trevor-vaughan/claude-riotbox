@@ -1,0 +1,352 @@
+name: inject-claude-md.sh tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  in_riotbox: "no"
+
+testcases:
+  # -- Creation --
+
+  - name: Creates CLAUDE.md when it does not exist
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config" "${TEST_DIR}/riotbox"
+          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
+          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
+          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
+          HOME="${TEST_DIR}" \
+            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          test -f "${TEST_DIR}/config/CLAUDE.md"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Created file contains the prompt content
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config"
+          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
+          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
+          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
+          HOME="${TEST_DIR}" \
+            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "You are in a riotbox."
+
+  - name: Created file has begin and end markers
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config"
+          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
+          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
+          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
+          HOME="${TEST_DIR}" \
+            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          grep -F "<!-- BEGIN RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md"
+          grep -F "<!-- END RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md"
+        assertions:
+          - result.code ShouldEqual 0
+
+  # -- Idempotency --
+
+  - name: Running twice produces exactly one riotbox block
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config"
+          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
+          export CLAUDE_CONFIG_DIR="${TEST_DIR}/config"
+          export RIOTBOX_PROMPT="${TEST_DIR}/prompt.md"
+          export HOME="${TEST_DIR}"
+          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          count=$(grep -cF "<!-- BEGIN RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md")
+          echo "begin_count=${count}"
+          [ "${count}" -eq 1 ]
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "begin_count=1"
+
+  - name: Running twice produces the same content
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config"
+          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
+          export CLAUDE_CONFIG_DIR="${TEST_DIR}/config"
+          export RIOTBOX_PROMPT="${TEST_DIR}/prompt.md"
+          export HOME="${TEST_DIR}"
+          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          first="$(cat "${TEST_DIR}/config/CLAUDE.md")"
+          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          second="$(cat "${TEST_DIR}/config/CLAUDE.md")"
+          [ "${first}" = "${second}" ] && echo "content_matches=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "content_matches=true"
+
+  # -- Replacement --
+
+  - name: Updates riotbox block when prompt content changes
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config"
+          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
+          export CLAUDE_CONFIG_DIR="${TEST_DIR}/config"
+          export RIOTBOX_PROMPT="${TEST_DIR}/prompt.md"
+          export HOME="${TEST_DIR}"
+          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          echo "Updated prompt." > "${TEST_DIR}/prompt.md"
+          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          grep -F "Updated prompt." "${TEST_DIR}/config/CLAUDE.md"
+          ! grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Updated prompt."
+
+  - name: Old prompt content is fully removed after update
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config"
+          printf 'Line one.\nLine two.\nLine three.\n' > "${TEST_DIR}/prompt.md"
+          export CLAUDE_CONFIG_DIR="${TEST_DIR}/config"
+          export RIOTBOX_PROMPT="${TEST_DIR}/prompt.md"
+          export HOME="${TEST_DIR}"
+          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          echo "Replacement." > "${TEST_DIR}/prompt.md"
+          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          ! grep -F "Line one." "${TEST_DIR}/config/CLAUDE.md"
+          ! grep -F "Line two." "${TEST_DIR}/config/CLAUDE.md"
+          ! grep -F "Line three." "${TEST_DIR}/config/CLAUDE.md"
+          grep -F "Replacement." "${TEST_DIR}/config/CLAUDE.md"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Replacement."
+
+  # -- Preservation of existing content --
+
+  - name: Preserves content before the riotbox block
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config"
+          echo "# My Project Notes" > "${TEST_DIR}/config/CLAUDE.md"
+          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
+          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
+          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
+          HOME="${TEST_DIR}" \
+            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          grep -F "# My Project Notes" "${TEST_DIR}/config/CLAUDE.md"
+          grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Preserves content after the riotbox block on re-inject
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config"
+          cat > "${TEST_DIR}/config/CLAUDE.md" <<'CONTENT'
+          # Project header
+
+          <!-- BEGIN RIOTBOX -->
+          Old prompt.
+          <!-- END RIOTBOX -->
+
+          # User notes
+          Remember to use pytest.
+          CONTENT
+          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
+          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
+          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
+          HOME="${TEST_DIR}" \
+            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          grep -F "Project header" "${TEST_DIR}/config/CLAUDE.md"
+          grep -F "User notes" "${TEST_DIR}/config/CLAUDE.md"
+          grep -F "Remember to use pytest." "${TEST_DIR}/config/CLAUDE.md"
+          grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
+          ! grep -F "Old prompt." "${TEST_DIR}/config/CLAUDE.md"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Preserves content both before and after the block
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config"
+          cat > "${TEST_DIR}/config/CLAUDE.md" <<'CONTENT'
+          # Before
+
+          <!-- BEGIN RIOTBOX -->
+          Original.
+          <!-- END RIOTBOX -->
+
+          # After
+          CONTENT
+          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
+          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
+          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
+          HOME="${TEST_DIR}" \
+            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          grep -F "Before" "${TEST_DIR}/config/CLAUDE.md"
+          grep -F "After" "${TEST_DIR}/config/CLAUDE.md"
+          grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
+        assertions:
+          - result.code ShouldEqual 0
+
+  # -- Prompt file resolution --
+
+  - name: Resolves user override prompt from ~/.riotbox/
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config" "${TEST_DIR}/.riotbox"
+          echo "User override." > "${TEST_DIR}/.riotbox/CLAUDE.md"
+          unset RIOTBOX_PROMPT
+          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
+          HOME="${TEST_DIR}" \
+            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          grep -F "User override." "${TEST_DIR}/config/CLAUDE.md"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "User override."
+
+  - name: "Resolves system default prompt from /etc/riotbox/ [riotbox-only]"
+    skip:
+      - "in_riotbox ShouldEqual yes"
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config"
+          unset RIOTBOX_PROMPT
+          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
+          HOME="${TEST_DIR}" \
+            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          grep -F "<!-- BEGIN RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md"
+          echo "system_default_resolved=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "system_default_resolved=true"
+
+  - name: Does nothing when no prompt file is available
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config" "${TEST_DIR}/empty-home"
+          unset RIOTBOX_PROMPT
+          saved_etc="/etc/riotbox/CLAUDE.md"
+          moved_etc=false
+          if [ -f "${saved_etc}" ]; then
+            sudo mv "${saved_etc}" "${saved_etc}.bak" 2>/dev/null && moved_etc=true
+          fi
+          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
+          HOME="${TEST_DIR}/empty-home" \
+            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          if [ "${moved_etc}" = true ]; then
+            sudo mv "${saved_etc}.bak" "${saved_etc}" 2>/dev/null
+          fi
+          if [ -f "${TEST_DIR}/config/CLAUDE.md" ]; then
+            echo "FAIL: CLAUDE.md should not have been created"
+            exit 1
+          fi
+          echo "no_file_created=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "no_file_created=true"
+
+  # -- Edge cases --
+
+  - name: Handles empty existing CLAUDE.md
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config"
+          touch "${TEST_DIR}/config/CLAUDE.md"
+          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
+          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
+          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
+          HOME="${TEST_DIR}" \
+            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          grep -F "<!-- BEGIN RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md"
+          grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Handles multi-line prompt content
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config"
+          printf 'First line.\nSecond line.\nThird line.\n' > "${TEST_DIR}/prompt.md"
+          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
+          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
+          HOME="${TEST_DIR}" \
+            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          grep -F "First line." "${TEST_DIR}/config/CLAUDE.md"
+          grep -F "Second line." "${TEST_DIR}/config/CLAUDE.md"
+          grep -F "Third line." "${TEST_DIR}/config/CLAUDE.md"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Markers are not duplicated across multiple runs with changing content
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/config"
+          export CLAUDE_CONFIG_DIR="${TEST_DIR}/config"
+          export HOME="${TEST_DIR}"
+          export RIOTBOX_PROMPT="${TEST_DIR}/prompt.md"
+          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
+          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          echo "V2." > "${TEST_DIR}/prompt.md"
+          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          echo "V3." > "${TEST_DIR}/prompt.md"
+          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          begin_count=$(grep -cF "<!-- BEGIN RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md")
+          end_count=$(grep -cF "<!-- END RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md")
+          echo "begin=${begin_count} end=${end_count}"
+          [ "${begin_count}" -eq 1 ] && [ "${end_count}" -eq 1 ]
+          grep -F "V3." "${TEST_DIR}/config/CLAUDE.md"
+          ! grep -F "V2." "${TEST_DIR}/config/CLAUDE.md"
+          ! grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "begin=1 end=1"

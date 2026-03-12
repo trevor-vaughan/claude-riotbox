@@ -4,6 +4,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERSION="$(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null || echo "unknown")"
 TARGET_DIR="${1:-${HOME}/bin}"
 
 mkdir -p "${TARGET_DIR}"
@@ -12,6 +13,7 @@ cat > "${TARGET_DIR}/claude-riotbox" <<'WRAPPER'
 #!/usr/bin/env bash
 # claude-riotbox — CLI wrapper for Claude Riotbox
 RIOTBOX_DIR="@@RIOTBOX_DIR@@"
+RIOTBOX_VERSION="@@RIOTBOX_VERSION@@"
 
 run_task() { exec task --taskfile "${RIOTBOX_DIR}/Taskfile.yml" "$@"; }
 
@@ -35,6 +37,9 @@ Session commands:
   session-remove [key/path]    Remove a session by key or project path (or --all)
   session-reset [all] [force]  Reset session cache (forces fresh skill/config copy)
 
+Info:
+  version                      Show the current version
+
 Task runner:
   task <task> [args...]        Pass a command through to the task runner
                                e.g. task build, task test, task docker:clean
@@ -43,16 +48,20 @@ Any unrecognized command is passed through to task automatically.
 EOF
 }
 
-cmd="$1"
-shift
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
 
 if [[ -z "$cmd" ]]; then
-    cmd="shell"
+    usage
+    exit 0
 fi
 
 case "${cmd}" in
     help|-h|--help)
         usage
+        ;;
+    version|--version|-V)
+        echo "claude-riotbox ${RIOTBOX_VERSION}"
         ;;
     run)
         run_task run -- "$@"
@@ -89,8 +98,12 @@ case "${cmd}" in
 esac
 WRAPPER
 
-# Inject the actual riotbox directory path
-sed -i "s|@@RIOTBOX_DIR@@|${SCRIPT_DIR}|g" "${TARGET_DIR}/claude-riotbox"
+# Inject the actual riotbox directory path (awk avoids sed delimiter issues
+# if SCRIPT_DIR contains |, /, or other sed metacharacters)
+awk -v dir="${SCRIPT_DIR}" -v ver="${VERSION}" \
+    '{gsub(/@@RIOTBOX_DIR@@/, dir); gsub(/@@RIOTBOX_VERSION@@/, ver); print}' \
+    "${TARGET_DIR}/claude-riotbox" > "${TARGET_DIR}/claude-riotbox.tmp" \
+    && mv "${TARGET_DIR}/claude-riotbox.tmp" "${TARGET_DIR}/claude-riotbox"
 
 chmod +x "${TARGET_DIR}/claude-riotbox"
 echo "Installed: ${TARGET_DIR}/claude-riotbox"

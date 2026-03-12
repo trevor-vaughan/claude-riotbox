@@ -23,11 +23,15 @@ tasks:
             "{{.ROOT_DIR}}"
 
   list:
-    desc: List available tests
-    cmd: grep -h '^@test ' "{{.ROOT_DIR}}"/tests/*.bats | sed 's/@test "\(.*\)".*/\1/'
+    desc: List available test suites
+    cmd: find "{{.ROOT_DIR}}/tests" -name '*.venom.yml' -printf '%f\n' | sort
+
+  lint:
+    desc: Lint .venom.yml test suites for structural issues
+    cmd: bash "{{.ROOT_DIR}}/scripts/lint-venom.sh" "{{.ROOT_DIR}}/tests"
 
   run:
-    desc: Run tests (setup.sh, install.sh, reown-commits.sh)
+    desc: Run tests (venom integration suites)
     deps: [build]
     vars:
       ARGS: "{{.ARGS | default .CLI_ARGS}}"

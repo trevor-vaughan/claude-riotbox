@@ -1,0 +1,46 @@
+version: '3'
+
+tasks:
+  default:
+    silent: true
+    cmd: task lint --list
+
+  shellcheck:
+    desc: Lint shell scripts with shellcheck
+    # Excluded checks:
+    #   SC1090 — Can't follow non-constant source (we source scripts dynamically)
+    #   SC1091 — Not following sourced file (sourced files not available as input)
+    cmd: |
+      shellcheck -x \
+        -e SC1090 \
+        -e SC1091 \
+        {{.ROOT_DIR}}/setup.sh \
+        {{.ROOT_DIR}}/install.sh \
+        {{.ROOT_DIR}}/scripts/*.sh \
+        {{.ROOT_DIR}}/container/*.sh \
+        {{.ROOT_DIR}}/.taskfiles/scripts/*.sh \
+        {{.ROOT_DIR}}/tests/lib/*.sh
+
+  hadolint:
+    desc: Lint Dockerfiles with hadolint
+    # Excluded checks:
+    #   DL3013 — Pin versions in pip install (unpinned for latest toolchains)
+    #   DL3016 — Pin versions in npm install (unpinned for latest toolchains)
+    #   DL3041 — Pin versions in dnf install (unpinned for latest toolchains)
+    #   DL3062 — Pin versions in dnf config-manager (unpinned for latest toolchains)
+    #   DL4006 — Set SHELL pipefail (SHELL not supported in OCI image format)
+    cmd: |
+      hadolint \
+        --ignore DL3013 \
+        --ignore DL3016 \
+        --ignore DL3041 \
+        --ignore DL3062 \
+        --ignore DL4006 \
+        {{.ROOT_DIR}}/Dockerfile \
+        {{.ROOT_DIR}}/tests/Dockerfile.test
+
+  run:
+    desc: Run all linters (shellcheck, hadolint)
+    cmds:
+      - task: shellcheck
+      - task: hadolint

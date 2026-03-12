@@ -2,3 +2,7 @@
 configs/
 
 .claude/
+
+# Venom test logs
+venom.log
+venom.*.log

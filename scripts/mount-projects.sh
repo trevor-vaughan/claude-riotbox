@@ -13,6 +13,11 @@
 # Single project:  mounted at /workspace (backward compatible)
 # Multiple projects: each mounted at /workspace/<dirname>
 # No projects:     current directory mounted at /workspace
+#
+# LIMITATION: Project paths must not contain spaces. Volume flags are
+# accumulated as a flat string and word-split at the container run call.
+# This is a deliberate tradeoff for simplicity — paths with spaces are
+# extremely uncommon for development project directories.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Generate a unique container name from project paths.
@@ -73,9 +78,10 @@ generate_container_name() {
     if [ ${#candidate} -gt ${max_len} ]; then
         candidate="${candidate: -${max_len}}"
         # Ensure it starts with an alphanumeric character
-        candidate="$(echo "${candidate}" | sed 's/^[^a-zA-Z0-9]*//')"
+        candidate="${candidate#"${candidate%%[a-zA-Z0-9]*}"}"
     fi
 
+    # shellcheck disable=SC2034  # used by caller after sourcing
     CONTAINER_NAME="${candidate}"
 }
 
@@ -92,12 +98,18 @@ resolve_projects() {
         raw_projects="$(pwd)"
     fi
 
-    # Resolve each path to absolute
+    # Resolve each path to absolute.
+    # Disable globbing so paths with metacharacters (*, ?) aren't expanded.
+    # Paths are space-separated by design (CLI args joined by the caller).
+    local _old_glob
+    _old_glob="$(shopt -po noglob 2>/dev/null || true)"
+    set -f
     for p in ${raw_projects}; do
         local resolved
         resolved="$(cd "${p}" && pwd)"
         PROJECT_DIRS+=("${resolved}")
     done
+    eval "${_old_glob}"
 
     if [ ${#PROJECT_DIRS[@]} -eq 1 ]; then
         PROJECT_SUMMARY="${PROJECT_DIRS[0]}"
@@ -124,6 +136,7 @@ resolve_projects() {
 setup_projects() {
     local raw_projects="$1"
     PROJECT_VOLUME_FLAGS=""
+    # shellcheck disable=SC2034  # used by caller after sourcing
     WORKDIR="/workspace"
 
     resolve_projects "${raw_projects}"

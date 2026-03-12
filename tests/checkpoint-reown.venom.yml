@@ -1,0 +1,414 @@
+name: Checkpoint and reown workflow integration tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  helpers: "{{.root}}/tests/lib/git-test-helpers.sh"
+
+testcases:
+  # -- Checkpoint creation --
+
+  - name: Checkpoint commit is created when repo has uncommitted changes
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          BACKUP_BASE="${TEST_DIR}/backups"
+          mkdir -p "${BACKUP_BASE}"
+          human_commit "initial"
+          echo "dirty work" >> dirty.txt
+          # do_checkpoint inline (mirrors run.sh logic)
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git add -A
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          git tag "claude-checkpoint/${ts}"
+          git log --format='%s' | grep -q "^checkpoint: pre-claude-"
+          echo "checkpoint_created=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "checkpoint_created=true"
+
+  - name: Checkpoint commit is created when repo is clean
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          # Clean repo — no uncommitted changes
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          git tag "claude-checkpoint/${ts}"
+          git log --format='%s' | grep -q "^checkpoint: pre-claude-"
+          echo "checkpoint_created=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "checkpoint_created=true"
+
+  - name: Checkpoint commit stages and includes dirty tracked files
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          echo "additional content" >> history.txt
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git add -A
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          git show HEAD -- history.txt | grep -q "additional content"
+          echo "dirty_staged=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "dirty_staged=true"
+
+  - name: Checkpoint commit is authored by the human identity
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          author="$(git log --grep='checkpoint: pre-claude' -1 --format='%ae')"
+          echo "author=${author}"
+          [ "${author}" = "${HUMAN_EMAIL}" ]
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "author=human@example.com"
+
+  - name: Checkpoint creates tag pointing to HEAD
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          CHECKPOINT_TAG="claude-checkpoint/${ts}"
+          git tag "${CHECKPOINT_TAG}"
+          tag_ref="$(git rev-parse "${CHECKPOINT_TAG}")"
+          head_ref="$(git rev-parse HEAD)"
+          echo "tag_matches_head=$( [ "${tag_ref}" = "${head_ref}" ] && echo true || echo false )"
+          [ "${tag_ref}" = "${head_ref}" ]
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tag_matches_head=true"
+
+  - name: Checkpoint pushes to a bare backup repo
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          BACKUP_BASE="${TEST_DIR}/backups"
+          mkdir -p "${BACKUP_BASE}"
+          human_commit "initial"
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          CHECKPOINT_TAG="claude-checkpoint/${ts}"
+          git tag "${CHECKPOINT_TAG}"
+          backup_dir="${BACKUP_BASE}/project.git"
+          git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
+          test -d "${backup_dir}"
+          git -C "${backup_dir}" tag -l 'claude-checkpoint/*' | grep -q 'claude-checkpoint/'
+          echo "backup_created=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "backup_created=true"
+
+  - name: Second checkpoint pushes to existing backup repo
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          BACKUP_BASE="${TEST_DIR}/backups"
+          mkdir -p "${BACKUP_BASE}"
+          backup_dir="${BACKUP_BASE}/project.git"
+
+          human_commit "initial"
+          # First checkpoint
+          _seq=1
+          ts1="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts1}" >/dev/null
+          git tag "claude-checkpoint/${ts1}"
+          git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
+
+          human_commit "more human work"
+          # Second checkpoint
+          _seq=2
+          ts2="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts2}" >/dev/null
+          git tag "claude-checkpoint/${ts2}"
+          git push --no-verify --force "${backup_dir}" --all >/dev/null 2>&1
+          git push --no-verify --force "${backup_dir}" --tags >/dev/null 2>&1
+
+          tag_count="$(git -C "${backup_dir}" tag -l 'claude-checkpoint/*' | wc -l | tr -d ' ')"
+          echo "tag_count=${tag_count}"
+          [ "${tag_count}" -eq 2 ]
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tag_count=2"
+
+  # -- Full workflow: checkpoint -> Claude commits -> reown --
+
+  - name: Reown finds checkpoint and rewrites claude commits (dirty repo at checkpoint)
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          echo "unsaved work" >> dirty.txt
+          # checkpoint
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git add -A
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          git tag "claude-checkpoint/${ts}"
+
+          claude_commit "claude feature A"
+          claude_commit "claude feature B"
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
+          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
+          echo "claude=${claude_count}"
+          [ "${claude_count}" -eq 0 ]
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "checkpoint"
+          - result.systemout ShouldContainSubstring "claude=0"
+
+  - name: Reown finds checkpoint and rewrites claude commits (clean repo at checkpoint)
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          # Clean repo at checkpoint time
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          git tag "claude-checkpoint/${ts}"
+
+          claude_commit "claude work"
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
+          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
+          echo "claude=${claude_count}"
+          [ "${claude_count}" -eq 0 ]
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "checkpoint"
+          - result.systemout ShouldContainSubstring "claude=0"
+
+  - name: Reown uses the most recent checkpoint when multiple runs have occurred
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          # First checkpoint
+          _seq=1
+          ts1="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts1}" >/dev/null
+          claude_commit "old claude work"
+          # Second run: human reviews, then runs again
+          human_commit "human review commit"
+          _seq=2
+          ts2="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts2}" >/dev/null
+          claude_commit "new claude work"
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
+          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
+          echo "claude=${claude_count}"
+          [ "${claude_count}" -eq 0 ]
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude=0"
+
+  - name: Reown does not touch commits before the checkpoint
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "pre-checkpoint human work"
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          claude_commit "claude work"
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
+          msg_author="$(git log --all --format='%ae %s' | grep 'pre-checkpoint human work')"
+          echo "pre_checkpoint_author=${msg_author}"
+          echo "${msg_author}" | grep -q "^${HUMAN_EMAIL} "
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Reown preserves file content after rewriting
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          echo "feature content" >> feature.txt
+          git add -A
+          GIT_AUTHOR_NAME="${CLAUDE_NAME}" GIT_AUTHOR_EMAIL="${CLAUDE_EMAIL}" \
+          GIT_COMMITTER_NAME="${CLAUDE_NAME}" GIT_COMMITTER_EMAIL="${CLAUDE_EMAIL}" \
+              git commit -m "add feature" >/dev/null
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
+          content="$(cat feature.txt)"
+          echo "content=${content}"
+          [ "${content}" = "feature content" ]
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "content=feature content"
+
+  - name: Reown exits cleanly with no claude commits after checkpoint
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          human_commit "more human work"
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "No Claude-authored commits found"
+
+  # -- Backup and recovery --
+
+  - name: Backup repo survives a Claude history rewrite
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          BACKUP_BASE="${TEST_DIR}/backups"
+          mkdir -p "${BACKUP_BASE}"
+          human_commit "precious work"
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git add -A
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          CHECKPOINT_TAG="claude-checkpoint/${ts}"
+          git tag "${CHECKPOINT_TAG}"
+          backup_dir="${BACKUP_BASE}/project.git"
+          git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
+
+          claude_commit "claude work"
+          # Simulate Claude wiping history
+          git reset --hard HEAD~2
+          # Verify backup still has the checkpoint tag
+          git -C "${backup_dir}" tag -l "${CHECKPOINT_TAG}" | grep -q "${CHECKPOINT_TAG}"
+          echo "backup_survived=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "backup_survived=true"
+
+  - name: Project is recoverable from backup after history destruction
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          BACKUP_BASE="${TEST_DIR}/backups"
+          mkdir -p "${BACKUP_BASE}"
+          human_commit "precious work"
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git add -A
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          CHECKPOINT_TAG="claude-checkpoint/${ts}"
+          git tag "${CHECKPOINT_TAG}"
+          backup_dir="${BACKUP_BASE}/project.git"
+          git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
+
+          claude_commit "claude work"
+          original_head="$(git rev-parse "${CHECKPOINT_TAG}")"
+          # Simulate Claude wiping everything
+          git reset --hard HEAD~2
+          # Recover via backup
+          git fetch "${backup_dir}" "refs/tags/${CHECKPOINT_TAG}:refs/tags/${CHECKPOINT_TAG}" >/dev/null 2>&1
+          git reset --hard "${CHECKPOINT_TAG}"
+          git log --format='%s' | grep -q "precious work"
+          [ "$(git rev-parse HEAD)" = "${original_head}" ]
+          echo "recovered=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "recovered=true"
+
+  - name: Reown backup tag allows restore to pre-reown state
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          _seq=1
+          ts="$(date +%Y%m%d-%H%M%S)-${_seq}"
+          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
+              commit --allow-empty -m "checkpoint: pre-claude-${ts}" >/dev/null
+          claude_commit "claude work"
+          pre_reown_head="$(git rev-parse HEAD)"
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
+          backup_tag="$(git tag -l 'backup/pre-reown-*' | head -1)"
+          [ -n "${backup_tag}" ]
+          git reset --hard "${backup_tag}"
+          [ "$(git rev-parse HEAD)" = "${pre_reown_head}" ]
+          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
+          echo "claude_after_restore=${claude_count}"
+          [ "${claude_count}" -eq 1 ]
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude_after_restore=1"

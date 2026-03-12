@@ -1,0 +1,98 @@
+name: install.sh tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+testcases:
+  - name: Creates the wrapper script
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}"
+          test -f "${TEST_DIR}/claude-riotbox"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Makes the wrapper executable
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}"
+          test -x "${TEST_DIR}/claude-riotbox"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Wrapper references the correct riotbox directory
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}"
+          grep -q "RIOTBOX_DIR=\"{{.riotbox_dir}}\"" "${TEST_DIR}/claude-riotbox"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Wrapper routes path arguments to shell command
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}"
+          grep -q 'run_task shell -- "${cmd}" "$@"' "${TEST_DIR}/claude-riotbox"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Wrapper shows help when no args given
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}"
+          grep -q 'usage' "${TEST_DIR}/claude-riotbox"
+          grep -q 'exit 0' "${TEST_DIR}/claude-riotbox"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: install.sh is idempotent
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}"
+          first_hash="$(sha256sum "${TEST_DIR}/claude-riotbox" | awk '{print $1}')"
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}"
+          second_hash="$(sha256sum "${TEST_DIR}/claude-riotbox" | awk '{print $1}')"
+          [ "${first_hash}" = "${second_hash}" ]
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Warns when target dir is not in PATH
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/not-in-path" 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "not in your PATH"
+
+  - name: Creates target directory if it does not exist
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          NEW_DIR="${TEST_DIR}/nested/dir"
+          "{{.riotbox_dir}}/install.sh" "${NEW_DIR}"
+          test -x "${NEW_DIR}/claude-riotbox"
+        assertions:
+          - result.code ShouldEqual 0

@@ -1,0 +1,30 @@
+version: '3'
+
+tasks:
+  default:
+    desc: List tasks in this module
+    silent: true
+    cmd: task release --list
+
+  bump:
+    desc: "Bump version, commit, and tag (usage: task release:bump -- 0.2.0)"
+    vars:
+      NEW_VERSION: "{{.CLI_ARGS}}"
+    preconditions:
+      - sh: '[ -n "{{.NEW_VERSION}}" ]'
+        msg: "Usage: task release:bump -- <version>  (e.g. 0.2.0)"
+      - sh: 'echo "{{.NEW_VERSION}}" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$"'
+        msg: "Version must be semver (e.g. 1.2.3)"
+      - sh: 'git diff --quiet && git diff --cached --quiet'
+        msg: "Working tree must be clean before releasing"
+    cmds:
+      - echo "{{.NEW_VERSION}}" > "{{.ROOT_DIR}}/VERSION"
+      - git add "{{.ROOT_DIR}}/VERSION"
+      - git commit -m "release v{{.NEW_VERSION}}"
+      - git tag -a "v{{.NEW_VERSION}}" -m "v{{.NEW_VERSION}}"
+      - echo "✅ Released v{{.NEW_VERSION}} — run 'git push && git push --tags' when ready"
+
+  current:
+    desc: Show the current version
+    silent: true
+    cmd: cat "{{.ROOT_DIR}}/VERSION"

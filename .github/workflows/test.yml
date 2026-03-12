@@ -7,6 +7,31 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Install hadolint
+        run: |
+          curl -sSfL -o /usr/local/bin/hadolint \
+            https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
+          chmod +x /usr/local/bin/hadolint
+
+      - name: Install task
+        run: |
+          sudo sh -c 'curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin'
+          task --version
+
+      - name: Run linters
+        run: task lint
+
+      - name: Lint venom test suites
+        run: task tests:lint
+
   test:
     runs-on: ubuntu-latest
     steps:

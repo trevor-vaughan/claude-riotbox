@@ -120,7 +120,6 @@ The image comes with a broad set of tools pre-installed so Claude can start work
 - [trivy](https://github.com/aquasecurity/trivy), [grype](https://github.com/anchore/grype), [syft](https://github.com/anchore/syft), [semgrep](https://semgrep.dev/), ShellCheck
 
 **Testing:**
-- [bats](https://github.com/bats-core/bats-core) (bash unit testing)
 - [venom](https://github.com/ovh/venom) (integration and end-to-end test suites)
 
 **Diagram validation:**
@@ -351,6 +350,28 @@ Session branching is automatically disabled for `claude-riotbox run` (non-intera
 - **SELinux**: project and session bind mounts use `:z`. Package caches use named volumes to avoid relabeling overhead. `.claude.json` is copied rather than mounted to avoid `:z` relabeling issues on 600-permission files; `.credentials.json` is bind-mounted RW inside the session directory (a nested mount that avoids the relabeling problem).
 - **Tool configs** (`.npmrc`, `.editorconfig`, etc.) are copied at build time — not mounted — so edits inside the container don't affect the host.
 - **Nested containers**: `RIOTBOX_NESTED=1` passes `--device /dev/fuse` and `--security-opt label=disable`. This disables SELinux confinement — the container is no longer restricted by SELinux policy. Only used when explicitly requested via `nested-run`/`nested-shell`.
+
+## Development
+
+### Additional prerequisites
+
+The following are only needed if you want to run the linters or tests locally (outside the container):
+
+- [shellcheck](https://www.shellcheck.net/) — shell script linter (`dnf install ShellCheck` or `brew install shellcheck`)
+- [hadolint](https://github.com/hadolint/hadolint) — Dockerfile linter (`brew install hadolint` or download from [releases](https://github.com/hadolint/hadolint/releases))
+- [venom](https://github.com/ovh/venom) — integration test runner (downloaded automatically inside the test container)
+
+### Tasks
+
+```sh
+task check          # run all quality gates (lint + test + venom lint)
+task lint           # shellcheck + hadolint
+task test           # integration tests (builds test container, runs venom suites)
+task tests:lint     # structural lint of .venom.yml test suites
+task tests:list     # list available test suites
+```
+
+The `check` task runs all three gates in parallel: `lint` (shellcheck and hadolint), `test` (venom integration suites in a container), and `tests:lint` (structural validation of venom test files).
 
 ## Podman setup
 

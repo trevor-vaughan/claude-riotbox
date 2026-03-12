@@ -188,6 +188,7 @@ done < <(git remote)
 # Capture upstream tracking ref so we can restore it after filter-repo wipes
 # refs/remotes/*. Without this, `git push` sees no remote tracking ref, fetches
 # from origin, and incorrectly tells the user to rebase instead of force-push.
+# shellcheck disable=SC1083  # braces are part of git @{upstream} syntax
 UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null || true)"
 
 # ── Pass 1: Rewrite author/committer via filter-repo ────────────────────────

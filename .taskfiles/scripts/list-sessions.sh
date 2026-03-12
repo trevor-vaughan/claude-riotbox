@@ -35,7 +35,7 @@ for session_dir in "${session_root}"/*/; do
     # Contents inventory
     contents=()
     if [ -d "${session_dir}/skills" ]; then
-        skill_count="$(ls "${session_dir}/skills" 2>/dev/null | wc -l)"
+        skill_count="$(find "${session_dir}/skills" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)"
         contents+=("${skill_count} skills")
     fi
     [ -f "${session_dir}/.claude.json" ] && contents+=("config")
