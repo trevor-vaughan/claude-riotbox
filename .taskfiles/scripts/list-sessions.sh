@@ -2,7 +2,7 @@
 set -euo pipefail
 # List riotbox session directories with project paths and usage info.
 
-session_root="${HOME}/.claude-riotbox"
+session_root="${XDG_DATA_HOME:-$HOME/.local/share}/claude-riotbox"
 
 if [ ! -d "${session_root}" ] || [ -z "$(ls -A "${session_root}" 2>/dev/null)" ]; then
     echo "No sessions found."

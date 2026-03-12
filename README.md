@@ -175,7 +175,7 @@ At runtime, `scripts/detect-mounts.sh` generates mount flags for the container. 
 
 | Host path | Container path | How |
 |---|---|---|
-| `~/.claude-riotbox/<session>/` | `~/.claude` | bind mount (`:z`) |
+| `~/.local/share/claude-riotbox/<session>/` | `~/.claude` | bind mount (`:z`) |
 | `~/.claude/.credentials.json` | `~/.claude/.credentials.json` | nested bind mount (`:z`, read-write) |
 | `~/.claude.json` | copied into session dir | file copy |
 | `~/.claude/skills/` | copied into session dir | file copy (symlinks dereferenced) |
@@ -220,7 +220,24 @@ EOF
 
 Each line is a path relative to `$HOME` (or absolute with `/`). All user mounts are **read-only** — the container can read your live tokens but cannot modify the host files. This is the recommended way to provide private registry credentials at runtime, since auth tokens are [stripped from configs at build time](#build-time-config-collection) and never baked into image layers.
 
-The config directory follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/) — override with `XDG_CONFIG_HOME` if needed.
+**Persistent defaults** (`~/.config/claude-riotbox/config`):
+
+You can set default values for any `RIOTBOX_*` environment variable in the `config` file. Values use shell `:=` syntax so explicit env vars and task flags always take precedence:
+
+```sh
+# ~/.config/claude-riotbox/config
+# Disable network by default (air-gapped sessions)
+: "${RIOTBOX_NETWORK:=none}"
+```
+
+**XDG directory layout:**
+
+All riotbox paths follow the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/):
+
+| XDG variable | Default | Contents |
+|---|---|---|
+| `XDG_CONFIG_HOME` | `~/.config/claude-riotbox/` | `mounts.conf`, `config` |
+| `XDG_DATA_HOME` | `~/.local/share/claude-riotbox/` | Session dirs, git backups |
 
 ## Claude wrapper
 
@@ -276,7 +293,7 @@ Claude runs autonomously with full write access to your project directory and pa
 
 The riotbox includes several layers of protection, but none are foolproof:
 
-- **Local bare backup**: Before every `run`, all refs and tags are pushed to a bare clone at `~/.claude-riotbox/backups/<project>.git`. This backup lives outside the container's mount tree — Claude cannot access or modify it. Even if Claude deletes every file and rewrites all history, the backup is intact.
+- **Local bare backup**: Before every `run`, all refs and tags are pushed to a bare clone at `~/.local/share/claude-riotbox/backups/<project>.git`. This backup lives outside the container's mount tree — Claude cannot access or modify it. Even if Claude deletes every file and rewrites all history, the backup is intact.
 - **Checkpoint tags**: A git tag (`claude-checkpoint/<timestamp>`) is created on the current HEAD before each run. Tags survive history rewrites inside the container.
 - **Session branches**: On `shell` sessions, the container offers to create a `riotbox/<id>` branch. Claude works there; on exit the branch is fast-forward merged back so the full commit history lands seamlessly on your branch. See [Session branches](#session-branches).
 - **Non-git-repo warning**: If a project directory isn't a git repo, the riotbox warns you that there's no checkpoint protection.
@@ -290,11 +307,11 @@ If Claude makes a mess, you have several recovery options:
 ```sh
 # Fetch everything from the backup into your project
 cd /path/to/my-project
-git fetch ~/.claude-riotbox/backups/my-project.git --all --tags
+git fetch ~/.local/share/claude-riotbox/backups/my-project.git --all --tags
 git reset --hard claude-checkpoint/<timestamp>
 
 # Or clone a fresh copy from the backup
-git clone ~/.claude-riotbox/backups/my-project.git my-project-restored
+git clone ~/.local/share/claude-riotbox/backups/my-project.git my-project-restored
 ```
 
 ### Session branches
@@ -352,7 +369,7 @@ Session branching is automatically disabled for `claude-riotbox run` (non-intera
 | Resource | Access | Notes |
 |---|---|---|
 | Project directory | read-write bind mount (`:z`) | Your code — Claude needs full access |
-| Session data (`~/.claude-riotbox/`) | bind mount (`:z`) | Isolated per project set |
+| Session data (`~/.local/share/claude-riotbox/`) | bind mount (`:z`) | Isolated per project set |
 | `~/.claude/.credentials.json` | nested bind mount (RW) | OAuth token refreshes must write back to host |
 | `~/.claude.json` | file copy into session dir | Each container gets a writable snapshot |
 | User scripts (`~/bin`) | read-only bind mount | Available but not writable |
@@ -495,17 +512,17 @@ cat ~/.claude/debug/latest
 
 **Check**:
 - Verify the files exist on the host: `ls -la ~/.claude.json ~/.claude/.credentials.json`
-- Verify the session directory is writable: `ls -la ~/.claude-riotbox/`
-- If the session directory is owned by a numeric UID (e.g., 525287), a previous run without `--userns=keep-id` left it with wrong ownership. Fix with: `sudo chown -R $(id -u):$(id -g) ~/.claude-riotbox/`
+- Verify the session directory is writable: `ls -la ~/.local/share/claude-riotbox/`
+- If the session directory is owned by a numeric UID (e.g., 525287), a previous run without `--userns=keep-id` left it with wrong ownership. Fix with: `sudo chown -R $(id -u):$(id -g) ~/.local/share/claude-riotbox/`
 
 ### Session directory owned by wrong UID
 
-**Symptom**: `Permission denied` errors writing to `~/.claude-riotbox/`.
+**Symptom**: `Permission denied` errors writing to `~/.local/share/claude-riotbox/`.
 
 **Cause**: a previous container run without `--userns=keep-id` (or with broken userns) caused files to be created with a subordinate UID. The mount-projects.sh script detects this and exits with an error message. Fix manually:
 
 ```sh
-sudo chown -R $(id -u):$(id -g) ~/.claude-riotbox/
+sudo chown -R $(id -u):$(id -g) ~/.local/share/claude-riotbox/
 ```
 
 ### Build fails with permission denied

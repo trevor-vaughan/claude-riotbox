@@ -5,6 +5,12 @@ set -euo pipefail
 # Optional env: RIOTBOX_PROJECTS, RIOTBOX_NETWORK, RIOTBOX_NESTED
 # Arguments: command and args to run inside the container
 
+# Source user config for persistent defaults (e.g. RIOTBOX_NETWORK=none).
+# Env vars set by the caller take precedence over the config file.
+RIOTBOX_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/claude-riotbox/config"
+# shellcheck disable=SC1090
+[ -f "${RIOTBOX_CONFIG}" ] && source "${RIOTBOX_CONFIG}"
+
 source "${ROOT_DIR}/scripts/mount-projects.sh"
 setup_projects "${RIOTBOX_PROJECTS:-}"
 MOUNTS="$("${ROOT_DIR}/scripts/detect-mounts.sh")"

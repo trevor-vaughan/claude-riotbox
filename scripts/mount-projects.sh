@@ -130,7 +130,8 @@ resolve_projects() {
     # Mangle: sort paths, join with +, replace / with -, strip leading -
     local session_key
     session_key="$(printf '%s\n' "${PROJECT_DIRS[@]}" | sort | sed 's|/|-|g; s|^-||' | paste -sd'+' -)"
-    RIOTBOX_SESSION_DIR="${HOME}/.claude-riotbox/${session_key}"
+    RIOTBOX_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/claude-riotbox"
+    RIOTBOX_SESSION_DIR="${RIOTBOX_DATA_DIR}/${session_key}"
 }
 
 setup_projects() {

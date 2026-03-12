@@ -34,7 +34,7 @@ FUNCTIONAL_MOUNTS=(
 
 # ── Riotbox session data ─────────────────────────────────────────────────────
 # Session isolation is handled by mount-projects.sh, which mounts a
-# project-specific subdirectory of ~/.claude-riotbox/ as ~/.claude.
+# project-specific subdirectory of $XDG_DATA_HOME/claude-riotbox/ as ~/.claude.
 # The real ~/.claude is NEVER mounted — this prevents an autonomous
 # container from reading your host conversation history.
 
