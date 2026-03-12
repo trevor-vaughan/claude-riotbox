@@ -85,13 +85,13 @@ this system._
 
 ## Finding Summary
 
-| Severity   | Count  |
-| ---------- | ------ |
-| 🔴 Critical | 0      |
-| 🟠 High     | 1      |
-| 🟡 Medium   | 6      |
-| 🟢 Low      | 4      |
-| **Total**  | **11** |
+| Severity   | Open | Remediated | Total |
+| ---------- | ---- | ---------- | ----- |
+| 🔴 Critical | 0    | 0          | 0     |
+| 🟠 High     | 1    | 0          | 1     |
+| 🟡 Medium   | 3    | 3          | 6     |
+| 🟢 Low      | 2    | 2          | 4     |
+| **Total**  | **6** | **5**     | **11** |
 
 ## Risk Matrix
 
@@ -405,7 +405,7 @@ inject malicious code into the container image.
 ### 🟡 RIOTBOX-20260312-007: Shell, resume, and audit entry points bypass pre-session backup mechanism
 
 **Severity:** Medium &nbsp;|&nbsp; **Risk Score:** 8 (L2 × I4) &nbsp;|&nbsp;
-**Status:** Open
+**Status:** Remediated
 
 #### System Context
 
@@ -545,11 +545,13 @@ backup protection. A destructive LLM session via 'task shell' has no safety net.
 
 #### Risk Treatment
 
-- **Decision:** 
-- **Rationale:** 
-- **Authority:** 
-- **Residual risk score:** 
-- **Review date:** 
+- **Decision:** Mitigate
+- **Rationale:** Extracted checkpoint logic into shared
+  `.taskfiles/scripts/checkpoint.sh`; wired into shell, resume, and
+  nested-shell tasks in `session.yml`. Audit is exempt (read-only mount).
+  Backup logic is now shared, not duplicated.
+- **Residual risk score:** 2 (L1 × I2) — all RW entry points now checkpoint
+- **Review date:** 2026-03-12
 
 #### Ticket
 
@@ -578,7 +580,7 @@ recovery path for destructive LLM sessions.
 ### 🟡 RIOTBOX-20260312-008: Host .npmrc auth tokens baked into container image via build.sh config copy
 
 **Severity:** Medium &nbsp;|&nbsp; **Risk Score:** 12 (L3 × I4) &nbsp;|&nbsp;
-**Status:** Open
+**Status:** Remediated
 
 #### System Context
 
@@ -714,11 +716,15 @@ bakes auth tokens into a permanent image layer.
 
 #### Risk Treatment
 
-- **Decision:** 
-- **Rationale:** 
-- **Authority:** 
-- **Residual risk score:** 
-- **Review date:** 
+- **Decision:** Mitigate
+- **Rationale:** `build.sh` now uses `strip_and_copy()` to filter
+  `_authToken`, `_auth`, and `_password` lines from `.npmrc` before
+  copying into the build context. Registry URLs and non-credential
+  config are preserved. Auth tokens for private registries should be
+  supplied at runtime via bind mount instead.
+- **Residual risk score:** 3 (L1 × I3) — novel credential patterns
+  could bypass the grep filter, but standard npm auth fields are covered
+- **Review date:** 2026-03-12
 
 #### Ticket
 
@@ -1231,7 +1237,7 @@ integrity verification. Pin to specific commits and verify checksums.
 ### 🟡 RIOTBOX-20260312-012: Host package manager configs baked into image may redirect dependency resolution
 
 **Severity:** Medium &nbsp;|&nbsp; **Risk Score:** 8 (L2 × I4) &nbsp;|&nbsp;
-**Status:** Open
+**Status:** Remediated
 
 #### System Context
 
@@ -1362,11 +1368,14 @@ potentially including custom registry URLs and credentials.
 
 #### Risk Treatment
 
-- **Decision:** 
-- **Rationale:** 
-- **Authority:** 
-- **Residual risk score:** 
-- **Review date:** 
+- **Decision:** Mitigate
+- **Rationale:** `build.sh` now strips `password`/`client-cert` from
+  `pip.conf` and `token` from `cargo/config.toml` before copying into
+  the build context via `strip_and_copy()`. Registry URLs are preserved
+  so dependency resolution still works with custom registries.
+- **Residual risk score:** 3 (L1 × I3) — custom registry URLs are still
+  baked in (by design for enterprise use), but credentials are stripped
+- **Review date:** 2026-03-12
 
 #### Ticket
 
@@ -1561,7 +1570,7 @@ URLs with checksum verification.
 ### 🟢 RIOTBOX-20260312-016: GitHub Actions workflow missing explicit permissions key
 
 **Severity:** Low &nbsp;|&nbsp; **Risk Score:** 3 (L1 × I3) &nbsp;|&nbsp;
-**Status:** Open
+**Status:** Remediated
 
 #### System Context
 
@@ -1677,11 +1686,13 @@ This restricts the GITHUB_TOKEN to read-only regardless of org defaults.
 
 #### Risk Treatment
 
-- **Decision:** 
-- **Rationale:** 
-- **Authority:** 
-- **Residual risk score:** 
-- **Review date:** 
+- **Decision:** Mitigate
+- **Rationale:** Added `permissions: contents: read` at the top level
+  of `test.yml`. GITHUB_TOKEN is now explicitly scoped to read-only
+  regardless of organization defaults.
+- **Residual risk score:** 1 (L1 × I1) — fully mitigated by explicit
+  least-privilege permissions
+- **Review date:** 2026-03-12
 
 #### Ticket
 
@@ -1851,7 +1862,7 @@ checks.
 ### 🟢 RIOTBOX-20260312-018: System prompt override via LLM-writable path in inject-claude-md.sh priority chain
 
 **Severity:** Low &nbsp;|&nbsp; **Risk Score:** 6 (L2 × I3) &nbsp;|&nbsp;
-**Status:** Open
+**Status:** Remediated
 
 #### System Context
 
@@ -1979,11 +1990,16 @@ low due to timing constraints.
 
 #### Risk Treatment
 
-- **Decision:** 
-- **Rationale:** 
-- **Authority:** 
-- **Residual risk score:** 
-- **Review date:** 
+- **Decision:** Mitigate
+- **Rationale:** Removed `~/.riotbox/CLAUDE.md` from the resolution
+  chain in `inject-claude-md.sh`. Only `/etc/riotbox/CLAUDE.md`
+  (root-owned, baked into the image) is used as the default. Explicit
+  `RIOTBOX_PROMPT` env var override is still available for legitimate
+  use (set before container start, not writable by the LLM). Updated
+  Dockerfile comment and venom test to match new behavior.
+- **Residual risk score:** 1 (L1 × I1) — user-writable path eliminated;
+  RIOTBOX_PROMPT override requires host-level env var set before entrypoint
+- **Review date:** 2026-03-12
 
 #### Ticket
 

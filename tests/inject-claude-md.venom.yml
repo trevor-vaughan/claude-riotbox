@@ -222,22 +222,36 @@ testcases:
 
   # -- Prompt file resolution --
 
-  - name: Resolves user override prompt from ~/.riotbox/
+  - name: Ignores user-writable ~/.riotbox/CLAUDE.md (prompt injection defense)
     steps:
       - type: exec
         script: |
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           mkdir -p "${TEST_DIR}/config" "${TEST_DIR}/.riotbox"
-          echo "User override." > "${TEST_DIR}/.riotbox/CLAUDE.md"
+          echo "Injected override." > "${TEST_DIR}/.riotbox/CLAUDE.md"
           unset RIOTBOX_PROMPT
+          # Temporarily hide the system default so no prompt is resolved
+          saved_etc="/etc/riotbox/CLAUDE.md"
+          moved_etc=false
+          if [ -f "${saved_etc}" ]; then
+            sudo mv "${saved_etc}" "${saved_etc}.bak" 2>/dev/null && moved_etc=true
+          fi
           CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
           HOME="${TEST_DIR}" \
             source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          grep -F "User override." "${TEST_DIR}/config/CLAUDE.md"
+          if [ "${moved_etc}" = true ]; then
+            sudo mv "${saved_etc}.bak" "${saved_etc}" 2>/dev/null
+          fi
+          # ~/.riotbox/CLAUDE.md must NOT be picked up
+          if [ -f "${TEST_DIR}/config/CLAUDE.md" ] && grep -qF "Injected override." "${TEST_DIR}/config/CLAUDE.md"; then
+            echo "FAIL: user-writable path was resolved"
+            exit 1
+          fi
+          echo "user_override_ignored=true"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "User override."
+          - result.systemout ShouldContainSubstring "user_override_ignored=true"
 
   - name: "Resolves system default prompt from /etc/riotbox/ [riotbox-only]"
     skip:

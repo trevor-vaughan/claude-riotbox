@@ -164,7 +164,7 @@ RUN useradd -l -m -u ${HOST_UID} -s /bin/bash claude 2>/dev/null || \
     # dnf non-interactive by default
     mkdir -p /etc/dnf/dnf.conf.d && \
     printf '[main]\nassumeyes=True\n' > /etc/dnf/dnf.conf.d/riotbox.conf && \
-    # System prompt (default — override at ~/.riotbox/CLAUDE.md)
+    # System prompt (default — override via RIOTBOX_PROMPT env var)
     mkdir -p /etc/riotbox
 
 COPY container/CLAUDE.md /etc/riotbox/CLAUDE.md
