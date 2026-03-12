@@ -13,11 +13,12 @@
 #   RIOTBOX_PROMPT — path to system prompt file (auto-resolved if unset)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Resolve prompt file: explicit override > user override > system default
+# Resolve prompt file: explicit RIOTBOX_PROMPT override > system default.
+# Only /etc/riotbox/CLAUDE.md (root-owned, baked into the image) is used as
+# the default — user-writable paths like ~/.riotbox/ are excluded to prevent
+# a prompt-injected LLM from overriding the system prompt.
 if [ -z "${RIOTBOX_PROMPT}" ]; then
-    if [ -f "${HOME}/.riotbox/CLAUDE.md" ]; then
-        RIOTBOX_PROMPT="${HOME}/.riotbox/CLAUDE.md"
-    elif [ -f /etc/riotbox/CLAUDE.md ]; then
+    if [ -f /etc/riotbox/CLAUDE.md ]; then
         RIOTBOX_PROMPT="/etc/riotbox/CLAUDE.md"
     fi
 fi

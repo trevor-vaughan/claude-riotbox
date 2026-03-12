@@ -143,17 +143,31 @@ copy_if_exists() {
     fi
 }
 
+# Copy a config file, stripping lines matching a credential pattern.
+# Usage: strip_and_copy <src> <dst_name> <grep-extended-pattern>
+strip_and_copy() {
+    local src="$1" dst_name="$2" pattern="$3"
+    if [ -f "${src}" ]; then
+        mkdir -p "${CONFIGS_DIR}/$(dirname "${dst_name}")"
+        grep -vE "${pattern}" "${src}" > "${CONFIGS_DIR}/${dst_name}" 2>/dev/null || true
+        echo "  ✓ ${src} → configs/${dst_name} (credentials stripped)"
+    fi
+}
+
 echo "→ Collecting tool configs..."
-copy_if_exists "${HOME}/.npmrc"              ".npmrc"
-copy_if_exists "${HOME}/.pip/pip.conf"      ".pip/pip.conf"
-copy_if_exists "${HOME}/.config/pip/pip.conf" ".config/pip/pip.conf"
+# .npmrc: strip auth tokens — never bake registry credentials into the image
+strip_and_copy "${HOME}/.npmrc" ".npmrc" '(_authToken|_auth|_password)='
+# pip.conf: strip passwords and client certs
+strip_and_copy "${HOME}/.pip/pip.conf" ".pip/pip.conf" '^\s*(password|client.cert)\s*='
+strip_and_copy "${HOME}/.config/pip/pip.conf" ".config/pip/pip.conf" '^\s*(password|client.cert)\s*='
 # .gitconfig is intentionally NOT copied — it often contains GPG signing,
 # credential helpers, and user identity that don't belong in the riotbox.
 # Git settings are configured in container/entrypoint.sh instead.
 copy_if_exists "${HOME}/.gitignore_global"   ".gitignore_global"
 copy_if_exists "${HOME}/.editorconfig"       ".editorconfig"
 copy_if_exists "${HOME}/.ripgreprc"          ".ripgreprc"
-copy_if_exists "${HOME}/.cargo/config.toml" ".cargo/config.toml"
+# cargo config: strip registry tokens
+strip_and_copy "${HOME}/.cargo/config.toml" ".cargo/config.toml" '^\s*token\s*='
 
 # uv config
 if [ -f "${HOME}/.config/uv/uv.toml" ]; then

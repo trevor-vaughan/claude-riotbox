@@ -41,7 +41,9 @@ tasks:
       IMAGE_NAME: "{{.IMAGE_NAME}}"
       ROOT_DIR: "{{.ROOT_DIR}}"
       RIOTBOX_PROJECTS: "{{.ARGS}}"
-    cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/launch.sh claude --continue"
+    cmds:
+      - "{{.ROOT_DIR}}/.taskfiles/scripts/checkpoint.sh"
+      - "{{.ROOT_DIR}}/.taskfiles/scripts/launch.sh claude --continue"
 
   audit:
     desc: Audit untrusted repo (read-only workspace)
@@ -83,7 +85,9 @@ tasks:
       IMAGE_NAME: "{{.IMAGE_NAME}}"
       ROOT_DIR: "{{.ROOT_DIR}}"
       RIOTBOX_PROJECTS: "{{.ARGS}}"
-    cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/launch.sh bash"
+    cmds:
+      - "{{.ROOT_DIR}}/.taskfiles/scripts/checkpoint.sh"
+      - "{{.ROOT_DIR}}/.taskfiles/scripts/launch.sh bash"
 
   nested-shell:
     desc: "Shell with nested podman support (WARNING: disables SELinux confinement)"
@@ -99,6 +103,7 @@ tasks:
       RIOTBOX_PROJECTS: "{{.ARGS}}"
     cmds:
       - cmd: echo "WARNING{{":"}} Nested container mode disables SELinux confinement." >&2
+      - "{{.ROOT_DIR}}/.taskfiles/scripts/checkpoint.sh"
       - "{{.ROOT_DIR}}/.taskfiles/scripts/launch.sh bash"
 
   list-sessions:
