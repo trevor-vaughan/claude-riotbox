@@ -391,6 +391,6 @@ RUN STAGING_DIR=/home/claude/.riotbox/plugins-staging/.claude && \
         frontend-design feature-dev code-simplifier commit-commands \
         security-guidance claude-code-setup claude-md-management \
         rust-analyzer-lsp typescript-lsp pyright-lsp gopls-lsp \
-        jdtls-lsp lua-lsp semgrep; do \
+        jdtls-lsp lua-lsp; do \
         CLAUDE_CONFIG_DIR="${STAGING_DIR}" claude plugin install "$p" || true; \
     done

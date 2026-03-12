@@ -27,7 +27,7 @@ usage() {
 Usage: claude-riotbox [command] [args...]
 
 Session commands:
-  .                            Open shell in current directory (default)
+  .                            Open shell in current directory
   . ../other                   Open shell with multiple projects
   shell [projects...]          Open a shell (explicit)
   run "prompt" [projects...]   Run Claude with a prompt
