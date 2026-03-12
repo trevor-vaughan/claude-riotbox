@@ -202,6 +202,26 @@ Package caches use named podman/docker volumes rather than bind mounts. This avo
 
 Sensitive directories (`.ssh`, `.gnupg`, `.kube`, `.aws`, etc.) are never mounted. Run `claude-riotbox mounts` to see what would be mounted for your system.
 
+**User-defined mounts** (`~/.config/claude-riotbox/mounts.conf`):
+
+If you need additional host files inside the container (e.g., `.npmrc` for private npm registries), list them in `mounts.conf`:
+
+```sh
+mkdir -p ~/.config/claude-riotbox
+cat > ~/.config/claude-riotbox/mounts.conf << 'EOF'
+# Private npm registry auth (mount live token, read-only)
+.npmrc
+# Yarn config
+# .yarnrc.yml
+# Maven settings with server credentials
+# .m2/settings.xml
+EOF
+```
+
+Each line is a path relative to `$HOME` (or absolute with `/`). All user mounts are **read-only** — the container can read your live tokens but cannot modify the host files. This is the recommended way to provide private registry credentials at runtime, since auth tokens are [stripped from configs at build time](#build-time-config-collection) and never baked into image layers.
+
+The config directory follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/) — override with `XDG_CONFIG_HOME` if needed.
+
 ## Claude wrapper
 
 Inside the container, `claude` is a wrapper script (`container/claude-wrapper.sh`) that shadows the npm-installed binary. It passes `--dangerously-skip-permissions` — this is safe here because the container **is** the riotbox. Claude can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
@@ -336,19 +356,20 @@ Session branching is automatically disabled for `claude-riotbox run` (non-intera
 | `~/.claude/.credentials.json` | nested bind mount (RW) | OAuth token refreshes must write back to host |
 | `~/.claude.json` | file copy into session dir | Each container gets a writable snapshot |
 | User scripts (`~/bin`) | read-only bind mount | Available but not writable |
+| User-defined mounts | read-only bind mount | From `~/.config/claude-riotbox/mounts.conf` |
 | Package caches | named volumes | Shared across containers, not with host |
 | Network | enabled | Claude needs npm/PyPI/crates.io etc. |
 
 ### What's NOT exposed
 
-`~/.ssh`, `~/.gnupg`, `~/.kube`, `~/.aws`, `~/.claude` (host conversations), cloud credentials, and anything not explicitly listed above. The `.dockerignore` also blocks secrets (`.env`, `*.pem`, `*.key`, etc.) from being baked into the image.
+`~/.ssh`, `~/.gnupg`, `~/.kube`, `~/.aws`, `~/.claude` (host conversations), cloud credentials, and anything not explicitly listed above (unless added to `mounts.conf`). The `.dockerignore` also blocks secrets (`.env`, `*.pem`, `*.key`, etc.) from being baked into the image.
 
 ### Other design choices
 
 - **Sudo**: the container user has passwordless `sudo`. Claude often needs to `dnf install` build dependencies, and the container is disposable. This does **not** grant any host privileges.
 - **UID mapping**: the container user's UID matches your host UID. With podman, `--userns=keep-id` preserves this mapping in rootless mode, requiring `fuse-overlayfs` for acceptable performance on large images.
 - **SELinux**: project and session bind mounts use `:z`. Package caches use named volumes to avoid relabeling overhead. `.claude.json` is copied rather than mounted to avoid `:z` relabeling issues on 600-permission files; `.credentials.json` is bind-mounted RW inside the session directory (a nested mount that avoids the relabeling problem).
-- **Tool configs** (`.npmrc`, `.editorconfig`, etc.) are copied at build time — not mounted — so edits inside the container don't affect the host.
+- <a id="build-time-config-collection"></a>**Tool configs** (`.npmrc`, `.editorconfig`, etc.) are copied at build time — not mounted — so edits inside the container don't affect the host. Auth tokens are stripped from `.npmrc`, `pip.conf`, and `cargo/config.toml` before baking into the image. Use `mounts.conf` to supply live credentials at runtime.
 - **Nested containers**: `RIOTBOX_NESTED=1` passes `--device /dev/fuse` and `--security-opt label=disable`. This disables SELinux confinement — the container is no longer restricted by SELinux policy. Only used when explicitly requested via `nested-run`/`nested-shell`.
 
 ## Development

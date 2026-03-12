@@ -5,12 +5,15 @@
 # Outputs docker/podman -v flags, one per line. Separates mounts into:
 #   1. Functional dirs (settings, scripts) — bind mounts with :z
 #   2. Package caches — named volumes (no SELinux relabeling needed)
+#   3. User-defined mounts from mounts.conf — bind mounts (read-only :ro,z)
 #
-# Sensitive directories (.ssh, .gnupg, .kube, .aws, etc.) are NEVER mounted.
+# Sensitive directories (.ssh, .gnupg, .kube, .aws, etc.) are NEVER mounted
+# by the auto-detection. Users can explicitly mount files via mounts.conf.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 CONTAINER_HOME="/home/claude"
+RIOTBOX_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-riotbox"
 
 # ── Functional mounts ────────────────────────────────────────────────────────
 # These are directories the container needs for correct operation.
@@ -72,3 +75,50 @@ for entry in "${CACHE_MOUNTS[@]}"; do
     read -r vol_name rel_path <<< "${entry}"
     echo "-v ${vol_name}:${CONTAINER_HOME}/${rel_path}"
 done
+
+# ── User-defined mounts from mounts.conf ─────────────────────────────────────
+# Users can specify additional files/directories to mount into the container
+# by listing them in ~/.config/claude-riotbox/mounts.conf (one per line).
+#
+# Format:
+#   - Lines starting with # are comments; blank lines are ignored
+#   - Paths starting with / or ~ are absolute
+#   - Other paths are relative to $HOME
+#   - All user mounts are read-only (:ro,z)
+#   - Mounted to the same path under /home/claude
+#
+# Example mounts.conf:
+#   # Private npm registry auth (needed for npm install of private packages)
+#   .npmrc
+#   # Yarn config
+#   .yarnrc.yml
+#   # Maven settings
+#   .m2/settings.xml
+#
+MOUNTS_CONF="${RIOTBOX_CONFIG_DIR}/mounts.conf"
+if [ -f "${MOUNTS_CONF}" ]; then
+    while IFS= read -r line || [ -n "${line}" ]; do
+        # Skip comments and blank lines
+        line="${line%%#*}"
+        line="$(echo "${line}" | xargs)" # trim whitespace
+        [ -z "${line}" ] && continue
+
+        # Resolve host path
+        case "${line}" in
+            ~/*) src="${HOME}/${line#\~/}" ;;
+            /*)  src="${line}" ;;
+            *)   src="${HOME}/${line}" ;;
+        esac
+
+        # Resolve container destination
+        case "${line}" in
+            /*) dst="${line}" ;;
+            ~/*) dst="${CONTAINER_HOME}/${line#\~/}" ;;
+            *)  dst="${CONTAINER_HOME}/${line}" ;;
+        esac
+
+        if [ -e "${src}" ]; then
+            echo "-v ${src}:${dst}:ro,z"
+        fi
+    done < "${MOUNTS_CONF}"
+fi
