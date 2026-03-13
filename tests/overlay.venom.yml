@@ -1,0 +1,530 @@
+name: Overlay mount host-side script tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+testcases:
+  # ── overlay-accept: positive cases ──────────────────────────────────────
+
+  - name: Accept copies new files from upper to project
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+          echo "original" > "${PROJECT}/existing.txt"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          echo "new file content" > "${OVERLAY}/upper/newfile.txt"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+
+          [ -f "${PROJECT}/newfile.txt" ] || { echo "FAIL: newfile.txt missing"; exit 1; }
+          [ "$(cat "${PROJECT}/newfile.txt")" = "new file content" ] || { echo "FAIL: wrong content"; exit 1; }
+          [ "$(cat "${PROJECT}/existing.txt")" = "original" ] || { echo "FAIL: existing.txt changed"; exit 1; }
+          echo "accept_new_file=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "accept_new_file=pass"
+
+  - name: Accept overwrites modified files in project
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+          echo "old content" > "${PROJECT}/file.txt"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          echo "new content" > "${OVERLAY}/upper/file.txt"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+
+          [ "$(cat "${PROJECT}/file.txt")" = "new content" ] || { echo "FAIL: content not updated"; exit 1; }
+          echo "accept_modify=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "accept_modify=pass"
+
+  - name: Accept deletes files marked with whiteout
+    steps:
+      - type: exec
+        script: |
+          # Use /dev/shm (tmpfs) because the container root is fuse-overlayfs
+          # which blocks creation of .wh.* files (reserved for whiteouts)
+          TEST_DIR="$(mktemp -d --tmpdir=/dev/shm)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+          echo "to be deleted" > "${PROJECT}/removeme.txt"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          touch "${OVERLAY}/upper/.wh.removeme.txt"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+
+          [ ! -f "${PROJECT}/removeme.txt" ] || { echo "FAIL: file should be deleted"; exit 1; }
+          echo "accept_whiteout=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "accept_whiteout=pass"
+
+  - name: Accept handles opaque directory replacement
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d --tmpdir=/dev/shm)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}/subdir"
+          echo "old" > "${PROJECT}/subdir/old.txt"
+          echo "also old" > "${PROJECT}/subdir/other.txt"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper/subdir" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          touch "${OVERLAY}/upper/subdir/.wh..wh..opq"
+          echo "replacement" > "${OVERLAY}/upper/subdir/new.txt"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+
+          [ ! -f "${PROJECT}/subdir/old.txt" ] || { echo "FAIL: old.txt should be gone"; exit 1; }
+          [ ! -f "${PROJECT}/subdir/other.txt" ] || { echo "FAIL: other.txt should be gone"; exit 1; }
+          [ -f "${PROJECT}/subdir/new.txt" ] || { echo "FAIL: new.txt missing"; exit 1; }
+          [ "$(cat "${PROJECT}/subdir/new.txt")" = "replacement" ] || { echo "FAIL: wrong content"; exit 1; }
+          echo "accept_opaque=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "accept_opaque=pass"
+
+  - name: Accept preserves file permissions
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          echo "#!/bin/bash" > "${OVERLAY}/upper/script.sh"
+          chmod 755 "${OVERLAY}/upper/script.sh"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+
+          [ -x "${PROJECT}/script.sh" ] || { echo "FAIL: not executable"; exit 1; }
+          echo "accept_perms=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "accept_perms=pass"
+
+  - name: Accept cleans up upper and work dirs after apply
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          echo "data" > "${OVERLAY}/upper/file.txt"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+
+          [ -d "${OVERLAY}/upper" ] || { echo "FAIL: upper dir missing"; exit 1; }
+          [ -d "${OVERLAY}/work" ] || { echo "FAIL: work dir missing"; exit 1; }
+          [ -z "$(ls -A "${OVERLAY}/upper")" ] || { echo "FAIL: upper not empty"; exit 1; }
+          echo "accept_cleanup=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "accept_cleanup=pass"
+
+  - name: Accept with no changes exits cleanly
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "No overlay changes to apply"
+
+  - name: Accept --force skips confirmation prompt
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          echo "data" > "${OVERLAY}/upper/file.txt"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          "{{.riotbox_dir}}/scripts/overlay-accept.sh" --force "${PROJECT}"
+
+          [ -f "${PROJECT}/file.txt" ] || { echo "FAIL: file not applied"; exit 1; }
+          echo "accept_force=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "accept_force=pass"
+
+  # ── overlay-reject ──────────────────────────────────────────────────────
+
+  - name: Reject deletes upper and work dirs
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          echo "data" > "${OVERLAY}/upper/file.txt"
+          echo "workdata" > "${OVERLAY}/work/something"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay-reject.sh" "${PROJECT}"
+
+          [ -d "${OVERLAY}/upper" ] || { echo "FAIL: upper dir missing"; exit 1; }
+          [ -d "${OVERLAY}/work" ] || { echo "FAIL: work dir missing"; exit 1; }
+          [ -z "$(ls -A "${OVERLAY}/upper")" ] || { echo "FAIL: upper not empty"; exit 1; }
+          [ -z "$(ls -A "${OVERLAY}/work")" ] || { echo "FAIL: work not empty"; exit 1; }
+          echo "reject_cleanup=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Overlay data discarded"
+          - result.systemout ShouldContainSubstring "reject_cleanup=pass"
+
+  - name: Reject --force skips confirmation prompt
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          echo "data" > "${OVERLAY}/upper/file.txt"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          "{{.riotbox_dir}}/scripts/overlay-reject.sh" --force "${PROJECT}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Overlay data discarded"
+
+  - name: Reject with no changes exits cleanly
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          "{{.riotbox_dir}}/scripts/overlay-reject.sh" "${PROJECT}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "No overlay changes to discard"
+
+  # ── overlay-diff ────────────────────────────────────────────────────────
+
+  - name: Diff shows A for added files
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          echo "brand new" > "${OVERLAY}/upper/added.txt"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          "{{.riotbox_dir}}/scripts/overlay-diff.sh" "${PROJECT}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "A  added.txt"
+
+  - name: Diff shows M for modified files
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+          echo "original" > "${PROJECT}/existing.txt"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          echo "modified" > "${OVERLAY}/upper/existing.txt"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          "{{.riotbox_dir}}/scripts/overlay-diff.sh" "${PROJECT}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "M  existing.txt"
+
+  - name: Diff shows D for deleted files (whiteouts)
+    steps:
+      - type: exec
+        script: |
+          # Use /dev/shm (tmpfs) for whiteout file creation
+          TEST_DIR="$(mktemp -d --tmpdir=/dev/shm)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+          echo "to delete" > "${PROJECT}/gone.txt"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          touch "${OVERLAY}/upper/.wh.gone.txt"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          "{{.riotbox_dir}}/scripts/overlay-diff.sh" "${PROJECT}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "D  ./gone.txt"
+
+  # ── overlay-list ────────────────────────────────────────────────────────
+
+  - name: List shows pending overlays with file counts
+    steps:
+      - type: exec
+        script: |
+          # Use /dev/shm (tmpfs) for whiteout file creation
+          TEST_DIR="$(mktemp -d --tmpdir=/dev/shm)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/fake-session-key"
+          OVERLAY="${SESSION}/overlay/project"
+          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
+          echo "/some/project" > "${SESSION}/.projects"
+
+          echo "data" > "${OVERLAY}/upper/file1.txt"
+          echo "data" > "${OVERLAY}/upper/file2.txt"
+          touch "${OVERLAY}/upper/.wh.deleted.txt"
+
+          "{{.riotbox_dir}}/scripts/overlay-list.sh"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Pending overlays:"
+          - result.systemout ShouldContainSubstring "/some/project"
+          - result.systemout ShouldContainSubstring "2 added/modified, 1 deleted"
+          - result.systemout ShouldContainSubstring "fake-session-key"
+
+  - name: List exits 1 when no overlays exist
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          mkdir -p "${XDG_DATA_HOME}/claude-riotbox"
+
+          "{{.riotbox_dir}}/scripts/overlay-list.sh"
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldContainSubstring "No pending overlays"
+
+  - name: List exits 1 when data dir does not exist
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          export XDG_DATA_HOME="${TEST_DIR}/nonexistent"
+          "{{.riotbox_dir}}/scripts/overlay-list.sh"
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldContainSubstring "No pending overlays"
+
+  # ── overlay-resolve: negative cases ─────────────────────────────────────
+
+  - name: Resolve errors when project path has no session
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/nosession"
+          mkdir -p "${PROJECT}"
+
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          mkdir -p "${XDG_DATA_HOME}/claude-riotbox"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          "{{.riotbox_dir}}/scripts/overlay-diff.sh" "${PROJECT}" 2>&1
+        assertions:
+          - result.code ShouldNotEqual 0
+          - result.systemout ShouldContainSubstring "No session found"
+
+  - name: Resolve errors when session has no overlay data
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          PROJECT="${TEST_DIR}/myproject"
+          mkdir -p "${PROJECT}"
+
+          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
+          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          mkdir -p "${SESSION}"
+          echo "${PROJECT}" > "${SESSION}/.projects"
+
+          export ROOT_DIR="{{.riotbox_dir}}"
+          "{{.riotbox_dir}}/scripts/overlay-diff.sh" "${PROJECT}" 2>&1
+        assertions:
+          - result.code ShouldNotEqual 0
+          - result.systemout ShouldContainSubstring "No overlay data found"
+
+  - name: Resolve errors when project path is not a directory
+    steps:
+      - type: exec
+        script: |
+          export ROOT_DIR="{{.riotbox_dir}}"
+          "{{.riotbox_dir}}/scripts/overlay-diff.sh" "/nonexistent/path" 2>&1
+        assertions:
+          - result.code ShouldNotEqual 0
+          - result.systemout ShouldContainSubstring "is not a directory"
+
+  # ── Docker detection in launch.sh ───────────────────────────────────────
+
+  - name: Launch overlay mode errors for non-podman container command
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_OVERLAY=1
+          export CONTAINER_CMD=docker
+          export IMAGE_NAME=test
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_PROJECTS="."
+          "{{.riotbox_dir}}/.taskfiles/scripts/launch.sh" echo test 2>&1
+        assertions:
+          - result.code ShouldNotEqual 0
+          - result.systemout ShouldContainSubstring "Overlay mode requires podman"

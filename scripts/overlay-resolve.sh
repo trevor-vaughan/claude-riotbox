@@ -41,6 +41,7 @@ resolve_overlay() {
     # Multi-project: overlay/<basename>/upper
     local overlay_base="${OVERLAY_SESSION_DIR}/overlay"
     if [ -d "${overlay_base}/project/upper" ]; then
+        # shellcheck disable=SC2034  # used by caller after sourcing
         OVERLAY_DIR="${overlay_base}/project"
     else
         local name

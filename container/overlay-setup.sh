@@ -12,8 +12,8 @@ overlay_setup() {
     # Disable session branches — overlay IS the isolation
     export SESSION_BRANCH=0
 
-    if [ -d /mnt/lower/.git ] || [ -f /mnt/lower/.git ]; then
-        # Single project mode
+    if [ -d /mnt/overlay/upper ]; then
+        # Single project mode (upper/ exists directly under /mnt/overlay)
         fuse-overlayfs \
             -o lowerdir=/mnt/lower \
             -o upperdir=/mnt/overlay/upper \
