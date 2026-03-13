@@ -99,9 +99,8 @@ claude-riotbox reown
 | `claude-riotbox run "<task>" [dir]` | Run Claude autonomously (defaults to current directory) |
 | `claude-riotbox shell [dir]` | Interactive shell (defaults to current directory) |
 | `claude-riotbox resume [dir]` | Continue the last Claude session |
-| `claude-riotbox reown` | Rewrite Claude-authored commits to your git identity |
+| `claude-riotbox reown` | Rewrite all Claude-authored commits to your git identity |
 | `claude-riotbox reown <ref>` | Rewrite only commits since a specific ref |
-| `claude-riotbox reown --all` | Rewrite all Claude-authored commits on the current branch |
 | `claude-riotbox mounts` | Show auto-detected mounts (useful for debugging) |
 | `claude-riotbox nested-run "<task>" [dir]` | Run with podman-in-podman support (disables SELinux) |
 | `claude-riotbox nested-shell [dir]` | Shell with podman-in-podman support (disables SELinux) |
@@ -266,13 +265,14 @@ RIOTBOX_NESTED=1 claude-riotbox shell
 
 ## Reclaiming authorship
 
-After a riotbox run, Claude's commits will have the container's git identity. Use `claude-riotbox reown` from the project directory to rewrite those commits with your name and email (read from your `~/.gitconfig`). The `run` command auto-creates a checkpoint commit before launching Claude, which `reown` uses to determine the rewrite range.
+After a riotbox run, Claude's commits will have the container's git identity (`claude@riotbox`). Use `claude-riotbox reown` from the project directory to rewrite those commits with your name and email (read from your `~/.gitconfig`).
+
+By default, `reown` finds all `claude@riotbox` commits on the current branch, starts the rewrite from the oldest one's parent (minimising hash changes to pre-Claude commits), and rewrites only the Claude-authored authorship fields. Running it twice is safe — the second run is a no-op.
 
 ```sh
 cd /path/to/project
-claude-riotbox reown              # rewrites since the last checkpoint
-claude-riotbox reown abc123       # rewrites since a specific commit
-claude-riotbox reown --all        # rewrites all claude-authored commits on current branch
+claude-riotbox reown              # rewrites all claude-authored commits
+claude-riotbox reown abc123       # rewrites only commits since a specific ref
 ```
 
 > **Note:** This uses `git filter-repo` under the hood, which rewrites commit hashes. Only use this on commits that haven't been pushed to a shared remote, or be prepared to force-push. A backup tag (`backup/pre-reown-<timestamp>`) is created before rewriting — use `git diff <backup-tag>..<branch>` to verify the result.

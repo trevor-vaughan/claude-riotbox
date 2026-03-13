@@ -12,7 +12,7 @@ set -euo pipefail
 # ─────────────────────────────────────────────────────────────────────────────
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
-setup_projects "${RIOTBOX_PROJECTS:-}"
+resolve_projects "${RIOTBOX_PROJECTS:-}"
 
 timestamp="$(date +%Y%m%d-%H%M%S)"
 for dir in "${PROJECT_DIRS[@]}"; do
@@ -22,14 +22,13 @@ for dir in "${PROJECT_DIRS[@]}"; do
     fi
     project_name="$(basename "${dir}")"
 
-    # Commit any uncommitted work, then create a checkpoint commit.
-    # --allow-empty ensures the checkpoint commit is always created even when
-    # the repo is clean — reown-commits.sh locates the range by searching for
-    # this commit message, so it must exist regardless of repo state.
-    if ! git -C "${dir}" diff --quiet || ! git -C "${dir}" diff --cached --quiet; then
+    # Commit any uncommitted work so it's safely captured before Claude runs.
+    # Includes untracked files — the goal is a complete snapshot.
+    if ! git -C "${dir}" diff --quiet || ! git -C "${dir}" diff --cached --quiet || \
+       [ -n "$(git -C "${dir}" ls-files --others --exclude-standard)" ]; then
         git -C "${dir}" add -A
+        git -C "${dir}" commit -m "checkpoint: pre-claude-${timestamp}"
     fi
-    git -C "${dir}" commit --allow-empty -m "checkpoint: pre-claude-${timestamp}"
 
     # Tag the current HEAD
     tag_name="claude-checkpoint/${timestamp}"

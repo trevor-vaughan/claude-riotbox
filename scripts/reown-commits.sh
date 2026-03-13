@@ -15,9 +15,8 @@
 # and easily restore if needed.
 #
 # Usage:
-#   ./reown-commits.sh                     # rewrite since last checkpoint
+#   ./reown-commits.sh                     # rewrite all claude@riotbox commits
 #   ./reown-commits.sh <since-ref>         # rewrite since a specific ref
-#   ./reown-commits.sh --all               # rewrite all claude-authored commits on current branch
 #   ./reown-commits.sh --force             # skip confirmation prompt
 #
 # Your name/email are read from your git config.
@@ -45,10 +44,9 @@ REF_ARG=""
 for arg in "$@"; do
     case "${arg}" in
         --force|-f) FORCE=true ;;
-        --all)      REF_ARG="--all" ;;
         -*)
             echo "ERROR: Unknown option '${arg}'." >&2
-            echo "Usage: task reown -- [<since-ref>|--all] [--force]" >&2
+            echo "Usage: task reown -- [<since-ref>] [--force]" >&2
             exit 1
             ;;
         *)  REF_ARG="${arg}" ;;
@@ -105,27 +103,33 @@ echo "Repository: ${GIT_TOPLEVEL}"
 echo "Branch:     ${CURRENT_BRANCH}"
 echo ""
 
-if [ "${REF_ARG}" = "--all" ]; then
-    RANGE_DESC="all Claude-authored commits on ${CURRENT_BRANCH}"
-    LOG_RANGE=("${CURRENT_BRANCH}")
-elif [ -n "${REF_ARG}" ]; then
+if [ -n "${REF_ARG}" ]; then
     # Validate that the ref exists (also prevents flag injection via --)
     if ! git rev-parse --verify "${REF_ARG}" &>/dev/null; then
         echo "ERROR: '${REF_ARG}' is not a valid git ref." >&2
+        echo "Usage: task reown -- [<since-ref>] [--force]" >&2
         exit 1
     fi
     RANGE_DESC="commits since ${REF_ARG}"
     LOG_RANGE=("${REF_ARG}..HEAD")
 else
-    # Find the most recent checkpoint commit
-    CHECKPOINT="$(git log --grep='checkpoint: pre-claude' -1 --format='%H' 2>/dev/null || true)"
-    if [ -n "${CHECKPOINT}" ]; then
-        RANGE_DESC="commits since checkpoint $(git log -1 --format='%h %s' "${CHECKPOINT}")"
-        LOG_RANGE=("${CHECKPOINT}..HEAD")
+    # Find the oldest Claude-authored commit on this branch and use its
+    # parent as the range start.  This minimises the hash blast radius —
+    # commits before the oldest Claude commit keep their original hashes.
+    OLDEST_CLAUDE="$(git log --author="${CLAUDE_EMAIL}" --author="${CLAUDE_EMAIL_LEGACY}" \
+        --format='%H' "${CURRENT_BRANCH}" | tail -1)"
+    if [ -z "${OLDEST_CLAUDE}" ]; then
+        echo "No Claude-authored commits found on ${CURRENT_BRANCH}. Nothing to do."
+        exit 0
+    fi
+    PARENT="$(git rev-parse --verify "${OLDEST_CLAUDE}^" 2>/dev/null || true)"
+    if [ -n "${PARENT}" ]; then
+        RANGE_DESC="commits since $(git log -1 --format='%h %s' "${PARENT}")"
+        LOG_RANGE=("${PARENT}..HEAD")
     else
-        echo "No checkpoint commit found. Specify a ref or use --all."
-        echo "Usage: task reown -- [<since-ref>|--all] [--force]"
-        exit 1
+        # Oldest Claude commit is the root commit
+        RANGE_DESC="all commits on ${CURRENT_BRANCH} (Claude commit is root)"
+        LOG_RANGE=("${CURRENT_BRANCH}")
     fi
 fi
 
@@ -171,7 +175,7 @@ fi
 
 # ── Create backup tags ──────────────────────────────────────────────────────
 
-BACKUP_TAG="backup/pre-reown-$(date +%Y%m%d-%H%M%S)"
+BACKUP_TAG="backup/pre-reown-$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
 git tag "${BACKUP_TAG}/${CURRENT_BRANCH}" "${CURRENT_BRANCH}"
 echo "Backup tag created: ${BACKUP_TAG}/${CURRENT_BRANCH}"

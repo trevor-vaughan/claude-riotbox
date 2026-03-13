@@ -31,12 +31,12 @@ projects="${*:-}"
 export RIOTBOX_PROJECTS="${projects}"
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
-setup_projects "${RIOTBOX_PROJECTS}"
+resolve_projects "${RIOTBOX_PROJECTS}"
 
 echo "Launching Claude Code in riotbox..."
 echo "   Projects: ${PROJECT_SUMMARY}"
 echo "   Task    : ${task_prompt}"
-echo "   Workdir : ${WORKDIR}"
+echo "   Workdir : /workspace"
 echo "   Network : enabled (no host credentials mounted)"
 echo ""
 
