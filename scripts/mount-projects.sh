@@ -142,22 +142,42 @@ setup_projects() {
 
     resolve_projects "${raw_projects}"
 
-    # RIOTBOX_READONLY=1 mounts projects read-only (for untrusted repos)
-    local mount_suffix=":z"
-    if [ "${RIOTBOX_READONLY:-}" = "1" ]; then
-        mount_suffix=":ro,z"
-    fi
-
-    if [ ${#PROJECT_DIRS[@]} -eq 1 ]; then
-        # Single project: mount at /workspace (backward compatible)
-        PROJECT_VOLUME_FLAGS="-v ${PROJECT_DIRS[0]}:/workspace${mount_suffix}"
+    if [ "${RIOTBOX_OVERLAY:-}" = "1" ]; then
+        # ── Overlay mode: project read-only + overlay data volume ─────
+        if [ ${#PROJECT_DIRS[@]} -eq 1 ]; then
+            PROJECT_VOLUME_FLAGS="-v ${PROJECT_DIRS[0]}:/mnt/lower:ro,z"
+            local overlay_dir="${RIOTBOX_SESSION_DIR}/overlay/project"
+            mkdir -p "${overlay_dir}/upper" "${overlay_dir}/work"
+            PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${overlay_dir}:/mnt/overlay:z"
+        else
+            for dir in "${PROJECT_DIRS[@]}"; do
+                local name
+                name="$(basename "${dir}")"
+                PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${dir}:/mnt/lower/${name}:ro,z"
+                local overlay_dir="${RIOTBOX_SESSION_DIR}/overlay/${name}"
+                mkdir -p "${overlay_dir}/upper" "${overlay_dir}/work"
+                PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${overlay_dir}:/mnt/overlay/${name}:z"
+            done
+        fi
     else
-        # Multiple projects: mount each at /workspace/<dirname>
-        for dir in "${PROJECT_DIRS[@]}"; do
-            local name
-            name="$(basename "${dir}")"
-            PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${dir}:/workspace/${name}${mount_suffix}"
-        done
+        # ── Normal mode: direct bind mount ────────────────────────────
+        # RIOTBOX_READONLY=1 mounts projects read-only (for untrusted repos)
+        local mount_suffix=":z"
+        if [ "${RIOTBOX_READONLY:-}" = "1" ]; then
+            mount_suffix=":ro,z"
+        fi
+
+        if [ ${#PROJECT_DIRS[@]} -eq 1 ]; then
+            # Single project: mount at /workspace (backward compatible)
+            PROJECT_VOLUME_FLAGS="-v ${PROJECT_DIRS[0]}:/workspace${mount_suffix}"
+        else
+            # Multiple projects: mount each at /workspace/<dirname>
+            for dir in "${PROJECT_DIRS[@]}"; do
+                local name
+                name="$(basename "${dir}")"
+                PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${dir}:/workspace/${name}${mount_suffix}"
+            done
+        fi
     fi
 
     local riotbox_session_dir="${RIOTBOX_SESSION_DIR}"

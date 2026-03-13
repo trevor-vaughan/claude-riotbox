@@ -141,6 +141,32 @@ tasks:
         vars:
           ARGS: "{{.CLI_ARGS}}"
 
+  overlays:
+    desc: "Alias for session:overlays"
+    cmds:
+      - task: session:overlays
+
+  overlay-diff:
+    desc: "Alias for session:overlay-diff"
+    cmds:
+      - task: session:overlay-diff
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
+  overlay-accept:
+    desc: "Alias for session:overlay-accept"
+    cmds:
+      - task: session:overlay-accept
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
+  overlay-reject:
+    desc: "Alias for session:overlay-reject"
+    cmds:
+      - task: session:overlay-reject
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
   mounts:
     desc: "Alias for setup:mounts"
     cmds:

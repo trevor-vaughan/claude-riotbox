@@ -37,6 +37,12 @@ Session commands:
   session-remove [key/path]    Remove a session by key or project path (or --all)
   session-reset [all] [force]  Reset session cache (forces fresh skill/config copy)
 
+Overlay commands (podman-only):
+  overlays                     List sessions with pending overlay data
+  overlay-diff [project]       Show overlay changes vs host project
+  overlay-accept [project]     Apply overlay changes to host project
+  overlay-reject [project]     Discard overlay changes
+
 Info:
   version                      Show the current version
 
@@ -83,6 +89,18 @@ case "${cmd}" in
         ;;
     session-reset)
         run_task session-reset -- "$@"
+        ;;
+    overlays)
+        run_task overlays
+        ;;
+    overlay-diff)
+        run_task overlay-diff -- "$@"
+        ;;
+    overlay-accept)
+        run_task overlay-accept -- "$@"
+        ;;
+    overlay-reject)
+        run_task overlay-reject -- "$@"
         ;;
     task)
         run_task "$@"

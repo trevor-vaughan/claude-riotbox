@@ -371,9 +371,10 @@ WORKDIR /workspace
 # ── Entrypoint ──────────────────────────────────────────────────────────────
 COPY --chown=claude:claude container/inject-claude-md.sh /home/claude/.riotbox/inject-claude-md.sh
 COPY --chown=claude:claude container/session-branch.sh /home/claude/.riotbox/session-branch.sh
+COPY --chown=claude:claude container/overlay-setup.sh /home/claude/.riotbox/overlay-setup.sh
 COPY --chown=claude:claude container/entrypoint.sh /home/claude/.riotbox/entrypoint.sh
 RUN chmod +x /home/claude/.riotbox/entrypoint.sh /home/claude/.riotbox/inject-claude-md.sh \
-    /home/claude/.riotbox/session-branch.sh
+    /home/claude/.riotbox/session-branch.sh /home/claude/.riotbox/overlay-setup.sh
 ENTRYPOINT ["/home/claude/.riotbox/entrypoint.sh"]
 CMD ["bash"]
 

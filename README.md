@@ -107,6 +107,10 @@ claude-riotbox reown
 | `claude-riotbox session-list` | List all riotbox sessions |
 | `claude-riotbox session-remove [key/path]` | Remove a session by key or project path (or `--all`) |
 | `claude-riotbox session-reset` | Reset session cache (forces fresh skill/config copy) |
+| `claude-riotbox overlays` | List sessions with pending overlay data (podman-only) |
+| `claude-riotbox overlay-diff [project]` | Show overlay changes vs host project |
+| `claude-riotbox overlay-accept [project]` | Apply overlay changes to host project |
+| `claude-riotbox overlay-reject [project]` | Discard overlay changes |
 
 ## Pre-installed tools
 
@@ -278,6 +282,29 @@ claude-riotbox reown abc123       # rewrites only commits since a specific ref
 > **Note:** This uses `git filter-repo` under the hood, which rewrites commit hashes. Only use this on commits that haven't been pushed to a shared remote, or be prepared to force-push. A backup tag (`backup/pre-reown-<timestamp>`) is created before rewriting — use `git diff <backup-tag>..<branch>` to verify the result.
 >
 > `reown` recognises both the current container identity (`claude@riotbox`) and the legacy identity (`riotbox@local`) used by older versions of riotbox, so old squash-merge commits are also caught.
+
+## Overlay mode (podman-only)
+
+Overlay mode mounts your project read-only and uses fuse-overlayfs to capture all changes in a separate layer. The host project is never modified directly.
+
+```sh
+# Enable for a single session
+RIOTBOX_OVERLAY=1 claude-riotbox shell .
+
+# Enable permanently
+echo 'RIOTBOX_OVERLAY=1' >> ~/.config/claude-riotbox/config
+```
+
+After the session exits, review and apply or discard:
+
+```sh
+claude-riotbox overlays          # List pending overlays
+claude-riotbox overlay-diff      # See what changed
+claude-riotbox overlay-accept    # Apply changes to your project
+claude-riotbox overlay-reject    # Discard all changes
+```
+
+> Overlay mode requires podman. Docker is not supported due to differences in how it handles bind-mounted overlays.
 
 ## What could go wrong
 

@@ -35,6 +35,7 @@ mkdir -p ~/.claude/debug ~/.claude/plugins/cache
 RIOTBOX_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${RIOTBOX_SCRIPT_DIR}/inject-claude-md.sh"
 source "${RIOTBOX_SCRIPT_DIR}/session-branch.sh"
+source "${RIOTBOX_SCRIPT_DIR}/overlay-setup.sh"
 
 # Seed Claude Code settings on first run, or migrate stale settings.
 # Plugins are now installed via the CLI — remove any legacy enabledPlugins
@@ -99,6 +100,9 @@ if [ -f ~/.claude/plugins/installed_plugins.json ]; then
         && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
 fi
 
+# Overlay: mount fuse-overlayfs at /workspace (sets SESSION_BRANCH=0 if active)
+overlay_setup
+
 # Session branch: create a dedicated branch for this session (if repo detected
 # and not suppressed). Must run after all setup is complete, before the main
 # command, so Claude starts on the right branch.
@@ -113,6 +117,9 @@ else
     "$@"
 fi
 _exit_code=$?
+
+# Overlay: print exit summary with change stats
+overlay_teardown
 
 # Session branch: fast-forward merge back to the original branch on clean exit.
 # On hard kill (SIGKILL) this won't run — the session branch persists on disk

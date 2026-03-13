@@ -127,3 +127,35 @@ tasks:
     env:
       ROOT_DIR: "{{.ROOT_DIR}}"
     cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/reset-session.sh {{.ARGS}}"
+
+  overlays:
+    desc: List sessions with pending overlay data
+    dir: "{{.USER_WORKING_DIR}}"
+    cmd: "{{.ROOT_DIR}}/scripts/overlay-list.sh"
+
+  overlay-diff:
+    desc: Show changes in overlay (vs host project)
+    dir: "{{.USER_WORKING_DIR}}"
+    vars:
+      ARGS: "{{.ARGS | default .CLI_ARGS}}"
+    env:
+      ROOT_DIR: "{{.ROOT_DIR}}"
+    cmd: "{{.ROOT_DIR}}/scripts/overlay-diff.sh {{.ARGS}}"
+
+  overlay-accept:
+    desc: Apply overlay changes to host project
+    dir: "{{.USER_WORKING_DIR}}"
+    vars:
+      ARGS: "{{.ARGS | default .CLI_ARGS}}"
+    env:
+      ROOT_DIR: "{{.ROOT_DIR}}"
+    cmd: "{{.ROOT_DIR}}/scripts/overlay-accept.sh {{.ARGS}}"
+
+  overlay-reject:
+    desc: Discard overlay changes
+    dir: "{{.USER_WORKING_DIR}}"
+    vars:
+      ARGS: "{{.ARGS | default .CLI_ARGS}}"
+    env:
+      ROOT_DIR: "{{.ROOT_DIR}}"
+    cmd: "{{.ROOT_DIR}}/scripts/overlay-reject.sh {{.ARGS}}"
