@@ -112,6 +112,8 @@ if [ -n "${REF_ARG}" ]; then
     fi
     RANGE_DESC="commits since ${REF_ARG}"
     LOG_RANGE=("${REF_ARG}..HEAD")
+    # Scope filter-repo to only this range (commits before the ref keep their hashes)
+    FILTER_REFS="${REF_ARG}..refs/heads/${CURRENT_BRANCH}"
 else
     # Find the oldest Claude-authored commit on this branch and use its
     # parent as the range start.  This minimises the hash blast radius —
@@ -126,10 +128,12 @@ else
     if [ -n "${PARENT}" ]; then
         RANGE_DESC="commits since $(git log -1 --format='%h %s' "${PARENT}")"
         LOG_RANGE=("${PARENT}..HEAD")
+        FILTER_REFS="${PARENT}..refs/heads/${CURRENT_BRANCH}"
     else
         # Oldest Claude commit is the root commit
         RANGE_DESC="all commits on ${CURRENT_BRANCH} (Claude commit is root)"
         LOG_RANGE=("${CURRENT_BRANCH}")
+        FILTER_REFS="refs/heads/${CURRENT_BRANCH}"
     fi
 fi
 
@@ -210,7 +214,7 @@ echo "Pass 1: Rewriting author/committer fields..."
 FILTER_REPO_ARGS=(
     --mailmap "${MAILMAP}"
     --force
-    --refs "${CURRENT_BRANCH}"
+    --refs "${FILTER_REFS}"
 )
 
 git filter-repo "${FILTER_REPO_ARGS[@]}"

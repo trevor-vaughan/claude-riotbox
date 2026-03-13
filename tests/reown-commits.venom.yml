@@ -87,12 +87,36 @@ testcases:
           claude_commit "new claude work"
           claude_commit "newest claude work"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force "${ref}" 2>&1
-          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
-          echo "claude_remaining=${claude_count}"
-          [ "${claude_count}" -eq 0 ]
+          # Commits after ref should be rewritten
+          new_count=$(git rev-list --count "${ref}..HEAD" --author="${CLAUDE_EMAIL}")
+          echo "claude_after_ref=${new_count}"
+          [ "${new_count}" -eq 0 ]
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "commits since"
+
+  - name: Explicit ref does NOT rewrite claude commits before the ref
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          claude_commit "old claude - should stay"
+          old_claude_hash="$(git rev-parse HEAD)"
+          ref="$(git rev-parse HEAD)"
+          claude_commit "new claude - should be rewritten"
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force "${ref}" 2>&1
+          # The old claude commit (at the ref) should keep its hash and author
+          old_author="$(git log -1 --format='%ae' "${old_claude_hash}" 2>/dev/null)"
+          echo "old_author=${old_author}"
+          [ "${old_author}" = "${CLAUDE_EMAIL}" ]
+          # Its hash should be unchanged
+          echo "old_hash_preserved=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "old_author=claude@riotbox"
 
   - name: Default finds all claude commits and rewrites from oldest
     steps:
