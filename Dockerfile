@@ -71,12 +71,14 @@ ARG HOST_UID=1000
 RUN dnf -y update && \
     dnf -y install \
         bash \
+        coreutils \
         curl \
         wget \
         git \
         make \
         gcc \
         gcc-c++ \
+        ncurses \
         python3 \
         python3-pip \
         python3-devel \
