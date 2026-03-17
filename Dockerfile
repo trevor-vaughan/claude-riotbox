@@ -75,6 +75,7 @@ RUN dnf -y update && \
         curl \
         wget \
         git \
+        git-lfs \
         make \
         gcc \
         gcc-c++ \
