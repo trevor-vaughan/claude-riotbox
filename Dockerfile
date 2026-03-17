@@ -71,7 +71,6 @@ ARG HOST_UID=1000
 RUN dnf -y update && \
     dnf -y install \
         bash \
-        coreutils \
         curl \
         wget \
         git \
@@ -382,7 +381,7 @@ ENTRYPOINT ["/home/claude/.riotbox/entrypoint.sh"]
 CMD ["bash"]
 
 # ── Claude Code (LAST — changes most frequently, preserves layer cache) ─────
-RUN npm install -g @anthropic-ai/claude-code && claude --version
+RUN curl -fsSL https://claude.ai/install.sh | bash && claude --version
 
 # ── Pre-stage plugins (no auth needed — just clones a public GitHub repo) ────
 # Installed to a staging dir because ~/.claude is bind-mounted at runtime.
