@@ -21,6 +21,8 @@ RIOTBOX_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-riotbox"
 FUNCTIONAL_MOUNTS=(
     # User scripts and tools
     "bin"
+    # Riotbox config (plugins.conf, etc.)
+    ".config/claude-riotbox"
 )
 
 # ── Auth tokens ───────────────────────────────────────────────────────────────

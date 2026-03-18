@@ -27,7 +27,7 @@ Finally...it was fun!
 ## How it works
 
 1. **`scripts/build.sh`** introspects your local environment (nvm, uv, Go, Rust/rustup, Ruby/RVM, UID, tool configs) and passes them as build args.
-2. The **Dockerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. Claude Code is installed last for optimal layer caching.
+2. The **Dockerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. Claude Code is installed last (via the [official installer](https://claude.ai/install.sh)) for optimal layer caching.
 3. At runtime your project directory is bind-mounted into the container. Auth credentials are synced into an isolated session directory: `~/.claude/.credentials.json` is bind-mounted read-write (so token refreshes write back to the host), and `~/.claude.json` is copied so each container gets a writable snapshot without host contention.
 4. A **wrapper script** shadows the `claude` binary to add autonomous-mode flags and a system prompt with commit discipline guidelines.
 
@@ -117,7 +117,7 @@ claude-riotbox reown
 The image comes with a broad set of tools pre-installed so Claude can start working immediately without spending time on setup.
 
 **Development toolchains** (auto-detected from your host):
-- Node.js (via nvm), Python/uv, Rust/cargo, Go, Ruby/RVM
+- Node.js (via nvm), Python/uv, Rust/cargo, Go, Ruby/RVM, git-lfs
 
 **Security scanners:**
 - [trivy](https://github.com/aquasecurity/trivy), [grype](https://github.com/anchore/grype), [syft](https://github.com/anchore/syft), [semgrep](https://semgrep.dev/), ShellCheck
@@ -134,7 +134,23 @@ The image comes with a broad set of tools pre-installed so Claude can start work
 
 ## Plugins
 
-Claude Code [plugins](https://docs.anthropic.com/en/docs/claude-code/plugins) (skills, LSP servers, etc.) are pre-installed at image build time and copied into each session on first run. The plugin list is defined in the `Dockerfile` — edit the staging `RUN` block and rebuild to customize.
+Claude Code [plugins](https://docs.anthropic.com/en/docs/claude-code/plugins) are managed by `container/plugin-setup.sh`, which runs at every container startup. Plugins are loaded in order of precedence (lowest to highest):
+
+1. **Pre-staged defaults** — baked into the image at build time (defined in the `Dockerfile`). Copied into the session on first run.
+2. **Marketplace plugins** — installed from `~/.config/claude-riotbox/plugins.conf` (one plugin name per line) or the `RIOTBOX_PLUGINS` environment variable (comma-separated). Already-installed plugins are skipped to avoid spawning Node.js on every startup.
+3. **Host plugins** — your host `~/.claude/plugins/` directory is bind-mounted read-only at `~/.host-plugins` and merged into the session with highest precedence. Host plugin paths are rewritten to the container's filesystem automatically.
+
+```sh
+# Install extra plugins via env var
+RIOTBOX_PLUGINS=superpowers,ralph-loop claude-riotbox shell
+
+# Or configure permanently
+cat > ~/.config/claude-riotbox/plugins.conf << 'EOF'
+# One plugin per line (comments and blank lines OK)
+superpowers
+ralph-loop
+EOF
+```
 
 **Skills** from your host `~/.claude/skills/` are copied into the session directory at every launch, so newly installed skills are available immediately. Symlinks are dereferenced during copy. Removed or renamed skills persist in the session cache — run `claude-riotbox session-reset` to clear stale entries.
 
@@ -183,6 +199,8 @@ At runtime, `scripts/detect-mounts.sh` generates mount flags for the container. 
 | `~/.claude.json` | copied into session dir | file copy |
 | `~/.claude/skills/` | copied into session dir | file copy (symlinks dereferenced) |
 | `~/.claude/statusline-command.sh` | copied into session dir | file copy (chmod +x enforced) |
+| `~/.config/claude-riotbox/` | `~/.config/claude-riotbox/` | bind mount (`:z`) |
+| `~/.claude/plugins/` | `~/.host-plugins` | bind mount (read-only, `:z`) |
 | `~/bin` | `~/bin` | bind mount (read-only) |
 
 Riotbox sessions are isolated from your host `~/.claude` — it is never mounted directly. `.credentials.json` is bind-mounted read-write so OAuth token refreshes write directly back to the host file (rotating refresh tokens require this). `.claude.json` is copied so each container gets a writable snapshot without host contention.
@@ -399,6 +417,8 @@ Session branching is automatically disabled for `claude-riotbox run` (non-intera
 | Session data (`~/.local/share/claude-riotbox/`) | bind mount (`:z`) | Isolated per project set |
 | `~/.claude/.credentials.json` | nested bind mount (RW) | OAuth token refreshes must write back to host |
 | `~/.claude.json` | file copy into session dir | Each container gets a writable snapshot |
+| Riotbox config (`~/.config/claude-riotbox/`) | bind mount (`:z`) | `plugins.conf`, `config`, `mounts.conf` |
+| Host plugins (`~/.claude/plugins/`) | read-only bind mount | Merged into session at startup |
 | User scripts (`~/bin`) | read-only bind mount | Available but not writable |
 | User-defined mounts | read-only bind mount | From `~/.config/claude-riotbox/mounts.conf` |
 | Package caches | named volumes | Shared across containers, not with host |

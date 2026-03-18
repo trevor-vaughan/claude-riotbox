@@ -374,9 +374,11 @@ WORKDIR /workspace
 COPY --chown=claude:claude container/inject-claude-md.sh /home/claude/.riotbox/inject-claude-md.sh
 COPY --chown=claude:claude container/session-branch.sh /home/claude/.riotbox/session-branch.sh
 COPY --chown=claude:claude container/overlay-setup.sh /home/claude/.riotbox/overlay-setup.sh
+COPY --chown=claude:claude container/plugin-setup.sh /home/claude/.riotbox/plugin-setup.sh
 COPY --chown=claude:claude container/entrypoint.sh /home/claude/.riotbox/entrypoint.sh
 RUN chmod +x /home/claude/.riotbox/entrypoint.sh /home/claude/.riotbox/inject-claude-md.sh \
-    /home/claude/.riotbox/session-branch.sh /home/claude/.riotbox/overlay-setup.sh
+    /home/claude/.riotbox/session-branch.sh /home/claude/.riotbox/overlay-setup.sh \
+    /home/claude/.riotbox/plugin-setup.sh
 ENTRYPOINT ["/home/claude/.riotbox/entrypoint.sh"]
 CMD ["bash"]
 
@@ -391,9 +393,8 @@ RUN STAGING_DIR=/home/claude/.riotbox/plugins-staging/.claude && \
     mkdir -p "${STAGING_DIR}/plugins/cache" && \
     CLAUDE_CONFIG_DIR="${STAGING_DIR}" claude plugin marketplace add anthropics/claude-plugins-official && \
     for p in \
+        superpowers ralph-loop \
         frontend-design feature-dev code-simplifier commit-commands \
-        security-guidance claude-code-setup claude-md-management \
-        rust-analyzer-lsp typescript-lsp pyright-lsp gopls-lsp \
-        jdtls-lsp lua-lsp; do \
+        security-guidance claude-code-setup claude-md-management; do \
         CLAUDE_CONFIG_DIR="${STAGING_DIR}" claude plugin install "$p" || true; \
     done

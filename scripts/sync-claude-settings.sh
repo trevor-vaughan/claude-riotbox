@@ -72,3 +72,13 @@ if [ -f "${HOST_CLAUDE_DIR}/statusline-command.sh" ]; then
 else
     rm -f "${SESSION_DIR}/statusline-command.sh"
 fi
+
+# ── Host plugins (read-only mount) ───────────────────────────────────────────
+# Mounted at /home/claude/.host-plugins inside the container. plugin-setup.sh
+# copies contents into ~/.claude/plugins/ at startup, with host plugins taking
+# highest precedence (overwriting pre-staged defaults on conflict).
+if [ -d "${HOST_CLAUDE_DIR}/plugins" ]; then
+    echo "-v ${HOST_CLAUDE_DIR}/plugins:${CONTAINER_HOME}/.host-plugins:ro,z"
+else
+    echo "Notice: ~/.claude/plugins not found on host — host plugin copy will be skipped." >&2
+fi
