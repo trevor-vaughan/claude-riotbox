@@ -16,7 +16,7 @@ fi
 
 RIOTBOX_DIR=/home/testuser/riotbox
 
-OUTPUT_DIR="${ROOT_DIR}/.test-output"
+OUTPUT_DIR="${TEST_DIR:-${ROOT_DIR}/.test-output}"
 CONTAINER_OUTPUT_DIR="${RIOTBOX_DIR}/.test-output"
 mkdir -p "${OUTPUT_DIR}"
 

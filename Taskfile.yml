@@ -9,10 +9,13 @@ includes:
     taskfile: .taskfiles/setup.yml
   lint:
     taskfile: .taskfiles/lint.yml
-  tests:
+  test:
     taskfile: .taskfiles/test.yml
   release:
     taskfile: .taskfiles/release.yml
+
+vars:
+  TEST_DIR: '{{.TEST_DIR | default ".test-output"}}'
 
 dotenv: [".env"]
 
@@ -97,9 +100,9 @@ tasks:
           ARGS: "{{.CLI_ARGS}}"
 
   test:
-    desc: "Alias for tests:run"
+    desc: "Alias for test:run"
     cmds:
-      - task: tests:run
+      - task: test:run
         vars:
           ARGS: "{{.CLI_ARGS}}"
 
@@ -184,6 +187,10 @@ tasks:
     cmds:
       - task: lint:run
 
+  clean:
+    desc: Remove build artifacts and test output
+    cmd: rm -rf {{.TEST_DIR}}
+
   check:
     desc: Run all quality gates
-    deps: [lint, test, tests:lint]
+    deps: [lint, test, test:lint]

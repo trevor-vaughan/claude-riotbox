@@ -2,7 +2,6 @@ version: '3'
 
 tasks:
   default:
-    desc: List tasks in this module
     silent: true
     cmd: task setup --list
 

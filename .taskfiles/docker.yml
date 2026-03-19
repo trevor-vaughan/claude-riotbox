@@ -7,7 +7,6 @@ vars:
 
 tasks:
   default:
-    desc: List tasks in this module
     silent: true
     cmd: task docker --list
 

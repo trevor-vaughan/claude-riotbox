@@ -2,14 +2,14 @@ version: '3'
 
 vars:
   TEST_IMAGE: claude-riotbox-test
+  TEST_DIR: '{{.ROOT_DIR}}/{{.TEST_DIR | default ".test-output"}}'
   CONTAINER_CMD:
     sh: command -v podman 2>/dev/null || echo docker
 
 tasks:
   default:
-    desc: List tasks in this module
     silent: true
-    cmd: task tests --list
+    cmd: task test --list
 
   build:
     internal: true
@@ -35,4 +35,8 @@ tasks:
     deps: [build]
     vars:
       ARGS: "{{.ARGS | default .CLI_ARGS}}"
-    cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/run-tests.sh {{.ARGS}}"
+    env:
+      TEST_DIR: "{{.TEST_DIR}}"
+    cmds:
+      - mkdir -p "{{.TEST_DIR}}"
+      - "{{.ROOT_DIR}}/.taskfiles/scripts/run-tests.sh {{.ARGS}}"
