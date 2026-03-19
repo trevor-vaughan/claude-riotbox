@@ -126,6 +126,40 @@ awk -v dir="${SCRIPT_DIR}" -v ver="${VERSION}" \
 chmod +x "${TARGET_DIR}/claude-riotbox"
 echo "Installed: ${TARGET_DIR}/claude-riotbox"
 
+# ── Stub configuration files ─────────────────────────────────────────────
+# Place commented-out config stubs in the user's XDG config directory so
+# they can discover and customise settings. Never overwrite existing files.
+# Each stub has a riotbox-config-version header; if the shipped version is
+# newer, warn the user that new options may be available.
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-riotbox"
+STUBS_DIR="${SCRIPT_DIR}/scripts/configs"
+mkdir -p "${CONFIG_DIR}"
+
+for stub in config mounts.conf plugins.conf; do
+    src="${STUBS_DIR}/${stub}"
+    dst="${CONFIG_DIR}/${stub}"
+
+    if [ ! -f "${src}" ]; then
+        continue
+    fi
+
+    if [ ! -f "${dst}" ]; then
+        cp "${src}" "${dst}"
+        echo "  Config: ${dst} (created)"
+    else
+        # Compare riotbox-config-version between shipped stub and installed file
+        shipped_ver="$(grep -m1 '^# riotbox-config-version:' "${src}" 2>/dev/null | awk '{print $NF}' || true)"
+        installed_ver="$(grep -m1 '^# riotbox-config-version:' "${dst}" 2>/dev/null | awk '{print $NF}' || true)"
+        if [ -n "${shipped_ver}" ] && [ -n "${installed_ver}" ] \
+                && [ "${shipped_ver}" -gt "${installed_ver}" ] 2>/dev/null; then
+            echo "  Config: ${dst} (exists, v${installed_ver} — v${shipped_ver} available)"
+            echo "          Review ${src} for new options."
+        else
+            echo "  Config: ${dst} (exists, up to date)"
+        fi
+    fi
+done
+
 if ! echo "${PATH}" | tr ':' '\n' | grep -qx "${TARGET_DIR}"; then
     echo "Note: ${TARGET_DIR} is not in your PATH. Add it:"
     echo "  export PATH=\"${TARGET_DIR}:\${PATH}\""

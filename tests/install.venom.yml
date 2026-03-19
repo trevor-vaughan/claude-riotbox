@@ -96,3 +96,134 @@ testcases:
           test -x "${NEW_DIR}/claude-riotbox"
         assertions:
           - result.code ShouldEqual 0
+
+  - name: Creates stub config files on fresh install
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export XDG_CONFIG_HOME="${TEST_DIR}/.config"
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
+          test -f "${TEST_DIR}/.config/claude-riotbox/config"
+          test -f "${TEST_DIR}/.config/claude-riotbox/mounts.conf"
+          test -f "${TEST_DIR}/.config/claude-riotbox/plugins.conf"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Stub configs contain version headers
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export XDG_CONFIG_HOME="${TEST_DIR}/.config"
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
+          grep -q '^# riotbox-config-version:' "${TEST_DIR}/.config/claude-riotbox/config"
+          grep -q '^# riotbox-config-version:' "${TEST_DIR}/.config/claude-riotbox/mounts.conf"
+          grep -q '^# riotbox-config-version:' "${TEST_DIR}/.config/claude-riotbox/plugins.conf"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Does not overwrite existing config files
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export XDG_CONFIG_HOME="${TEST_DIR}/.config"
+          mkdir -p "${TEST_DIR}/.config/claude-riotbox"
+          echo "# custom config" > "${TEST_DIR}/.config/claude-riotbox/config"
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
+          content="$(cat "${TEST_DIR}/.config/claude-riotbox/config")"
+          [ "${content}" = "# custom config" ]
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Warns when shipped config version is newer
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export XDG_CONFIG_HOME="${TEST_DIR}/.config"
+          mkdir -p "${TEST_DIR}/.config/claude-riotbox"
+          echo "# riotbox-config-version: 0" > "${TEST_DIR}/.config/claude-riotbox/config"
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin" 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "v0"
+          - result.systemout ShouldContainSubstring "v1 available"
+
+  - name: Shows up-to-date when config versions match
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export XDG_CONFIG_HOME="${TEST_DIR}/.config"
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin" >/dev/null 2>&1
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin" 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "up to date"
+
+  - name: Falls back to unknown when VERSION file is missing
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export XDG_CONFIG_HOME="${TEST_DIR}/.config"
+          FAKE_RIOTBOX="${TEST_DIR}/riotbox"
+          mkdir -p "${FAKE_RIOTBOX}/scripts/configs"
+          cp "{{.riotbox_dir}}/install.sh" "${FAKE_RIOTBOX}/"
+          cp "{{.riotbox_dir}}/scripts/configs/"* "${FAKE_RIOTBOX}/scripts/configs/"
+          "${FAKE_RIOTBOX}/install.sh" "${TEST_DIR}/bin"
+          grep 'RIOTBOX_VERSION="unknown"' "${TEST_DIR}/bin/claude-riotbox"
+          echo "version_fallback=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "version_fallback=pass"
+
+  - name: Handles missing stubs directory gracefully
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export XDG_CONFIG_HOME="${TEST_DIR}/.config"
+          FAKE_RIOTBOX="${TEST_DIR}/riotbox"
+          mkdir -p "${FAKE_RIOTBOX}"
+          cp "{{.riotbox_dir}}/install.sh" "${FAKE_RIOTBOX}/"
+          echo "0.0.0" > "${FAKE_RIOTBOX}/VERSION"
+          "${FAKE_RIOTBOX}/install.sh" "${TEST_DIR}/bin"
+          test -x "${TEST_DIR}/bin/claude-riotbox"
+          [ ! -f "${TEST_DIR}/.config/claude-riotbox/config" ]
+          [ ! -f "${TEST_DIR}/.config/claude-riotbox/mounts.conf" ]
+          [ ! -f "${TEST_DIR}/.config/claude-riotbox/plugins.conf" ]
+          echo "missing_stubs=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "missing_stubs=pass"
+
+  - name: Does not warn when target dir IS in PATH
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export XDG_CONFIG_HOME="${TEST_DIR}/.config"
+          export PATH="${TEST_DIR}/bin:${PATH}"
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin" 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "not in your PATH"

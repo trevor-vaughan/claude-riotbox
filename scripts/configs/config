@@ -1,0 +1,37 @@
+# riotbox-config-version: 1
+# ~/.config/claude-riotbox/config — Persistent defaults for claude-riotbox.
+#
+# This file is sourced as shell script by the launcher. Values use the
+# : "${VAR:=default}" pattern so that environment variables and task flags
+# always take precedence over settings here.
+#
+# To activate a setting, uncomment the line. To revert to the default,
+# comment it out or delete the line.
+# ─────────────────────────────────────────────────────────────────────────
+
+# ── Network isolation ────────────────────────────────────────────────────
+# Set to "none" to disable outbound network access inside the container.
+# This prevents Claude from fetching packages or reaching external services,
+# but also blocks exfiltration. Useful for auditing untrusted code.
+#
+# : "${RIOTBOX_NETWORK:=none}"
+
+# ── Overlay mode (podman only) ───────────────────────────────────────────
+# When enabled, project directories are mounted via fuse-overlayfs so that
+# changes stay inside the container until you explicitly accept them with
+# claude-riotbox overlay-accept. Requires podman and /dev/fuse.
+#
+# : "${RIOTBOX_OVERLAY:=1}"
+
+# ── Nested containers (podman-in-podman) ─────────────────────────────────
+# Passes --device /dev/fuse and --security-opt label=disable to the
+# container, allowing Claude to run podman/docker inside the riotbox.
+# WARNING: This disables SELinux confinement — the container has reduced
+# isolation from the host.
+#
+# : "${RIOTBOX_NESTED:=1}"
+
+# ── Container image name ─────────────────────────────────────────────────
+# Override if you maintain multiple riotbox images (e.g. per-project).
+#
+# : "${IMAGE_NAME:=claude-riotbox}"

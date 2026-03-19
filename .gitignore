@@ -1,8 +1,12 @@
-# Build artifacts created by build.sh
-configs/
+# Build artifacts created by build.sh (top-level only)
+/configs/
 
 .claude/
 
-# Venom test logs
+# Superpowers session artifacts
+docs/superpowers/
+
+# Test output
+.test-output/
 venom.log
 venom.*.log

@@ -2,6 +2,7 @@ name: Overlay mount host-side script tests
 vars:
   root: "."
   riotbox_dir: "{{.root}}"
+  overlay_helpers: "{{.root}}/tests/lib/overlay-test-helpers.sh"
 
 testcases:
   # ── overlay-accept: positive cases ──────────────────────────────────────
@@ -10,23 +11,14 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
 
-          PROJECT="${TEST_DIR}/myproject"
-          mkdir -p "${PROJECT}"
           echo "original" > "${PROJECT}/existing.txt"
-
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
-
           echo "new file content" > "${OVERLAY}/upper/newfile.txt"
 
-          export ROOT_DIR="{{.riotbox_dir}}"
           echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
 
           [ -f "${PROJECT}/newfile.txt" ] || { echo "FAIL: newfile.txt missing"; exit 1; }
@@ -41,23 +33,14 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
 
-          PROJECT="${TEST_DIR}/myproject"
-          mkdir -p "${PROJECT}"
           echo "old content" > "${PROJECT}/file.txt"
-
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
-
           echo "new content" > "${OVERLAY}/upper/file.txt"
 
-          export ROOT_DIR="{{.riotbox_dir}}"
           echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
 
           [ "$(cat "${PROJECT}/file.txt")" = "new content" ] || { echo "FAIL: content not updated"; exit 1; }
@@ -70,25 +53,14 @@ testcases:
     steps:
       - type: exec
         script: |
-          # Use /dev/shm (tmpfs) because the container root is fuse-overlayfs
-          # which blocks creation of .wh.* files (reserved for whiteouts)
-          TEST_DIR="$(mktemp -d --tmpdir=/dev/shm)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test /dev/shm
           trap 'rm -rf "${TEST_DIR}"' EXIT
 
-          PROJECT="${TEST_DIR}/myproject"
-          mkdir -p "${PROJECT}"
           echo "to be deleted" > "${PROJECT}/removeme.txt"
-
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
-
           touch "${OVERLAY}/upper/.wh.removeme.txt"
 
-          export ROOT_DIR="{{.riotbox_dir}}"
           echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
 
           [ ! -f "${PROJECT}/removeme.txt" ] || { echo "FAIL: file should be deleted"; exit 1; }
@@ -101,25 +73,19 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d --tmpdir=/dev/shm)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test /dev/shm
           trap 'rm -rf "${TEST_DIR}"' EXIT
 
-          PROJECT="${TEST_DIR}/myproject"
           mkdir -p "${PROJECT}/subdir"
           echo "old" > "${PROJECT}/subdir/old.txt"
           echo "also old" > "${PROJECT}/subdir/other.txt"
 
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper/subdir" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
-
+          mkdir -p "${OVERLAY}/upper/subdir"
           touch "${OVERLAY}/upper/subdir/.wh..wh..opq"
           echo "replacement" > "${OVERLAY}/upper/subdir/new.txt"
 
-          export ROOT_DIR="{{.riotbox_dir}}"
           echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
 
           [ ! -f "${PROJECT}/subdir/old.txt" ] || { echo "FAIL: old.txt should be gone"; exit 1; }
@@ -135,23 +101,14 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-
-          PROJECT="${TEST_DIR}/myproject"
-          mkdir -p "${PROJECT}"
-
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
 
           echo "#!/bin/bash" > "${OVERLAY}/upper/script.sh"
           chmod 755 "${OVERLAY}/upper/script.sh"
 
-          export ROOT_DIR="{{.riotbox_dir}}"
           echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
 
           [ -x "${PROJECT}/script.sh" ] || { echo "FAIL: not executable"; exit 1; }
@@ -164,22 +121,13 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-
-          PROJECT="${TEST_DIR}/myproject"
-          mkdir -p "${PROJECT}"
-
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
 
           echo "data" > "${OVERLAY}/upper/file.txt"
 
-          export ROOT_DIR="{{.riotbox_dir}}"
           echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
 
           [ -d "${OVERLAY}/upper" ] || { echo "FAIL: upper dir missing"; exit 1; }
@@ -194,20 +142,11 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
 
-          PROJECT="${TEST_DIR}/myproject"
-          mkdir -p "${PROJECT}"
-
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
-
-          export ROOT_DIR="{{.riotbox_dir}}"
           "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
         assertions:
           - result.code ShouldEqual 0
@@ -217,22 +156,13 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-
-          PROJECT="${TEST_DIR}/myproject"
-          mkdir -p "${PROJECT}"
-
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
 
           echo "data" > "${OVERLAY}/upper/file.txt"
 
-          export ROOT_DIR="{{.riotbox_dir}}"
           "{{.riotbox_dir}}/scripts/overlay-accept.sh" --force "${PROJECT}"
 
           [ -f "${PROJECT}/file.txt" ] || { echo "FAIL: file not applied"; exit 1; }
@@ -247,23 +177,14 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-
-          PROJECT="${TEST_DIR}/myproject"
-          mkdir -p "${PROJECT}"
-
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
 
           echo "data" > "${OVERLAY}/upper/file.txt"
           echo "workdata" > "${OVERLAY}/work/something"
 
-          export ROOT_DIR="{{.riotbox_dir}}"
           echo "y" | "{{.riotbox_dir}}/scripts/overlay-reject.sh" "${PROJECT}"
 
           [ -d "${OVERLAY}/upper" ] || { echo "FAIL: upper dir missing"; exit 1; }
@@ -280,22 +201,13 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-
-          PROJECT="${TEST_DIR}/myproject"
-          mkdir -p "${PROJECT}"
-
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
 
           echo "data" > "${OVERLAY}/upper/file.txt"
 
-          export ROOT_DIR="{{.riotbox_dir}}"
           "{{.riotbox_dir}}/scripts/overlay-reject.sh" --force "${PROJECT}"
         assertions:
           - result.code ShouldEqual 0
@@ -305,20 +217,11 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
 
-          PROJECT="${TEST_DIR}/myproject"
-          mkdir -p "${PROJECT}"
-
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
-
-          export ROOT_DIR="{{.riotbox_dir}}"
           "{{.riotbox_dir}}/scripts/overlay-reject.sh" "${PROJECT}"
         assertions:
           - result.code ShouldEqual 0
@@ -330,22 +233,13 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-
-          PROJECT="${TEST_DIR}/myproject"
-          mkdir -p "${PROJECT}"
-
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
 
           echo "brand new" > "${OVERLAY}/upper/added.txt"
 
-          export ROOT_DIR="{{.riotbox_dir}}"
           "{{.riotbox_dir}}/scripts/overlay-diff.sh" "${PROJECT}"
         assertions:
           - result.code ShouldEqual 0
@@ -355,23 +249,14 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
 
-          PROJECT="${TEST_DIR}/myproject"
-          mkdir -p "${PROJECT}"
           echo "original" > "${PROJECT}/existing.txt"
-
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
-
           echo "modified" > "${OVERLAY}/upper/existing.txt"
 
-          export ROOT_DIR="{{.riotbox_dir}}"
           "{{.riotbox_dir}}/scripts/overlay-diff.sh" "${PROJECT}"
         assertions:
           - result.code ShouldEqual 0
@@ -381,24 +266,14 @@ testcases:
     steps:
       - type: exec
         script: |
-          # Use /dev/shm (tmpfs) for whiteout file creation
-          TEST_DIR="$(mktemp -d --tmpdir=/dev/shm)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test /dev/shm
           trap 'rm -rf "${TEST_DIR}"' EXIT
 
-          PROJECT="${TEST_DIR}/myproject"
-          mkdir -p "${PROJECT}"
           echo "to delete" > "${PROJECT}/gone.txt"
-
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-          export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
-          OVERLAY="${SESSION}/overlay/project"
-          mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
-          echo "${PROJECT}" > "${SESSION}/.projects"
-
           touch "${OVERLAY}/upper/.wh.gone.txt"
 
-          export ROOT_DIR="{{.riotbox_dir}}"
           "{{.riotbox_dir}}/scripts/overlay-diff.sh" "${PROJECT}"
         assertions:
           - result.code ShouldEqual 0

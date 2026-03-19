@@ -2,6 +2,7 @@ name: CLI wrapper argument routing tests
 vars:
   root: "."
   riotbox_dir: "{{.root}}"
+  wrapper_helpers: "{{.root}}/tests/lib/wrapper-test-helpers.sh"
 
 testcases:
   # -- No arguments -> show help --
@@ -10,10 +11,11 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects/foo" "${TEST_DIR}/projects/bar"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
+          cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" 2>&1
         assertions:
           - result.code ShouldEqual 0
@@ -25,74 +27,50 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects/foo"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" "${TEST_DIR}/projects/foo"
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "ARGS: ${args}"
-          echo "${args}" | grep -q "shell"
-          echo "${args}" | grep -q "${TEST_DIR}/projects/foo"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "shell"
+          - result.systemout ShouldContainSubstring "/projects/foo"
 
   - name: Multiple paths routes to shell with all paths
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects/foo" "${TEST_DIR}/projects/bar"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" "${TEST_DIR}/projects/foo" "${TEST_DIR}/projects/bar"
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "ARGS: ${args}"
-          echo "${args}" | grep -q "shell"
-          echo "${args}" | grep -q "${TEST_DIR}/projects/foo"
-          echo "${args}" | grep -q "${TEST_DIR}/projects/bar"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "shell"
+          - result.systemout ShouldContainSubstring "/projects/foo"
+          - result.systemout ShouldContainSubstring "/projects/bar"
 
   - name: Dot path routes to shell with dot
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" .
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "shell"
-          echo "${args}" | grep -q "\."
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "shell"
+          - result.systemout ShouldContainSubstring "."
 
   # -- Explicit shell command --
 
@@ -100,47 +78,33 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" shell
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "shell"
-          echo "${args}" | grep -q "\."
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "shell"
+          - result.systemout ShouldContainSubstring "."
 
   - name: Shell with project routes to shell with that project
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects/foo"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" shell "${TEST_DIR}/projects/foo"
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "shell"
-          echo "${args}" | grep -q "${TEST_DIR}/projects/foo"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "shell"
+          - result.systemout ShouldContainSubstring "/projects/foo"
 
   # -- run command --
 
@@ -148,48 +112,34 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects/foo"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" run "implement the feature" "${TEST_DIR}/projects/foo"
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "run"
-          echo "${args}" | grep -q "implement the feature"
-          echo "${args}" | grep -q "${TEST_DIR}/projects/foo"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "run"
+          - result.systemout ShouldContainSubstring "implement the feature"
+          - result.systemout ShouldContainSubstring "/projects/foo"
 
   - name: Run with prompt only (no projects)
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" run "do something"
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "run"
-          echo "${args}" | grep -q "do something"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "run"
+          - result.systemout ShouldContainSubstring "do something"
 
   # -- resume command --
 
@@ -197,47 +147,33 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" resume
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "resume"
-          echo "${args}" | grep -q "\."
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "resume"
+          - result.systemout ShouldContainSubstring "."
 
   - name: Resume with project
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects/foo"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" resume "${TEST_DIR}/projects/foo"
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "resume"
-          echo "${args}" | grep -q "${TEST_DIR}/projects/foo"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "resume"
+          - result.systemout ShouldContainSubstring "/projects/foo"
 
   # -- session-list command --
 
@@ -245,23 +181,16 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" session-list
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "session-list"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "session-list"
 
   # -- session-remove command --
 
@@ -269,69 +198,48 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" session-remove
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "session-remove"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "session-remove"
 
   - name: Session-remove --all routes correctly
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" session-remove --all
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "session-remove"
-          echo "${args}" | grep -q "\-\-all"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "session-remove"
+          - result.systemout ShouldContainSubstring "--all"
 
   - name: Session-remove with path routes correctly
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects/foo"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" session-remove "${TEST_DIR}/projects/foo"
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "session-remove"
-          echo "${args}" | grep -q "${TEST_DIR}/projects/foo"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "session-remove"
+          - result.systemout ShouldContainSubstring "/projects/foo"
 
   # -- session-reset command --
 
@@ -339,47 +247,33 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" session-reset
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "session-reset"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "session-reset"
 
   - name: Session-reset all force routes correctly
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" session-reset all force
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "session-reset"
-          echo "${args}" | grep -q "all"
-          echo "${args}" | grep -q "force"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "session-reset"
+          - result.systemout ShouldContainSubstring "all"
+          - result.systemout ShouldContainSubstring "force"
 
   # -- reown command --
 
@@ -387,46 +281,32 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" reown
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "reown"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "reown"
 
   - name: Reown with --force flag
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" reown --force
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "reown"
-          echo "${args}" | grep -q "\-\-force"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "reown"
+          - result.systemout ShouldContainSubstring "--force"
 
   # -- Pass-through commands --
 
@@ -434,89 +314,61 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" build
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "build"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "build"
 
   - name: Test passes through to task
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" test
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "test"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "test"
 
   - name: Clean passes through to task
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" clean
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "clean"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "clean"
 
   - name: Namespaced task passes through
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" "session:audit" -- "review this"
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "session:audit"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "session:audit"
 
   # -- Edge cases --
 
@@ -524,75 +376,46 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" "/nonexistent/path"
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          if echo "${args}" | grep -q "shell"; then
-            echo "FAIL: should not route to shell"
-            exit 1
-          fi
-          echo "${args}" | grep -q "/nonexistent/path"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "shell"
+          - result.systemout ShouldContainSubstring "/nonexistent/path"
 
   - name: Mix of path and non-path is not treated as all-paths
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects/foo"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" "${TEST_DIR}/projects/foo" "not-a-path"
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          if echo "${args}" | grep -q "shell"; then
-            echo "FAIL: should not route to shell"
-            exit 1
-          fi
-          echo "ok"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "ok"
+          - result.systemout ShouldNotContainSubstring "shell"
 
   - name: Separator is passed through for advanced usage
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/bin" "${TEST_DIR}/projects/foo"
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}/bin"
-          MOCK_TASK_ARGS="${TEST_DIR}/task-args"
-          cat > "${TEST_DIR}/bin/task" <<'MOCK'
-          #!/usr/bin/env bash
-          printf '%s\n' "$@" > "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
-          export MOCK_TASK_ARGS PATH="${TEST_DIR}/bin:${PATH}"
           cd "${TEST_DIR}/projects"
           "${TEST_DIR}/bin/claude-riotbox" "session:nested-run" -- "do something" "${TEST_DIR}/projects/foo"
-          args="$(cat "${MOCK_TASK_ARGS}")"
-          echo "${args}" | grep -q "session:nested-run"
-          echo "${args}" | grep -q "\-\-"
-          echo "${args}" | grep -q "do something"
+          print_task_args
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "session:nested-run"
+          - result.systemout ShouldContainSubstring "--"
+          - result.systemout ShouldContainSubstring "do something"

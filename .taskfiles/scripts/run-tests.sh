@@ -16,18 +16,26 @@ fi
 
 RIOTBOX_DIR=/home/testuser/riotbox
 
+OUTPUT_DIR="${ROOT_DIR}/.test-output"
+CONTAINER_OUTPUT_DIR="${RIOTBOX_DIR}/.test-output"
+mkdir -p "${OUTPUT_DIR}"
+
 run_venom() {
     ${CONTAINER_CMD} run --rm \
         ${USERNS_FLAG} \
         ${INIT_FLAG} \
         -v "${ROOT_DIR}:${RIOTBOX_DIR}:ro,z" \
+        -v "${OUTPUT_DIR}:${CONTAINER_OUTPUT_DIR}:rw,z" \
         -e RIOTBOX_DIR="${RIOTBOX_DIR}" \
         "${TEST_IMAGE}" \
         venom run "$@" \
-            --output-dir /tmp/venom-results \
+            --output-dir "${CONTAINER_OUTPUT_DIR}" \
             --var root="${RIOTBOX_DIR}" \
             --var riotbox_dir="${RIOTBOX_DIR}" \
-            --var helpers="${RIOTBOX_DIR}/tests/lib/git-test-helpers.sh"
+            --var helpers="${RIOTBOX_DIR}/tests/lib/git-test-helpers.sh" \
+            --var wrapper_helpers="${RIOTBOX_DIR}/tests/lib/wrapper-test-helpers.sh" \
+            --var overlay_helpers="${RIOTBOX_DIR}/tests/lib/overlay-test-helpers.sh" \
+            --var inject_helpers="${RIOTBOX_DIR}/tests/lib/inject-test-helpers.sh"
 }
 
 filter="${*:-}"

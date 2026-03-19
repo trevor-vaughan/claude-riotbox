@@ -291,6 +291,7 @@ testcases:
           ANTHROPIC_API_KEY="sk-test-fake-key" HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Setup complete"
 
   - name: Exits 0 with warnings (missing auth is a warning not error)
     steps:

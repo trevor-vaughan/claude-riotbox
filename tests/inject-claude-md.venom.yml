@@ -3,6 +3,7 @@ vars:
   root: "."
   riotbox_dir: "{{.root}}"
   in_riotbox: "no"
+  inject_helpers: "{{.root}}/tests/lib/inject-test-helpers.sh"
 
 testcases:
   # -- Creation --
@@ -11,15 +12,12 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config" "${TEST_DIR}/riotbox"
-          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
-          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
-          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
-          HOME="${TEST_DIR}" \
-            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          test -f "${TEST_DIR}/config/CLAUDE.md"
+          run_inject
+          test -f "${CLAUDE_MD}"
         assertions:
           - result.code ShouldEqual 0
 
@@ -27,15 +25,12 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config"
-          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
-          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
-          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
-          HOME="${TEST_DIR}" \
-            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
+          run_inject
+          grep -F "You are in a riotbox." "${CLAUDE_MD}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "You are in a riotbox."
@@ -44,16 +39,13 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config"
-          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
-          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
-          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
-          HOME="${TEST_DIR}" \
-            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          grep -F "<!-- BEGIN RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md"
-          grep -F "<!-- END RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md"
+          run_inject
+          grep -F "<!-- BEGIN RIOTBOX -->" "${CLAUDE_MD}"
+          grep -F "<!-- END RIOTBOX -->" "${CLAUDE_MD}"
         assertions:
           - result.code ShouldEqual 0
 
@@ -63,16 +55,13 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config"
-          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
-          export CLAUDE_CONFIG_DIR="${TEST_DIR}/config"
-          export RIOTBOX_PROMPT="${TEST_DIR}/prompt.md"
-          export HOME="${TEST_DIR}"
-          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          count=$(grep -cF "<!-- BEGIN RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md")
+          run_inject
+          run_inject
+          count=$(grep -cF "<!-- BEGIN RIOTBOX -->" "${CLAUDE_MD}")
           echo "begin_count=${count}"
           [ "${count}" -eq 1 ]
         assertions:
@@ -83,17 +72,14 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config"
-          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
-          export CLAUDE_CONFIG_DIR="${TEST_DIR}/config"
-          export RIOTBOX_PROMPT="${TEST_DIR}/prompt.md"
-          export HOME="${TEST_DIR}"
-          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          first="$(cat "${TEST_DIR}/config/CLAUDE.md")"
-          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          second="$(cat "${TEST_DIR}/config/CLAUDE.md")"
+          run_inject
+          first="$(cat "${CLAUDE_MD}")"
+          run_inject
+          second="$(cat "${CLAUDE_MD}")"
           [ "${first}" = "${second}" ] && echo "content_matches=true"
         assertions:
           - result.code ShouldEqual 0
@@ -105,18 +91,15 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config"
-          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
-          export CLAUDE_CONFIG_DIR="${TEST_DIR}/config"
-          export RIOTBOX_PROMPT="${TEST_DIR}/prompt.md"
-          export HOME="${TEST_DIR}"
-          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          echo "Updated prompt." > "${TEST_DIR}/prompt.md"
-          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          grep -F "Updated prompt." "${TEST_DIR}/config/CLAUDE.md"
-          ! grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
+          run_inject
+          echo "Updated prompt." > "${PROMPT_FILE}"
+          run_inject
+          grep -F "Updated prompt." "${CLAUDE_MD}"
+          ! grep -F "You are in a riotbox." "${CLAUDE_MD}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "Updated prompt."
@@ -125,20 +108,17 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test "$(printf 'Line one.\nLine two.\nLine three.\n')"
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config"
-          printf 'Line one.\nLine two.\nLine three.\n' > "${TEST_DIR}/prompt.md"
-          export CLAUDE_CONFIG_DIR="${TEST_DIR}/config"
-          export RIOTBOX_PROMPT="${TEST_DIR}/prompt.md"
-          export HOME="${TEST_DIR}"
-          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          echo "Replacement." > "${TEST_DIR}/prompt.md"
-          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          ! grep -F "Line one." "${TEST_DIR}/config/CLAUDE.md"
-          ! grep -F "Line two." "${TEST_DIR}/config/CLAUDE.md"
-          ! grep -F "Line three." "${TEST_DIR}/config/CLAUDE.md"
-          grep -F "Replacement." "${TEST_DIR}/config/CLAUDE.md"
+          run_inject
+          echo "Replacement." > "${PROMPT_FILE}"
+          run_inject
+          ! grep -F "Line one." "${CLAUDE_MD}"
+          ! grep -F "Line two." "${CLAUDE_MD}"
+          ! grep -F "Line three." "${CLAUDE_MD}"
+          grep -F "Replacement." "${CLAUDE_MD}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "Replacement."
@@ -149,17 +129,14 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config"
-          echo "# My Project Notes" > "${TEST_DIR}/config/CLAUDE.md"
-          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
-          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
-          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
-          HOME="${TEST_DIR}" \
-            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          grep -F "# My Project Notes" "${TEST_DIR}/config/CLAUDE.md"
-          grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
+          echo "# My Project Notes" > "${CLAUDE_MD}"
+          run_inject
+          grep -F "# My Project Notes" "${CLAUDE_MD}"
+          grep -F "You are in a riotbox." "${CLAUDE_MD}"
         assertions:
           - result.code ShouldEqual 0
 
@@ -167,10 +144,11 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config"
-          cat > "${TEST_DIR}/config/CLAUDE.md" <<'CONTENT'
+          cat > "${CLAUDE_MD}" <<'CONTENT'
           # Project header
 
           <!-- BEGIN RIOTBOX -->
@@ -180,16 +158,12 @@ testcases:
           # User notes
           Remember to use pytest.
           CONTENT
-          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
-          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
-          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
-          HOME="${TEST_DIR}" \
-            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          grep -F "Project header" "${TEST_DIR}/config/CLAUDE.md"
-          grep -F "User notes" "${TEST_DIR}/config/CLAUDE.md"
-          grep -F "Remember to use pytest." "${TEST_DIR}/config/CLAUDE.md"
-          grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
-          ! grep -F "Old prompt." "${TEST_DIR}/config/CLAUDE.md"
+          run_inject
+          grep -F "Project header" "${CLAUDE_MD}"
+          grep -F "User notes" "${CLAUDE_MD}"
+          grep -F "Remember to use pytest." "${CLAUDE_MD}"
+          grep -F "You are in a riotbox." "${CLAUDE_MD}"
+          ! grep -F "Old prompt." "${CLAUDE_MD}"
         assertions:
           - result.code ShouldEqual 0
 
@@ -197,10 +171,11 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config"
-          cat > "${TEST_DIR}/config/CLAUDE.md" <<'CONTENT'
+          cat > "${CLAUDE_MD}" <<'CONTENT'
           # Before
 
           <!-- BEGIN RIOTBOX -->
@@ -209,14 +184,10 @@ testcases:
 
           # After
           CONTENT
-          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
-          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
-          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
-          HOME="${TEST_DIR}" \
-            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          grep -F "Before" "${TEST_DIR}/config/CLAUDE.md"
-          grep -F "After" "${TEST_DIR}/config/CLAUDE.md"
-          grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
+          run_inject
+          grep -F "Before" "${CLAUDE_MD}"
+          grep -F "After" "${CLAUDE_MD}"
+          grep -F "You are in a riotbox." "${CLAUDE_MD}"
         assertions:
           - result.code ShouldEqual 0
 
@@ -306,17 +277,14 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config"
-          touch "${TEST_DIR}/config/CLAUDE.md"
-          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
-          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
-          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
-          HOME="${TEST_DIR}" \
-            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          grep -F "<!-- BEGIN RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md"
-          grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
+          touch "${CLAUDE_MD}"
+          run_inject
+          grep -F "<!-- BEGIN RIOTBOX -->" "${CLAUDE_MD}"
+          grep -F "You are in a riotbox." "${CLAUDE_MD}"
         assertions:
           - result.code ShouldEqual 0
 
@@ -324,17 +292,14 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test "$(printf 'First line.\nSecond line.\nThird line.\n')"
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config"
-          printf 'First line.\nSecond line.\nThird line.\n' > "${TEST_DIR}/prompt.md"
-          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
-          RIOTBOX_PROMPT="${TEST_DIR}/prompt.md" \
-          HOME="${TEST_DIR}" \
-            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          grep -F "First line." "${TEST_DIR}/config/CLAUDE.md"
-          grep -F "Second line." "${TEST_DIR}/config/CLAUDE.md"
-          grep -F "Third line." "${TEST_DIR}/config/CLAUDE.md"
+          run_inject
+          grep -F "First line." "${CLAUDE_MD}"
+          grep -F "Second line." "${CLAUDE_MD}"
+          grep -F "Third line." "${CLAUDE_MD}"
         assertions:
           - result.code ShouldEqual 0
 
@@ -342,25 +307,22 @@ testcases:
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config"
-          export CLAUDE_CONFIG_DIR="${TEST_DIR}/config"
-          export HOME="${TEST_DIR}"
-          export RIOTBOX_PROMPT="${TEST_DIR}/prompt.md"
-          echo "You are in a riotbox." > "${TEST_DIR}/prompt.md"
-          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          echo "V2." > "${TEST_DIR}/prompt.md"
-          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          echo "V3." > "${TEST_DIR}/prompt.md"
-          source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          begin_count=$(grep -cF "<!-- BEGIN RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md")
-          end_count=$(grep -cF "<!-- END RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md")
+          run_inject
+          echo "V2." > "${PROMPT_FILE}"
+          run_inject
+          echo "V3." > "${PROMPT_FILE}"
+          run_inject
+          begin_count=$(grep -cF "<!-- BEGIN RIOTBOX -->" "${CLAUDE_MD}")
+          end_count=$(grep -cF "<!-- END RIOTBOX -->" "${CLAUDE_MD}")
           echo "begin=${begin_count} end=${end_count}"
           [ "${begin_count}" -eq 1 ] && [ "${end_count}" -eq 1 ]
-          grep -F "V3." "${TEST_DIR}/config/CLAUDE.md"
-          ! grep -F "V2." "${TEST_DIR}/config/CLAUDE.md"
-          ! grep -F "You are in a riotbox." "${TEST_DIR}/config/CLAUDE.md"
+          grep -F "V3." "${CLAUDE_MD}"
+          ! grep -F "V2." "${CLAUDE_MD}"
+          ! grep -F "You are in a riotbox." "${CLAUDE_MD}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "begin=1 end=1"
