@@ -33,7 +33,7 @@ jobs:
         run: task lint
 
       - name: Lint venom test suites
-        run: task tests:lint
+        run: task test:lint
 
   test:
     runs-on: ubuntu-latest
