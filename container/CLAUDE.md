@@ -30,6 +30,12 @@ Skills are installed and available. USE THEM — do not skip skills to jump stra
 - **Commits**: `commit-commands:commit` skill
 - **Finishing a branch**: `superpowers:finishing-a-development-branch`
 
+## Programming
+
+- Do not create trivial wrapper functions. Extract a function only when it has non-trivial logic or 3+ callers.
+- Test as you develop.
+- Prefer subagent-driven development.
+
 ## Testing & Automation
 
 - Use `task` (https://taskfile.dev) for build/test/lint. Don't bypass it with raw commands. Create one if missing.
