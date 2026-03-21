@@ -97,9 +97,14 @@ plugin_setup() {
     # ~/.host-plugins is bind-mounted read-only from the host's ~/.claude/plugins.
     if [ -d "${HOST_PLUGINS_DIR}" ]; then
         echo "  [plugins] Copying host plugins..."
-        # Copy cache directories (plugin source trees)
+        # Copy cache directories (plugin source trees), skipping temp_git_*
+        # leftovers from interrupted `claude plugin install` on the host.
         if [ -d "${HOST_PLUGINS_DIR}/cache" ]; then
-            cp -a "${HOST_PLUGINS_DIR}/cache/." ~/.claude/plugins/cache/
+            for entry in "${HOST_PLUGINS_DIR}/cache/"*; do
+                [ -e "${entry}" ] || continue
+                [[ "$(basename "${entry}")" == temp_git_* ]] && continue
+                cp -a "${entry}" ~/.claude/plugins/cache/
+            done
         fi
         # Merge installed_plugins.json: host entries overwrite existing entries.
         # The host's JSON contains paths from the host filesystem (e.g.
