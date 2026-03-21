@@ -99,12 +99,15 @@ plugin_setup() {
         echo "  [plugins] Copying host plugins..."
         # Copy cache directories (plugin source trees), skipping temp_git_*
         # leftovers from interrupted `claude plugin install` on the host.
+        # Safety: dereference symlinks (-L) to prevent symlinks targeting
+        # sensitive container paths; strip setuid/setgid bits afterwards.
         if [ -d "${HOST_PLUGINS_DIR}/cache" ]; then
             for entry in "${HOST_PLUGINS_DIR}/cache/"*; do
                 [ -e "${entry}" ] || continue
                 [[ "$(basename "${entry}")" == temp_git_* ]] && continue
-                cp -a "${entry}" ~/.claude/plugins/cache/
+                cp -rL --no-preserve=ownership "${entry}" ~/.claude/plugins/cache/
             done
+            find ~/.claude/plugins/cache/ -perm /6000 -exec chmod ug-s {} + 2>/dev/null || true
         fi
         # Merge installed_plugins.json: host entries overwrite existing entries.
         # The host's JSON contains paths from the host filesystem (e.g.
