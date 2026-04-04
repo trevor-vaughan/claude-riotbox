@@ -27,8 +27,19 @@ CLAUDE_MD="${CLAUDE_CONFIG_DIR}/CLAUDE.md"
 if [ -n "${RIOTBOX_PROMPT}" ]; then
     BEGIN_MARKER="<!-- BEGIN RIOTBOX -->"
     END_MARKER="<!-- END RIOTBOX -->"
+    # Detect OS from /etc/os-release (available on all modern distros)
+    if [ -f /etc/os-release ]; then
+        # shellcheck source=/dev/null
+        . /etc/os-release
+        OS_PRETTY_NAME="${PRETTY_NAME:-Linux}"
+    else
+        OS_PRETTY_NAME="Linux"
+    fi
+    # Replace the OS placeholder in the prompt template
+    # Use awk to avoid sed delimiter conflicts with special chars in OS names
+    PROMPT_CONTENT="$(awk -v os="${OS_PRETTY_NAME}" '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' "${RIOTBOX_PROMPT}")"
     RIOTBOX_BLOCK="${BEGIN_MARKER}
-$(cat "${RIOTBOX_PROMPT}")
+${PROMPT_CONTENT}
 ${END_MARKER}"
     # Strip any existing riotbox block (no-op if absent), then append fresh block.
     if [ -f "${CLAUDE_MD}" ]; then

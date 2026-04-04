@@ -28,6 +28,15 @@ session_branch_setup() {
     local session_id="${SESSION_ID:-$(date +%Y%m%d-%H%M%S)-$$}"
     local branch_name="${_SB_BRANCH_PREFIX}/${session_id}"
 
+    # Skip if HEAD is unborn (empty repo with no commits) — session branching
+    # needs an existing commit to branch from.
+    if ! git -C /workspace rev-parse --verify HEAD &>/dev/null; then
+        echo "  [session-branch] Empty repo (no commits) — skipping session branch."
+        echo "  Tip: make an initial commit first, then restart to get session branching:"
+        echo "    git add <files> && git commit -m \"Initial commit\""
+        return 0
+    fi
+
     # Detect current branch (fails on detached HEAD)
     local current_branch
     if ! current_branch="$(git -C /workspace symbolic-ref --short HEAD 2>/dev/null)"; then
