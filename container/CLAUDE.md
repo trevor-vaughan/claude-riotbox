@@ -37,7 +37,33 @@ Skills are installed and available. USE THEM — do not skip skills to jump stra
 ## Programming
 
 - Do not create trivial wrapper functions. Extract a function only when it has non-trivial logic or 3+ callers.
+- Prefer correctness over speed and brevity. Implement completely or not at all. If a function exists it must honor its
+  full contract — every error path, edge case, and branch. No stubs (`TODO`, `pass`, `unimplemented!()`), no
+  placeholders (empty catch blocks, hardcoded returns), no prose substitutes (`// similar handling for remaining cases`).
+  If you cannot implement it correctly yet, do not create it. This applies equally to TDD: each green cycle must be a
+  real implementation, not a minimal shim that satisfies the current test alone.
+- Do not use hacks, shims, or workarounds to silence errors or tests. Fix the root cause. A red test that reflects a
+  real problem is more valuable than a green test that hides one.
+- Do not over-engineer. No features, config flags, abstractions, or refactors beyond what was asked. Do not add error
+  handling for impossible states. Do not clean up adjacent code "while you're here." Solve the stated problem, stop.
+- Match existing codebase conventions — naming, error handling, file organization, patterns. Read surrounding code before
+  adding to it. When in doubt, be consistent with what exists rather than introducing something "better."
+- Do not trust your training for API signatures, CLI flags, or library interfaces. If you have not verified a function or
+  flag exists in the current environment (via docs, --help, or reading source), assume you are hallucinating it.
 - Test as you develop.
+
+## When to stop and ask
+
+You are autonomous by default, but autonomy is not a license to guess. Stop and ask the user when:
+
+- **Requirements are ambiguous** and multiple interpretations would lead to meaningfully different implementations. Do not
+  pick one silently — a 30-second clarification beats an hour building the wrong thing.
+- **An action is destructive or affects shared state** — force-pushing, deleting branches, modifying CI/CD, dropping data,
+  or publishing to external services. Autonomy applies to local, reversible work.
+- **Multiple architectures are viable** with different tradeoffs (performance vs. simplicity, library A vs. B). Present
+  the tradeoffs concisely and let the user decide. Implementation details are your call; structural decisions are not.
+- **You have failed the same approach twice.** Do not retry a third time with minor variations. Explain what you tried,
+  what failed, and what you think the options are.
 
 ## Testing & Automation
 
@@ -57,6 +83,7 @@ Skills are installed and available. USE THEM — do not skip skills to jump stra
 
 - Commit at logical checkpoints. Do not wait until the end. Tag progression points when implementing a plan.
 - Before each commit, review staged changes for:
+  * [ ] Scope: only changes related to the task at hand, no drive-by cleanups
   * [ ] Tidiness: nothing extraneous, files organized sensibly
   * [ ] Security: no secrets, no injection, OWASP top 10
   * [ ] Correctness: logic errors, edge cases
@@ -74,3 +101,7 @@ These restate critical instructions that compete with default skill behaviors. T
 - Do not invoke finishing-a-development-branch unless explicitly requested.
 - Do not extract trivial wrapper functions. Extract only when logic is non-trivial or has 3+ callers.
 - Write code and documentation that is LLM-maintainable and human-understandable.
+- Never stub, fake, or partially implement. No TODOs, no placeholders, no hardcoded returns, no `// similar for X` prose substitutes. Implement every branch or do not create the function.
+- Do not over-engineer. Solve the stated problem, then stop.
+- Verify APIs, flags, and library interfaces before using them. If you haven't confirmed it exists, assume hallucination.
+- Autonomy has limits: ambiguous requirements, destructive actions, architectural forks, and repeated failures all require user input.
