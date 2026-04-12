@@ -16,12 +16,20 @@ if [ -f /etc/hosts ]; then
   fi
 fi
 
-# Disable Claude Code telemetry and update checks — the container is
-# air-gapped from these services and they cause hangs on startup.
-export DISABLE_TELEMETRY=1
-export CLAUDE_CODE_DISABLE_TELEMETRY=1
+# Disable all non-essential network traffic — the container runs a fixed
+# Claude Code version and should not phone home for telemetry, updates,
+# error reporting, or feedback surveys.
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export DO_NOT_TRACK=1
-export CLAUDE_CODE_SKIP_UPDATE_CHECK=1
+export DISABLE_AUTOUPDATER=1
+
+# Keep marketplace cache when git pull fails (container may lack network).
+export CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE=1
+
+# Point Claude Code at the pre-staged plugin directory as a seed source.
+# This is a belt-and-suspenders addition to the manual copy in plugin-setup.sh
+# — newer Claude Code versions may use this natively on first startup.
+export CLAUDE_CODE_PLUGIN_SEED_DIR="${HOME}/.riotbox/plugins-staging/.claude/plugins"
 
 # Point Claude Code's config dir at the bind-mounted session directory.
 # This ensures ALL reads and writes (config, credentials, lock files) happen
@@ -39,8 +47,9 @@ done
 # Ensure Claude Code directories exist
 mkdir -p ~/.claude/debug ~/.claude/plugins/cache
 
-# Inject riotbox system prompt as ~/.claude/CLAUDE.md so it persists through
-# context compression (re-injected as system reminders throughout the conversation).
+# Managed policy (/etc/claude-code/CLAUDE.md) is pre-rendered at build time.
+# inject-claude-md.sh is a no-op unless RIOTBOX_PROMPT overrides the template
+# or the build-time render is missing (backward compat with older images).
 RIOTBOX_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${RIOTBOX_SCRIPT_DIR}/inject-claude-md.sh"
 source "${RIOTBOX_SCRIPT_DIR}/session-branch.sh"

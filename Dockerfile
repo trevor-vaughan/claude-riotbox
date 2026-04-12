@@ -166,10 +166,20 @@ RUN useradd -l -m -u ${HOST_UID} -s /bin/bash claude 2>/dev/null || \
     # dnf non-interactive by default
     mkdir -p /etc/dnf/dnf.conf.d && \
     printf '[main]\nassumeyes=True\n' > /etc/dnf/dnf.conf.d/riotbox.conf && \
-    # System prompt (default — override via RIOTBOX_PROMPT env var)
-    mkdir -p /etc/riotbox
+    # System prompt template in /etc/riotbox (root-owned, immutable at runtime).
+    # Pre-rendered at build time into /etc/claude-code/ (the managed policy path
+    # that Claude Code reads automatically and cannot be excluded).
+    # Build-time rendering avoids runtime writes to /etc/ inside the container,
+    # which would cause SELinux AVC denials (container_t writing to etc_t).
+    mkdir -p /etc/riotbox /etc/claude-code && \
+    chown claude:claude /etc/claude-code
 
 COPY container/CLAUDE.md /etc/riotbox/CLAUDE.md
+RUN . /etc/os-release && \
+    awk -v os="${PRETTY_NAME:-Linux}" \
+        '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
+        /etc/riotbox/CLAUDE.md > /etc/claude-code/CLAUDE.md && \
+    chown claude:claude /etc/claude-code/CLAUDE.md
 
 # ── Security tools + task/venom from builder stage ───────────────────────────
 COPY --from=tools --chown=claude:claude /tools/bin/ /home/claude/.local/bin/

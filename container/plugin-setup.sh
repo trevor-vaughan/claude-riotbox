@@ -17,6 +17,9 @@ plugin_setup() {
 
     # ── 1. Seed settings.json ──────────────────────────────────────────────
     # Create on first run, or strip legacy enabledPlugins from prior versions.
+    # Host settings.json is intentionally NOT synced — it contains hooks,
+    # permission rules, and paths that reference the host filesystem and
+    # would break or cause unexpected behavior inside the container.
     if [ ! -f ~/.claude/settings.json ]; then
         jq -n '{
             promptSuggestionEnabled: false,
@@ -30,13 +33,14 @@ plugin_setup() {
 
     # ── 2. Copy pre-staged plugins (first run only) ────────────────────────
     # Pre-installed at build time into ~/.riotbox/plugins-staging/ to avoid
-    # network access and Node.js spawns at startup.
-    local installed
-    installed="$(jq -r '.plugins | length' ~/.claude/plugins/installed_plugins.json 2>/dev/null || echo 0)"
-    if [ "${installed}" = "0" ] && [ -d "${STAGING_DIR}/plugins" ]; then
+    # network access and Node.js spawns at startup. Guard with a stamp file
+    # so this runs exactly once per session, not on every startup.
+    if [ ! -f ~/.claude/plugins/.staged ] && [ -d "${STAGING_DIR}/plugins" ]; then
         echo "  [plugins] Copying pre-staged plugins..."
         cp -a "${STAGING_DIR}/plugins/"* ~/.claude/plugins/
-        # Fix paths — staging used a different HOME
+        # Fix paths — staging used a different HOME.
+        # This substitution is safe for sed because STAGING_DIR is a known
+        # build-time constant (no user content), unlike host plugin paths.
         sed -i "s|${STAGING_DIR}|${HOME}/.claude|g" \
             ~/.claude/plugins/installed_plugins.json \
             ~/.claude/plugins/known_marketplaces.json 2>/dev/null || true
@@ -49,6 +53,7 @@ plugin_setup() {
                 ~/.claude/settings.json > ~/.claude/settings.json.tmp \
                 && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
         fi
+        touch ~/.claude/plugins/.staged
     fi
 
     # ── 3. Install marketplace plugins from config or env ─────────────────
@@ -82,8 +87,11 @@ plugin_setup() {
                 echo "  [plugins] WARNING: Ignoring invalid plugin name: ${plugin}" >&2
                 continue
             fi
-            if jq -e --arg p "${plugin}" '.plugins[$p]' \
-                ~/.claude/plugins/installed_plugins.json &>/dev/null 2>&1; then
+            # v2 format uses qualified keys ("plugin@marketplace"), so match
+            # both exact name and any key starting with "name@".
+            if jq -e --arg p "${plugin}" \
+                '.plugins | has($p) or ([keys[] | select(startswith($p + "@"))] | length > 0)' \
+                ~/.claude/plugins/installed_plugins.json &>/dev/null; then
                 echo "  [plugins] ${plugin}: already installed."
             else
                 echo "  [plugins] Installing ${plugin}..."
@@ -115,7 +123,12 @@ plugin_setup() {
         # in /.claude/plugins to the container's path using a regex.
         if [ -f "${HOST_PLUGINS_DIR}/installed_plugins.json" ]; then
             if [ -f ~/.claude/plugins/installed_plugins.json ]; then
-                jq -s '{plugins: ((.[0].plugins // {}) * (.[1].plugins // {}))}' \
+                # Preserve version field (v2+) and merge plugin entries.
+                jq -s '
+                    (([.[].version // null] | map(select(. != null)) | max) as $v |
+                     if $v then {version: $v} else {} end)
+                    + {plugins: ((.[0].plugins // {}) * (.[1].plugins // {}))}
+                ' \
                     ~/.claude/plugins/installed_plugins.json \
                     "${HOST_PLUGINS_DIR}/installed_plugins.json" \
                     > ~/.claude/plugins/installed_plugins.json.tmp \
@@ -126,10 +139,16 @@ plugin_setup() {
                    ~/.claude/plugins/installed_plugins.json
             fi
             # Rewrite host plugin paths to the container's plugin directory.
-            # Matches any absolute path prefix ending in /.claude/plugins
-            # (e.g. /home/alice/.claude/plugins → /home/claude/.claude/plugins).
-            sed -i "s|[^\"]*/.claude/plugins|${HOME}/.claude/plugins|g" \
-                ~/.claude/plugins/installed_plugins.json 2>/dev/null || true
+            # Uses jq (JSON-aware) instead of sed to avoid corrupting values
+            # that happen to contain /.claude/plugins as a substring.
+            jq --arg prefix "${HOME}/.claude/plugins" '
+                walk(if type == "string" and test("/.claude/plugins/")
+                     then sub(".*/.claude/plugins/"; $prefix + "/")
+                     else . end)
+            ' ~/.claude/plugins/installed_plugins.json \
+                > ~/.claude/plugins/installed_plugins.json.tmp \
+                && mv ~/.claude/plugins/installed_plugins.json.tmp \
+                      ~/.claude/plugins/installed_plugins.json
         fi
         # Merge known_marketplaces.json if present
         if [ -f "${HOST_PLUGINS_DIR}/known_marketplaces.json" ]; then
@@ -144,8 +163,14 @@ plugin_setup() {
                 cp "${HOST_PLUGINS_DIR}/known_marketplaces.json" \
                    ~/.claude/plugins/known_marketplaces.json
             fi
-            sed -i "s|[^\"]*/.claude/plugins|${HOME}/.claude/plugins|g" \
-                ~/.claude/plugins/known_marketplaces.json 2>/dev/null || true
+            jq --arg prefix "${HOME}/.claude/plugins" '
+                walk(if type == "string" and test("/.claude/plugins/")
+                     then sub(".*/.claude/plugins/"; $prefix + "/")
+                     else . end)
+            ' ~/.claude/plugins/known_marketplaces.json \
+                > ~/.claude/plugins/known_marketplaces.json.tmp \
+                && mv ~/.claude/plugins/known_marketplaces.json.tmp \
+                      ~/.claude/plugins/known_marketplaces.json
         fi
     else
         echo "  [plugins] Notice: No host plugins found (~/.claude/plugins not mounted)."

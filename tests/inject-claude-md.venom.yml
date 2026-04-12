@@ -6,9 +6,9 @@ vars:
   inject_helpers: "{{.root}}/tests/lib/inject-test-helpers.sh"
 
 testcases:
-  # -- Creation --
+  # -- Rendering --
 
-  - name: Creates CLAUDE.md when it does not exist
+  - name: Renders prompt to managed policy path
     steps:
       - type: exec
         script: |
@@ -17,11 +17,11 @@ testcases:
           setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
           run_inject
-          test -f "${CLAUDE_MD}"
+          test -f "${MANAGED_POLICY_MD}"
         assertions:
           - result.code ShouldEqual 0
 
-  - name: Created file contains the prompt content
+  - name: Rendered file contains the prompt content
     steps:
       - type: exec
         script: |
@@ -30,28 +30,49 @@ testcases:
           setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
           run_inject
-          grep -F "You are in a riotbox." "${CLAUDE_MD}"
+          grep -F "You are in a riotbox." "${MANAGED_POLICY_MD}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "You are in a riotbox."
 
-  - name: Created file has begin and end markers
+  - name: Handles multi-line prompt content
     steps:
       - type: exec
         script: |
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           source "{{.inject_helpers}}"
-          setup_inject_test "You are in a riotbox."
+          setup_inject_test "$(printf 'First line.\nSecond line.\nThird line.\n')"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           run_inject
-          grep -F "<!-- BEGIN RIOTBOX -->" "${CLAUDE_MD}"
-          grep -F "<!-- END RIOTBOX -->" "${CLAUDE_MD}"
+          grep -F "First line." "${MANAGED_POLICY_MD}"
+          grep -F "Second line." "${MANAGED_POLICY_MD}"
+          grep -F "Third line." "${MANAGED_POLICY_MD}"
         assertions:
           - result.code ShouldEqual 0
+
+  # -- Template substitution --
+
+  - name: Substitutes OS_PRETTY_NAME template variable
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.inject_helpers}}"
+          setup_inject_test 'Running on {{OS_PRETTY_NAME}}.'
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          run_inject
+          # Should not contain the raw template placeholder
+          ! grep -F '{{OS_PRETTY_NAME}}' "${MANAGED_POLICY_MD}"
+          # Should contain an actual OS name (at minimum "Linux")
+          grep -q 'Running on .' "${MANAGED_POLICY_MD}"
+          echo "template_substituted=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "template_substituted=true"
 
   # -- Idempotency --
 
-  - name: Running twice produces exactly one riotbox block
+  - name: Running twice overwrites rather than appends
     steps:
       - type: exec
         script: |
@@ -60,34 +81,15 @@ testcases:
           setup_inject_test "You are in a riotbox."
           trap 'rm -rf "${TEST_DIR}"' EXIT
           run_inject
+          first="$(cat "${MANAGED_POLICY_MD}")"
           run_inject
-          count=$(grep -cF "<!-- BEGIN RIOTBOX -->" "${CLAUDE_MD}")
-          echo "begin_count=${count}"
-          [ "${count}" -eq 1 ]
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "begin_count=1"
-
-  - name: Running twice produces the same content
-    steps:
-      - type: exec
-        script: |
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.inject_helpers}}"
-          setup_inject_test "You are in a riotbox."
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          run_inject
-          first="$(cat "${CLAUDE_MD}")"
-          run_inject
-          second="$(cat "${CLAUDE_MD}")"
+          second="$(cat "${MANAGED_POLICY_MD}")"
           [ "${first}" = "${second}" ] && echo "content_matches=true"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "content_matches=true"
 
-  # -- Replacement --
-
-  - name: Updates riotbox block when prompt content changes
+  - name: Updated prompt replaces previous content completely
     steps:
       - type: exec
         script: |
@@ -98,98 +100,52 @@ testcases:
           run_inject
           echo "Updated prompt." > "${PROMPT_FILE}"
           run_inject
-          grep -F "Updated prompt." "${CLAUDE_MD}"
-          ! grep -F "You are in a riotbox." "${CLAUDE_MD}"
+          grep -F "Updated prompt." "${MANAGED_POLICY_MD}"
+          ! grep -F "You are in a riotbox." "${MANAGED_POLICY_MD}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "Updated prompt."
 
-  - name: Old prompt content is fully removed after update
+  # -- Build-time render --
+
+  - name: Skips rendering when build-time managed policy already exists
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/managed-policy"
+          # Simulate a build-time rendered managed policy
+          echo "Build-time content." > "${TEST_DIR}/managed-policy/CLAUDE.md"
+          unset RIOTBOX_PROMPT
+          export RIOTBOX_MANAGED_POLICY_DIR="${TEST_DIR}/managed-policy"
+          HOME="${TEST_DIR}" \
+            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+          # Content must be unchanged (not overwritten)
+          grep -F "Build-time content." "${TEST_DIR}/managed-policy/CLAUDE.md"
+          echo "build_time_preserved=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "build_time_preserved=true"
+
+  - name: Explicit RIOTBOX_PROMPT overrides build-time render
     steps:
       - type: exec
         script: |
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           source "{{.inject_helpers}}"
-          setup_inject_test "$(printf 'Line one.\nLine two.\nLine three.\n')"
+          setup_inject_test "Custom override prompt."
           trap 'rm -rf "${TEST_DIR}"' EXIT
+          # Pre-populate managed policy to simulate build-time render
+          echo "Build-time content." > "${MANAGED_POLICY_MD}"
           run_inject
-          echo "Replacement." > "${PROMPT_FILE}"
-          run_inject
-          ! grep -F "Line one." "${CLAUDE_MD}"
-          ! grep -F "Line two." "${CLAUDE_MD}"
-          ! grep -F "Line three." "${CLAUDE_MD}"
-          grep -F "Replacement." "${CLAUDE_MD}"
+          # Must be replaced with the custom prompt
+          grep -F "Custom override prompt." "${MANAGED_POLICY_MD}"
+          ! grep -F "Build-time content." "${MANAGED_POLICY_MD}"
+          echo "override_applied=true"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "Replacement."
-
-  # -- Preservation of existing content --
-
-  - name: Preserves content before the riotbox block
-    steps:
-      - type: exec
-        script: |
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.inject_helpers}}"
-          setup_inject_test "You are in a riotbox."
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          echo "# My Project Notes" > "${CLAUDE_MD}"
-          run_inject
-          grep -F "# My Project Notes" "${CLAUDE_MD}"
-          grep -F "You are in a riotbox." "${CLAUDE_MD}"
-        assertions:
-          - result.code ShouldEqual 0
-
-  - name: Preserves content after the riotbox block on re-inject
-    steps:
-      - type: exec
-        script: |
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.inject_helpers}}"
-          setup_inject_test "You are in a riotbox."
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          cat > "${CLAUDE_MD}" <<'CONTENT'
-          # Project header
-
-          <!-- BEGIN RIOTBOX -->
-          Old prompt.
-          <!-- END RIOTBOX -->
-
-          # User notes
-          Remember to use pytest.
-          CONTENT
-          run_inject
-          grep -F "Project header" "${CLAUDE_MD}"
-          grep -F "User notes" "${CLAUDE_MD}"
-          grep -F "Remember to use pytest." "${CLAUDE_MD}"
-          grep -F "You are in a riotbox." "${CLAUDE_MD}"
-          ! grep -F "Old prompt." "${CLAUDE_MD}"
-        assertions:
-          - result.code ShouldEqual 0
-
-  - name: Preserves content both before and after the block
-    steps:
-      - type: exec
-        script: |
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.inject_helpers}}"
-          setup_inject_test "You are in a riotbox."
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          cat > "${CLAUDE_MD}" <<'CONTENT'
-          # Before
-
-          <!-- BEGIN RIOTBOX -->
-          Original.
-          <!-- END RIOTBOX -->
-
-          # After
-          CONTENT
-          run_inject
-          grep -F "Before" "${CLAUDE_MD}"
-          grep -F "After" "${CLAUDE_MD}"
-          grep -F "You are in a riotbox." "${CLAUDE_MD}"
-        assertions:
-          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "override_applied=true"
 
   # -- Prompt file resolution --
 
@@ -199,23 +155,23 @@ testcases:
         script: |
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config" "${TEST_DIR}/.riotbox"
+          mkdir -p "${TEST_DIR}/managed-policy" "${TEST_DIR}/.riotbox"
           echo "Injected override." > "${TEST_DIR}/.riotbox/CLAUDE.md"
           unset RIOTBOX_PROMPT
+          export RIOTBOX_MANAGED_POLICY_DIR="${TEST_DIR}/managed-policy"
           # Temporarily hide the system default so no prompt is resolved
           saved_etc="/etc/riotbox/CLAUDE.md"
           moved_etc=false
           if [ -f "${saved_etc}" ]; then
             sudo mv "${saved_etc}" "${saved_etc}.bak" 2>/dev/null && moved_etc=true
           fi
-          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
           HOME="${TEST_DIR}" \
             source "{{.riotbox_dir}}/container/inject-claude-md.sh"
           if [ "${moved_etc}" = true ]; then
             sudo mv "${saved_etc}.bak" "${saved_etc}" 2>/dev/null
           fi
           # ~/.riotbox/CLAUDE.md must NOT be picked up
-          if [ -f "${TEST_DIR}/config/CLAUDE.md" ] && grep -qF "Injected override." "${TEST_DIR}/config/CLAUDE.md"; then
+          if [ -f "${TEST_DIR}/managed-policy/CLAUDE.md" ] && grep -qF "Injected override." "${TEST_DIR}/managed-policy/CLAUDE.md"; then
             echo "FAIL: user-writable path was resolved"
             exit 1
           fi
@@ -232,12 +188,12 @@ testcases:
         script: |
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config"
+          mkdir -p "${TEST_DIR}/managed-policy"
           unset RIOTBOX_PROMPT
-          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
+          export RIOTBOX_MANAGED_POLICY_DIR="${TEST_DIR}/managed-policy"
           HOME="${TEST_DIR}" \
             source "{{.riotbox_dir}}/container/inject-claude-md.sh"
-          grep -F "<!-- BEGIN RIOTBOX -->" "${TEST_DIR}/config/CLAUDE.md"
+          test -f "${TEST_DIR}/managed-policy/CLAUDE.md"
           echo "system_default_resolved=true"
         assertions:
           - result.code ShouldEqual 0
@@ -249,20 +205,20 @@ testcases:
         script: |
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          mkdir -p "${TEST_DIR}/config" "${TEST_DIR}/empty-home"
+          mkdir -p "${TEST_DIR}/managed-policy" "${TEST_DIR}/empty-home"
           unset RIOTBOX_PROMPT
+          export RIOTBOX_MANAGED_POLICY_DIR="${TEST_DIR}/managed-policy"
           saved_etc="/etc/riotbox/CLAUDE.md"
           moved_etc=false
           if [ -f "${saved_etc}" ]; then
             sudo mv "${saved_etc}" "${saved_etc}.bak" 2>/dev/null && moved_etc=true
           fi
-          CLAUDE_CONFIG_DIR="${TEST_DIR}/config" \
           HOME="${TEST_DIR}/empty-home" \
             source "{{.riotbox_dir}}/container/inject-claude-md.sh"
           if [ "${moved_etc}" = true ]; then
             sudo mv "${saved_etc}.bak" "${saved_etc}" 2>/dev/null
           fi
-          if [ -f "${TEST_DIR}/config/CLAUDE.md" ]; then
+          if [ -f "${TEST_DIR}/managed-policy/CLAUDE.md" ]; then
             echo "FAIL: CLAUDE.md should not have been created"
             exit 1
           fi
@@ -270,59 +226,3 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "no_file_created=true"
-
-  # -- Edge cases --
-
-  - name: Handles empty existing CLAUDE.md
-    steps:
-      - type: exec
-        script: |
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.inject_helpers}}"
-          setup_inject_test "You are in a riotbox."
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          touch "${CLAUDE_MD}"
-          run_inject
-          grep -F "<!-- BEGIN RIOTBOX -->" "${CLAUDE_MD}"
-          grep -F "You are in a riotbox." "${CLAUDE_MD}"
-        assertions:
-          - result.code ShouldEqual 0
-
-  - name: Handles multi-line prompt content
-    steps:
-      - type: exec
-        script: |
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.inject_helpers}}"
-          setup_inject_test "$(printf 'First line.\nSecond line.\nThird line.\n')"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          run_inject
-          grep -F "First line." "${CLAUDE_MD}"
-          grep -F "Second line." "${CLAUDE_MD}"
-          grep -F "Third line." "${CLAUDE_MD}"
-        assertions:
-          - result.code ShouldEqual 0
-
-  - name: Markers are not duplicated across multiple runs with changing content
-    steps:
-      - type: exec
-        script: |
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.inject_helpers}}"
-          setup_inject_test "You are in a riotbox."
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          run_inject
-          echo "V2." > "${PROMPT_FILE}"
-          run_inject
-          echo "V3." > "${PROMPT_FILE}"
-          run_inject
-          begin_count=$(grep -cF "<!-- BEGIN RIOTBOX -->" "${CLAUDE_MD}")
-          end_count=$(grep -cF "<!-- END RIOTBOX -->" "${CLAUDE_MD}")
-          echo "begin=${begin_count} end=${end_count}"
-          [ "${begin_count}" -eq 1 ] && [ "${end_count}" -eq 1 ]
-          grep -F "V3." "${CLAUDE_MD}"
-          ! grep -F "V2." "${CLAUDE_MD}"
-          ! grep -F "You are in a riotbox." "${CLAUDE_MD}"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "begin=1 end=1"

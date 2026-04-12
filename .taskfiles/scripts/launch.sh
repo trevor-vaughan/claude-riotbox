@@ -88,7 +88,7 @@ if command -v chcon &>/dev/null; then
 fi
 
 # shellcheck disable=SC2086  # intentional word splitting for multi-flag vars
-${CONTAINER_CMD} run --rm -it ${USERNS_FLAG} ${INIT_FLAG} \
+${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${INIT_FLAG} \
     --name "${CONTAINER_NAME}" \
     ${NET_FLAG} \
     ${NESTED_FLAGS} \

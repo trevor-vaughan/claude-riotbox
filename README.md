@@ -264,7 +264,7 @@ All riotbox paths follow the [XDG Base Directory Specification](https://specific
 
 Inside the container, `claude` is a wrapper script (`container/claude-wrapper.sh`) that shadows the npm-installed binary. It passes `--dangerously-skip-permissions` — this is safe here because the container **is** the riotbox. Claude can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
 
-The entrypoint injects a system prompt as `~/.claude/CLAUDE.md` (via `inject-claude-md.sh`) instructing Claude to install whatever it needs, commit regularly, and perform a security/sanity/DRY/maintainability review before every commit. Injecting via CLAUDE.md rather than `--append-system-prompt` means it survives context compression — Claude Code re-injects CLAUDE.md contents as system reminders throughout a long session.
+The system prompt is pre-rendered at build time into `/etc/claude-code/CLAUDE.md` (the managed policy path). This location is loaded automatically by Claude Code, cannot be excluded, and survives context compression. Build-time rendering avoids SELinux AVC denials that occur when `container_t` writes to `etc_t` paths in the overlay filesystem. The `RIOTBOX_PROMPT` env var can override the template at runtime if needed. Using the managed policy path frees `~/.claude/CLAUDE.md` for the user's own instructions — personal CLAUDE.md and rules from the host are synced into the session directory at launch.
 
 ## Nested containers (podman-in-podman)
 
@@ -542,7 +542,7 @@ podman run --rm -it --userns=keep-id $(scripts/detect-mounts.sh) localhost/claud
 **Symptom**: container starts, but `claude` shows a blank screen or hangs.
 
 **Likely causes**:
-1. **Telemetry/update checks** — Claude Code tries to reach external services on startup. The entrypoint sets `DISABLE_TELEMETRY=1`, `DO_NOT_TRACK=1`, and `CLAUDE_CODE_SKIP_UPDATE_CHECK=1` to prevent this. If you're running claude directly (not via the entrypoint), set these manually.
+1. **Telemetry/update checks** — Claude Code tries to reach external services on startup. The entrypoint sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DO_NOT_TRACK=1`, and `DISABLE_AUTOUPDATER=1` to prevent this. If you're running claude directly (not via the entrypoint), set these manually.
 2. **Auth file write failure** — Claude Code writes back to `~/.claude.json` on startup. If the file is read-only or on a read-only mount, Claude hangs in a retry loop. Auth files are now copied into the session directory to avoid this.
 3. **Missing directories** — Claude Code expects `~/.claude/debug/` and `~/.claude/plugins/cache/` to exist. The entrypoint creates these, but if permissions are wrong they may silently fail. Check with `ls -la ~/.claude/` inside the container.
 
