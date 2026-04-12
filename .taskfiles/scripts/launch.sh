@@ -71,6 +71,22 @@ if [ "${RIOTBOX_OVERLAY:-}" = "1" ]; then
     OVERLAY_FLAGS="--device /dev/fuse"
 fi
 
+# ── SELinux pre-labeling ─────────────────────────────────────────────────────
+# Files created by setup_projects (mkdir, cp) inherit the parent directory's
+# SELinux type (e.g. user_home_t). The :z mount flag asks the runtime to
+# relabel at start, but with nested mounts the ordering is non-deterministic —
+# the container process can hit files before their mount's relabel completes.
+# In Enforcing mode this produces AVC denials; in Permissive mode the denials
+# are logged without blocking, but still pollute the audit log and mask real
+# issues. Pre-label everything we created so the context is already correct.
+#
+# Guard on chcon (the tool we actually call), not getenforce — a system can
+# have SELinux in the kernel without the getenforce binary installed, but if
+# chcon is missing there is nothing we can do regardless.
+if command -v chcon &>/dev/null; then
+    chcon -R -t container_file_t "${RIOTBOX_SESSION_DIR}" 2>/dev/null || true
+fi
+
 # shellcheck disable=SC2086  # intentional word splitting for multi-flag vars
 ${CONTAINER_CMD} run --rm -it ${USERNS_FLAG} ${INIT_FLAG} \
     --name "${CONTAINER_NAME}" \
