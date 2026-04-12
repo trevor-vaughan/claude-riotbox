@@ -9,6 +9,8 @@
 #
 #   .credentials.json  — RW bind mount (token refresh writes back to host)
 #   .claude.json       — copied (account metadata; container may write oauthAccount)
+#   CLAUDE.md          — copied if present (user-level instructions)
+#   rules/             — copied if present (user-level rules, path-scoped)
 #   skills/            — copied with symlink dereferencing (may be plugin symlinks)
 #   statusline-command.sh — copied if present (custom status bar command)
 #
@@ -49,6 +51,28 @@ if [ -f "${HOME}/.claude.json" ]; then
     dest="${SESSION_DIR}/.claude.json"
     cp "${HOME}/.claude.json" "${dest}"
     chmod 600 "${dest}"
+fi
+
+# ── User CLAUDE.md ───────────────────────────────────────────────────────────
+# The riotbox system prompt lives at the managed policy path
+# (/etc/claude-code/CLAUDE.md) inside the container, so ~/.claude/CLAUDE.md is
+# free for the user's personal instructions. Copy from host if present; remove
+# stale copies if the host file was deleted.
+if [ -f "${HOST_CLAUDE_DIR}/CLAUDE.md" ]; then
+    cp "${HOST_CLAUDE_DIR}/CLAUDE.md" "${SESSION_DIR}/CLAUDE.md"
+else
+    rm -f "${SESSION_DIR}/CLAUDE.md"
+fi
+
+# ── User rules ───────────────────────────────────────────────────────────────
+# Personal rules in ~/.claude/rules/ apply to every project. Path-scoped rules
+# use glob frontmatter and load on demand. Re-copy each launch so
+# added/removed rules don't linger.
+if [ -d "${HOST_CLAUDE_DIR}/rules" ]; then
+    rm -rf "${SESSION_DIR}/rules"
+    cp -rL "${HOST_CLAUDE_DIR}/rules" "${SESSION_DIR}/"
+else
+    rm -rf "${SESSION_DIR}/rules"
 fi
 
 # ── Skills ────────────────────────────────────────────────────────────────────
