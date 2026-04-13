@@ -14,6 +14,8 @@ setup_inject_test() {
     mkdir -p "${TEST_DIR}/managed-policy"
     PROMPT_FILE="${TEST_DIR}/prompt.md"
     echo "${prompt_content}" > "${PROMPT_FILE}"
+    # Used by templates
+    # shellcheck disable=SC2034
     MANAGED_POLICY_MD="${TEST_DIR}/managed-policy/CLAUDE.md"
     export RIOTBOX_PROMPT="${PROMPT_FILE}"
     export RIOTBOX_MANAGED_POLICY_DIR="${TEST_DIR}/managed-policy"
