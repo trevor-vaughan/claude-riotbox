@@ -356,7 +356,10 @@ while IFS= read -r path; do
     else
         dir="$(dirname "${rel}")"
         mkdir -p "${project}/${dir}"
-        cp -a "${path}" "${project}/${rel}"
+        # Drop context+xattr: SELinux denies relabel-to onto the host
+        # project mount, and container_t-derived labels don't belong on
+        # host artifacts anyway.
+        cp -a --no-preserve=context,xattr "${path}" "${project}/${rel}"
     fi
 done < <(find "${upper}" -mindepth 1 2>/dev/null | sort)
 

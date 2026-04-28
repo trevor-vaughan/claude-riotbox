@@ -102,7 +102,11 @@ while IFS= read -r path; do
     else
         dir="$(dirname "${rel}")"
         mkdir -p "${project}/${dir}"
-        cp -a "${path}" "${project}/${rel}"
+        # `cp -a` preserves context+xattr via fsetxattr, which (a) the kernel
+        # denies under SELinux when the project bind mount has a different
+        # label class, and (b) would smear container_t-derived labels onto
+        # host files. Drop both; mode/timestamps/links are still preserved.
+        cp -a --no-preserve=context,xattr "${path}" "${project}/${rel}"
     fi
 done < <(find "${upper}" -mindepth 1 2>/dev/null | sort)
 

@@ -1,0 +1,85 @@
+name: plugin-setup.sh tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+testcases:
+  - name: Skips dangling symlinks when copying host plugin cache
+    # Regression: cp -rL aborts on the first dangling symlink encountered
+    # in the host plugin tree (a host-side install/uninstall race or partial
+    # git fetch can leave them behind), polluting startup with "cannot stat"
+    # errors and skipping the rest of the offending plugin.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          mkdir -p "${HOME}/.claude/plugins/cache"
+          mkdir -p "${HOME}/.host-plugins/cache/claude-plugins-official/broken-plugin/0.1.0/skills"
+          ln -s /nonexistent/missing-target \
+              "${HOME}/.host-plugins/cache/claude-plugins-official/broken-plugin/0.1.0/skills/dangling"
+          mkdir -p "${HOME}/.host-plugins/cache/claude-plugins-official/good-plugin/1.0.0"
+          echo "intact" > "${HOME}/.host-plugins/cache/claude-plugins-official/good-plugin/1.0.0/PLUGIN.md"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          plugin_setup 2>"${stderr_file}"
+
+          [ -f "${HOME}/.claude/plugins/cache/claude-plugins-official/good-plugin/1.0.0/PLUGIN.md" ]
+          [ "$(cat "${HOME}/.claude/plugins/cache/claude-plugins-official/good-plugin/1.0.0/PLUGIN.md")" = "intact" ]
+          [ ! -e "${HOME}/.claude/plugins/cache/claude-plugins-official/broken-plugin/0.1.0/skills/dangling" ]
+          ! grep -q 'cannot stat' "${stderr_file}"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Dereferences valid symlinks in host plugin cache
+    # The original `cp -rL` security posture: symlinks are dereferenced into
+    # real files, so the container never holds a link pointing back into
+    # host filesystem paths. The replacement pipeline must preserve this.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          mkdir -p "${HOME}/.claude/plugins/cache"
+          mkdir -p "${HOME}/.host-plugins/cache/claude-plugins-official/plugin/1.0.0/real"
+          echo "payload" > "${HOME}/.host-plugins/cache/claude-plugins-official/plugin/1.0.0/real/file.txt"
+          ln -s real "${HOME}/.host-plugins/cache/claude-plugins-official/plugin/1.0.0/aliased"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          plugin_setup >/dev/null
+
+          dest="${HOME}/.claude/plugins/cache/claude-plugins-official/plugin/1.0.0/aliased"
+          [ -d "${dest}" ] && [ ! -L "${dest}" ]
+          [ "$(cat "${dest}/file.txt")" = "payload" ]
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Skips temp_git_ leftovers from interrupted host installs
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          mkdir -p "${HOME}/.claude/plugins/cache"
+          mkdir -p "${HOME}/.host-plugins/cache/temp_git_abc123/junk"
+          echo "x" > "${HOME}/.host-plugins/cache/temp_git_abc123/junk/file"
+          mkdir -p "${HOME}/.host-plugins/cache/marketplace/plugin/1.0.0"
+          echo "y" > "${HOME}/.host-plugins/cache/marketplace/plugin/1.0.0/PLUGIN.md"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          plugin_setup >/dev/null
+
+          [ -f "${HOME}/.claude/plugins/cache/marketplace/plugin/1.0.0/PLUGIN.md" ]
+          [ ! -e "${HOME}/.claude/plugins/cache/temp_git_abc123" ]
+        assertions:
+          - result.code ShouldEqual 0
