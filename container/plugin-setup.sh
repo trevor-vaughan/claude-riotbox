@@ -37,7 +37,12 @@ plugin_setup() {
     # so this runs exactly once per session, not on every startup.
     if [ ! -f ~/.claude/plugins/.staged ] && [ -d "${STAGING_DIR}/plugins" ]; then
         echo "  [plugins] Copying pre-staged plugins..."
-        cp -a "${STAGING_DIR}/plugins/"* ~/.claude/plugins/
+        # `cp -a` is `-dR --preserve=all`, which includes context+xattr.
+        # When the destination lands on fuse-overlayfs (overlay mode), the
+        # fsetxattr syscall used to copy the SELinux label is denied by the
+        # kernel ("AVC: denied { relabelto } … tcontext=…fusefs_t"). Drop
+        # those two attributes; mode/timestamps/links are still preserved.
+        cp -a --no-preserve=context,xattr "${STAGING_DIR}/plugins/"* ~/.claude/plugins/
         # Fix paths — staging used a different HOME.
         # This substitution is safe for sed because STAGING_DIR is a known
         # build-time constant (no user content), unlike host plugin paths.
@@ -107,13 +112,24 @@ plugin_setup() {
         echo "  [plugins] Copying host plugins..."
         # Copy cache directories (plugin source trees), skipping temp_git_*
         # leftovers from interrupted `claude plugin install` on the host.
-        # Safety: dereference symlinks (-L) to prevent symlinks targeting
-        # sensitive container paths; strip setuid/setgid bits afterwards.
+        # Safety: dereference symlinks to prevent symlinks targeting sensitive
+        # container paths; strip setuid/setgid bits afterwards.
+        #
+        # `cp -rL` would abort on the first dangling symlink (e.g. left by a
+        # host-side install/uninstall race or a partial git fetch). Instead,
+        # pre-filter with `find -L … ! -type l` — under `-L`, valid symlinks
+        # report their target's type, so only broken symlinks retain `-type l`
+        # — then stream paths through `tar -h` to dereference and copy.
         if [ -d "${HOST_PLUGINS_DIR}/cache" ]; then
             for entry in "${HOST_PLUGINS_DIR}/cache/"*; do
                 [ -e "${entry}" ] || continue
-                [[ "$(basename "${entry}")" == temp_git_* ]] && continue
-                cp -rL --no-preserve=ownership "${entry}" ~/.claude/plugins/cache/
+                local entry_name
+                entry_name="$(basename "${entry}")"
+                [[ "${entry_name}" == temp_git_* ]] && continue
+                ( cd "${HOST_PLUGINS_DIR}/cache" \
+                    && find -L "${entry_name}" ! -type l -print0 \
+                    | tar -ch --null --no-recursion --files-from=- -f - \
+                ) | tar -xf - -C ~/.claude/plugins/cache/ --no-same-owner
             done
             find ~/.claude/plugins/cache/ -perm /6000 -exec chmod ug-s {} + 2>/dev/null || true
         fi
