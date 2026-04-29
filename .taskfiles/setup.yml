@@ -10,7 +10,7 @@ tasks:
     cmd: "{{.ROOT_DIR}}/install.sh {{.CLI_ARGS | default \"$HOME/bin\"}}"
 
   install-hooks:
-    desc: Install git pre-push hook (blocks pushes with claude@riotbox commits)
+    desc: Install git pre-push hook (blocks pushes with riotbox container-identity commits)
     vars:
       ARGS: "{{.ARGS | default .CLI_ARGS}}"
     env:

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Install git pre-push hook (blocks pushes with claude@riotbox commits).
+# Install git pre-push hook (blocks pushes with riotbox container-identity commits).
 # Required env: ROOT_DIR
 # Arguments: [global] (default: local repo)
 

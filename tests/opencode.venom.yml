@@ -1,0 +1,783 @@
+name: opencode integration tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  opencode_helpers: "{{.root}}/tests/lib/opencode-test-helpers.sh"
+  INTEGRATION: "0"
+
+# Wrapper resolution + injection behaviour is tested through the generic
+# container/agent-wrapper.sh installed as `opencode` (one symlink per agent
+# in production). The opencode manifest at agents/opencode.sh decides
+# injection rules.
+
+testcases:
+  - name: find-real-bin locates opencode outside .riotbox/bin
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_path_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "${RIOTBOX_DIR}/container/find-real-bin.sh" opencode
+          echo "REAL_BIN=${REAL_BIN}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REAL_BIN="
+          - result.systemout ShouldContainSubstring "/realbin/opencode"
+          - result.systemout ShouldNotContainSubstring "/.riotbox/bin/opencode"
+
+  - name: find-real-bin skips .riotbox/bin even when wrapper exists there
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_path_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "${RIOTBOX_DIR}/container/find-real-bin.sh" opencode
+          # Resolved binary must be the realbin one, not the wrapper
+          test "${REAL_BIN}" = "${FAKE_REAL_OPENCODE}"
+          # Invoking it must hit the real fake, not the wrapper sentinel
+          output="$("${REAL_BIN}" --version 2>&1)"
+          echo "${output}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_REAL_OPENCODE_INVOKED"
+          - result.systemout ShouldNotContainSubstring "FAKE_WRAPPER_INVOKED_INCORRECTLY"
+
+  - name: find-real-bin returns empty when no real opencode on PATH
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_path_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          rm -f "${FAKE_REAL_OPENCODE}"
+          source "${RIOTBOX_DIR}/container/find-real-bin.sh" opencode
+          echo "REAL_BIN=[${REAL_BIN}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REAL_BIN=[]"
+
+  - name: agent-wrapper appends --dangerously-skip-permissions for opencode run
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_path_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_opencode_wrapper
+          # `--dangerously-skip-permissions` is a `run`-subcommand-local flag,
+          # so the wrapper must inject it AFTER `run`, not before.
+          opencode run "do work"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_REAL_OPENCODE_INVOKED"
+          - result.systemout ShouldContainSubstring "arg=run"
+          - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
+          - result.systemout ShouldContainSubstring "arg=do work"
+
+  - name: agent-wrapper does NOT inject the run flag for opencode non-run invocations
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_path_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_opencode_wrapper
+          # --version is a root-level invocation; injecting --dangerously-skip-permissions
+          # there would cause opencode to error with "unknown flag".
+          opencode --version
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_REAL_OPENCODE_INVOKED"
+          - result.systemout ShouldContainSubstring "arg=--version"
+          - result.systemout ShouldNotContainSubstring "arg=--dangerously-skip-permissions"
+
+  - name: agent-wrapper injects opencode flag immediately after run (subcommand-local position)
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_path_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_opencode_wrapper
+          # The flag must appear after `run` and before the user's positional
+          # prompt, so opencode's run subparser sees it.
+          out="$(opencode run --continue 2>&1)"
+          # Verify positional ordering: run first, then flag, then --continue
+          run_line=$(echo "${out}" | grep -n "^arg=run$" | cut -d: -f1)
+          flag_line=$(echo "${out}" | grep -n "^arg=--dangerously-skip-permissions$" | cut -d: -f1)
+          continue_line=$(echo "${out}" | grep -n "^arg=--continue$" | cut -d: -f1)
+          test "${run_line}" -lt "${flag_line}"
+          test "${flag_line}" -lt "${continue_line}"
+          echo "ORDER_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ORDER_OK"
+
+  - name: agent-wrapper sets CI=true for opencode when run subcommand is present
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_path_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_opencode_wrapper
+          # Replace fake real opencode to print CI status
+          cat > "${FAKE_REAL_OPENCODE}" <<'FAKE'
+          #!/usr/bin/env bash
+          echo "CI=${CI:-unset}"
+          FAKE
+          chmod +x "${FAKE_REAL_OPENCODE}"
+          opencode run "do something"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CI=true"
+
+  - name: agent-wrapper does not set CI for opencode when run is absent
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_path_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_opencode_wrapper
+          unset CI
+          cat > "${FAKE_REAL_OPENCODE}" <<'FAKE'
+          #!/usr/bin/env bash
+          echo "CI=${CI:-unset}"
+          FAKE
+          chmod +x "${FAKE_REAL_OPENCODE}"
+          opencode --help
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CI=unset"
+
+  - name: agent-wrapper exits non-zero when no real opencode on PATH
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_path_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_opencode_wrapper
+          rm -f "${FAKE_REAL_OPENCODE}"
+          opencode --version 2>&1 || echo "EXIT=$?"
+        assertions:
+          - result.systemout ShouldContainSubstring "could not find the real opencode"
+          - result.systemout ShouldContainSubstring "EXIT="
+
+  - name: opencode-setup places AGENTS.md from the template on first run
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          test -f "${AGENTS_TARGET}"
+          grep -F "autonomy prompt" "${AGENTS_TARGET}"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup writes baseline opencode.json when none exists
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          test -f "${OPENCODE_JSON}"
+          jq -e '.permission == "allow"' "${OPENCODE_JSON}"
+          jq -e '.autoupdate == false' "${OPENCODE_JSON}"
+          jq -e '.share == "disabled"' "${OPENCODE_JSON}"
+          jq -e '.instructions[0]' "${OPENCODE_JSON}"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup does not overwrite existing opencode.json
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test preconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          # The original host-synced content is preserved
+          jq -e '.model == "anthropic/claude-sonnet-4-5"' "${OPENCODE_JSON}"
+          # Baseline-only keys are NOT injected
+          ! jq -e '.permission' "${OPENCODE_JSON}" >/dev/null 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup is idempotent across multiple invocations
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          ts1="$(stat -c %Y "${OPENCODE_JSON}")"
+          sleep 1
+          opencode_setup
+          ts2="$(stat -c %Y "${OPENCODE_JSON}")"
+          test "${ts1}" -eq "${ts2}"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup honors RIOTBOX_PROMPT override for AGENTS.md
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig withprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          grep -F "Custom prompt content." "${AGENTS_TARGET}"
+          ! grep -F "autonomy prompt" "${AGENTS_TARGET}"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup RIOTBOX_PROMPT overwrites an existing AGENTS.md
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig withprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # Place a stale AGENTS.md that the override must replace
+          printf 'STALE_CONTENT\n' > "${AGENTS_TARGET}"
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          ! grep -F "STALE_CONTENT" "${AGENTS_TARGET}"
+          grep -F "Custom prompt content." "${AGENTS_TARGET}"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: sync-opencode-settings copies host config when present
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_sync_test withconfig noauth
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          session_dir="${TEST_DIR}/session"
+          mkdir -p "${session_dir}"
+          "${RIOTBOX_DIR}/agents/opencode/sync-settings.sh" \
+              "${FAKE_HOME}/.config/opencode" \
+              "${FAKE_HOME}/.local/share/opencode" \
+              "${session_dir}" \
+              > "${TEST_DIR}/flags.txt" 2> "${TEST_DIR}/notice.txt"
+          test -d "${session_dir}/.config-opencode/agents"
+          test -f "${session_dir}/.config-opencode/opencode.json"
+          test -d "${session_dir}/.local-share-opencode"
+          grep -F ".config-opencode:/home/claude/.config/opencode:z" "${TEST_DIR}/flags.txt"
+          grep -F ".local-share-opencode:/home/claude/.local/share/opencode:z" "${TEST_DIR}/flags.txt"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: sync-opencode-settings emits notice when host config absent
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_sync_test noconfig noauth
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          session_dir="${TEST_DIR}/session"
+          mkdir -p "${session_dir}"
+          "${RIOTBOX_DIR}/agents/opencode/sync-settings.sh" \
+              "${FAKE_HOME}/.config/opencode" \
+              "${FAKE_HOME}/.local/share/opencode" \
+              "${session_dir}" \
+              > "${TEST_DIR}/flags.txt" 2> "${TEST_DIR}/notice.txt"
+          test -d "${session_dir}/.config-opencode"
+          test -d "${session_dir}/.local-share-opencode"
+          grep -i "notice" "${TEST_DIR}/notice.txt"
+          grep -F ".config-opencode" "${TEST_DIR}/flags.txt"
+          grep -F ".local-share-opencode" "${TEST_DIR}/flags.txt"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: sync-opencode-settings emits auth.json RW bind when present
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_sync_test withconfig withauth
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          session_dir="${TEST_DIR}/session"
+          mkdir -p "${session_dir}"
+          "${RIOTBOX_DIR}/agents/opencode/sync-settings.sh" \
+              "${FAKE_HOME}/.config/opencode" \
+              "${FAKE_HOME}/.local/share/opencode" \
+              "${session_dir}" \
+              > "${TEST_DIR}/flags.txt"
+          grep -F "auth.json:/home/claude/.local/share/opencode/auth.json:z" \
+              "${TEST_DIR}/flags.txt"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: sync-opencode-settings does not emit auth bind when absent
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_sync_test withconfig noauth
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          session_dir="${TEST_DIR}/session"
+          mkdir -p "${session_dir}"
+          "${RIOTBOX_DIR}/agents/opencode/sync-settings.sh" \
+              "${FAKE_HOME}/.config/opencode" \
+              "${FAKE_HOME}/.local/share/opencode" \
+              "${session_dir}" \
+              > "${TEST_DIR}/flags.txt"
+          ! grep -F "auth.json" "${TEST_DIR}/flags.txt"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: sync-opencode-settings re-copies host config (refreshes session)
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_sync_test withconfig noauth
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          session_dir="${TEST_DIR}/session"
+          mkdir -p "${session_dir}"
+          # First sync
+          "${RIOTBOX_DIR}/agents/opencode/sync-settings.sh" \
+              "${FAKE_HOME}/.config/opencode" \
+              "${FAKE_HOME}/.local/share/opencode" \
+              "${session_dir}" >/dev/null
+          # Add a new file to host
+          printf '# new\n' > "${FAKE_HOME}/.config/opencode/agents/added.md"
+          # Remove an old one
+          rm -f "${FAKE_HOME}/.config/opencode/agents/myagent.md"
+          # Re-sync
+          "${RIOTBOX_DIR}/agents/opencode/sync-settings.sh" \
+              "${FAKE_HOME}/.config/opencode" \
+              "${FAKE_HOME}/.local/share/opencode" \
+              "${session_dir}" >/dev/null
+          test -f "${session_dir}/.config-opencode/agents/added.md"
+          ! test -f "${session_dir}/.config-opencode/agents/myagent.md"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: sync-opencode-settings skips dangling symlinks without aborting
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_sync_test withconfig noauth
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # Add a dangling symlink alongside the valid agent
+          ln -s /nonexistent/target "${FAKE_HOME}/.config/opencode/agents/dangling.md"
+          session_dir="${TEST_DIR}/session"
+          mkdir -p "${session_dir}"
+          "${RIOTBOX_DIR}/agents/opencode/sync-settings.sh" \
+              "${FAKE_HOME}/.config/opencode" \
+              "${FAKE_HOME}/.local/share/opencode" \
+              "${session_dir}" \
+              > "${TEST_DIR}/flags.txt" 2> "${TEST_DIR}/notice.txt"
+          # Valid file copied
+          test -f "${session_dir}/.config-opencode/agents/myagent.md"
+          # Dangling symlink NOT present
+          ! test -e "${session_dir}/.config-opencode/agents/dangling.md"
+          # Volume flags still emitted (the caller depends on them)
+          grep -F ".config-opencode:/home/claude/.config/opencode:z" "${TEST_DIR}/flags.txt"
+          grep -F ".local-share-opencode:/home/claude/.local/share/opencode:z" "${TEST_DIR}/flags.txt"
+          # No "cannot stat" errors on stderr
+          ! grep -F "cannot stat" "${TEST_DIR}/notice.txt"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: passthrough-vars emits flags only for set variables
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
+          unset ANTHROPIC_VERTEX_PROJECT_ID ANTHROPIC_VERTEX_BASE_URL
+          unset ANTHROPIC_BEDROCK_BASE_URL
+          unset CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_BEDROCK
+          unset VERTEX_LOCATION CLOUD_ML_REGION AWS_REGION AWS_PROFILE
+          unset OPENAI_API_KEY OPENROUTER_API_KEY GEMINI_API_KEY
+          unset GROQ_API_KEY MISTRAL_API_KEY DEEPSEEK_API_KEY XAI_API_KEY
+          unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+          export ANTHROPIC_API_KEY="sk-ant-test"
+          export CLAUDE_CODE_USE_VERTEX="1"
+          export ANTHROPIC_VERTEX_PROJECT_ID="my-proj"
+          export VERTEX_LOCATION="us-east5"
+          export CLOUD_ML_REGION="us-east5"
+          export AWS_REGION="us-east-1"
+          export AWS_ACCESS_KEY_ID="AKIA-should-not-pass"
+          source "${RIOTBOX_DIR}/.taskfiles/scripts/passthrough-vars.sh"
+          flags="$(passthrough_flags)"
+          echo "FLAGS=${flags}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "-e ANTHROPIC_API_KEY"
+          - result.systemout ShouldContainSubstring "-e CLAUDE_CODE_USE_VERTEX"
+          - result.systemout ShouldContainSubstring "-e ANTHROPIC_VERTEX_PROJECT_ID"
+          - result.systemout ShouldContainSubstring "-e VERTEX_LOCATION"
+          - result.systemout ShouldContainSubstring "-e CLOUD_ML_REGION"
+          - result.systemout ShouldContainSubstring "-e AWS_REGION"
+          - result.systemout ShouldNotContainSubstring "-e AWS_ACCESS_KEY_ID"
+          - result.systemout ShouldNotContainSubstring "-e GEMINI_API_KEY"
+
+  - name: passthrough-vars honors RIOTBOX_PASSTHROUGH_VARS override
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          unset ANTHROPIC_API_KEY OPENAI_API_KEY
+          export FOO_TOKEN="abc"
+          export ANTHROPIC_API_KEY="should-not-pass"
+          export RIOTBOX_PASSTHROUGH_VARS="FOO_TOKEN"
+          source "${RIOTBOX_DIR}/.taskfiles/scripts/passthrough-vars.sh"
+          flags="$(passthrough_flags)"
+          echo "FLAGS=${flags}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "-e FOO_TOKEN"
+          - result.systemout ShouldNotContainSubstring "-e ANTHROPIC_API_KEY"
+
+  - name: passthrough-vars produces empty flags when nothing is set
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          unset ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY
+          unset GEMINI_API_KEY GROQ_API_KEY MISTRAL_API_KEY
+          unset DEEPSEEK_API_KEY XAI_API_KEY RIOTBOX_PASSTHROUGH_VARS
+          source "${RIOTBOX_DIR}/.taskfiles/scripts/passthrough-vars.sh"
+          flags="$(passthrough_flags)"
+          echo "FLAGS=[${flags}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[]"
+
+  - name: credfile-vars mounts existing files RO and rewrites the env var
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          printf '{}\n' > "${tmp}/gcp.json"
+          unset GOOGLE_APPLICATION_CREDENTIALS AWS_SHARED_CREDENTIALS_FILE
+          unset AWS_CONFIG_FILE KUBECONFIG RIOTBOX_CREDFILE_VARS
+          export GOOGLE_APPLICATION_CREDENTIALS="${tmp}/gcp.json"
+          source "${RIOTBOX_DIR}/.taskfiles/scripts/credfile-vars.sh"
+          flags="$(credfile_flags)"
+          echo "FLAGS=${flags}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "-v "
+          - result.systemout ShouldContainSubstring ":/run/secrets/gcp-creds.json:ro,z"
+          - result.systemout ShouldContainSubstring "-e GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-creds.json"
+
+  - name: credfile-vars skips missing files with a notice
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          unset GOOGLE_APPLICATION_CREDENTIALS AWS_SHARED_CREDENTIALS_FILE
+          unset AWS_CONFIG_FILE KUBECONFIG RIOTBOX_CREDFILE_VARS
+          export GOOGLE_APPLICATION_CREDENTIALS="/nonexistent/path.json"
+          source "${RIOTBOX_DIR}/.taskfiles/scripts/credfile-vars.sh"
+          flags="$(credfile_flags 2>/tmp/credfile-stderr)"
+          echo "FLAGS=[${flags}]"
+          echo "STDERR<<<"; cat /tmp/credfile-stderr; echo ">>>"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[]"
+          - result.systemout ShouldContainSubstring "GOOGLE_APPLICATION_CREDENTIALS=/nonexistent/path.json"
+          - result.systemout ShouldContainSubstring "does not exist"
+
+  - name: credfile-vars rejects directories and other non-regular files
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          unset GOOGLE_APPLICATION_CREDENTIALS AWS_SHARED_CREDENTIALS_FILE
+          unset AWS_CONFIG_FILE KUBECONFIG RIOTBOX_CREDFILE_VARS
+          export AWS_SHARED_CREDENTIALS_FILE="${tmp}"
+          source "${RIOTBOX_DIR}/.taskfiles/scripts/credfile-vars.sh"
+          flags="$(credfile_flags 2>/tmp/credfile-stderr)"
+          echo "FLAGS=[${flags}]"
+          echo "STDERR<<<"; cat /tmp/credfile-stderr; echo ">>>"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[]"
+          - result.systemout ShouldContainSubstring "is not a regular file"
+
+  - name: credfile-vars honors RIOTBOX_CREDFILE_VARS override
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          printf 'token\n' > "${tmp}/foo"
+          unset GOOGLE_APPLICATION_CREDENTIALS AWS_SHARED_CREDENTIALS_FILE
+          unset AWS_CONFIG_FILE KUBECONFIG
+          export FOO_CREDFILE="${tmp}/foo"
+          export GOOGLE_APPLICATION_CREDENTIALS="${tmp}/foo"
+          export RIOTBOX_CREDFILE_VARS="FOO_CREDFILE:/run/secrets/foo"
+          source "${RIOTBOX_DIR}/.taskfiles/scripts/credfile-vars.sh"
+          flags="$(credfile_flags)"
+          echo "FLAGS=${flags}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "-e FOO_CREDFILE=/run/secrets/foo"
+          - result.systemout ShouldNotContainSubstring "GOOGLE_APPLICATION_CREDENTIALS"
+
+  - name: vertex-adc-prompt is a no-op when CLAUDE_CODE_USE_VERTEX is unset
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          unset CLAUDE_CODE_USE_VERTEX GOOGLE_APPLICATION_CREDENTIALS
+          source "${RIOTBOX_DIR}/.taskfiles/scripts/vertex-adc-prompt.sh"
+          vertex_adc_prompt 2>/tmp/adc-stderr
+          echo "GAC=[${GOOGLE_APPLICATION_CREDENTIALS:-unset}]"
+          echo "STDERR<<<"; cat /tmp/adc-stderr; echo ">>>"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "GAC=[unset]"
+          - result.systemout ShouldNotContainSubstring "Notice:"
+
+  - name: vertex-adc-prompt is a no-op when GOOGLE_APPLICATION_CREDENTIALS already set
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          export CLAUDE_CODE_USE_VERTEX="1"
+          export GOOGLE_APPLICATION_CREDENTIALS="/some/preexisting/path.json"
+          source "${RIOTBOX_DIR}/.taskfiles/scripts/vertex-adc-prompt.sh"
+          vertex_adc_prompt 2>/tmp/adc-stderr
+          echo "GAC=[${GOOGLE_APPLICATION_CREDENTIALS}]"
+          echo "STDERR<<<"; cat /tmp/adc-stderr; echo ">>>"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "GAC=[/some/preexisting/path.json]"
+          - result.systemout ShouldNotContainSubstring "Notice:"
+
+  - name: vertex-adc-prompt is a no-op when ADC file does not exist
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          # Use a fresh HOME with no gcloud config so the ADC file is absent.
+          export HOME="${tmp}"
+          export CLAUDE_CODE_USE_VERTEX="1"
+          unset GOOGLE_APPLICATION_CREDENTIALS
+          source "${RIOTBOX_DIR}/.taskfiles/scripts/vertex-adc-prompt.sh"
+          vertex_adc_prompt 2>/tmp/adc-stderr
+          echo "GAC=[${GOOGLE_APPLICATION_CREDENTIALS:-unset}]"
+          echo "STDERR<<<"; cat /tmp/adc-stderr; echo ">>>"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "GAC=[unset]"
+          - result.systemout ShouldNotContainSubstring "Notice:"
+
+  - name: vertex-adc-prompt prints notice and skips when stdin is not a TTY
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          export HOME="${tmp}"
+          mkdir -p "${HOME}/.config/gcloud"
+          printf '{}\n' > "${HOME}/.config/gcloud/application_default_credentials.json"
+          export CLAUDE_CODE_USE_VERTEX="1"
+          unset GOOGLE_APPLICATION_CREDENTIALS
+          source "${RIOTBOX_DIR}/.taskfiles/scripts/vertex-adc-prompt.sh"
+          # venom runs scripts without a TTY — vertex_adc_prompt should
+          # detect that, print a notice, and leave GAC unset.
+          vertex_adc_prompt 2>/tmp/adc-stderr
+          echo "GAC=[${GOOGLE_APPLICATION_CREDENTIALS:-unset}]"
+          echo "STDERR<<<"; cat /tmp/adc-stderr; echo ">>>"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "GAC=[unset]"
+          - result.systemout ShouldContainSubstring "not a TTY"
+          - result.systemout ShouldContainSubstring "CLAUDE_CODE_USE_VERTEX is set"
+
+  - name: launch.sh runs vertex-adc-prompt without aborting in non-TTY mode
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          fake_bin="${tmp}/fake-container"
+          cat > "${fake_bin}" <<'FAKE'
+          #!/usr/bin/env bash
+          printf 'arg=%s\n' "$@"
+          FAKE
+          chmod +x "${fake_bin}"
+          # ADC file present in fake HOME; non-TTY in venom should suppress prompt.
+          fake_home="${tmp}/home"
+          mkdir -p "${fake_home}/.config/gcloud"
+          printf '{}\n' > "${fake_home}/.config/gcloud/application_default_credentials.json"
+          repo="${tmp}/repo"
+          mkdir -p "${repo}"
+          ( cd "${repo}" && git init -q \
+              && git config user.email t@x && git config user.name t \
+              && echo a > a && git add a && git commit -qm i ) >/dev/null
+          unset GOOGLE_APPLICATION_CREDENTIALS AWS_SHARED_CREDENTIALS_FILE
+          unset AWS_CONFIG_FILE KUBECONFIG RIOTBOX_CREDFILE_VARS
+          env -i HOME="${fake_home}" PATH="$PATH" \
+              ANTHROPIC_API_KEY="sk-ant-test" \
+              CLAUDE_CODE_USE_VERTEX=1 \
+              CONTAINER_CMD="${fake_bin}" \
+              IMAGE_NAME=fake-img \
+              ROOT_DIR="${RIOTBOX_DIR}" \
+              RIOTBOX_PROJECTS="${repo}" \
+              SESSION_BRANCH=0 \
+              bash "${RIOTBOX_DIR}/.taskfiles/scripts/launch.sh" echo hi \
+              > "${tmp}/argv.txt" 2>&1
+          cat "${tmp}/argv.txt"
+        assertions:
+          - result.code ShouldEqual 0
+          # Non-TTY path emits the notice and does NOT splice the gcp-creds mount.
+          - result.systemout ShouldContainSubstring "not a TTY"
+          - result.systemout ShouldContainSubstring "arg=-e"
+          - result.systemout ShouldContainSubstring "arg=CLAUDE_CODE_USE_VERTEX"
+          - result.systemout ShouldNotContainSubstring "/run/secrets/gcp-creds.json"
+
+  - name: launch.sh splices credfile flags into container argv
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          # Fake CONTAINER_CMD that just dumps argv
+          fake_bin="${tmp}/fake-container"
+          cat > "${fake_bin}" <<'FAKE'
+          #!/usr/bin/env bash
+          printf 'arg=%s\n' "$@"
+          FAKE
+          chmod +x "${fake_bin}"
+          # Fake credfile and project repo
+          printf '{}\n' > "${tmp}/gcp.json"
+          repo="${tmp}/repo"
+          mkdir -p "${repo}"
+          ( cd "${repo}" && git init -q \
+              && git config user.email t@x && git config user.name t \
+              && echo a > a && git add a && git commit -qm i ) >/dev/null
+          unset GOOGLE_APPLICATION_CREDENTIALS AWS_SHARED_CREDENTIALS_FILE
+          unset AWS_CONFIG_FILE KUBECONFIG RIOTBOX_CREDFILE_VARS
+          export GOOGLE_APPLICATION_CREDENTIALS="${tmp}/gcp.json"
+          export ANTHROPIC_API_KEY="sk-ant-test"
+          env -i HOME="$HOME" PATH="$PATH" \
+              ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
+              GOOGLE_APPLICATION_CREDENTIALS="${GOOGLE_APPLICATION_CREDENTIALS}" \
+              CONTAINER_CMD="${fake_bin}" \
+              IMAGE_NAME=fake-img \
+              ROOT_DIR="${RIOTBOX_DIR}" \
+              RIOTBOX_PROJECTS="${repo}" \
+              SESSION_BRANCH=0 \
+              bash "${RIOTBOX_DIR}/.taskfiles/scripts/launch.sh" echo hi \
+              > "${tmp}/argv.txt" 2>&1
+          cat "${tmp}/argv.txt"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "arg=-e"
+          - result.systemout ShouldContainSubstring "arg=ANTHROPIC_API_KEY"
+          - result.systemout ShouldContainSubstring "arg=GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-creds.json"
+          - result.systemout ShouldContainSubstring ":/run/secrets/gcp-creds.json:ro,z"
+
+  # -- Integration smoke test (gated by INTEGRATION=1) --
+  # Run with: task test ARGS="opencode -- --var INTEGRATION=1"
+  # Requires the host to have ANTHROPIC_API_KEY set; auto-skips otherwise.
+  #
+  # The gating is done in the script body rather than via venom's `skip:`
+  # directive. The skip directive's expression evaluation has been
+  # unreliable in this codebase for non-trivial conditions. The script
+  # emits a sentinel containing "INTEGRATION_" in both the gated and
+  # the run-to-completion paths, and the assertion only verifies that
+  # the sentinel appeared and the script exited cleanly.
+
+  - name: "Full opencode launch loop builds image and runs a no-op session [integration]"
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          INTEGRATION="{{.INTEGRATION}}"
+          if [ "${INTEGRATION}" != "1" ]; then
+            echo "INTEGRATION_SKIPPED: INTEGRATION=${INTEGRATION:-unset}, run with --var INTEGRATION=1 to enable"
+            exit 0
+          fi
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "INTEGRATION_SKIPPED: ANTHROPIC_API_KEY not set in host env"
+            exit 0
+          fi
+          REPO="$(mktemp -d)"
+          BIN_DIR="$(mktemp -d)"
+          trap 'rm -rf "${REPO}" "${BIN_DIR}"' EXIT
+          ( cd "${REPO}" && git init -q && \
+              git config user.email "test@example.com" && \
+              git config user.name "test" && \
+              echo "hi" > README.md && \
+              git add README.md && git commit -qm "init" )
+
+          # Build is a no-op when the image is already current.
+          ( cd "{{.riotbox_dir}}" && task build >/dev/null 2>&1 )
+
+          # Install the wrapper into a tmp bin dir
+          "{{.riotbox_dir}}/install.sh" "${BIN_DIR}" >/dev/null
+
+          # Run a trivial prompt with --agent=opencode
+          ( cd "${REPO}" && "${BIN_DIR}/claude-riotbox" --agent=opencode \
+              run "respond with 'ok' and exit" )
+
+          # Locate the session dir (matches mangle in mount-projects.sh)
+          SESSION_KEY="$(printf '%s\n' "${REPO}" | sed 's|/|-|g; s|^-||')"
+          SESSION_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/claude-riotbox/${SESSION_KEY}"
+          test -d "${SESSION_DIR}/.config-opencode"
+          test -d "${SESSION_DIR}/.local-share-opencode"
+          test -f "${SESSION_DIR}/.config-opencode/AGENTS.md"
+          # Working tree should be clean (no rogue writes to the project)
+          ( cd "${REPO}" && test -z "$(git status --porcelain)" )
+          echo "INTEGRATION_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          # Matches both INTEGRATION_OK (run) and INTEGRATION_SKIPPED (gated)
+          - result.systemout ShouldContainSubstring "INTEGRATION_"

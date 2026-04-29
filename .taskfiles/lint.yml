@@ -19,6 +19,8 @@ tasks:
         {{.ROOT_DIR}}/scripts/*.sh \
         {{.ROOT_DIR}}/container/*.sh \
         {{.ROOT_DIR}}/.taskfiles/scripts/*.sh \
+        {{.ROOT_DIR}}/agents/*.sh \
+        {{.ROOT_DIR}}/agents/*/*.sh \
         {{.ROOT_DIR}}/tests/lib/*.sh
 
   hadolint:

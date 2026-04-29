@@ -179,7 +179,12 @@ RUN . /etc/os-release && \
     awk -v os="${PRETTY_NAME:-Linux}" \
         '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
         /etc/riotbox/CLAUDE.md > /etc/claude-code/CLAUDE.md && \
-    chown claude:claude /etc/claude-code/CLAUDE.md
+    chown claude:claude /etc/claude-code/CLAUDE.md && \
+    mkdir -p /home/claude/.riotbox && \
+    awk -v os="${PRETTY_NAME:-Linux}" \
+        '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
+        /etc/riotbox/CLAUDE.md > /home/claude/.riotbox/AGENTS.md.template && \
+    chown -R claude:claude /home/claude/.riotbox
 
 # ── Security tools + task/venom from builder stage ───────────────────────────
 COPY --from=tools --chown=claude:claude /tools/bin/ /home/claude/.local/bin/
@@ -289,9 +294,10 @@ RUN mkdir -p \
     # Gem / Bundler — skip docs, parallel installs
     echo 'gem: --no-document' > /home/claude/.gemrc && \
     printf 'BUNDLE_JOBS: "4"\nBUNDLE_RETRY: "3"\n' > /home/claude/.bundle/config && \
-    # Git config (Claude commits as itself so reown-commits.sh can identify its work)
-    git config --global user.name "Claude (riotbox)" && \
-    git config --global user.email "claude@riotbox" && \
+    # Git config — generic LLM identity so reown-commits.sh can identify the
+    # container's work regardless of which model (Claude, opencode, etc.) ran.
+    git config --global user.name "LLM (riotbox)" && \
+    git config --global user.email "llm@riotbox" && \
     git config --global commit.gpgsign false && \
     git config --global tag.gpgsign false && \
     git config --global core.pager "" && \
@@ -327,6 +333,11 @@ export PYTHONDONTWRITEBYTECODE=1
 export NPM_CONFIG_FUND=false
 export NPM_CONFIG_AUDIT=false
 export NPM_CONFIG_UPDATE_NOTIFIER=false
+
+# opencode: suppress auto-update checks and LSP downloads. The container
+# runs a fixed image; outbound requests for tooling are a leak surface.
+export OPENCODE_DISABLE_AUTOUPDATE=1
+export OPENCODE_DISABLE_LSP_DOWNLOAD=1
 
 # Not on Debian, but some scripts check this to skip interactive prompts
 export DEBIAN_FRONTEND=noninteractive
@@ -373,24 +384,55 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 RUN npm install -g @mermaid-js/mermaid-cli && mmdc --version
 
-# ── Riotbox scripts ──────────────────────────────────────────────────────────
-COPY --chown=claude:claude container/find-real-claude.sh /home/claude/.riotbox/find-real-claude.sh
-COPY --chown=claude:claude container/claude-wrapper.sh /home/claude/.riotbox/bin/claude
-RUN chmod +x /home/claude/.riotbox/bin/claude /home/claude/.riotbox/find-real-claude.sh
+# ── Riotbox scripts: agent registry + generic wrapper ───────────────────────
+# The agent registry (agents/<name>.sh + agents/registry.sh) is the single
+# source of truth for which CLI agents this image supports. The Dockerfile
+# stays agent-agnostic: agent-wrapper.sh is installed once, and per-agent
+# entries in /home/claude/.riotbox/bin/ are symlinks created from the
+# registry. Adding a new agent is a manifest edit, not a Dockerfile edit.
+COPY --chown=claude:claude agents/ /home/claude/.riotbox/agents/
+COPY --chown=claude:claude container/find-real-bin.sh /home/claude/.riotbox/find-real-bin.sh
+COPY --chown=claude:claude container/agent-wrapper.sh /home/claude/.riotbox/agent-wrapper.sh
+RUN chmod +x /home/claude/.riotbox/agent-wrapper.sh \
+              /home/claude/.riotbox/find-real-bin.sh && \
+    # Install one symlink per registered agent. The wrapper detects the
+    # agent from basename($0), so the symlink name doubles as the agent
+    # name. Reading AGENT_REGISTRY directly keeps the Dockerfile in sync
+    # with agents/registry.sh — no second list to update.
+    bash -c '\
+        set -euo pipefail; \
+        # shellcheck disable=SC1091  # path verified above \
+        source /home/claude/.riotbox/agents/registry.sh; \
+        for a in "${AGENT_REGISTRY[@]}"; do \
+            ln -sf ../agent-wrapper.sh "/home/claude/.riotbox/bin/${a}"; \
+        done'
 
 WORKDIR /workspace
 
 # ── Entrypoint ──────────────────────────────────────────────────────────────
-COPY --chown=claude:claude container/inject-claude-md.sh /home/claude/.riotbox/inject-claude-md.sh
+# Agent setup scripts (claude/setup.sh, opencode/setup.sh) ride along with
+# the manifests via the COPY agents/ above; the entrypoint reaches them
+# through the registry, so they don't need separate COPY lines.
 COPY --chown=claude:claude container/session-branch.sh /home/claude/.riotbox/session-branch.sh
 COPY --chown=claude:claude container/overlay-setup.sh /home/claude/.riotbox/overlay-setup.sh
 COPY --chown=claude:claude container/plugin-setup.sh /home/claude/.riotbox/plugin-setup.sh
 COPY --chown=claude:claude container/entrypoint.sh /home/claude/.riotbox/entrypoint.sh
-RUN chmod +x /home/claude/.riotbox/entrypoint.sh /home/claude/.riotbox/inject-claude-md.sh \
+RUN chmod +x /home/claude/.riotbox/entrypoint.sh \
     /home/claude/.riotbox/session-branch.sh /home/claude/.riotbox/overlay-setup.sh \
     /home/claude/.riotbox/plugin-setup.sh
 ENTRYPOINT ["/home/claude/.riotbox/entrypoint.sh"]
 CMD ["bash"]
+
+# ── opencode (installed alongside Claude Code) ───────────────────────────────
+# The official installer hardcodes the install target at $HOME/.opencode/bin
+# and modifies .bashrc to extend PATH. Skip the .bashrc modification with
+# --no-modify-path (we manage PATH explicitly in the image), then move the
+# binary into the existing user-local bin dir so no extra PATH entry is
+# needed. The .opencode/bin directory itself is left in place — empty after
+# the move and harmless.
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path && \
+    mv /home/claude/.opencode/bin/opencode /home/claude/.local/bin/opencode && \
+    /home/claude/.local/bin/opencode --version
 
 # ── Claude Code (LAST — changes most frequently, preserves layer cache) ─────
 RUN curl -fsSL https://claude.ai/install.sh | bash && claude --version

@@ -157,7 +157,10 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "v0"
-          - result.systemout ShouldContainSubstring "v1 available"
+          # Bumps each time scripts/configs/config gains a riotbox-config-version
+          # increment. Don't pin to a specific newer-version number; assert the
+          # general "newer version available" shape instead.
+          - result.systemout ShouldContainSubstring "available"
 
   - name: Shows up-to-date when config versions match
     steps:

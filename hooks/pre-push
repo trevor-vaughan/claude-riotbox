@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 # RIOTBOX-HOOK: pre-push
-# Block pushes containing commits by any riotbox container identity
-# (claude@riotbox is current; riotbox@local is the legacy squash-merge identity).
+# Block pushes containing commits authored by any riotbox container identity.
+#
+# Recognised identities (must match scripts/reown-commits.sh CONTAINER_EMAILS):
+#   llm@riotbox     — current primary (Dockerfile)
+#   claude@riotbox  — legacy: pre-rename Claude-specific identity
+#   llm@localhost   — legacy: pre-domain-rename
+#   riotbox@local   — legacy: oldest squash-merge identity
 #
 # Install: claude-riotbox install-hooks
 # Or manually: cp hooks/pre-push .git/hooks/pre-push
 set -euo pipefail
+
+# Keep this list in sync with scripts/reown-commits.sh CONTAINER_EMAILS.
+CONTAINER_EMAIL_REGEX='llm@riotbox|claude@riotbox|llm@localhost|riotbox@local'
 
 remote="$1"
 url="$2"
@@ -25,10 +33,8 @@ while read -r local_ref local_oid remote_ref remote_oid; do
     fi
 
     # Look for commits authored by any riotbox container identity.
-    # claude@riotbox is current; riotbox@local is the legacy identity from the
-    # old squash-merge code (pre-ff-only fix).
     bad_commits="$(git log --format='%h %ae %s' "${range}" -- 2>/dev/null \
-        | grep -E 'claude@riotbox|riotbox@local' || true)"
+        | grep -E "${CONTAINER_EMAIL_REGEX}" || true)"
     if [ -n "${bad_commits}" ]; then
         echo "ERROR: Push blocked — found commits authored by a riotbox container identity:" >&2
         echo "" >&2

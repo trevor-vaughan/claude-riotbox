@@ -18,7 +18,7 @@ tasks:
     cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/ensure-image.sh"
 
   run:
-    desc: Run Claude with a task prompt
+    desc: Run agent with a task prompt (Claude or opencode, per RIOTBOX_AGENT)
     dir: "{{.USER_WORKING_DIR}}"
     deps: [ensure-image]
     vars:
@@ -27,10 +27,11 @@ tasks:
       CONTAINER_CMD: "{{.CONTAINER_CMD}}"
       IMAGE_NAME: "{{.IMAGE_NAME}}"
       ROOT_DIR: "{{.ROOT_DIR}}"
+      RIOTBOX_AGENT: "{{.RIOTBOX_AGENT}}"
     cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/run.sh {{.ARGS}}"
 
   resume:
-    desc: Continue the last Claude session
+    desc: Continue the last session (Claude or opencode, per RIOTBOX_AGENT)
     dir: "{{.USER_WORKING_DIR}}"
     deps: [ensure-image]
     vars:
@@ -40,9 +41,10 @@ tasks:
       IMAGE_NAME: "{{.IMAGE_NAME}}"
       ROOT_DIR: "{{.ROOT_DIR}}"
       RIOTBOX_PROJECTS: "{{.ARGS}}"
+      RIOTBOX_AGENT: "{{.RIOTBOX_AGENT}}"
     cmds:
       - "{{.ROOT_DIR}}/.taskfiles/scripts/checkpoint.sh"
-      - "{{.ROOT_DIR}}/.taskfiles/scripts/launch.sh claude --continue"
+      - "{{.ROOT_DIR}}/.taskfiles/scripts/resume.sh"
 
   audit:
     desc: Audit untrusted repo (read-only workspace)
@@ -54,6 +56,7 @@ tasks:
       CONTAINER_CMD: "{{.CONTAINER_CMD}}"
       IMAGE_NAME: "{{.IMAGE_NAME}}"
       ROOT_DIR: "{{.ROOT_DIR}}"
+      RIOTBOX_AGENT: "{{.RIOTBOX_AGENT}}"
     cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/audit.sh {{.ARGS}}"
 
   nested-run:
@@ -67,6 +70,7 @@ tasks:
       IMAGE_NAME: "{{.IMAGE_NAME}}"
       ROOT_DIR: "{{.ROOT_DIR}}"
       RIOTBOX_NESTED: "1"
+      RIOTBOX_AGENT: "{{.RIOTBOX_AGENT}}"
     cmds:
       - cmd: echo "WARNING{{":"}} Nested container mode disables SELinux confinement (--security-opt label=disable)." >&2
       - cmd: echo "         The container has reduced isolation from the host." >&2
@@ -84,6 +88,7 @@ tasks:
       IMAGE_NAME: "{{.IMAGE_NAME}}"
       ROOT_DIR: "{{.ROOT_DIR}}"
       RIOTBOX_PROJECTS: "{{.ARGS}}"
+      RIOTBOX_AGENT: "{{.RIOTBOX_AGENT}}"
     cmds:
       - "{{.ROOT_DIR}}/.taskfiles/scripts/checkpoint.sh"
       - "{{.ROOT_DIR}}/.taskfiles/scripts/launch.sh bash"
@@ -100,6 +105,7 @@ tasks:
       ROOT_DIR: "{{.ROOT_DIR}}"
       RIOTBOX_NESTED: "1"
       RIOTBOX_PROJECTS: "{{.ARGS}}"
+      RIOTBOX_AGENT: "{{.RIOTBOX_AGENT}}"
     cmds:
       - cmd: echo "WARNING{{":"}} Nested container mode disables SELinux confinement." >&2
       - "{{.ROOT_DIR}}/.taskfiles/scripts/checkpoint.sh"

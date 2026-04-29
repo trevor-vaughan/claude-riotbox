@@ -120,7 +120,7 @@ testcases:
           unset RIOTBOX_PROMPT
           export RIOTBOX_MANAGED_POLICY_DIR="${TEST_DIR}/managed-policy"
           HOME="${TEST_DIR}" \
-            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+            source "{{.riotbox_dir}}/agents/claude/setup.sh" && claude_setup
           # Content must be unchanged (not overwritten)
           grep -F "Build-time content." "${TEST_DIR}/managed-policy/CLAUDE.md"
           echo "build_time_preserved=true"
@@ -166,7 +166,7 @@ testcases:
             sudo mv "${saved_etc}" "${saved_etc}.bak" 2>/dev/null && moved_etc=true
           fi
           HOME="${TEST_DIR}" \
-            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+            source "{{.riotbox_dir}}/agents/claude/setup.sh" && claude_setup
           if [ "${moved_etc}" = true ]; then
             sudo mv "${saved_etc}.bak" "${saved_etc}" 2>/dev/null
           fi
@@ -192,7 +192,7 @@ testcases:
           unset RIOTBOX_PROMPT
           export RIOTBOX_MANAGED_POLICY_DIR="${TEST_DIR}/managed-policy"
           HOME="${TEST_DIR}" \
-            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+            source "{{.riotbox_dir}}/agents/claude/setup.sh" && claude_setup
           test -f "${TEST_DIR}/managed-policy/CLAUDE.md"
           echo "system_default_resolved=true"
         assertions:
@@ -214,7 +214,7 @@ testcases:
             sudo mv "${saved_etc}" "${saved_etc}.bak" 2>/dev/null && moved_etc=true
           fi
           HOME="${TEST_DIR}/empty-home" \
-            source "{{.riotbox_dir}}/container/inject-claude-md.sh"
+            source "{{.riotbox_dir}}/agents/claude/setup.sh" && claude_setup
           if [ "${moved_etc}" = true ]; then
             sudo mv "${saved_etc}.bak" "${saved_etc}" 2>/dev/null
           fi
