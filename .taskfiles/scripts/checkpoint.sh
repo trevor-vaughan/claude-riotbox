@@ -39,7 +39,7 @@ for dir in "${PROJECT_DIRS[@]}"; do
     if [ ! -d "${backup_dir}" ]; then
         git clone --bare "${dir}" "${backup_dir}" 2>/dev/null
     else
-        # --no-verify: skip the pre-push hook (which blocks claude@riotbox commits)
+        # --no-verify: skip the pre-push hook (which blocks container-identity commits)
         # The backup is a local bare repo, not a shared remote, so the hook
         # intent (prevent publishing unowned commits) does not apply here.
         git -C "${dir}" push --no-verify --force "${backup_dir}" --all 2>/dev/null

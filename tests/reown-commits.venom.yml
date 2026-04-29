@@ -7,7 +7,7 @@ vars:
 testcases:
   # -- Happy path --
 
-  - name: Rewrites claude-authored commits to human identity
+  - name: Rewrites llm-authored commits to human identity
     steps:
       - type: exec
         script: |
@@ -15,19 +15,19 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "feature A"
-          claude_commit "feature B"
+          llm_commit "feature A"
+          llm_commit "feature B"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
-          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
+          llm_count=$(count_by_author "${LLM_EMAIL}")
           human_count=$(count_by_author "${HUMAN_EMAIL}")
-          echo "claude=${claude_count} human=${human_count}"
-          [ "${claude_count}" -eq 0 ]
+          echo "llm=${llm_count} human=${human_count}"
+          [ "${llm_count}" -eq 0 ]
           [ "${human_count}" -eq 3 ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "claude=0 human=3"
+          - result.systemout ShouldContainSubstring "llm=0 human=3"
 
-  - name: Preserves non-claude commits unchanged
+  - name: Preserves non-llm commits unchanged
     steps:
       - type: exec
         script: |
@@ -36,12 +36,12 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
           human_commit "human work"
-          claude_commit "claude work"
+          llm_commit "llm work"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           msgs="$(git log --format='%s' --reverse)"
           echo "${msgs}" | grep -qx "initial"
           echo "${msgs}" | grep -qx "human work"
-          echo "${msgs}" | grep -qx "claude work"
+          echo "${msgs}" | grep -qx "llm work"
         assertions:
           - result.code ShouldEqual 0
 
@@ -55,8 +55,8 @@ testcases:
           human_commit "initial"
           echo "trailer test" >> history.txt
           git add -A
-          GIT_AUTHOR_NAME="${CLAUDE_NAME}" GIT_AUTHOR_EMAIL="${CLAUDE_EMAIL}" \
-          GIT_COMMITTER_NAME="${CLAUDE_NAME}" GIT_COMMITTER_EMAIL="${CLAUDE_EMAIL}" \
+          GIT_AUTHOR_NAME="${LLM_NAME}" GIT_AUTHOR_EMAIL="${LLM_EMAIL}" \
+          GIT_COMMITTER_NAME="${LLM_NAME}" GIT_COMMITTER_EMAIL="${LLM_EMAIL}" \
               git commit -m "feature with trailer
 
           Co-Authored-By: Claude <noreply@anthropic.com>" >/dev/null
@@ -82,20 +82,20 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "old claude work"
+          llm_commit "old llm work"
           ref="$(git rev-parse HEAD)"
-          claude_commit "new claude work"
-          claude_commit "newest claude work"
+          llm_commit "new llm work"
+          llm_commit "newest llm work"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force "${ref}" 2>&1
           # Commits after ref should be rewritten
-          new_count=$(git rev-list --count "${ref}..HEAD" --author="${CLAUDE_EMAIL}")
-          echo "claude_after_ref=${new_count}"
+          new_count=$(git rev-list --count "${ref}..HEAD" --author="${LLM_EMAIL}")
+          echo "llm_after_ref=${new_count}"
           [ "${new_count}" -eq 0 ]
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "commits since"
 
-  - name: Explicit ref does NOT rewrite claude commits before the ref
+  - name: Explicit ref does NOT rewrite llm commits before the ref
     steps:
       - type: exec
         script: |
@@ -103,22 +103,22 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "old claude - should stay"
-          old_claude_hash="$(git rev-parse HEAD)"
+          llm_commit "old llm - should stay"
+          old_llm_hash="$(git rev-parse HEAD)"
           ref="$(git rev-parse HEAD)"
-          claude_commit "new claude - should be rewritten"
+          llm_commit "new llm - should be rewritten"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force "${ref}" 2>&1
-          # The old claude commit (at the ref) should keep its hash and author
-          old_author="$(git log -1 --format='%ae' "${old_claude_hash}" 2>/dev/null)"
+          # The old llm commit (at the ref) should keep its hash and author
+          old_author="$(git log -1 --format='%ae' "${old_llm_hash}" 2>/dev/null)"
           echo "old_author=${old_author}"
-          [ "${old_author}" = "${CLAUDE_EMAIL}" ]
+          [ "${old_author}" = "${LLM_EMAIL}" ]
           # Its hash should be unchanged
           echo "old_hash_preserved=true"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "old_author=claude@riotbox"
+          - result.systemout ShouldContainSubstring "old_author=llm@riotbox"
 
-  - name: Default finds all claude commits and rewrites from oldest
+  - name: Default finds all llm commits and rewrites from oldest
     steps:
       - type: exec
         script: |
@@ -126,20 +126,20 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "claude work A"
+          llm_commit "llm work A"
           human_commit "human interlude"
-          claude_commit "claude work B"
+          llm_commit "llm work B"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
-          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
+          llm_count=$(count_by_author "${LLM_EMAIL}")
           human_count=$(count_by_author "${HUMAN_EMAIL}")
-          echo "claude=${claude_count} human=${human_count}"
-          [ "${claude_count}" -eq 0 ]
+          echo "llm=${llm_count} human=${human_count}"
+          [ "${llm_count}" -eq 0 ]
           [ "${human_count}" -eq 4 ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "claude=0 human=4"
+          - result.systemout ShouldContainSubstring "llm=0 human=4"
 
-  - name: Exits cleanly when no claude commits exist
+  - name: Exits cleanly when no llm commits exist
     steps:
       - type: exec
         script: |
@@ -151,9 +151,9 @@ testcases:
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "No Claude-authored commits found"
+          - result.systemout ShouldContainSubstring "No container-authored commits found"
 
-  - name: Commits before oldest claude commit keep original hashes
+  - name: Commits before oldest llm commit keep original hashes
     steps:
       - type: exec
         script: |
@@ -163,7 +163,7 @@ testcases:
           human_commit "ancient history"
           human_commit "more history"
           old_hash="$(git rev-parse HEAD~1)"
-          claude_commit "claude work"
+          llm_commit "llm work"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           new_hash="$(git rev-parse HEAD~2)"
           echo "old=${old_hash} new=${new_hash}"
@@ -181,7 +181,7 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "work"
+          llm_commit "work"
           pre_rewrite_head="$(git rev-parse HEAD)"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           backup_tag="$(git tag -l 'backup/pre-reown-*' | head -1)"
@@ -200,18 +200,18 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "work"
+          llm_commit "work"
           pre_rewrite_head="$(git rev-parse HEAD)"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           backup_tag="$(git tag -l 'backup/pre-reown-*' | head -1)"
           git reset --hard "${backup_tag}"
           [ "$(git rev-parse HEAD)" = "${pre_rewrite_head}" ]
-          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
-          echo "claude_after_restore=${claude_count}"
-          [ "${claude_count}" -eq 1 ]
+          llm_count=$(count_by_author "${LLM_EMAIL}")
+          echo "llm_after_restore=${llm_count}"
+          [ "${llm_count}" -eq 1 ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "claude_after_restore=1"
+          - result.systemout ShouldContainSubstring "llm_after_restore=1"
 
   # -- Branch isolation --
 
@@ -223,19 +223,19 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "main initial"
-          claude_commit "main claude"
+          llm_commit "main llm"
           git checkout -b feature >/dev/null 2>&1
-          claude_commit "feature claude"
+          llm_commit "feature llm"
           git checkout main >/dev/null 2>&1
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
-          main_claude=$(count_by_author "${CLAUDE_EMAIL}" main)
+          main_llm=$(count_by_author "${LLM_EMAIL}" main)
           feature_author="$(git log -1 feature --format='%ae')"
-          echo "main_claude=${main_claude} feature_author=${feature_author}"
-          [ "${main_claude}" -eq 0 ]
-          [ "${feature_author}" = "${CLAUDE_EMAIL}" ]
+          echo "main_llm=${main_llm} feature_author=${feature_author}"
+          [ "${main_llm}" -eq 0 ]
+          [ "${feature_author}" = "${LLM_EMAIL}" ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "main_claude=0 feature_author=claude@riotbox"
+          - result.systemout ShouldContainSubstring "main_llm=0 feature_author=llm@riotbox"
 
   # -- Remote preservation --
 
@@ -247,7 +247,7 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "work"
+          llm_commit "work"
           git push origin main >/dev/null 2>&1
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           remote_url="$(git remote get-url origin)"
@@ -267,7 +267,7 @@ testcases:
           git init --bare "${second_bare}" >/dev/null 2>&1
           git remote add upstream "${second_bare}"
           human_commit "initial"
-          claude_commit "work"
+          llm_commit "work"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           [ "$(git remote get-url origin)" = "${BARE_DIR}" ]
           [ "$(git remote get-url upstream)" = "${second_bare}" ]
@@ -284,7 +284,7 @@ testcases:
           human_commit "initial"
           git push origin main >/dev/null 2>&1
           git branch --set-upstream-to=origin/main main
-          claude_commit "work"
+          llm_commit "work"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           tracking="$(git rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null)"
           echo "tracking=${tracking}"
@@ -336,49 +336,49 @@ testcases:
           - result.code ShouldEqual 1
           - result.systemout ShouldContainSubstring "detached HEAD"
 
-  - name: Handles interleaved claude and human commits
+  - name: Handles interleaved llm and human commits
     steps:
       - type: exec
         script: |
           source "{{.helpers}}"
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          claude_commit "claude 1"
+          llm_commit "llm 1"
           human_commit "human 1"
-          claude_commit "claude 2"
+          llm_commit "llm 2"
           human_commit "human 2"
-          claude_commit "claude 3"
+          llm_commit "llm 3"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
-          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
+          llm_count=$(count_by_author "${LLM_EMAIL}")
           human_count=$(count_by_author "${HUMAN_EMAIL}")
           line_count=$(wc -l < history.txt | tr -d ' ')
-          echo "claude=${claude_count} human=${human_count} lines=${line_count}"
-          [ "${claude_count}" -eq 0 ]
+          echo "llm=${llm_count} human=${human_count} lines=${line_count}"
+          [ "${llm_count}" -eq 0 ]
           [ "${human_count}" -eq 5 ]
           [ "${line_count}" -eq 5 ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "claude=0 human=5 lines=5"
+          - result.systemout ShouldContainSubstring "llm=0 human=5 lines=5"
 
-  - name: Works when all commits are claude-authored
+  - name: Works when all commits are llm-authored
     steps:
       - type: exec
         script: |
           source "{{.helpers}}"
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          claude_commit "first"
-          claude_commit "second"
-          claude_commit "third"
+          llm_commit "first"
+          llm_commit "second"
+          llm_commit "third"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
-          claude_count=$(count_by_author "${CLAUDE_EMAIL}" main)
+          llm_count=$(count_by_author "${LLM_EMAIL}" main)
           human_count=$(count_by_author "${HUMAN_EMAIL}" main)
-          echo "claude=${claude_count} human=${human_count}"
-          [ "${claude_count}" -eq 0 ]
+          echo "llm=${llm_count} human=${human_count}"
+          [ "${llm_count}" -eq 0 ]
           [ "${human_count}" -eq 3 ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "claude=0 human=3"
+          - result.systemout ShouldContainSubstring "llm=0 human=3"
 
   - name: --force skips confirmation
     steps:
@@ -388,7 +388,7 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "work"
+          llm_commit "work"
           timeout 10 "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
         assertions:
           - result.code ShouldEqual 0
@@ -401,11 +401,11 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "work"
+          llm_commit "work"
           echo "n" | "{{.riotbox_dir}}/scripts/reown-commits.sh" 2>&1
-          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
-          echo "claude_after_abort=${claude_count}"
-          [ "${claude_count}" -eq 1 ]
+          llm_count=$(count_by_author "${LLM_EMAIL}")
+          echo "llm_after_abort=${llm_count}"
+          [ "${llm_count}" -eq 1 ]
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "Aborted"
@@ -430,7 +430,7 @@ testcases:
           [ -n "${key_fp}" ] || { echo "SKIP failed to generate GPG key"; exit 0; }
           # Create commits BEFORE enabling signing
           human_commit "initial"
-          claude_commit "unsigned claude work"
+          llm_commit "unsigned llm work"
           # Enable signing
           git config user.signingkey "${key_fp}"
           git config commit.gpgsign true
@@ -461,11 +461,11 @@ testcases:
           human_commit "initial"
           echo "dated work" >> history.txt
           git add -A
-          GIT_AUTHOR_NAME="${CLAUDE_NAME}" GIT_AUTHOR_EMAIL="${CLAUDE_EMAIL}" \
-          GIT_COMMITTER_NAME="${CLAUDE_NAME}" GIT_COMMITTER_EMAIL="${CLAUDE_EMAIL}" \
+          GIT_AUTHOR_NAME="${LLM_NAME}" GIT_AUTHOR_EMAIL="${LLM_EMAIL}" \
+          GIT_COMMITTER_NAME="${LLM_NAME}" GIT_COMMITTER_EMAIL="${LLM_EMAIL}" \
           GIT_AUTHOR_DATE="2025-01-15T12:00:00" \
           GIT_COMMITTER_DATE="2025-01-15T12:00:00" \
-              git commit -m "dated claude work" >/dev/null
+              git commit -m "dated llm work" >/dev/null
           original_date="$(git log -1 --format='%ai')"
           git config user.signingkey "${key_fp}"
           git config commit.gpgsign true
@@ -485,7 +485,7 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "work"
+          llm_commit "work"
           git config commit.gpgsign false
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
         assertions:
@@ -500,7 +500,7 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "work"
+          llm_commit "work"
           git config --global commit.gpgsign true
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
         assertions:
@@ -517,11 +517,11 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "feature work"
+          llm_commit "feature work"
           echo "extra content" >> history.txt
           git add -A
-          GIT_AUTHOR_NAME="${CLAUDE_NAME}" GIT_AUTHOR_EMAIL="${CLAUDE_EMAIL}" \
-          GIT_COMMITTER_NAME="${CLAUDE_NAME}" GIT_COMMITTER_EMAIL="${CLAUDE_EMAIL}" \
+          GIT_AUTHOR_NAME="${LLM_NAME}" GIT_AUTHOR_EMAIL="${LLM_EMAIL}" \
+          GIT_COMMITTER_NAME="${LLM_NAME}" GIT_COMMITTER_EMAIL="${LLM_EMAIL}" \
               git commit -m "more feature work" >/dev/null
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           backup_tag="$(git tag -l 'backup/pre-reown-*' | head -1)"
@@ -544,9 +544,9 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "claude 1"
+          llm_commit "llm 1"
           human_commit "human 1"
-          claude_commit "claude 2"
+          llm_commit "llm 2"
           count_before="$(git rev-list --count HEAD)"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           count_after="$(git rev-list --count HEAD)"
@@ -563,7 +563,7 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "fix: handle edge case in parser (issue #42)"
+          llm_commit "fix: handle edge case in parser (issue #42)"
           msgs_before="$(git log --format='%s' --reverse)"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           msgs_after="$(git log --format='%s' --reverse)"
@@ -584,8 +584,8 @@ testcases:
           echo '#!/bin/bash' > script.sh
           chmod +x script.sh
           git add -A
-          GIT_AUTHOR_NAME="${CLAUDE_NAME}" GIT_AUTHOR_EMAIL="${CLAUDE_EMAIL}" \
-          GIT_COMMITTER_NAME="${CLAUDE_NAME}" GIT_COMMITTER_EMAIL="${CLAUDE_EMAIL}" \
+          GIT_AUTHOR_NAME="${LLM_NAME}" GIT_AUTHOR_EMAIL="${LLM_EMAIL}" \
+          GIT_COMMITTER_NAME="${LLM_NAME}" GIT_COMMITTER_EMAIL="${LLM_EMAIL}" \
               git commit -m "add executable script" >/dev/null
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           [ -x script.sh ]
@@ -607,8 +607,8 @@ testcases:
           printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR' > image.png
           md5_before="$(md5sum image.png | awk '{print $1}')"
           git add -A
-          GIT_AUTHOR_NAME="${CLAUDE_NAME}" GIT_AUTHOR_EMAIL="${CLAUDE_EMAIL}" \
-          GIT_COMMITTER_NAME="${CLAUDE_NAME}" GIT_COMMITTER_EMAIL="${CLAUDE_EMAIL}" \
+          GIT_AUTHOR_NAME="${LLM_NAME}" GIT_AUTHOR_EMAIL="${LLM_EMAIL}" \
+          GIT_COMMITTER_NAME="${LLM_NAME}" GIT_COMMITTER_EMAIL="${LLM_EMAIL}" \
               git commit -m "add binary file" >/dev/null
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           md5_after="$(md5sum image.png | awk '{print $1}')"
@@ -627,7 +627,7 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "claude work"
+          llm_commit "llm work"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
           head_after_first="$(git rev-parse HEAD)"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
@@ -638,7 +638,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "Nothing to do"
 
-  # -- Legacy identity --
+  # -- Legacy identities --
 
   - name: Rewrites legacy riotbox@local commits
     steps:
@@ -648,20 +648,16 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          echo "legacy work" >> history.txt
-          git add -A
-          GIT_AUTHOR_NAME="Claude" GIT_AUTHOR_EMAIL="riotbox@local" \
-          GIT_COMMITTER_NAME="Claude" GIT_COMMITTER_EMAIL="riotbox@local" \
-              git commit -m "legacy claude commit" >/dev/null
+          identity_commit "Claude" "${LLM_EMAIL_LEGACY_RIOTBOX}" "legacy riotbox@local commit"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
-          legacy_count="$(git log --author='riotbox@local' --format='%H' | wc -l | tr -d ' ')"
+          legacy_count="$(count_by_author "${LLM_EMAIL_LEGACY_RIOTBOX}")"
           echo "legacy=${legacy_count}"
           [ "${legacy_count}" -eq 0 ]
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "legacy=0"
 
-  - name: Rewrites mixed legacy and current claude commits
+  - name: Rewrites legacy claude@riotbox commits
     steps:
       - type: exec
         script: |
@@ -669,20 +665,59 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          echo "legacy" >> history.txt
-          git add -A
-          GIT_AUTHOR_NAME="Claude" GIT_AUTHOR_EMAIL="riotbox@local" \
-          GIT_COMMITTER_NAME="Claude" GIT_COMMITTER_EMAIL="riotbox@local" \
-              git commit -m "legacy commit" >/dev/null
-          claude_commit "current commit"
+          identity_commit "Claude (riotbox)" "${LLM_EMAIL_LEGACY_CLAUDE}" "legacy claude@riotbox commit"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
-          legacy_count="$(git log --author='riotbox@local' --format='%H' | wc -l | tr -d ' ')"
-          current_count="$(git log --author='claude@riotbox' --format='%H' | wc -l | tr -d ' ')"
-          echo "legacy=${legacy_count} current=${current_count}"
+          legacy_count="$(count_by_author "${LLM_EMAIL_LEGACY_CLAUDE}")"
+          echo "legacy=${legacy_count}"
           [ "${legacy_count}" -eq 0 ]
-          [ "${current_count}" -eq 0 ]
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "legacy=0"
+
+  - name: Rewrites legacy llm@localhost commits
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          identity_commit "LLM" "${LLM_EMAIL_LEGACY_LOCALHOST}" "legacy llm@localhost commit"
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
+          legacy_count="$(count_by_author "${LLM_EMAIL_LEGACY_LOCALHOST}")"
+          echo "legacy=${legacy_count}"
+          [ "${legacy_count}" -eq 0 ]
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "legacy=0"
+
+  - name: Rewrites mixed legacy and current container-identity commits
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          identity_commit "Claude" "${LLM_EMAIL_LEGACY_RIOTBOX}" "riotbox@local commit"
+          identity_commit "Claude (riotbox)" "${LLM_EMAIL_LEGACY_CLAUDE}" "claude@riotbox commit"
+          identity_commit "LLM" "${LLM_EMAIL_LEGACY_LOCALHOST}" "llm@localhost commit"
+          llm_commit "current commit"
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
+          riotbox_count="$(count_by_author "${LLM_EMAIL_LEGACY_RIOTBOX}")"
+          claude_count="$(count_by_author "${LLM_EMAIL_LEGACY_CLAUDE}")"
+          localhost_count="$(count_by_author "${LLM_EMAIL_LEGACY_LOCALHOST}")"
+          current_count="$(count_by_author "${LLM_EMAIL}")"
+          human_count="$(count_by_author "${HUMAN_EMAIL}")"
+          echo "riotbox=${riotbox_count} claude=${claude_count} localhost=${localhost_count} current=${current_count} human=${human_count}"
+          [ "${riotbox_count}" -eq 0 ]
+          [ "${claude_count}" -eq 0 ]
+          [ "${localhost_count}" -eq 0 ]
+          [ "${current_count}" -eq 0 ]
+          [ "${human_count}" -eq 5 ]
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "riotbox=0 claude=0 localhost=0 current=0 human=5"
 
   # -- Negative: things that must NOT happen --
 
@@ -694,12 +729,8 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          echo "bot work" >> history.txt
-          git add -A
-          GIT_AUTHOR_NAME="GitHub Bot" GIT_AUTHOR_EMAIL="bot@github.com" \
-          GIT_COMMITTER_NAME="GitHub Bot" GIT_COMMITTER_EMAIL="bot@github.com" \
-              git commit -m "automated PR merge" >/dev/null
-          claude_commit "claude work"
+          identity_commit "GitHub Bot" "bot@github.com" "automated PR merge"
+          llm_commit "llm work"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           bot_author="$(git log --author='bot@github.com' -1 --format='%ae')"
           echo "bot_author=${bot_author}"
@@ -716,7 +747,7 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "claude work"
+          llm_commit "llm work"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           status="$(git status --porcelain)"
           if [ -n "${status}" ]; then
@@ -736,7 +767,7 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "work"
+          llm_commit "work"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force --all 2>&1
         assertions:
           - result.code ShouldEqual 1
@@ -756,8 +787,8 @@ testcases:
           # Write to a different file to avoid merge conflicts
           echo "feature content" > feature.txt
           git add -A
-          GIT_AUTHOR_NAME="${CLAUDE_NAME}" GIT_AUTHOR_EMAIL="${CLAUDE_EMAIL}" \
-          GIT_COMMITTER_NAME="${CLAUDE_NAME}" GIT_COMMITTER_EMAIL="${CLAUDE_EMAIL}" \
+          GIT_AUTHOR_NAME="${LLM_NAME}" GIT_AUTHOR_EMAIL="${LLM_EMAIL}" \
+          GIT_COMMITTER_NAME="${LLM_NAME}" GIT_COMMITTER_EMAIL="${LLM_EMAIL}" \
               git commit -m "feature work" >/dev/null
           git checkout main >/dev/null 2>&1
           echo "main content" > main-only.txt
@@ -765,16 +796,16 @@ testcases:
           git commit -m "main work" >/dev/null
           git merge --no-ff feature -m "Merge feature" >/dev/null 2>&1
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
-          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
-          echo "claude=${claude_count}"
-          [ "${claude_count}" -eq 0 ]
+          llm_count=$(count_by_author "${LLM_EMAIL}")
+          echo "llm=${llm_count}"
+          [ "${llm_count}" -eq 0 ]
           # Verify merge commit still exists
           merge_count="$(git log --merges --format='%H' | wc -l | tr -d ' ')"
           echo "merges=${merge_count}"
           [ "${merge_count}" -eq 1 ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "claude=0"
+          - result.systemout ShouldContainSubstring "llm=0"
 
   # -- Large range --
 
@@ -787,14 +818,14 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
           for i in $(seq 1 20); do
-            claude_commit "claude commit ${i}"
+            llm_commit "llm commit ${i}"
           done
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
-          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
+          llm_count=$(count_by_author "${LLM_EMAIL}")
           total="$(git rev-list --count HEAD)"
-          echo "claude=${claude_count} total=${total}"
-          [ "${claude_count}" -eq 0 ]
+          echo "llm=${llm_count} total=${total}"
+          [ "${llm_count}" -eq 0 ]
           [ "${total}" -eq 21 ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "claude=0 total=21"
+          - result.systemout ShouldContainSubstring "llm=0 total=21"

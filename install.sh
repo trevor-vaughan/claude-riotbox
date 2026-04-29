@@ -15,6 +15,12 @@ cat > "${TARGET_DIR}/claude-riotbox" <<'WRAPPER'
 RIOTBOX_DIR="@@RIOTBOX_DIR@@"
 RIOTBOX_VERSION="@@RIOTBOX_VERSION@@"
 
+# Source the agent registry at runtime (not install time) so newly added
+# agents are picked up without re-running install.sh. The registry is a
+# pure-bash file that auto-discovers agents/<name>/manifest.sh.
+# shellcheck disable=SC1091
+source "${RIOTBOX_DIR}/agents/registry.sh"
+
 run_task() { exec task --taskfile "${RIOTBOX_DIR}/Taskfile.yml" "$@"; }
 
 all_paths() {
@@ -26,12 +32,16 @@ usage() {
     cat <<EOF
 Usage: claude-riotbox [command] [args...]
 
+Global flags:
+  --agent=<claude|opencode>    Select the AI agent (default: claude).
+                               May also be set via RIOTBOX_AGENT env var.
+
 Session commands:
   .                            Open shell in current directory
   . ../other                   Open shell with multiple projects
   shell [projects...]          Open a shell (explicit)
-  run "prompt" [projects...]   Run Claude with a prompt
-  resume [projects...]         Resume the last Claude session
+  run "prompt" [projects...]   Run agent with a prompt
+  resume [projects...]         Resume the last session
   reown [flags...]             Rewrite Claude's commits to your git identity
   session-list                 List all riotbox sessions
   session-remove [key/path]    Remove a session by key or project path (or --all)
@@ -44,6 +54,7 @@ Overlay commands (podman-only):
   overlay-reject [project]     Discard overlay changes
 
 Info:
+  agents                       List registered agents (riotbox name + binary)
   version                      Show the current version
 
 Task runner:
@@ -53,6 +64,30 @@ Task runner:
 Any unrecognized command is passed through to task automatically.
 EOF
 }
+
+# Parse --agent=<name> flag (consumed before dispatch to task).
+# Validates against the allowed agents and re-exports as RIOTBOX_AGENT.
+RIOTBOX_AGENT="${RIOTBOX_AGENT:-claude}"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --agent=*)
+            RIOTBOX_AGENT="${1#--agent=}"
+            shift
+            ;;
+        --agent)
+            RIOTBOX_AGENT="${2:-}"
+            shift 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+if ! agent_is_registered "${RIOTBOX_AGENT}"; then
+    echo "Error: --agent must be one of: $(agent_registry_csv) (got: ${RIOTBOX_AGENT})" >&2
+    exit 2
+fi
+export RIOTBOX_AGENT
 
 cmd="${1:-}"
 [ $# -gt 0 ] && shift
@@ -68,6 +103,21 @@ case "${cmd}" in
         ;;
     version|--version|-V)
         echo "claude-riotbox ${RIOTBOX_VERSION}"
+        ;;
+    agents)
+        # List registered agents with their real binary name. Two columns
+        # so future agents whose riotbox name differs from the binary
+        # (e.g. cursor-agent → cursor) read clearly. Column width is
+        # computed from the longest agent name so a long-named agent does
+        # not break alignment.
+        agents_max_width=0
+        for agent in "${AGENT_REGISTRY[@]}"; do
+            [ "${#agent}" -gt "${agents_max_width}" ] && agents_max_width="${#agent}"
+        done
+        for agent in "${AGENT_REGISTRY[@]}"; do
+            binary="$(agent_call "${agent}" real_binary)"
+            printf "%-${agents_max_width}s  %s\n" "${agent}" "${binary}"
+        done
         ;;
     run)
         run_task run -- "$@"
@@ -117,9 +167,13 @@ esac
 WRAPPER
 
 # Inject the actual riotbox directory path (awk avoids sed delimiter issues
-# if SCRIPT_DIR contains |, /, or other sed metacharacters)
+# if SCRIPT_DIR contains |, /, or other sed metacharacters). The agent list
+# is no longer baked here — the wrapper sources agents/registry.sh at
+# runtime so newly added agents are picked up without re-installing.
 awk -v dir="${SCRIPT_DIR}" -v ver="${VERSION}" \
-    '{gsub(/@@RIOTBOX_DIR@@/, dir); gsub(/@@RIOTBOX_VERSION@@/, ver); print}' \
+    '{gsub(/@@RIOTBOX_DIR@@/, dir); \
+      gsub(/@@RIOTBOX_VERSION@@/, ver); \
+      print}' \
     "${TARGET_DIR}/claude-riotbox" > "${TARGET_DIR}/claude-riotbox.tmp" \
     && mv "${TARGET_DIR}/claude-riotbox.tmp" "${TARGET_DIR}/claude-riotbox"
 

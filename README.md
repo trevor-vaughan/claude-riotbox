@@ -29,7 +29,7 @@ Finally...it was fun!
 1. **`scripts/build.sh`** introspects your local environment (nvm, uv, Go, Rust/rustup, Ruby/RVM, UID, tool configs) and passes them as build args.
 2. The **Dockerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. Claude Code is installed last (via the [official installer](https://claude.ai/install.sh)) for optimal layer caching.
 3. At runtime your project directory is bind-mounted into the container. Auth credentials are synced into an isolated session directory: `~/.claude/.credentials.json` is bind-mounted read-write (so token refreshes write back to the host), and `~/.claude.json` is copied so each container gets a writable snapshot without host contention.
-4. A **wrapper script** shadows the `claude` binary to add autonomous-mode flags and a system prompt with commit discipline guidelines.
+4. **A single generic wrapper** (`container/agent-wrapper.sh`) shadows the real agent binaries via per-agent symlinks under `~/.riotbox/bin/`. The wrapper detects which agent it's running as from its own filename, looks up that agent's manifest at `agents/<name>/manifest.sh`, and applies the manifest's flag-injection rules. The riotbox autonomy prompt lives at `/etc/claude-code/CLAUDE.md` (managed-policy path read by Claude) and at `~/.config/opencode/AGENTS.md` (placed at runtime by the agent's setup hook). Selection happens via `--agent=claude|opencode` (default `claude`); see `claude-riotbox agents` to list the registered set.
 
 ## Prerequisites
 
@@ -90,6 +90,39 @@ claude-riotbox shell
 claude-riotbox reown
 ```
 
+## Using opencode
+
+The riotbox ships with [opencode](https://opencode.ai/) installed alongside Claude Code. Pick the agent per command with the `--agent` flag:
+
+```sh
+# Run opencode against the current directory
+claude-riotbox --agent=opencode run "fix the build"
+
+# Resume the last opencode session
+claude-riotbox --agent=opencode resume
+
+# Open a shell with both binaries on PATH (use either)
+claude-riotbox shell
+```
+
+Default is `claude` if `--agent` is omitted. You can persist a default in `~/.config/claude-riotbox/config` by uncommenting the `RIOTBOX_AGENT` line.
+
+> Want to add a third agent (aider, goose, cursor-agent, codex, …)? See [`docs/maintainer/adding-an-agent.md`](docs/maintainer/adding-an-agent.md). The agent registry at `agents/registry.sh` is the single source of truth — adding an agent is a manifest plus a Dockerfile install line, no edits to dispatch sites or wrappers.
+
+### Opencode auth
+
+1. **`opencode auth login` on the host** (recommended) — credentials at `~/.local/share/opencode/auth.json` are bind-mounted RW into the container. OAuth token refreshes write back to the host file.
+2. **Provider env vars** — direct API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.) and Claude Code routing vars (`CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_PROJECT_ID`, `AWS_PROFILE`, etc.) are passed through automatically when set on the host. See `~/.config/claude-riotbox/config` for the full default list and how to extend it.
+3. **Cloud SDK credential files** — `GOOGLE_APPLICATION_CREDENTIALS` (Vertex), `AWS_SHARED_CREDENTIALS_FILE` (Bedrock), `KUBECONFIG`, and `AWS_CONFIG_FILE` are auto-mounted **read-only** at a fixed in-container path and the env var is rewritten to that path. Configure via `RIOTBOX_CREDFILE_VARS`.
+
+If `CLAUDE_CODE_USE_VERTEX` is set on the host but `GOOGLE_APPLICATION_CREDENTIALS` is unset, the launcher additionally checks for `~/.config/gcloud/application_default_credentials.json` (the file `gcloud auth application-default login` writes) and prompts before bind-mounting it. Answer `n` if you'd rather plumb credentials yourself; the launcher will skip the mount and print a notice. The prompt is TTY-only — non-interactive launches always skip with a notice.
+
+Long-lived AWS access keys (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`) are **not** passed through by default — use a profile + credentials file instead. SSH agent forwarding is also out of scope.
+
+### Opencode config
+
+Your host `~/.config/opencode/` (agents, commands, themes, `opencode.json`) is copied into the session dir at every launch. If you have no host opencode config, the container generates a minimal baseline `opencode.json` with `permission: "allow"`, `share: "disabled"`, and `instructions: ["~/.config/opencode/AGENTS.md"]`.
+
 ## Commands
 
 | Command | Description |
@@ -99,7 +132,7 @@ claude-riotbox reown
 | `claude-riotbox run "<task>" [dir]` | Run Claude autonomously (defaults to current directory) |
 | `claude-riotbox shell [dir]` | Interactive shell (defaults to current directory) |
 | `claude-riotbox resume [dir]` | Continue the last Claude session |
-| `claude-riotbox reown` | Rewrite all Claude-authored commits to your git identity |
+| `claude-riotbox reown` | Rewrite all container-authored commits to your git identity |
 | `claude-riotbox reown <ref>` | Rewrite only commits since a specific ref |
 | `claude-riotbox mounts` | Show auto-detected mounts (useful for debugging) |
 | `claude-riotbox nested-run "<task>" [dir]` | Run with podman-in-podman support (disables SELinux) |
@@ -111,6 +144,7 @@ claude-riotbox reown
 | `claude-riotbox overlay-diff [project]` | Show overlay changes vs host project |
 | `claude-riotbox overlay-accept [project]` | Apply overlay changes to host project |
 | `claude-riotbox overlay-reject [project]` | Discard overlay changes |
+| `claude-riotbox agents` | List registered agents (riotbox name + binary) |
 
 ## Pre-installed tools
 
@@ -287,19 +321,19 @@ RIOTBOX_NESTED=1 claude-riotbox shell
 
 ## Reclaiming authorship
 
-After a riotbox run, Claude's commits will have the container's git identity (`claude@riotbox`). Use `claude-riotbox reown` from the project directory to rewrite those commits with your name and email (read from your `~/.gitconfig`).
+After a riotbox run, the container's commits will carry its generic identity (`LLM (riotbox)` <`llm@riotbox`>). Use `claude-riotbox reown` from the project directory to rewrite those commits with your name and email (read from your `~/.gitconfig`).
 
-By default, `reown` finds all `claude@riotbox` commits on the current branch, starts the rewrite from the oldest one's parent (minimising hash changes to pre-Claude commits), and rewrites only the Claude-authored authorship fields. Running it twice is safe — the second run is a no-op.
+By default, `reown` finds all container-authored commits on the current branch, starts the rewrite from the oldest one's parent (minimising hash changes to pre-container commits), and rewrites only the container-authored authorship fields. Running it twice is safe — the second run is a no-op.
 
 ```sh
 cd /path/to/project
-claude-riotbox reown              # rewrites all claude-authored commits
+claude-riotbox reown              # rewrites all container-authored commits
 claude-riotbox reown abc123       # rewrites only commits since a specific ref
 ```
 
 > **Note:** This uses `git filter-repo` under the hood, which rewrites commit hashes. Only use this on commits that haven't been pushed to a shared remote, or be prepared to force-push. A backup tag (`backup/pre-reown-<timestamp>`) is created before rewriting — use `git diff <backup-tag>..<branch>` to verify the result.
 >
-> `reown` recognises both the current container identity (`claude@riotbox`) and the legacy identity (`riotbox@local`) used by older versions of riotbox, so old squash-merge commits are also caught.
+> `reown` recognises the current container identity (`llm@riotbox`) and three legacy identities used by older riotbox versions (`claude@riotbox`, `llm@localhost`, `riotbox@local`), so old commits are also caught.
 
 ## Overlay mode (podman-only)
 

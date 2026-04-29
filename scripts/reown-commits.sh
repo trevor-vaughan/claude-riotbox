@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# reown-commits.sh — Rewrite Claude-authored commits to use your identity.
+# reown-commits.sh — Rewrite container-authored commits to use your identity.
 #
-# After a riotbox run, Claude's commits will have the container's git identity.
-# This script rewrites the author/committer on those commits so the history
-# looks like yours, while preserving the Co-Authored-By trailer.
+# After a riotbox run, the container's commits will have its generic LLM
+# identity (currently "LLM (riotbox)" <llm@riotbox>; see Dockerfile). This
+# script rewrites the author/committer on those commits so the history looks
+# like yours, while preserving the Co-Authored-By trailer.
+#
+# Container identities recognised:
+#   llm@riotbox     — current primary (matches the Dockerfile)
+#   claude@riotbox  — legacy: pre-rename, when the identity was Claude-specific
+#   llm@localhost   — legacy: pre-domain-rename
+#   riotbox@local   — legacy: oldest squash-merge identity (pre-ff-only fix)
 #
 # Uses git-filter-repo (the officially recommended replacement for
 # filter-branch) with a two-pass approach:
@@ -15,7 +22,7 @@
 # and easily restore if needed.
 #
 # Usage:
-#   ./reown-commits.sh                     # rewrite all claude@riotbox commits
+#   ./reown-commits.sh                     # rewrite all container-authored commits
 #   ./reown-commits.sh <since-ref>         # rewrite since a specific ref
 #   ./reown-commits.sh --force             # skip confirmation prompt
 #
@@ -24,10 +31,26 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-# Primary container identity (current)
-CLAUDE_EMAIL="claude@riotbox"
-# Legacy identity used by old squash-merge code (pre-ff-only fix)
-CLAUDE_EMAIL_LEGACY="riotbox@local"
+# Container identities that get rewritten. The first entry is the current
+# primary (matches the Dockerfile); the rest are legacy identities still
+# present in older history. To recognise a new identity, append it here.
+CONTAINER_EMAILS=(
+    "llm@riotbox"      # current primary — matches Dockerfile
+    "claude@riotbox"   # legacy: pre-rename, Claude-specific identity
+    "llm@localhost"    # legacy: pre-domain-rename
+    "riotbox@local"    # legacy: oldest squash-merge identity (pre-ff-only fix)
+)
+
+# Pre-built --author flag list — used by every git query that filters by
+# container identity. Built once because it is referenced from several places.
+AUTHOR_FLAGS=()
+for email in "${CONTAINER_EMAILS[@]}"; do
+    AUTHOR_FLAGS+=(--author="${email}")
+done
+
+# Regex alternation for ERE grep — matches an email at the start of a line
+# followed by a space (the `git log %ae <space>` shape used below).
+EMAIL_REGEX="^($(IFS='|'; echo "${CONTAINER_EMAILS[*]}")) "
 
 # ── Dependency check ─────────────────────────────────────────────────────────
 
@@ -115,23 +138,23 @@ if [ -n "${REF_ARG}" ]; then
     # Scope filter-repo to only this range (commits before the ref keep their hashes)
     FILTER_REFS="${REF_ARG}..refs/heads/${CURRENT_BRANCH}"
 else
-    # Find the oldest Claude-authored commit on this branch and use its
-    # parent as the range start.  This minimises the hash blast radius —
-    # commits before the oldest Claude commit keep their original hashes.
-    OLDEST_CLAUDE="$(git log --author="${CLAUDE_EMAIL}" --author="${CLAUDE_EMAIL_LEGACY}" \
+    # Find the oldest container-authored commit on this branch and use its
+    # parent as the range start. This minimises the hash blast radius —
+    # commits before the oldest container commit keep their original hashes.
+    OLDEST_CONTAINER_COMMIT="$(git log "${AUTHOR_FLAGS[@]}" \
         --format='%H' "${CURRENT_BRANCH}" | tail -1)"
-    if [ -z "${OLDEST_CLAUDE}" ]; then
-        echo "No Claude-authored commits found on ${CURRENT_BRANCH}. Nothing to do."
+    if [ -z "${OLDEST_CONTAINER_COMMIT}" ]; then
+        echo "No container-authored commits found on ${CURRENT_BRANCH}. Nothing to do."
         exit 0
     fi
-    PARENT="$(git rev-parse --verify "${OLDEST_CLAUDE}^" 2>/dev/null || true)"
+    PARENT="$(git rev-parse --verify "${OLDEST_CONTAINER_COMMIT}^" 2>/dev/null || true)"
     if [ -n "${PARENT}" ]; then
         RANGE_DESC="commits since $(git log -1 --format='%h %s' "${PARENT}")"
         LOG_RANGE=("${PARENT}..HEAD")
         FILTER_REFS="${PARENT}..refs/heads/${CURRENT_BRANCH}"
     else
-        # Oldest Claude commit is the root commit
-        RANGE_DESC="all commits on ${CURRENT_BRANCH} (Claude commit is root)"
+        # Oldest container commit is the root commit
+        RANGE_DESC="all commits on ${CURRENT_BRANCH} (container commit is root)"
         LOG_RANGE=("${CURRENT_BRANCH}")
         FILTER_REFS="refs/heads/${CURRENT_BRANCH}"
     fi
@@ -140,30 +163,32 @@ fi
 # ── Count affected commits ──────────────────────────────────────────────────
 
 TOTAL_IN_RANGE="$(git rev-list --count "${LOG_RANGE[@]}")"
-CLAUDE_COUNT="$(git rev-list --count "${LOG_RANGE[@]}" --author="${CLAUDE_EMAIL}" --author="${CLAUDE_EMAIL_LEGACY}")"
+CONTAINER_COUNT="$(git rev-list --count "${LOG_RANGE[@]}" "${AUTHOR_FLAGS[@]}")"
 
-if [ "${CLAUDE_COUNT}" -eq 0 ]; then
-    echo "No Claude-authored commits found in range (${RANGE_DESC}). Nothing to do."
+if [ "${CONTAINER_COUNT}" -eq 0 ]; then
+    echo "No container-authored commits found in range (${RANGE_DESC}). Nothing to do."
     exit 0
 fi
 
-echo "Found ${CLAUDE_COUNT} Claude-authored commit(s) in range (${RANGE_DESC})."
+echo "Found ${CONTAINER_COUNT} container-authored commit(s) in range (${RANGE_DESC})."
 echo "  ${TOTAL_IN_RANGE} total commit(s) in hash chain will be rewritten."
 echo "  New author: ${YOUR_NAME} <${YOUR_EMAIL}>"
 echo ""
 
-# List the Claude-authored commits that will be rewritten
+# List the container-authored commits that will be rewritten
 echo "Commits to reown:"
-git --no-pager log "${LOG_RANGE[@]}" --author="${CLAUDE_EMAIL}" --author="${CLAUDE_EMAIL_LEGACY}" --format="  %C(yellow)%h%Creset %s" --reverse
+git --no-pager log "${LOG_RANGE[@]}" "${AUTHOR_FLAGS[@]}" \
+    --format="  %C(yellow)%h%Creset %s" --reverse
 echo ""
 
-# Show any non-Claude commits in the range (they get rewritten too due to hash chain)
-NON_CLAUDE_COUNT=$(( TOTAL_IN_RANGE - CLAUDE_COUNT ))
-if [ "${NON_CLAUDE_COUNT}" -gt 0 ]; then
-    echo "Also in range (${NON_CLAUDE_COUNT} commit(s) by other authors — hashes will change):"
-    # --invert-grep only works with --grep, not --author; use grep -v to exclude
+# Show any non-container commits in the range (they get rewritten too due to hash chain)
+NON_CONTAINER_COUNT=$(( TOTAL_IN_RANGE - CONTAINER_COUNT ))
+if [ "${NON_CONTAINER_COUNT}" -gt 0 ]; then
+    echo "Also in range (${NON_CONTAINER_COUNT} commit(s) by other authors — hashes will change):"
+    # --invert-grep only works with --grep, not --author; use grep -Ev to exclude
+    # any of the container identities at the start of the line.
     git log "${LOG_RANGE[@]}" --format="%ae %C(dim)%h%Creset %s %C(dim)(%an)%Creset" --reverse \
-        | grep -Ev "^${CLAUDE_EMAIL} |^${CLAUDE_EMAIL_LEGACY} " \
+        | grep -Ev "${EMAIL_REGEX}" \
         | sed 's/^[^ ]* /  /'
     echo ""
 fi
@@ -205,9 +230,11 @@ MAILMAP="$(mktemp)"
 trap 'rm -f "${MAILMAP}"' EXIT
 
 # mailmap format: New Name <new@email> <old@email>
-# Include both current and legacy container identities.
-printf '%s <%s> <%s>\n' "${YOUR_NAME}" "${YOUR_EMAIL}" "${CLAUDE_EMAIL}"        > "${MAILMAP}"
-printf '%s <%s> <%s>\n' "${YOUR_NAME}" "${YOUR_EMAIL}" "${CLAUDE_EMAIL_LEGACY}" >> "${MAILMAP}"
+# One line per recognised container identity.
+: > "${MAILMAP}"
+for email in "${CONTAINER_EMAILS[@]}"; do
+    printf '%s <%s> <%s>\n' "${YOUR_NAME}" "${YOUR_EMAIL}" "${email}" >> "${MAILMAP}"
+done
 
 echo "Pass 1: Rewriting author/committer fields..."
 
@@ -271,7 +298,7 @@ else
 fi
 
 echo ""
-echo "Done. ${CLAUDE_COUNT} commit(s) rewritten."
+echo "Done. ${CONTAINER_COUNT} commit(s) rewritten."
 echo ""
 echo "Review with:  git log --oneline -${TOTAL_IN_RANGE}"
 echo "Compare with: git diff ${BACKUP_TAG}/${CURRENT_BRANCH}..${CURRENT_BRANCH}"

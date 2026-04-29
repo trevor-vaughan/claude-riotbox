@@ -157,9 +157,9 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "tag_count=2"
 
-  # -- Full workflow: checkpoint -> Claude commits -> reown --
+  # -- Full workflow: checkpoint -> LLM commits -> reown --
 
-  - name: Reown rewrites claude commits after checkpoint with dirty state
+  - name: Reown rewrites llm commits after checkpoint with dirty state
     steps:
       - type: exec
         script: |
@@ -173,17 +173,17 @@ testcases:
           git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
               commit -m "checkpoint: pre-claude-test" >/dev/null
 
-          claude_commit "claude feature A"
-          claude_commit "claude feature B"
+          llm_commit "llm feature A"
+          llm_commit "llm feature B"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
-          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
-          echo "claude=${claude_count}"
-          [ "${claude_count}" -eq 0 ]
+          llm_count=$(count_by_author "${LLM_EMAIL}")
+          echo "llm=${llm_count}"
+          [ "${llm_count}" -eq 0 ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "claude=0"
+          - result.systemout ShouldContainSubstring "llm=0"
 
-  - name: Reown rewrites claude commits after checkpoint with clean state
+  - name: Reown rewrites llm commits after checkpoint with clean state
     steps:
       - type: exec
         script: |
@@ -192,16 +192,16 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
           # No checkpoint commit needed when clean — just tag
-          claude_commit "claude work"
+          llm_commit "llm work"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
-          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
-          echo "claude=${claude_count}"
-          [ "${claude_count}" -eq 0 ]
+          llm_count=$(count_by_author "${LLM_EMAIL}")
+          echo "llm=${llm_count}"
+          [ "${llm_count}" -eq 0 ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "claude=0"
+          - result.systemout ShouldContainSubstring "llm=0"
 
-  - name: Reown handles multiple sessions (only rewrites remaining claude commits)
+  - name: Reown handles multiple sessions (only rewrites remaining llm commits)
     steps:
       - type: exec
         script: |
@@ -210,39 +210,39 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
 
-          # Session 1: claude work, then reown
-          claude_commit "session 1 claude"
+          # Session 1: llm work, then reown
+          llm_commit "session 1 llm"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
 
-          # Session 2: more claude work
-          claude_commit "session 2 claude"
+          # Session 2: more llm work
+          llm_commit "session 2 llm"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
 
-          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
+          llm_count=$(count_by_author "${LLM_EMAIL}")
           human_count=$(count_by_author "${HUMAN_EMAIL}")
-          echo "claude=${claude_count} human=${human_count}"
-          [ "${claude_count}" -eq 0 ]
+          echo "llm=${llm_count} human=${human_count}"
+          [ "${llm_count}" -eq 0 ]
           [ "${human_count}" -eq 3 ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "claude=0 human=3"
+          - result.systemout ShouldContainSubstring "llm=0 human=3"
 
-  - name: Reown does not touch commits before the oldest claude commit
+  - name: Reown does not touch commits before the oldest llm commit
     steps:
       - type: exec
         script: |
           source "{{.helpers}}"
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          human_commit "pre-claude human work"
+          human_commit "pre-llm human work"
           old_hash="$(git rev-parse HEAD)"
-          claude_commit "claude work"
+          llm_commit "llm work"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           new_hash="$(git rev-parse HEAD~1)"
           echo "old=${old_hash} new=${new_hash}"
           [ "${old_hash}" = "${new_hash}" ]
-          msg_author="$(git log --format='%ae %s' | grep 'pre-claude human work')"
-          echo "pre_claude_author=${msg_author}"
+          msg_author="$(git log --format='%ae %s' | grep 'pre-llm human work')"
+          echo "pre_llm_author=${msg_author}"
           echo "${msg_author}" | grep -q "^${HUMAN_EMAIL} "
         assertions:
           - result.code ShouldEqual 0
@@ -257,8 +257,8 @@ testcases:
           human_commit "initial"
           echo "feature content" >> feature.txt
           git add -A
-          GIT_AUTHOR_NAME="${CLAUDE_NAME}" GIT_AUTHOR_EMAIL="${CLAUDE_EMAIL}" \
-          GIT_COMMITTER_NAME="${CLAUDE_NAME}" GIT_COMMITTER_EMAIL="${CLAUDE_EMAIL}" \
+          GIT_AUTHOR_NAME="${LLM_NAME}" GIT_AUTHOR_EMAIL="${LLM_EMAIL}" \
+          GIT_COMMITTER_NAME="${LLM_NAME}" GIT_COMMITTER_EMAIL="${LLM_EMAIL}" \
               git commit -m "add feature" >/dev/null
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           content="$(cat feature.txt)"
@@ -268,7 +268,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "content=feature content"
 
-  - name: Reown exits cleanly with no claude commits
+  - name: Reown exits cleanly with no llm commits
     steps:
       - type: exec
         script: |
@@ -280,11 +280,11 @@ testcases:
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>&1
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "No Claude-authored commits found"
+          - result.systemout ShouldContainSubstring "No container-authored commits found"
 
   # -- Backup and recovery --
 
-  - name: Backup repo survives a Claude history rewrite
+  - name: Backup repo survives a llm history rewrite
     steps:
       - type: exec
         script: |
@@ -300,8 +300,8 @@ testcases:
           backup_dir="${BACKUP_BASE}/project.git"
           git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
 
-          claude_commit "claude work"
-          # Simulate Claude wiping history
+          llm_commit "llm work"
+          # Simulate llm wiping history
           git reset --hard HEAD~1
           # Verify backup still has the checkpoint tag
           git -C "${backup_dir}" tag -l "${CHECKPOINT_TAG}" | grep -q "${CHECKPOINT_TAG}"
@@ -326,9 +326,9 @@ testcases:
           backup_dir="${BACKUP_BASE}/project.git"
           git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
 
-          claude_commit "claude work"
+          llm_commit "llm work"
           original_head="$(git rev-parse "${CHECKPOINT_TAG}")"
-          # Simulate Claude wiping everything
+          # Simulate llm wiping everything
           git reset --hard HEAD~1
           # Recover via backup
           git fetch "${backup_dir}" "refs/tags/${CHECKPOINT_TAG}:refs/tags/${CHECKPOINT_TAG}" >/dev/null 2>&1
@@ -348,16 +348,16 @@ testcases:
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
-          claude_commit "claude work"
+          llm_commit "llm work"
           pre_reown_head="$(git rev-parse HEAD)"
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
           backup_tag="$(git tag -l 'backup/pre-reown-*' | head -1)"
           [ -n "${backup_tag}" ]
           git reset --hard "${backup_tag}"
           [ "$(git rev-parse HEAD)" = "${pre_reown_head}" ]
-          claude_count=$(count_by_author "${CLAUDE_EMAIL}")
-          echo "claude_after_restore=${claude_count}"
-          [ "${claude_count}" -eq 1 ]
+          llm_count=$(count_by_author "${LLM_EMAIL}")
+          echo "llm_after_restore=${llm_count}"
+          [ "${llm_count}" -eq 1 ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "claude_after_restore=1"
+          - result.systemout ShouldContainSubstring "llm_after_restore=1"

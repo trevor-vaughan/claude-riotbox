@@ -1,0 +1,532 @@
+name: agent registry contract tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  agent_helpers: "{{.root}}/tests/lib/agent-test-helpers.sh"
+
+# Every test below iterates over AGENT_REGISTRY and verifies that each
+# registered agent satisfies the registry contract. Adding a new agent
+# extends coverage automatically — no test edits required.
+
+testcases:
+
+  - name: registry declares a non-empty AGENT_REGISTRY array
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          if [ "${#AGENT_REGISTRY[@]}" -eq 0 ]; then
+            echo "FAIL: AGENT_REGISTRY is empty" >&2
+            exit 1
+          fi
+          echo "AGENTS=${AGENT_REGISTRY[*]}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "AGENTS="
+          - result.systemout ShouldContainSubstring "claude"
+          - result.systemout ShouldContainSubstring "opencode"
+
+  - name: every registered agent has a real_binary that resolves to a non-empty name
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          agent_test_init
+          for a in "${AGENT_REGISTRY[@]}"; do
+            bin="$(agent_call "$a" real_binary)"
+            if [ -z "${bin}" ]; then
+              agent_fail "${a} real_binary returned empty"
+            fi
+            echo "${a}: real_binary=${bin}"
+          done
+          agent_test_done
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: every registered agent's run_argv begins with its real binary and includes the prompt
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          agent_test_init
+          prompt="SENTINEL_PROMPT_VALUE"
+          for a in "${AGENT_REGISTRY[@]}"; do
+            bin="$(agent_call "$a" real_binary)"
+            mapfile -d '' -t argv < <(agent_call "$a" run_argv "${prompt}")
+            if [ "${argv[0]}" != "${bin}" ]; then
+              agent_fail "${a}: run_argv[0]=${argv[0]:-empty}, expected ${bin}"
+            fi
+            joined="${argv[*]}"
+            case "${joined}" in
+              *"${prompt}"*) : ;;
+              *) agent_fail "${a}: run_argv missing prompt token (argv=${joined})" ;;
+            esac
+            echo "${a}: run_argv=${joined}"
+          done
+          agent_test_done
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: every registered agent's resume_argv begins with its real binary and is non-empty
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          agent_test_init
+          for a in "${AGENT_REGISTRY[@]}"; do
+            bin="$(agent_call "$a" real_binary)"
+            mapfile -d '' -t argv < <(agent_call "$a" resume_argv)
+            if [ "${#argv[@]}" -lt 2 ]; then
+              agent_fail "${a}: resume_argv has fewer than 2 tokens (argv=${argv[*]:-empty})"
+            fi
+            if [ "${argv[0]:-}" != "${bin}" ]; then
+              agent_fail "${a}: resume_argv[0]=${argv[0]:-empty}, expected ${bin}"
+            fi
+            echo "${a}: resume_argv=${argv[*]}"
+          done
+          agent_test_done
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: every registered agent's audit_argv begins with its real binary and includes the prompt
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          agent_test_init
+          prompt="AUDIT_SENTINEL"
+          for a in "${AGENT_REGISTRY[@]}"; do
+            bin="$(agent_call "$a" real_binary)"
+            mapfile -d '' -t argv < <(agent_call "$a" audit_argv "${prompt}")
+            if [ "${argv[0]:-}" != "${bin}" ]; then
+              agent_fail "${a}: audit_argv[0]=${argv[0]:-empty}, expected ${bin}"
+            fi
+            joined="${argv[*]}"
+            case "${joined}" in
+              *"${prompt}"*) : ;;
+              *) agent_fail "${a}: audit_argv missing prompt (argv=${joined})" ;;
+            esac
+            echo "${a}: audit_argv=${joined}"
+          done
+          agent_test_done
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: every registered agent has a container_setup function (may be a no-op)
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          agent_test_init
+          for a in "${AGENT_REGISTRY[@]}"; do
+            fn="agent_${a}_container_setup"
+            if ! declare -F "${fn}" >/dev/null; then
+              agent_fail "${a}: missing function ${fn}"
+            else
+              echo "${a}: container_setup defined"
+            fi
+          done
+          agent_test_done
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: every registered agent has a wrapper_inject function
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          agent_test_init
+          for a in "${AGENT_REGISTRY[@]}"; do
+            fn="agent_${a}_wrapper_inject"
+            if ! declare -F "${fn}" >/dev/null; then
+              agent_fail "${a}: missing function ${fn}"
+            else
+              echo "${a}: wrapper_inject defined"
+            fi
+          done
+          agent_test_done
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: every registered agent has a host_sync function (may print nothing)
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          agent_test_init
+          for a in "${AGENT_REGISTRY[@]}"; do
+            fn="agent_${a}_host_sync"
+            if ! declare -F "${fn}" >/dev/null; then
+              agent_fail "${a}: missing function ${fn}"
+            else
+              echo "${a}: host_sync defined"
+            fi
+          done
+          agent_test_done
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: every registered agent has env_vars and returns at least one name
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          agent_test_init
+          for a in "${AGENT_REGISTRY[@]}"; do
+            fn="agent_${a}_env_vars"
+            if ! declare -F "${fn}" >/dev/null; then
+              agent_fail "${a}: missing function ${fn}"
+              continue
+            fi
+            mapfile -t names < <(agent_call "$a" env_vars)
+            if [ "${#names[@]}" -eq 0 ]; then
+              agent_fail "${a}: env_vars returned zero names"
+              continue
+            fi
+            # Each line must be a plausible env var name: non-empty, no spaces,
+            # no '=' (those would break the `-e NAME` passthrough form).
+            for n in "${names[@]}"; do
+              case "${n}" in
+                ''|*[[:space:]]*|*=*)
+                  agent_fail "${a}: env_vars yielded malformed name '${n}'"
+                  ;;
+              esac
+            done
+            echo "${a}: env_vars=${names[*]}"
+          done
+          agent_test_done
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: passthrough_flags emits -e for a fresh env var declared by a manifest
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          # Mirror the real registry tree, plus a stub agent that declares a
+          # one-of-a-kind env var. Sourcing passthrough-vars.sh against this
+          # tree must surface the new var in the union.
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          mkdir -p "${tmp}/agents" "${tmp}/.taskfiles/scripts"
+          cp "${RIOTBOX_DIR}/agents/registry.sh" "${tmp}/agents/"
+          cp -r "${RIOTBOX_DIR}/agents/claude" "${tmp}/agents/"
+          cp -r "${RIOTBOX_DIR}/agents/opencode" "${tmp}/agents/"
+          cp "${RIOTBOX_DIR}/.taskfiles/scripts/passthrough-vars.sh" \
+              "${tmp}/.taskfiles/scripts/"
+          mkdir -p "${tmp}/agents/zztest"
+          cat > "${tmp}/agents/zztest/manifest.sh" <<'EOF'
+          agent_zztest_real_binary()    { printf 'zztest\n'; }
+          agent_zztest_run_argv()       { printf '%s\0' zztest --run "$1"; }
+          agent_zztest_resume_argv()    { printf '%s\0' zztest --resume; }
+          agent_zztest_audit_argv()     { printf '%s\0' zztest --audit "$1"; }
+          agent_zztest_wrapper_inject() { for a in "$@"; do printf '%s\0' "${a}"; done; }
+          agent_zztest_container_setup() { :; }
+          agent_zztest_host_sync()       { :; }
+          agent_zztest_env_vars()        { printf '%s\n' ZZTEST_FRESH_VAR; }
+          EOF
+          unset RIOTBOX_PASSTHROUGH_VARS
+          export ZZTEST_FRESH_VAR="present"
+          # Source from the temp tree so the registry picks up zztest.
+          source "${tmp}/.taskfiles/scripts/passthrough-vars.sh"
+          flags="$(passthrough_flags)"
+          echo "FLAGS=${flags}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "-e ZZTEST_FRESH_VAR"
+
+  - name: agent_call rejects an unknown agent with a clear error
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          out="$(agent_call no_such_agent real_binary 2>&1 || echo "EXIT=$?")"
+          echo "${out}"
+        assertions:
+          - result.systemout ShouldContainSubstring "EXIT="
+          - result.systemout ShouldContainSubstring "no_such_agent"
+
+  - name: agent_call rejects an unknown verb with a clear error
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          # Pick the first registered agent — we want to test the verb path,
+          # not the agent path.
+          first="${AGENT_REGISTRY[0]}"
+          out="$(agent_call "${first}" no_such_verb 2>&1 || echo "EXIT=$?")"
+          echo "${out}"
+        assertions:
+          - result.systemout ShouldContainSubstring "EXIT="
+          - result.systemout ShouldContainSubstring "no_such_verb"
+
+  - name: agent_is_registered returns 0 for known agents and 1 for unknown
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          for a in "${AGENT_REGISTRY[@]}"; do
+            if ! agent_is_registered "$a"; then
+              echo "FAIL: ${a} should be registered" >&2
+              exit 1
+            fi
+          done
+          if agent_is_registered "definitely_not_an_agent"; then
+            echo "FAIL: nonsense agent should not be registered" >&2
+            exit 1
+          fi
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # ── Claude-specific contract checks ─────────────────────────────────────
+  # These pin claude's specific verb shape so we don't accidentally drop
+  # the -p flag or stop continuing sessions.
+
+  - name: claude run_argv uses -p for the prompt
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          mapfile -d '' -t argv < <(agent_call claude run_argv "do thing")
+          echo "argv=${argv[*]}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude"
+          - result.systemout ShouldContainSubstring "-p"
+          - result.systemout ShouldContainSubstring "do thing"
+
+  - name: claude resume_argv uses --continue
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          mapfile -d '' -t argv < <(agent_call claude resume_argv)
+          echo "argv=${argv[*]}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude"
+          - result.systemout ShouldContainSubstring "--continue"
+
+  # Multi-line prompts must round-trip through run_argv as a single argv
+  # token. The encoding contract is NUL-separated so embedded newlines
+  # survive — line-separated encoding would split a 3-token argv into 5.
+  - name: claude run_argv preserves multi-line prompt as a single token
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          prompt="fix this:
+            - thing one
+            - thing two"
+          mapfile -d '' -t argv < <(agent_call claude run_argv "${prompt}")
+          # Exactly 3 argv tokens: claude, -p, prompt.
+          if [ "${#argv[@]}" -ne 3 ]; then
+            echo "FAIL: expected 3 tokens, got ${#argv[@]}" >&2
+            for i in "${!argv[@]}"; do printf '  [%d]=%q\n' "$i" "${argv[$i]}" >&2; done
+            exit 1
+          fi
+          if [ "${argv[0]}" != "claude" ]; then
+            echo "FAIL: argv[0]=${argv[0]}, expected claude" >&2
+            exit 1
+          fi
+          if [ "${argv[1]}" != "-p" ]; then
+            echo "FAIL: argv[1]=${argv[1]}, expected -p" >&2
+            exit 1
+          fi
+          # Byte-for-byte round-trip of the embedded newlines.
+          if [ "${argv[2]}" != "${prompt}" ]; then
+            echo "FAIL: argv[2] does not match prompt byte-for-byte" >&2
+            printf 'got=%q\nwant=%q\n' "${argv[2]}" "${prompt}" >&2
+            exit 1
+          fi
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # ── Opencode-specific contract checks ───────────────────────────────────
+  # opencode's CLI is `opencode <subcmd>`, so run/resume verbs must include
+  # the `run` subcommand token. This guards against a regression where the
+  # subcommand gets dropped on a registry refactor.
+
+  - name: opencode run_argv includes the run subcommand
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          mapfile -d '' -t argv < <(agent_call opencode run_argv "do thing")
+          echo "argv=${argv[*]}"
+          # `run` must appear and must come before the prompt token
+          run_pos=-1
+          prompt_pos=-1
+          for i in "${!argv[@]}"; do
+            [ "${argv[$i]}" = "run" ]      && run_pos=$i
+            [ "${argv[$i]}" = "do thing" ] && prompt_pos=$i
+          done
+          test "${run_pos}" -ge 0
+          test "${prompt_pos}" -gt "${run_pos}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "opencode"
+          - result.systemout ShouldContainSubstring "run"
+
+  - name: opencode resume_argv runs `run --continue`
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          mapfile -d '' -t argv < <(agent_call opencode resume_argv)
+          echo "argv=${argv[*]}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "opencode"
+          - result.systemout ShouldContainSubstring "run"
+          - result.systemout ShouldContainSubstring "--continue"
+
+  # ── Auto-discovery edge cases ───────────────────────────────────────────
+  # registry.sh discovers agents by globbing agents/*/manifest.sh. These
+  # tests use a copied-and-modified registry tree to exercise edge cases
+  # without polluting the real registry.
+
+  - name: registry auto-discovers a freshly-dropped agent directory
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          # Mirror the real registry layout into a temp tree.
+          mkdir -p "${tmp}/agents"
+          cp "${RIOTBOX_DIR}/agents/registry.sh" "${tmp}/agents/"
+          cp -r "${RIOTBOX_DIR}/agents/claude" "${tmp}/agents/"
+          cp -r "${RIOTBOX_DIR}/agents/opencode" "${tmp}/agents/"
+          # Drop a third agent that is just a duplicate manifest under a
+          # new name. The contract is "drop a directory, get an agent" —
+          # no edit to registry.sh.
+          mkdir -p "${tmp}/agents/zztest"
+          cat > "${tmp}/agents/zztest/manifest.sh" <<'EOF'
+          agent_zztest_real_binary() { printf 'zztest\n'; }
+          agent_zztest_run_argv()    { printf '%s\0' zztest --run "$1"; }
+          agent_zztest_resume_argv() { printf '%s\0' zztest --resume; }
+          agent_zztest_audit_argv()  { printf '%s\0' zztest --audit "$1"; }
+          agent_zztest_wrapper_inject() { for a in "$@"; do printf '%s\0' "${a}"; done; }
+          agent_zztest_container_setup() { :; }
+          agent_zztest_host_sync()       { :; }
+          agent_zztest_env_vars()        { printf '%s\n' ZZTEST_API_KEY; }
+          EOF
+          # shellcheck source=/dev/null
+          source "${tmp}/agents/registry.sh"
+          echo "agents=${AGENT_REGISTRY[*]}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude"
+          - result.systemout ShouldContainSubstring "opencode"
+          - result.systemout ShouldContainSubstring "zztest"
+
+  - name: registry skips agents/foo/ when manifest.sh is missing
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          mkdir -p "${tmp}/agents"
+          cp "${RIOTBOX_DIR}/agents/registry.sh" "${tmp}/agents/"
+          cp -r "${RIOTBOX_DIR}/agents/claude" "${tmp}/agents/"
+          cp -r "${RIOTBOX_DIR}/agents/opencode" "${tmp}/agents/"
+          # Directory without manifest.sh — must be silently skipped.
+          mkdir -p "${tmp}/agents/scaffold-only"
+          echo "# notes" > "${tmp}/agents/scaffold-only/README.md"
+          # shellcheck source=/dev/null
+          source "${tmp}/agents/registry.sh"
+          echo "agents=${AGENT_REGISTRY[*]}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude"
+          - result.systemout ShouldContainSubstring "opencode"
+          - result.systemout ShouldNotContainSubstring "scaffold-only"
+
+  - name: registry skips _-prefixed and dot-prefixed directories
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          mkdir -p "${tmp}/agents"
+          cp "${RIOTBOX_DIR}/agents/registry.sh" "${tmp}/agents/"
+          cp -r "${RIOTBOX_DIR}/agents/claude" "${tmp}/agents/"
+          cp -r "${RIOTBOX_DIR}/agents/opencode" "${tmp}/agents/"
+          # Template directory that should never be loaded.
+          mkdir -p "${tmp}/agents/_template"
+          cat > "${tmp}/agents/_template/manifest.sh" <<'EOF'
+          agent__template_real_binary() { printf "template\n"; }
+          EOF
+          # shellcheck source=/dev/null
+          source "${tmp}/agents/registry.sh"
+          echo "agents=${AGENT_REGISTRY[*]}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude"
+          - result.systemout ShouldNotContainSubstring "_template"
+
+  - name: registry errors when no agents are discovered at all
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          mkdir -p "${tmp}/agents"
+          cp "${RIOTBOX_DIR}/agents/registry.sh" "${tmp}/agents/"
+          # No subdirectories at all — registry should refuse to load.
+          out="$(bash -c 'source "$1" 2>&1; echo "EXIT=$?"' _ "${tmp}/agents/registry.sh")"
+          echo "${out}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "no agents discovered"
+          - result.systemout ShouldContainSubstring "EXIT=1"

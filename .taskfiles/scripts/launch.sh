@@ -87,6 +87,21 @@ if command -v chcon &>/dev/null; then
     chcon -R -t container_file_t "${RIOTBOX_SESSION_DIR}" 2>/dev/null || true
 fi
 
+# shellcheck source=./passthrough-vars.sh
+source "$(dirname "${BASH_SOURCE[0]}")/passthrough-vars.sh"
+PASSTHROUGH_FLAGS="$(passthrough_flags)"
+
+# Must run before credfile_flags(): if the user accepts, this exports
+# GOOGLE_APPLICATION_CREDENTIALS, which credfile-vars.sh then picks up and
+# turns into the bind-mount + env-rewrite pair.
+# shellcheck source=./vertex-adc-prompt.sh
+source "$(dirname "${BASH_SOURCE[0]}")/vertex-adc-prompt.sh"
+vertex_adc_prompt
+
+# shellcheck source=./credfile-vars.sh
+source "$(dirname "${BASH_SOURCE[0]}")/credfile-vars.sh"
+CREDFILE_FLAGS="$(credfile_flags)"
+
 # shellcheck disable=SC2086  # intentional word splitting for multi-flag vars
 ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${INIT_FLAG} \
     --name "${CONTAINER_NAME}" \
@@ -95,10 +110,12 @@ ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${INIT_FLAG} \
     ${OVERLAY_FLAGS} \
     ${PROJECT_VOLUME_FLAGS} \
     ${MOUNTS} \
-    ${ANTHROPIC_API_KEY:+-e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"} \
+    ${PASSTHROUGH_FLAGS} \
+    ${CREDFILE_FLAGS} \
     -e SESSION_ID="${SESSION_ID}" \
     ${SESSION_BRANCH:+-e SESSION_BRANCH="${SESSION_BRANCH}"} \
     ${RIOTBOX_PLUGINS:+-e RIOTBOX_PLUGINS="${RIOTBOX_PLUGINS}"} \
+    ${RIOTBOX_AGENT:+-e RIOTBOX_AGENT="${RIOTBOX_AGENT}"} \
     -w "${WORKDIR}" \
     "${IMAGE_NAME}" \
     "$@"

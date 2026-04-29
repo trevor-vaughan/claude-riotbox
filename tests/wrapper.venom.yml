@@ -419,3 +419,156 @@ testcases:
           - result.systemout ShouldContainSubstring "session:nested-run"
           - result.systemout ShouldContainSubstring "--"
           - result.systemout ShouldContainSubstring "do something"
+
+  # -- Agent flag --
+
+  - name: Agent flag opencode is parsed and exported
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cat > "${TEST_DIR}/bin/task" <<MOCK
+          #!/usr/bin/env bash
+          printf '%s\n' "\$@" > "${MOCK_TASK_ARGS}"
+          echo "RIOTBOX_AGENT=\${RIOTBOX_AGENT:-unset}" >> "${MOCK_TASK_ARGS}"
+          MOCK
+          chmod +x "${TEST_DIR}/bin/task"
+          cd "${TEST_DIR}/projects"
+          "${TEST_DIR}/bin/claude-riotbox" --agent=opencode run "do work"
+          print_task_args
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RIOTBOX_AGENT=opencode"
+          - result.systemout ShouldContainSubstring "run"
+          - result.systemout ShouldContainSubstring "do work"
+
+  - name: Agent flag claude is the default behavior
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cat > "${TEST_DIR}/bin/task" <<MOCK
+          #!/usr/bin/env bash
+          printf '%s\n' "\$@" > "${MOCK_TASK_ARGS}"
+          echo "RIOTBOX_AGENT=\${RIOTBOX_AGENT:-unset}" >> "${MOCK_TASK_ARGS}"
+          MOCK
+          chmod +x "${TEST_DIR}/bin/task"
+          cd "${TEST_DIR}/projects"
+          unset RIOTBOX_AGENT
+          "${TEST_DIR}/bin/claude-riotbox" run "do work"
+          print_task_args
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RIOTBOX_AGENT=claude"
+
+  - name: Agent flag is validated and rejects unknown values
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          "${TEST_DIR}/bin/claude-riotbox" --agent=garbage run "x" 2>&1 || echo "EXIT=$?"
+        assertions:
+          - result.systemout ShouldContainSubstring "must be one of"
+          - result.systemout ShouldContainSubstring "EXIT="
+
+  - name: RIOTBOX_AGENT env var is honored when no flag is given
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cat > "${TEST_DIR}/bin/task" <<MOCK
+          #!/usr/bin/env bash
+          printf '%s\n' "\$@" > "${MOCK_TASK_ARGS}"
+          echo "RIOTBOX_AGENT=\${RIOTBOX_AGENT:-unset}" >> "${MOCK_TASK_ARGS}"
+          MOCK
+          chmod +x "${TEST_DIR}/bin/task"
+          cd "${TEST_DIR}/projects"
+          export RIOTBOX_AGENT=opencode
+          "${TEST_DIR}/bin/claude-riotbox" run "x"
+          print_task_args
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RIOTBOX_AGENT=opencode"
+
+  # -- agents verb --
+
+  - name: Agents verb lists registered agents
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          "${TEST_DIR}/bin/claude-riotbox" agents
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude"
+          - result.systemout ShouldContainSubstring "opencode"
+
+  - name: Agents verb output is two whitespace-separated columns
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          # Each line must have exactly two whitespace-separated tokens
+          # (riotbox name and real binary name). Print 'OK' iff at least
+          # one line is present and every line satisfies that, else
+          # 'BAD: <line>' so the assertion below catches the first offender.
+          "${TEST_DIR}/bin/claude-riotbox" agents | awk '
+              NF != 2 { print "BAD: " $0; bad=1; exit 0 }
+              END { if (NR == 0) print "BAD: empty"; else if (!bad) print "OK" }
+          '
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual "OK"
+
+  - name: Agents verb is listed in help output
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          "${TEST_DIR}/bin/claude-riotbox" help
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "agents"
+
+  - name: Invalid --agent value blocks the agents verb (validation runs before dispatch)
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          # --agent validation runs unconditionally, even for the
+          # agent-agnostic `agents` verb. Pin this so a future refactor
+          # that moves validation past dispatch (which would silently
+          # accept --agent=garbage for info-only verbs) regresses loudly.
+          "${TEST_DIR}/bin/claude-riotbox" --agent=garbage agents 2>&1 || echo "EXIT=$?"
+        assertions:
+          - result.systemout ShouldContainSubstring "must be one of"
+          - result.systemout ShouldContainSubstring "EXIT="

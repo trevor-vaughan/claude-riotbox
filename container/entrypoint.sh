@@ -23,6 +23,12 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export DO_NOT_TRACK=1
 export DISABLE_AUTOUPDATER=1
 
+# opencode equivalents: disable auto-update and LSP download. The container
+# runs a fixed image; outbound requests for updates or LSP servers should
+# never happen in a session.
+export OPENCODE_DISABLE_AUTOUPDATE=1
+export OPENCODE_DISABLE_LSP_DOWNLOAD=1
+
 # Keep marketplace cache when git pull fails (container may lack network).
 export CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE=1
 
@@ -39,6 +45,10 @@ export CLAUDE_CODE_PLUGIN_SEED_DIR="${HOME}/.riotbox/plugins-staging/.claude/plu
 # in-memory cache and the on-disk file (GH #3117 protection).
 export CLAUDE_CONFIG_DIR="${HOME}/.claude"
 
+# Pin opencode's config dir to the session-mounted location so reads and
+# writes hit persistent storage instead of the overlay filesystem.
+export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+
 # Mark multi-project mount subdirectories as safe for git
 for d in /workspace/*/; do
     [ -d "${d}.git" ] && git config --global --add safe.directory "${d%/}"
@@ -51,7 +61,6 @@ mkdir -p ~/.claude/debug ~/.claude/plugins/cache
 # inject-claude-md.sh is a no-op unless RIOTBOX_PROMPT overrides the template
 # or the build-time render is missing (backward compat with older images).
 RIOTBOX_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${RIOTBOX_SCRIPT_DIR}/inject-claude-md.sh"
 source "${RIOTBOX_SCRIPT_DIR}/session-branch.sh"
 source "${RIOTBOX_SCRIPT_DIR}/overlay-setup.sh"
 source "${RIOTBOX_SCRIPT_DIR}/plugin-setup.sh"
@@ -59,6 +68,18 @@ source "${RIOTBOX_SCRIPT_DIR}/plugin-setup.sh"
 # Plugin setup: seed settings, copy staged + host plugins, install marketplace
 # plugins from config/env, wire statusline, sync enabledPlugins.
 plugin_setup
+
+# Per-agent runtime setup. The agent registry drives this — every manifest
+# defines container_setup. claude renders the system prompt (a no-op when
+# the build-time render is current); opencode places AGENTS.md and the
+# baseline opencode.json. Adding a new agent extends this loop with no
+# edit to entrypoint.sh.
+# shellcheck source=./agents/registry.sh
+source "${RIOTBOX_SCRIPT_DIR}/agents/registry.sh"
+for _agent in "${AGENT_REGISTRY[@]}"; do
+    agent_call "${_agent}" container_setup
+done
+unset _agent
 
 # Overlay: mount fuse-overlayfs at /workspace (sets SESSION_BRANCH=0 if active)
 overlay_setup

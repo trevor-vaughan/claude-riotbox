@@ -12,8 +12,8 @@ Usage:
   task audit -- "prompt" [project ...]
   claude-riotbox audit "prompt" [project ...]
 
-A prompt describes what Claude should do. Projects default to the current
-directory if not specified.
+A prompt describes what the agent should do. Projects default to the
+current directory if not specified.
 
 Examples:
   task audit -- "review this code for security issues"
@@ -29,4 +29,14 @@ projects="${*:-}"
 
 export RIOTBOX_READONLY=1
 export RIOTBOX_PROJECTS="${projects}"
-exec "${ROOT_DIR}/.taskfiles/scripts/launch.sh" claude -p "${task_prompt}"
+
+# shellcheck source=../../agents/registry.sh
+source "${ROOT_DIR}/agents/registry.sh"
+agent="${RIOTBOX_AGENT:-claude}"
+if ! agent_is_registered "${agent}"; then
+    echo "ERROR: unknown RIOTBOX_AGENT: '${agent}'" >&2
+    echo "       Registered agents: ${AGENT_REGISTRY[*]}" >&2
+    exit 1
+fi
+mapfile -d '' -t agent_argv < <(agent_call "${agent}" audit_argv "${task_prompt}")
+exec "${ROOT_DIR}/.taskfiles/scripts/launch.sh" "${agent_argv[@]}"

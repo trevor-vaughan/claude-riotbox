@@ -22,7 +22,11 @@ setup_inject_test() {
     export HOME="${TEST_DIR}"
 }
 
-# Run the inject script (sources it in current shell).
+# Run the claude container_setup (which renders the system prompt).
+# After the agent-registry refactor, the body lives at agents/claude/setup.sh
+# as a function; sourcing alone is no-op until claude_setup is called.
 run_inject() {
-    source "${RIOTBOX_DIR}/container/inject-claude-md.sh"
+    # shellcheck source=/dev/null
+    source "${RIOTBOX_DIR}/agents/claude/setup.sh"
+    claude_setup
 }

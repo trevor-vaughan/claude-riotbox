@@ -194,15 +194,21 @@ setup_projects() {
     fi
     PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${riotbox_session_dir}:/home/claude/.claude:z"
 
-    # ── Sync Claude config files into the session dir ─────────────────
-    # Delegates to sync-claude-settings.sh which handles credentials,
-    # config, skills, statusline-command.sh, etc. Any -v flags it prints
-    # (e.g. for the RW credentials bind mount) are appended to PROJECT_VOLUME_FLAGS.
-    local sync_flags
-    sync_flags="$("${ROOT_DIR}/scripts/sync-claude-settings.sh" "${HOME}/.claude" "${riotbox_session_dir}")"
-    if [ -n "${sync_flags}" ]; then
-        PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} ${sync_flags}"
-    fi
+    # ── Sync each registered agent's host config into the session dir ──
+    # The agent registry tells us which agents to sync. Each manifest's
+    # host_sync function knows where its host config lives and what
+    # volume flags to emit. Adding a new agent extends this loop without
+    # editing this file.
+    # shellcheck source=../agents/registry.sh
+    source "${ROOT_DIR}/agents/registry.sh"
+    local _agent _sync_flags
+    for _agent in "${AGENT_REGISTRY[@]}"; do
+        _sync_flags="$(agent_call "${_agent}" host_sync "${riotbox_session_dir}")"
+        if [ -n "${_sync_flags}" ]; then
+            PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} ${_sync_flags}"
+        fi
+    done
+    unset _agent _sync_flags
 
     # ── Container name ────────────────────────────────────────────────
     generate_container_name "${PROJECT_DIRS[@]}"

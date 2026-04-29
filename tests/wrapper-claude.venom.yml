@@ -1,0 +1,192 @@
+name: claude wrapper behavior tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  shared_helpers: "{{.root}}/tests/lib/wrapper-shared.sh"
+
+# Pins the claude-as-wrapper behavior (root-level flag injection,
+# -p / --prompt triggers CI=true) using the same generic agent-wrapper
+# that opencode uses. Mirrors tests/opencode.venom.yml's wrapper checks
+# but for claude — previously this surface had no venom coverage; the
+# refactor closes that gap.
+
+testcases:
+  - name: agent-wrapper as claude prepends --dangerously-skip-permissions at the root
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for claude
+          claude -p "do work"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_REAL_claude_INVOKED"
+          # The flag must be injected at the FRONT (before any user arg)
+          # because claude treats it as a root flag.
+          - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
+          - result.systemout ShouldContainSubstring "arg=-p"
+          - result.systemout ShouldContainSubstring "arg=do work"
+
+  - name: agent-wrapper as claude injects flag at index 0 (before user args)
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for claude
+          out="$(claude -p "do work" 2>&1)"
+          # Verify the flag appears before -p in argv order. claude's CLI
+          # accepts the flag at the root only.
+          flag_line=$(echo "${out}" | grep -n '^arg=--dangerously-skip-permissions$' | head -1 | cut -d: -f1)
+          p_line=$(echo "${out}" | grep -n '^arg=-p$' | head -1 | cut -d: -f1)
+          test -n "${flag_line}" && test -n "${p_line}"
+          test "${flag_line}" -lt "${p_line}"
+          echo "ORDER_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ORDER_OK"
+
+  - name: agent-wrapper as claude sets CI=true when -p is present
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for claude
+          claude -p "do work"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CI=true"
+
+  - name: agent-wrapper as claude sets CI=true when --prompt is present
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for claude
+          claude --prompt "do work"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CI=true"
+
+  - name: agent-wrapper as claude does NOT set CI for interactive invocation (no -p)
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for claude
+          unset CI
+          # No -p / --prompt — the wrapper must NOT export CI.
+          claude --version
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CI=unset"
+
+  - name: agent-wrapper as claude still injects flag for non-prompt invocations
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for claude
+          # Even for `claude --version` we prepend the flag — claude's CLI
+          # accepts unknown root flags as a no-op for these subcommands.
+          # Pinning this behavior prevents drift in wrapper_inject.
+          claude --version
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
+          - result.systemout ShouldContainSubstring "arg=--version"
+
+  - name: agent-wrapper as claude preserves multi-line prompt end-to-end
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for claude
+          # A multi-line prompt must reach the real binary as a single
+          # argv token. The fake real binary echoes one line per argv
+          # token as `arg=...`, so an embedded newline shows up as a
+          # literal newline inside one `arg=...` value (no `arg=` on
+          # the continuation lines).
+          prompt="fix this:
+            - thing one
+            - thing two"
+          out="$(claude -p "${prompt}")"
+          echo "${out}"
+          # Count how many `arg=` lines the fake binary printed. A
+          # correctly-encoded argv produces exactly 3:
+          #   --dangerously-skip-permissions, -p, and the multi-line prompt.
+          # A line-split bug produces 5 (one per prompt line).
+          arg_count="$(printf '%s\n' "${out}" | grep -c '^arg=')"
+          if [ "${arg_count}" -ne 3 ]; then
+            echo "FAIL: expected 3 arg= lines, got ${arg_count}" >&2
+            exit 1
+          fi
+          # The bullet lines must NOT have `arg=` prefixes — they are
+          # continuation bytes of the prompt token, not separate tokens.
+          if printf '%s\n' "${out}" | grep -qx 'arg=  - thing one'; then
+            echo "FAIL: prompt was split — bullet lines became separate tokens" >&2
+            exit 1
+          fi
+          echo "ROUND_TRIP_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_REAL_claude_INVOKED"
+          - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
+          - result.systemout ShouldContainSubstring "arg=-p"
+          - result.systemout ShouldContainSubstring "arg=fix this:"
+          - result.systemout ShouldContainSubstring "ROUND_TRIP_OK"
+
+  - name: agent-wrapper as claude exits non-zero when no real claude on PATH
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for claude
+          rm -f "${FAKE_REAL_BIN}"
+          claude -p "do work" 2>&1 || echo "EXIT=$?"
+        assertions:
+          - result.systemout ShouldContainSubstring "could not find the real claude"
+          - result.systemout ShouldContainSubstring "EXIT="
+
+  - name: agent-wrapper rejects an invocation under an unregistered name (typo symlink)
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          # Sandbox a fake agent name `cluade` (typo) that is not in the
+          # registry. Setting up the bin path is the same as for any agent
+          # since the wrapper detects from basename($0).
+          setup_wrapper_sandbox cluade
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for cluade
+          # Invoking `cluade` should fail clearly — the wrapper sources the
+          # registry, finds `cluade` is not registered, and errors out.
+          cluade --version 2>&1 || echo "EXIT=$?"
+        assertions:
+          - result.systemout ShouldContainSubstring "no such agent is registered"
+          - result.systemout ShouldContainSubstring "cluade"
+          - result.systemout ShouldContainSubstring "EXIT="

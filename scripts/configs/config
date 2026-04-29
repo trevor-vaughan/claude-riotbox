@@ -1,4 +1,4 @@
-# riotbox-config-version: 1
+# riotbox-config-version: 4
 # ~/.config/claude-riotbox/config — Persistent defaults for claude-riotbox.
 #
 # This file is sourced as shell script by the launcher. Values use the
@@ -35,3 +35,78 @@
 # Override if you maintain multiple riotbox images (e.g. per-project).
 #
 # : "${IMAGE_NAME:=claude-riotbox}"
+
+# ── Agent selection ──────────────────────────────────────────────────────
+# Choose between Claude Code and opencode for `run`/`resume`/`shell`
+# commands. Inside the container both binaries are always on PATH; this
+# setting only affects which one the convenience verbs invoke. May also
+# be overridden per-invocation with the --agent=<name> flag.
+#
+# : "${RIOTBOX_AGENT:=claude}"
+
+# ── Provider env var & routing passthrough ──────────────────────────────
+# Whitespace-separated list of environment variables to pass into the
+# container if they are set on the host. Used by Claude (provider routing)
+# and opencode (provider keys). Unset variables are silently skipped.
+#
+# DEFAULT (when this variable is unset): the union of every registered
+# agent's `agent_<name>_env_vars` declaration, deduplicated. Each agent
+# manifest at agents/<name>/manifest.sh is the source of truth for the
+# vars THAT agent reads — adding a new agent or a new provider key means
+# editing one manifest, not this config and not passthrough-vars.sh.
+# Today that union covers:
+#   * Claude Code (agents/claude/manifest.sh): ANTHROPIC_API_KEY,
+#     ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, ANTHROPIC_VERTEX_*,
+#     ANTHROPIC_BEDROCK_BASE_URL, CLAUDE_CODE_USE_VERTEX,
+#     CLAUDE_CODE_USE_BEDROCK, VERTEX_LOCATION, CLOUD_ML_REGION,
+#     AWS_REGION, AWS_PROFILE.
+#   * opencode (agents/opencode/manifest.sh): ANTHROPIC_API_KEY,
+#     OPENAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, GROQ_API_KEY,
+#     MISTRAL_API_KEY, DEEPSEEK_API_KEY, XAI_API_KEY.
+#
+# Setting RIOTBOX_PASSTHROUGH_VARS here overrides the registry union with
+# a curated whitespace-separated list of your choice.
+#
+# Excluded from the default by design — uncomment in your shell to opt in:
+#   * AWS access keys (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+#     AWS_SESSION_TOKEN) — long-lived static keys in an autonomous
+#     container is a security regression. Prefer AWS_PROFILE +
+#     AWS_SHARED_CREDENTIALS_FILE (handled by RIOTBOX_CREDFILE_VARS).
+#   * SSH_AUTH_SOCK — Unix socket forwarding has a different mount
+#     model and gives the container live signing access for the host
+#     SSH agent's lifetime; out of scope here.
+#
+# Name-only (no `=value`) tells the container runtime to copy the value
+# from the caller's environment, keeping secrets out of process argv.
+#
+# : "${RIOTBOX_PASSTHROUGH_VARS:=ANTHROPIC_API_KEY OPENAI_API_KEY}"
+#
+# Example: extend with additional providers (registry union plus extras)
+# RIOTBOX_PASSTHROUGH_VARS="$RIOTBOX_PASSTHROUGH_VARS COHERE_API_KEY TOGETHER_API_KEY"
+
+# ── Credential-file mounts ───────────────────────────────────────────────
+# Whitespace-separated list of "VAR_NAME:/container/path" entries. For
+# each entry where the host env var is set AND points to an existing
+# regular file, the file is bind-mounted READ-ONLY at the given
+# container path, and the env var inside the container is rewritten to
+# that path. Missing files or non-regular targets are skipped with a
+# notice (no abort). Use this for cloud SDK credentials that live on
+# disk and are referenced by env var.
+#
+# Defaults cover:
+#   * GOOGLE_APPLICATION_CREDENTIALS — Vertex / Google ADC
+#   * AWS_SHARED_CREDENTIALS_FILE / AWS_CONFIG_FILE — Bedrock / boto3
+#   * KUBECONFIG — kubectl
+#
+# : "${RIOTBOX_CREDFILE_VARS:=GOOGLE_APPLICATION_CREDENTIALS:/run/secrets/gcp-creds.json AWS_SHARED_CREDENTIALS_FILE:/run/secrets/aws-credentials AWS_CONFIG_FILE:/run/secrets/aws-config KUBECONFIG:/run/secrets/kubeconfig}"
+
+# ── Vertex ADC prompt ────────────────────────────────────────────────────
+# When CLAUDE_CODE_USE_VERTEX is set on the host but
+# GOOGLE_APPLICATION_CREDENTIALS is not, and
+# ~/.config/gcloud/application_default_credentials.json exists, the launcher
+# prompts (TTY only) before bind-mounting that file read-only into the
+# container. Decline to manage the credential yourself instead — set
+# GOOGLE_APPLICATION_CREDENTIALS on the host to point at any credential
+# file, or copy a credential file into a project mount. There is no
+# config flag to suppress the prompt; the prompt only fires when its
+# pre-conditions (Vertex on, GAC unset, ADC file present) are all met.
