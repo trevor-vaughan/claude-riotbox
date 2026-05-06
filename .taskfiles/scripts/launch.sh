@@ -44,11 +44,19 @@ fi
 # Passed into the container so the entrypoint can name the session branch.
 SESSION_ID="$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
-# Podman rootless: --userns=keep-id preserves host UID inside the container
+# Podman rootless: --userns=keep-id preserves host UID inside the container.
+# Default mode uses the bare 1-uid mapping; nested mode widens to size=65536
+# so the inner container can carve out subordinate uids for itself while
+# this outer container still owns its bind-mounted host paths (project dirs
+# and the riotbox session dir keep their tvaughan:tvaughan ownership).
 USERNS_FLAG=""
 INIT_FLAG=""
 if [ "$(basename "${CONTAINER_CMD}")" = "podman" ]; then
-    USERNS_FLAG="--userns=keep-id"
+    if [ "${RIOTBOX_NESTED:-}" = "1" ]; then
+        USERNS_FLAG="--userns=keep-id:size=65536"
+    else
+        USERNS_FLAG="--userns=keep-id"
+    fi
     # catatonit (podman's --init) segfaults on EL10; not needed anyway
     INIT_FLAG="--init=false"
 fi
@@ -59,10 +67,45 @@ if [ "${RIOTBOX_NETWORK:-}" = "none" ]; then
     NET_FLAG="--network=none"
 fi
 
-# RIOTBOX_NESTED=1 enables podman-in-podman (disables SELinux confinement)
+# RIOTBOX_NESTED=1 enables podman-in-podman. This is intentionally a much
+# broader trust model than the default — turning it on requires loosening
+# every protection that prevents an inner OCI runtime from initializing.
+# All of these are scoped to nested mode; default mode keeps the tighter
+# profile (single-uid keep-id, masked /proc/sys, no SYS_ADMIN cap).
+#
+#   --device /dev/fuse                 fuse-overlayfs (outer) storage driver
+#   --device /dev/net/tun              pasta networking (TAP device)
+#   --security-opt label=disable       SELinux confinement off (transition
+#                                      between outer container_t and inner
+#                                      container processes is disallowed
+#                                      under default policy)
+#   --security-opt unmask=ALL          Removes every default OCI mask AND
+#                                      readonly path on /proc and /sys.
+#                                      Inner crun's setup writes to
+#                                      /proc/sys/net/ipv4/ping_group_range
+#                                      and mounts a fresh /proc, neither of
+#                                      which works under the default mask.
+#                                      Narrower targets (unmask=/proc/sys
+#                                      or unmask=…ping_group_range) DO NOT
+#                                      WORK — verified empirically.
+#   --cap-add=SYS_ADMIN                Inner crun calls sethostname() and
+#                                      mount() during container setup; the
+#                                      default rootless bounding set
+#                                      excludes CAP_SYS_ADMIN. The cap is
+#                                      bounded by the outer userns.
+#
+# Inner storage MUST be vfs (not overlay/fuse-overlayfs); the inner crun
+# fails on `mkdir /run/secrets` under nested overlay. The vfs override,
+# /etc/sub{u,g}id alignment, and v3 file caps on newuidmap/newgidmap (v2
+# caps don't apply when the running process isn't root in its userns) are
+# handled at runtime by container/nested-podman-setup.sh.
 NESTED_FLAGS=""
 if [ "${RIOTBOX_NESTED:-}" = "1" ]; then
-    NESTED_FLAGS="--device /dev/fuse --security-opt label=disable"
+    NESTED_FLAGS="--device /dev/fuse \
+        --device /dev/net/tun \
+        --security-opt label=disable \
+        --security-opt unmask=ALL \
+        --cap-add=SYS_ADMIN"
 fi
 
 # RIOTBOX_OVERLAY=1 needs FUSE device access for fuse-overlayfs
@@ -116,6 +159,7 @@ ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${INIT_FLAG} \
     ${SESSION_BRANCH:+-e SESSION_BRANCH="${SESSION_BRANCH}"} \
     ${RIOTBOX_PLUGINS:+-e RIOTBOX_PLUGINS="${RIOTBOX_PLUGINS}"} \
     ${RIOTBOX_AGENT:+-e RIOTBOX_AGENT="${RIOTBOX_AGENT}"} \
+    ${RIOTBOX_NESTED:+-e RIOTBOX_NESTED="${RIOTBOX_NESTED}"} \
     -w "${WORKDIR}" \
     "${IMAGE_NAME}" \
     "$@"

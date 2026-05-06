@@ -79,9 +79,18 @@ fi
 # Skills may be symlinks to locations outside ~/.claude/ (e.g. plugin dirs or
 # dev checkouts), so copy with -L to dereference them. Remove and re-copy on
 # each launch so renamed/removed skills don't linger.
+#
+# `cp -rL` aborts on the first dangling symlink (e.g. a plugin checkout the
+# user removed). Pre-filter with `find -L … ! -type l` — under -L, valid
+# symlinks report their target's type, so only broken symlinks retain
+# `-type l` — then stream paths through `tar -h` to dereference and copy.
+# This mirrors the host-plugin copy pattern in container/plugin-setup.sh.
 if [ -d "${HOST_CLAUDE_DIR}/skills" ]; then
     rm -rf "${SESSION_DIR}/skills"
-    cp -rL "${HOST_CLAUDE_DIR}/skills" "${SESSION_DIR}/"
+    ( cd "${HOST_CLAUDE_DIR}" \
+        && find -L skills ! -type l -print0 \
+        | tar -ch --null --no-recursion --files-from=- -f - \
+    ) | tar -xf - -C "${SESSION_DIR}/" --no-same-owner
 fi
 
 # ── Statusline command ────────────────────────────────────────────────────────
