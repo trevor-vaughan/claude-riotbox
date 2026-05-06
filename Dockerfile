@@ -160,9 +160,12 @@ RUN useradd -l -m -u ${HOST_UID} -s /bin/bash claude 2>/dev/null || \
     useradd -l -m -s /bin/bash claude && \
     mkdir -p /workspace && chown claude /workspace && \
     echo "claude ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/claude && \
-    # Subordinate UID/GID ranges for rootless podman-in-podman
-    echo "claude:100000:65536" >> /etc/subuid && \
-    echo "claude:100000:65536" >> /etc/subgid && \
+    # /etc/subuid and /etc/subgid are rewritten at runtime by
+    # container/nested-podman-setup.sh based on /proc/self/uid_map. Any
+    # static range we bake here would point to outer UIDs that aren't
+    # mapped into the --userns=keep-id namespace, and the kernel would
+    # reject newuidmap with EPERM. Leave whatever useradd put there;
+    # entrypoint will overwrite it when RIOTBOX_NESTED=1.
     # dnf non-interactive by default
     mkdir -p /etc/dnf/dnf.conf.d && \
     printf '[main]\nassumeyes=True\n' > /etc/dnf/dnf.conf.d/riotbox.conf && \
@@ -416,10 +419,11 @@ WORKDIR /workspace
 COPY --chown=claude:claude container/session-branch.sh /home/claude/.riotbox/session-branch.sh
 COPY --chown=claude:claude container/overlay-setup.sh /home/claude/.riotbox/overlay-setup.sh
 COPY --chown=claude:claude container/plugin-setup.sh /home/claude/.riotbox/plugin-setup.sh
+COPY --chown=claude:claude container/nested-podman-setup.sh /home/claude/.riotbox/nested-podman-setup.sh
 COPY --chown=claude:claude container/entrypoint.sh /home/claude/.riotbox/entrypoint.sh
 RUN chmod +x /home/claude/.riotbox/entrypoint.sh \
     /home/claude/.riotbox/session-branch.sh /home/claude/.riotbox/overlay-setup.sh \
-    /home/claude/.riotbox/plugin-setup.sh
+    /home/claude/.riotbox/plugin-setup.sh /home/claude/.riotbox/nested-podman-setup.sh
 ENTRYPOINT ["/home/claude/.riotbox/entrypoint.sh"]
 CMD ["bash"]
 

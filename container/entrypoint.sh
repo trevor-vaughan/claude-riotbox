@@ -65,6 +65,22 @@ source "${RIOTBOX_SCRIPT_DIR}/session-branch.sh"
 source "${RIOTBOX_SCRIPT_DIR}/overlay-setup.sh"
 source "${RIOTBOX_SCRIPT_DIR}/plugin-setup.sh"
 
+# Nested podman setup: file caps on newuidmap/newgidmap and /etc/sub{u,g}id
+# alignment with the outer keep-id user namespace. Only run when nested mode
+# is requested — otherwise SELinux confinement (still in effect) blocks setcap
+# and there is no inner podman to satisfy. Older images may not have shipped
+# this script; tolerate its absence gracefully.
+#
+# Executed as a subprocess (not sourced) so its `set -euo pipefail` stays
+# inside the script. Sourcing leaked nounset into this shell, which tripped
+# RVM's `cd` override (loaded by ~/.bashrc above) on a later `cd` in
+# plugin_setup — RVM's environment script references rvm_bash_nounset
+# without a default and dies under set -u, breaking the plugin copy pipeline.
+if [ "${RIOTBOX_NESTED:-}" = "1" ] && \
+   [ -x "${RIOTBOX_SCRIPT_DIR}/nested-podman-setup.sh" ]; then
+    "${RIOTBOX_SCRIPT_DIR}/nested-podman-setup.sh"
+fi
+
 # Plugin setup: seed settings, copy staged + host plugins, install marketplace
 # plugins from config/env, wire statusline, sync enabledPlugins.
 plugin_setup

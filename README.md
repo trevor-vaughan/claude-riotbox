@@ -468,7 +468,14 @@ Session branching is automatically disabled for `claude-riotbox run` (non-intera
 - **UID mapping**: the container user's UID matches your host UID. With podman, `--userns=keep-id` preserves this mapping in rootless mode, requiring `fuse-overlayfs` for acceptable performance on large images.
 - **SELinux**: project and session bind mounts use `:z`. Package caches use named volumes to avoid relabeling overhead. `.claude.json` is copied rather than mounted to avoid `:z` relabeling issues on 600-permission files; `.credentials.json` is bind-mounted RW inside the session directory (a nested mount that avoids the relabeling problem).
 - <a id="build-time-config-collection"></a>**Tool configs** (`.npmrc`, `.editorconfig`, etc.) are copied at build time — not mounted — so edits inside the container don't affect the host. Auth tokens are stripped from `.npmrc`, `pip.conf`, and `cargo/config.toml` before baking into the image. Use `mounts.conf` to supply live credentials at runtime.
-- **Nested containers**: `RIOTBOX_NESTED=1` passes `--device /dev/fuse` and `--security-opt label=disable`. This disables SELinux confinement — the container is no longer restricted by SELinux policy. Only used when explicitly requested via `nested-run`/`nested-shell`.
+- **Nested containers**: `RIOTBOX_NESTED=1` is a privileged mode for running podman-in-podman; default mode keeps a tighter profile. The flag set is:
+  - `--userns=keep-id:size=65536` — widens the keep-id mapping so the inner container has a subordinate uid range to carve from, while the outer process still owns its bind-mounted host paths (project dirs and session dir keep their host ownership).
+  - `--security-opt label=disable` — SELinux confinement off (the default container_t policy denies inner-to-inner transitions).
+  - `--security-opt unmask=ALL` — removes every default OCI mask AND readonly path on `/proc` and `/sys`. Inner crun writes `/proc/sys/net/ipv4/ping_group_range` and mounts a fresh `/proc`; narrower targets (verified) do not work.
+  - `--cap-add=SYS_ADMIN` — inner crun calls `sethostname` and `mount` during setup; the cap is bounded by the outer userns.
+  - `--device /dev/fuse`, `--device /dev/net/tun` — outer storage and pasta networking.
+
+  Inside the container, entrypoint runs `nested-podman-setup.sh` which: (a) writes **v3** file capabilities on `newuidmap`/`newgidmap` via `setcap -n $(id -u) cap_setuid/setgid+ep` — v2 caps don't apply when the running process isn't root in the host's userns, which is why setuid-via-setcap silently no-ops without the `-n` flag; (b) writes `/etc/sub{u,g}id` as up to two ranges that cover the outer's mapped uids minus uid 0 (kernel restriction) and minus the user's own uid (newuidmap restriction); (c) overrides `~/.config/containers/storage.conf` to use the `vfs` driver, since nested overlay/fuse-overlayfs makes inner crun fail on `mkdir /run/secrets`. Only used when explicitly requested via `nested-run`/`nested-shell` or `RIOTBOX_NESTED=1`.
 
 ## Development
 
