@@ -18,9 +18,11 @@
 # Both `FROM` lines (tools + runtime) MUST reference the same digest so the
 # binaries baked in the tools stage match the libc they will be COPYed onto
 # in runtime.
-FROM quay.io/centos/centos:stream10@sha256:661b0c97d34a9269eac34154da69621d37d8aad1847a90371708453ccc3f7003 AS tools
+FROM quay.io/centos/centos:stream10 AS tools
 
-RUN dnf -y install curl tar gzip && dnf clean all
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+        curl tar gzip && \
+    dnf clean all && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc
 
 WORKDIR /tools
 
@@ -74,7 +76,7 @@ RUN ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/') && \
 # ═════════════════════════════════════════════════════════════════════════════
 # Pinned to the same digest as the tools stage. See refresh procedure at the
 # top of the tools stage; both `FROM` lines must move together.
-FROM quay.io/centos/centos:stream10@sha256:661b0c97d34a9269eac34154da69621d37d8aad1847a90371708453ccc3f7003 AS runtime
+FROM quay.io/centos/centos:stream10 AS runtime
 
 # ── Build args (populated by build.sh from host introspection) ────────────────
 ARG NVM_INSTALLER_VERSION=0.39.7
@@ -82,7 +84,11 @@ ARG NODE_VERSIONS="20"
 ARG NODE_DEFAULT="20"
 ARG UV_VERSION="latest"
 ARG GO_VERSION=""
-ARG RUST_TOOLCHAINS="stable"
+# RUST_TOOLCHAINS=""  → skip Rust entirely (saves ~1.4 GB).
+# RUST_TOOLCHAINS="stable 1.83.0 …" → install the listed toolchains; the first
+# becomes default. build.sh detects what's installed on the host; if rustup
+# isn't on the host, build.sh leaves this empty and Rust is not baked in.
+ARG RUST_TOOLCHAINS=""
 ARG RUBY_VERSIONS="3.2.9"
 ARG RUBY_DEFAULT="3.2.9"
 ARG HOST_UID=1000
@@ -96,8 +102,16 @@ ARG HOST_GID=${HOST_UID}
 
 # ── System packages ───────────────────────────────────────────────────────────
 # Combined into one layer to avoid intermediate bloat from dnf metadata.
-RUN dnf -y update && \
-    dnf -y install \
+#
+# Size hygiene:
+#   --setopt=install_weak_deps=False  skip Recommends/Suggests (fonts, X11 deps
+#                                     pulled in by chromium, etc.)
+#   --setopt=tsflags=nodocs           skip man pages, info files, locale data
+#   rm -rf ...                        nuke dnf cache, logs, residual docs
+# `dnf -y update` is deliberately omitted — stream10 is a rolling base, so the
+# image digest is already current. Running update on top just shadows files
+# from the base layer with newer copies, ballooning the image.
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         bash \
         curl \
         wget \
@@ -130,14 +144,19 @@ RUN dnf -y update && \
         libatomic \
         patch \
         sudo \
-    && dnf -y install epel-release \
-    && dnf -y install ripgrep plantuml chromium bats \
-    && dnf clean all
+        dnf-plugins-core \
+        gnupg2 \
+    && dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+           epel-release \
+    && dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+           ripgrep chromium bats \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc /usr/share/info
 
 # ── Common dev libraries (pre-installed to save Claude from installing them) ──
 # Separated from base system packages for cache clarity.
 RUN /usr/bin/crb enable && \
-    dnf -y install \
+    dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         autoconf \
         automake \
         bison \
@@ -149,37 +168,41 @@ RUN /usr/bin/crb enable && \
         ShellCheck \
         tree \
         bc \
-        # C/C++ dev libraries
         libcurl-devel \
         libxml2-devel \
         pcre2-devel \
-        # GUI / desktop app toolkits (Tauri, GTK apps)
-        glib2-devel \
-        gtk3-devel \
-        webkit2gtk4.1-devel \
-        libsoup3-devel \
-        # Database client libraries
-        postgresql-devel \
-    && dnf clean all
+    && dnf clean all \
+    && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc /usr/share/info
 
 # ── Ruby build dependencies (needed by RVM to compile Ruby from source) ──────
 RUN if [ -n "${RUBY_VERSIONS}" ]; then \
-        dnf -y install libyaml-devel ruby \
-        && dnf clean all; \
+        dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+            libyaml-devel ruby \
+        && dnf clean all \
+        && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc /usr/share/info; \
     fi
 
 # ── Go (system package, if version specified) ────────────────────────────────
 RUN if [ -n "${GO_VERSION}" ]; then \
-        dnf -y install golang && dnf clean all && go version; \
+        dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+            golang \
+        && dnf clean all \
+        && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc /usr/share/info \
+        && go version; \
     fi
 
 # ── Podman-in-podman (nested containers) ──────────────────────────────────────
 # Pre-installed so RIOTBOX_NESTED=1 works without rebuilding the image.
 # slirp4netns provides rootless networking; fuse-overlayfs for storage.
-RUN dnf -y install podman fuse-overlayfs slirp4netns && dnf clean all
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+        podman fuse-overlayfs slirp4netns \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc /usr/share/info
 
 # ── semgrep (Python package — must be installed in the runtime stage) ─────────
-RUN pip3 install --no-cache-dir --break-system-packages semgrep pyyaml && semgrep --version
+RUN pip3 install --no-cache-dir --break-system-packages semgrep pyyaml && \
+    semgrep --version && \
+    rm -rf /root/.cache/pip
 
 # ── lola — AI Skills Package Manager (https://github.com/LobsterTrap/lola) ────
 # `lola-ai` requires Python >=3.13, but the base ships Python 3.12. Install a
@@ -189,10 +212,14 @@ RUN pip3 install --no-cache-dir --break-system-packages semgrep pyyaml && semgre
 # supply-chain integrity; refresh by bumping LOLA_VERSION below after picking
 # a new release at https://github.com/LobsterTrap/lola/releases.
 ARG LOLA_VERSION=0.4.4
-RUN dnf -y install python3.13 python3.13-pip && dnf clean all && \
-    pip3.13 install --no-cache-dir --break-system-packages \
-        "lola-ai==${LOLA_VERSION}" && \
-    lola --version
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+        python3.13 python3.13-pip \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc /usr/share/info \
+    && pip3.13 install --no-cache-dir --break-system-packages \
+        "lola-ai==${LOLA_VERSION}" \
+    && lola --version \
+    && rm -rf /root/.cache/pip
 
 # ── Non-root user + root-phase config ─────────────────────────────────────────
 # User creation, dnf config, and system prompt dir. The chown -R happens later
@@ -230,6 +257,12 @@ RUN . /etc/os-release && \
         '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
         /etc/riotbox/CLAUDE.md > /home/claude/.riotbox/AGENTS.md.template && \
     chown -R claude:claude /home/claude/.riotbox
+
+# ── Strip non-English locale data ────────────────────────────────────────────
+# This is a non-interactive automation container; we don't need locale data
+# for 200 other languages. Keep en* (covers en_US, en_GB, etc.).
+RUN find /usr/share/locale -mindepth 1 -maxdepth 1 -type d ! -name 'en*' \
+        -exec rm -rf {} + 2>/dev/null || true
 
 # ── Security tools + task/venom from builder stage ───────────────────────────
 COPY --from=tools --chown=claude:claude /tools/bin/ /home/claude/.local/bin/
@@ -275,22 +308,29 @@ RUN if [ "${UV_VERSION}" = "latest" ]; then \
     /home/claude/.local/bin/uv --version
 
 # ── Rust (via rustup) + cargo-binstall for pre-built binaries ────────────────
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-    sh -s -- -y --default-toolchain stable && \
-    bash -c "\
-        source /home/claude/.cargo/env && \
-        for tc in ${RUST_TOOLCHAINS}; do \
-            echo \"==> rustup install \$tc\" && \
-            rustup toolchain install \$tc; \
-        done && \
-        rustc --version && cargo --version && \
-        ARCH=\$(uname -m) && \
-        # TODO(security): cargo-binstall publishes .sig files (minisign) but uses
-        #   ephemeral keys per release — no stable public key to verify against.
-        curl -LSfs https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-\${ARCH}-unknown-linux-musl.tgz \
-            | tar xz -C /home/claude/.cargo/bin && \
-        cargo binstall --no-confirm ast-grep && sg --version \
-    "
+# Conditional: when RUST_TOOLCHAINS is empty (the default), skip the whole
+# rustup install. This saves ~1.4 GB for users who don't need Rust in-container.
+# The first toolchain in the space-separated list becomes the rustup default.
+RUN if [ -n "${RUST_TOOLCHAINS}" ]; then \
+        set -- ${RUST_TOOLCHAINS}; \
+        RUST_DEFAULT_TC="$1"; \
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+            sh -s -- -y --default-toolchain "${RUST_DEFAULT_TC}" && \
+        bash -c "\
+            source /home/claude/.cargo/env && \
+            for tc in ${RUST_TOOLCHAINS}; do \
+                echo \"==> rustup install \$tc\" && \
+                rustup toolchain install \$tc; \
+            done && \
+            rustc --version && cargo --version && \
+            ARCH=\$(uname -m) && \
+            curl -LSfs https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-\${ARCH}-unknown-linux-musl.tgz \
+                | tar xz -C /home/claude/.cargo/bin && \
+            cargo binstall --no-confirm ast-grep && sg --version \
+        "; \
+    fi
+# TODO(security): cargo-binstall publishes .sig files (minisign) but uses
+#   ephemeral keys per release — no stable public key to verify against.
 
 # ── Ruby (via RVM, if versions specified) ────────────────────────────────
 # GPG keys must be imported before RVM's installer will pass signature checks

@@ -104,8 +104,8 @@ if command -v rustup &>/dev/null; then
     )"
     echo "→ Rust toolchains: ${RUST_TOOLCHAINS}"
 else
-    RUST_TOOLCHAINS="stable"
-    echo "⚠️  rustup not found locally — will install stable in container"
+    RUST_TOOLCHAINS=""
+    echo "⚠️  rustup not found locally — skipping Rust in container (set RUST_TOOLCHAINS to override)"
 fi
 
 # ── 6. Ruby / RVM ─────────────────────────────────────────────────────────
