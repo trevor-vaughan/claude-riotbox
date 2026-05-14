@@ -174,6 +174,19 @@ RUN dnf -y install podman fuse-overlayfs slirp4netns && dnf clean all
 # ── semgrep (Python package — must be installed in the runtime stage) ─────────
 RUN pip3 install --no-cache-dir --break-system-packages semgrep pyyaml && semgrep --version
 
+# ── lola — AI Skills Package Manager (https://github.com/LobsterTrap/lola) ────
+# `lola-ai` requires Python >=3.13, but the base ships Python 3.12. Install a
+# parallel 3.13 interpreter from EPEL (enabled in the system-packages RUN
+# block above) and use its pip. Entry points land in /usr/local/bin/lola,
+# which is already on PATH for both root and the claude user. Pinned for
+# supply-chain integrity; refresh by bumping LOLA_VERSION below after picking
+# a new release at https://github.com/LobsterTrap/lola/releases.
+ARG LOLA_VERSION=0.4.4
+RUN dnf -y install python3.13 python3.13-pip && dnf clean all && \
+    pip3.13 install --no-cache-dir --break-system-packages \
+        "lola-ai==${LOLA_VERSION}" && \
+    lola --version
+
 # ── Non-root user + root-phase config ─────────────────────────────────────────
 # User creation, dnf config, and system prompt dir. The chown -R happens later
 # (after COPY/pip that create root-owned dirs under /home/claude).

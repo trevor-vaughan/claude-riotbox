@@ -160,6 +160,9 @@ The image comes with a broad set of tools pre-installed so Claude can start work
 **Testing:**
 - [venom](https://github.com/ovh/venom) (integration and end-to-end test suites)
 
+**AI tooling:**
+- [`lola`](https://github.com/LobsterTrap/lola) — AI Skills Package Manager (cross-assistant skill distribution)
+
 **Diagram validation:**
 - `plantuml` — UML diagram generation and validation
 - `mmdc` ([mermaid-cli](https://github.com/mermaid-js/mermaid-cli)) — Mermaid diagram rendering
@@ -187,7 +190,7 @@ ralph-loop
 EOF
 ```
 
-**Skills** from your host `~/.claude/skills/` are copied into the session directory at every launch, so newly installed skills are available immediately. Symlinks are dereferenced during copy. Removed or renamed skills persist in the session cache — run `claude-riotbox session-reset` to clear stale entries.
+**User extensions** from your host `~/.claude/` are copied into the session directory at every launch, so newly installed resources are available immediately. The covered directories are `skills/`, `agents/` (subagents), `commands/` (slash commands), and `output-styles/`. Symlinks are dereferenced during copy, and removing a directory on the host removes it from the next session too.
 
 ## Status bar customization
 
@@ -232,7 +235,7 @@ At runtime, `scripts/detect-mounts.sh` generates mount flags for the container. 
 | `~/.local/share/claude-riotbox/<session>/` | `~/.claude` | bind mount (`:z`) |
 | `~/.claude/.credentials.json` | `~/.claude/.credentials.json` | nested bind mount (`:z`, read-write) |
 | `~/.claude.json` | copied into session dir | file copy |
-| `~/.claude/skills/` | copied into session dir | file copy (symlinks dereferenced) |
+| `~/.claude/{skills,agents,commands,output-styles}/` | copied into session dir | file copy (symlinks dereferenced) |
 | `~/.claude/statusline-command.sh` | copied into session dir | file copy (chmod +x enforced) |
 | `~/.config/claude-riotbox/` | `~/.config/claude-riotbox/` | bind mount (`:z`) |
 | `~/.claude/plugins/` | `~/.host-plugins` | bind mount (read-only, `:z`) |

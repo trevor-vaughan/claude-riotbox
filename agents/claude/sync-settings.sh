@@ -12,6 +12,9 @@
 #   CLAUDE.md          — copied if present (user-level instructions)
 #   rules/             — copied if present (user-level rules, path-scoped)
 #   skills/            — copied with symlink dereferencing (may be plugin symlinks)
+#   agents/            — copied with symlink dereferencing (user-level subagents)
+#   commands/          — copied with symlink dereferencing (user-level slash commands)
+#   output-styles/     — copied with symlink dereferencing (custom output styles)
 #   statusline-command.sh — copied if present (custom status bar command)
 #
 # Bind-mount flags (for credentials) are printed to stdout so the caller can
@@ -75,23 +78,37 @@ else
     rm -rf "${SESSION_DIR}/rules"
 fi
 
-# ── Skills ────────────────────────────────────────────────────────────────────
-# Skills may be symlinks to locations outside ~/.claude/ (e.g. plugin dirs or
-# dev checkouts), so copy with -L to dereference them. Remove and re-copy on
-# each launch so renamed/removed skills don't linger.
+# ── User extension directories ────────────────────────────────────────────────
+# Claude Code loads user-level resources from several sibling directories under
+# ~/.claude/. All follow the same loading model — a directory of files scanned
+# at startup — so they share one copy routine:
 #
-# `cp -rL` aborts on the first dangling symlink (e.g. a plugin checkout the
-# user removed). Pre-filter with `find -L … ! -type l` — under -L, valid
-# symlinks report their target's type, so only broken symlinks retain
-# `-type l` — then stream paths through `tar -h` to dereference and copy.
-# This mirrors the host-plugin copy pattern in container/plugin-setup.sh.
-if [ -d "${HOST_CLAUDE_DIR}/skills" ]; then
-    rm -rf "${SESSION_DIR}/skills"
-    ( cd "${HOST_CLAUDE_DIR}" \
-        && find -L skills ! -type l -print0 \
-        | tar -ch --null --no-recursion --files-from=- -f - \
-    ) | tar -xf - -C "${SESSION_DIR}/" --no-same-owner
-fi
+#   skills/        — reusable instruction bundles
+#   agents/        — user-defined subagents
+#   commands/      — user-defined slash commands
+#   output-styles/ — custom output style definitions
+#
+# Each may contain symlinks pointing into plugin checkouts or dev sources, so
+# we dereference during copy. `cp -rL` aborts on the first dangling symlink
+# (e.g. a plugin checkout the user removed). Pre-filter with `find -L … !
+# -type l` — under -L, valid symlinks report their target's type, so only
+# broken symlinks retain `-type l` — then stream paths through `tar -h` to
+# dereference and copy. This mirrors the host-plugin copy pattern in
+# container/plugin-setup.sh.
+#
+# Re-copy each launch so renamed/removed files don't linger; clean up the
+# destination when the source has been removed so it does not outlive the
+# host.
+for _user_dir in skills agents commands output-styles; do
+    rm -rf "${SESSION_DIR:?}/${_user_dir}"
+    if [ -d "${HOST_CLAUDE_DIR}/${_user_dir}" ]; then
+        ( cd "${HOST_CLAUDE_DIR}" \
+            && find -L "${_user_dir}" ! -type l -print0 \
+            | tar -ch --null --no-recursion --files-from=- -f - \
+        ) | tar -xf - -C "${SESSION_DIR}/" --no-same-owner
+    fi
+done
+unset _user_dir
 
 # ── Statusline command ────────────────────────────────────────────────────────
 # Optional user script that customises the Claude Code status bar.

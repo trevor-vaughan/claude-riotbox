@@ -38,7 +38,8 @@ run_venom() {
             --var inject_helpers="${RIOTBOX_DIR}/tests/lib/inject-test-helpers.sh" \
             --var opencode_helpers="${RIOTBOX_DIR}/tests/lib/opencode-test-helpers.sh" \
             --var agent_helpers="${RIOTBOX_DIR}/tests/lib/agent-test-helpers.sh" \
-            --var shared_helpers="${RIOTBOX_DIR}/tests/lib/wrapper-shared.sh"
+            --var shared_helpers="${RIOTBOX_DIR}/tests/lib/wrapper-shared.sh" \
+            --var sync_helpers="${RIOTBOX_DIR}/tests/lib/sync-settings-test-helpers.sh"
 }
 
 filter="${*:-}"

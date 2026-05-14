@@ -1,0 +1,205 @@
+name: agents/claude/sync-settings.sh user-extension copy tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  sync_helpers: "{{.root}}/tests/lib/sync-settings-test-helpers.sh"
+
+testcases:
+  # ── Copy: positive path ─────────────────────────────────────────────────────
+  # The four user-authored extension directories share one copy routine. A
+  # single test exercises all of them so a regression in the loop fails one
+  # case rather than four near-duplicates.
+
+  - name: Copies all four user extension directories when present
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          for d in skills agents commands output-styles; do
+              mkdir -p "${HOST_CLAUDE}/${d}/sub"
+              printf 'top-%s\n' "${d}" > "${HOST_CLAUDE}/${d}/file.txt"
+              printf 'nested-%s\n' "${d}" > "${HOST_CLAUDE}/${d}/sub/inner.txt"
+          done
+
+          run_sync >/dev/null
+
+          for d in skills agents commands output-styles; do
+              grep -qx "top-${d}" "${SESSION_DIR}/${d}/file.txt" \
+                  || { echo "MISSING: ${d}/file.txt"; exit 1; }
+              grep -qx "nested-${d}" "${SESSION_DIR}/${d}/sub/inner.txt" \
+                  || { echo "MISSING: ${d}/sub/inner.txt"; exit 1; }
+          done
+          echo "all-dirs-copied"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "all-dirs-copied"
+
+  # ── Stale cleanup ───────────────────────────────────────────────────────────
+  # The session dir is persistent across launches. If the host directory is
+  # removed, the previous copy must not linger — that was the inconsistency
+  # the loop refactor fixed (previously only rules/, CLAUDE.md, and
+  # statusline cleaned up; skills/ did not).
+
+  - name: Removes stale session copy when host directory is absent
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          for d in skills agents commands output-styles; do
+              mkdir -p "${SESSION_DIR}/${d}"
+              printf 'stale\n' > "${SESSION_DIR}/${d}/old.txt"
+          done
+
+          run_sync >/dev/null
+
+          for d in skills agents commands output-styles; do
+              if [ -e "${SESSION_DIR}/${d}" ]; then
+                  echo "STILL-PRESENT: ${d}"
+                  exit 1
+              fi
+          done
+          echo "all-stale-cleared"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "all-stale-cleared"
+
+  # ── Symlink dereferencing ───────────────────────────────────────────────────
+  # Skills, agents, and commands are routinely symlinks into plugin checkouts.
+  # The copy must dereference so the container sees real files, not links
+  # pointing into a host path that does not exist inside the container.
+
+  - name: Dereferences valid symlinks during copy
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          # External target lives outside HOST_CLAUDE — mimicking a plugin
+          # checkout that ~/.claude/skills/foo points at.
+          mkdir -p "${EXTERNAL_DIR}/payload"
+          printf 'real-content\n' > "${EXTERNAL_DIR}/payload/SKILL.md"
+
+          for d in skills agents commands output-styles; do
+              mkdir -p "${HOST_CLAUDE}/${d}"
+              ln -s "${EXTERNAL_DIR}/payload" "${HOST_CLAUDE}/${d}/linked"
+          done
+
+          run_sync >/dev/null
+
+          for d in skills agents commands output-styles; do
+              if [ -L "${SESSION_DIR}/${d}/linked" ]; then
+                  echo "STILL-A-SYMLINK: ${d}/linked"
+                  exit 1
+              fi
+              grep -qx "real-content" "${SESSION_DIR}/${d}/linked/SKILL.md" \
+                  || { echo "MISSING-TARGET: ${d}/linked/SKILL.md"; exit 1; }
+          done
+          echo "all-symlinks-dereferenced"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "all-symlinks-dereferenced"
+
+  # ── Dangling symlink tolerance ──────────────────────────────────────────────
+  # `cp -rL` aborts on the first dangling symlink, which is why the script
+  # uses `find -L … ! -type l | tar -h` instead. Verify that a broken link
+  # does not prevent the rest of the directory from being copied.
+
+  - name: Tolerates dangling symlinks without aborting the copy
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          for d in skills agents commands output-styles; do
+              mkdir -p "${HOST_CLAUDE}/${d}"
+              printf 'survivor\n' > "${HOST_CLAUDE}/${d}/keepme.txt"
+              ln -s "${TEST_DIR}/does-not-exist" "${HOST_CLAUDE}/${d}/broken"
+          done
+
+          run_sync >/dev/null
+
+          for d in skills agents commands output-styles; do
+              grep -qx "survivor" "${SESSION_DIR}/${d}/keepme.txt" \
+                  || { echo "REGULAR-FILE-MISSING: ${d}/keepme.txt"; exit 1; }
+              # The broken symlink must NOT have been propagated.
+              if [ -e "${SESSION_DIR}/${d}/broken" ] || [ -L "${SESSION_DIR}/${d}/broken" ]; then
+                  echo "DANGLING-PROPAGATED: ${d}/broken"
+                  exit 1
+              fi
+          done
+          echo "all-dangling-tolerated"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "all-dangling-tolerated"
+
+  # ── Absent on host ──────────────────────────────────────────────────────────
+  # When a host extension directory was never created, the session dir simply
+  # should not contain one — and the script must not error out.
+
+  - name: Skips copy when host directory does not exist
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          # HOST_CLAUDE is otherwise empty (only the plugins/ stub created by
+          # setup_sync_test exists). Run sync — no extension dirs on host.
+          run_sync >/dev/null
+
+          for d in skills agents commands output-styles; do
+              if [ -e "${SESSION_DIR}/${d}" ]; then
+                  echo "UNEXPECTED: ${d}"
+                  exit 1
+              fi
+          done
+          echo "no-extensions-copied"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "no-extensions-copied"
+
+  # ── Mixed populations ───────────────────────────────────────────────────────
+  # Tests don't cross-contaminate the dirs. With only some of the four on the
+  # host, the others must not appear in the session dir.
+
+  - name: Copies only the directories that exist on the host
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          mkdir -p "${HOST_CLAUDE}/skills"
+          printf 'present\n' > "${HOST_CLAUDE}/skills/marker.txt"
+          mkdir -p "${HOST_CLAUDE}/commands"
+          printf 'present\n' > "${HOST_CLAUDE}/commands/marker.txt"
+          # agents/ and output-styles/ deliberately absent.
+
+          run_sync >/dev/null
+
+          grep -qx "present" "${SESSION_DIR}/skills/marker.txt"
+          grep -qx "present" "${SESSION_DIR}/commands/marker.txt"
+          [ ! -e "${SESSION_DIR}/agents" ]
+          [ ! -e "${SESSION_DIR}/output-styles" ]
+          echo "mixed-population-correct"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "mixed-population-correct"
