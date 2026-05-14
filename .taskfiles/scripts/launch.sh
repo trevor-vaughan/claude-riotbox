@@ -44,19 +44,46 @@ fi
 # Passed into the container so the entrypoint can name the session branch.
 SESSION_ID="$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
-# Podman rootless: --userns=keep-id preserves host UID inside the container.
-# Default mode uses the bare 1-uid mapping; nested mode widens to size=65536
-# so the inner container can carve out subordinate uids for itself while
-# this outer container still owns its bind-mounted host paths (project dirs
-# and the riotbox session dir keep their tvaughan:tvaughan ownership).
+# Podman rootless --userns=keep-id preserves the host user's UID/GID inside
+# the container. Both uid= and gid= are passed explicitly: podman's default
+# substitution fills the inner GID slot from host_uid (not host_gid), so when
+# host uid != gid (a user whose primary group differs from their useradd-
+# implicit group) the kernel-level gid_map keep-id slot lands on host_uid
+# rather than the real host_gid.
+#
+# --user is layered on top of --userns=keep-id for a second, independent
+# reason: podman's /etc/passwd rewrite for keep-id stamps the image's user
+# entry as `claude:x:HOST_UID:HOST_UID` regardless of `:gid=`, so the
+# process started from the image's USER directive would run with
+# egid=HOST_UID, not HOST_GID — even though the kernel gid_map is now
+# correct. --user X:Y bypasses /etc/passwd and forces the process's runtime
+# uid/gid directly, so id -g returns HOST_GID, nested-podman-setup.sh
+# derives /etc/subgid by splitting around the right value, and inner
+# podman's newgidmap call references the kernel's keep-id slot. Without
+# both knobs set, inner podman fails with `newgidmap: write to gid_map
+# failed: Operation not permitted` on the first `podman run`. With
+# host uid == host gid both are no-ops; with mismatched uid/gid both are
+# load-bearing. The Dockerfile builds claude with the host user's UID *and*
+# GID (build.sh threads both as build-args), so an image built for the
+# running user has its USER entry already aligned and these flags become
+# no-ops; they remain in place as defense for images built without
+# HOST_GID (older builds, manual `podman build` invocations, or an image
+# shared across hosts with different uid/gid combinations).
+#
+# Default mode uses the bare 1-uid mapping; nested mode widens to
+# size=65536 so the inner container can carve out subordinate uids for
+# itself while this outer container still owns its bind-mounted host paths
+# (project dirs and the riotbox session dir keep their on-disk owner:group).
 USERNS_FLAG=""
 INIT_FLAG=""
+USER_FLAG=""
 if [ "$(basename "${CONTAINER_CMD}")" = "podman" ]; then
     if [ "${RIOTBOX_NESTED:-}" = "1" ]; then
-        USERNS_FLAG="--userns=keep-id:size=65536"
+        USERNS_FLAG="--userns=keep-id:uid=$(id -u),gid=$(id -g),size=65536"
     else
-        USERNS_FLAG="--userns=keep-id"
+        USERNS_FLAG="--userns=keep-id:uid=$(id -u),gid=$(id -g)"
     fi
+    USER_FLAG="--user $(id -u):$(id -g)"
     # catatonit (podman's --init) segfaults on EL10; not needed anyway
     INIT_FLAG="--init=false"
 fi
@@ -146,7 +173,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/credfile-vars.sh"
 CREDFILE_FLAGS="$(credfile_flags)"
 
 # shellcheck disable=SC2086  # intentional word splitting for multi-flag vars
-${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${INIT_FLAG} \
+${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${USER_FLAG} ${INIT_FLAG} \
     --name "${CONTAINER_NAME}" \
     ${NET_FLAG} \
     ${NESTED_FLAGS} \

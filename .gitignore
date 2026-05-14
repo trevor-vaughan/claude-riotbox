@@ -11,5 +11,8 @@ docs/superpowers/
 venom.log
 venom.*.log
 
+# Diagnostic dumps and runtime logs (never commit)
+*.log
+
 # Scratch space for spikes / one-off experiments
 tmp/

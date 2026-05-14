@@ -25,9 +25,16 @@ echo "════════════════════════�
 echo "  Claude Riotbox v${VERSION} — environment introspection + build"
 echo "══════════════════════════════════════════════════════"
 
-# ── 1. Host UID (so volume-mounted files have correct ownership) ───────────────
+# ── 1. Host UID/GID (so volume-mounted files have correct ownership) ──────────
+# HOST_GID is captured separately from HOST_UID: on hosts where the user's
+# primary GID differs from their UID (e.g., a manually-configured account
+# whose primary group was created at a different gid), the image must be
+# built with both, or podman keep-id's /etc/passwd rewrite races against
+# nested-mode's userns setup and inner podman fails with EPERM on newgidmap.
 HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
 echo "→ HOST_UID: ${HOST_UID}"
+echo "→ HOST_GID: ${HOST_GID}"
 
 # ── 2. nvm ────────────────────────────────────────────────────────────────────
 NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
@@ -191,6 +198,7 @@ ${CONTAINER_CMD} build \
     --label "org.opencontainers.image.version=${VERSION}" \
     --label "org.opencontainers.image.title=claude-riotbox" \
     --build-arg "HOST_UID=${HOST_UID}" \
+    --build-arg "HOST_GID=${HOST_GID}" \
     --build-arg "NVM_INSTALLER_VERSION=${NVM_INSTALLER_VERSION}" \
     --build-arg "NODE_VERSIONS=${NODE_VERSIONS}" \
     --build-arg "NODE_DEFAULT=${NODE_DEFAULT}" \

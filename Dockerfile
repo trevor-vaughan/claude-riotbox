@@ -86,6 +86,13 @@ ARG RUST_TOOLCHAINS="stable"
 ARG RUBY_VERSIONS="3.2.9"
 ARG RUBY_DEFAULT="3.2.9"
 ARG HOST_UID=1000
+# Default HOST_GID to HOST_UID for the common case where the host user's
+# primary GID matches their UID (useradd's stock behavior on most distros).
+# Users whose primary GID differs from their UID — e.g., a host where
+# groupadd allocated a separate user-private-group at a different gid — must
+# pass HOST_GID=$(id -g) at build time. build.sh does this automatically;
+# the default exists so direct `podman build` invocations still work.
+ARG HOST_GID=${HOST_UID}
 
 # ── System packages ───────────────────────────────────────────────────────────
 # Combined into one layer to avoid intermediate bloat from dnf metadata.
@@ -190,7 +197,8 @@ RUN dnf -y install python3.13 python3.13-pip && dnf clean all && \
 # ── Non-root user + root-phase config ─────────────────────────────────────────
 # User creation, dnf config, and system prompt dir. The chown -R happens later
 # (after COPY/pip that create root-owned dirs under /home/claude).
-RUN useradd -l -m -u ${HOST_UID} -s /bin/bash claude 2>/dev/null || \
+RUN (groupadd -g ${HOST_GID} claude && \
+     useradd -l -m -u ${HOST_UID} -g claude -s /bin/bash claude) 2>/dev/null || \
     useradd -l -m -s /bin/bash claude && \
     mkdir -p /workspace && chown claude /workspace && \
     echo "claude ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/claude && \
