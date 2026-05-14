@@ -136,7 +136,7 @@ tasks:
   overlays:
     desc: List sessions with pending overlay data
     dir: "{{.USER_WORKING_DIR}}"
-    cmd: "{{.ROOT_DIR}}/scripts/overlay-list.sh"
+    cmd: "{{.ROOT_DIR}}/scripts/overlay.sh list"
 
   overlay-diff:
     desc: Show changes in overlay (vs host project)
@@ -145,7 +145,7 @@ tasks:
       ARGS: "{{.ARGS | default .CLI_ARGS}}"
     env:
       ROOT_DIR: "{{.ROOT_DIR}}"
-    cmd: "{{.ROOT_DIR}}/scripts/overlay-diff.sh {{.ARGS}}"
+    cmd: "{{.ROOT_DIR}}/scripts/overlay.sh diff {{.ARGS}}"
 
   overlay-accept:
     desc: Apply overlay changes to host project
@@ -154,7 +154,7 @@ tasks:
       ARGS: "{{.ARGS | default .CLI_ARGS}}"
     env:
       ROOT_DIR: "{{.ROOT_DIR}}"
-    cmd: "{{.ROOT_DIR}}/scripts/overlay-accept.sh {{.ARGS}}"
+    cmd: "{{.ROOT_DIR}}/scripts/overlay.sh accept {{.ARGS}}"
 
   overlay-reject:
     desc: Discard overlay changes
@@ -163,4 +163,4 @@ tasks:
       ARGS: "{{.ARGS | default .CLI_ARGS}}"
     env:
       ROOT_DIR: "{{.ROOT_DIR}}"
-    cmd: "{{.ROOT_DIR}}/scripts/overlay-reject.sh {{.ARGS}}"
+    cmd: "{{.ROOT_DIR}}/scripts/overlay.sh reject {{.ARGS}}"

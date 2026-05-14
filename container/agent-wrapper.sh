@@ -44,21 +44,33 @@ if [ -z "${REAL_BIN}" ]; then
 fi
 
 # Apply the agent's injection rules. wrapper_inject prints the rewritten argv
-# as NUL-terminated tokens (`printf '%s\0'`) on stdout and emits "CI=1" on
-# stderr if CI=true should be set. NUL framing keeps multi-line argv (e.g.
-# a `-p` prompt with embedded newlines) intact. We capture both streams so
-# a malformed manifest can't silently smuggle unintended output to the
-# terminal.
-inject_stderr="$(mktemp)"
-trap 'rm -f "${inject_stderr}"' EXIT
-mapfile -d '' -t new_args < <(agent_call "${agent}" wrapper_inject "$@" 2> "${inject_stderr}")
-if grep -qx 'CI=1' "${inject_stderr}"; then
-    export CI=true
+# as NUL-terminated tokens (`printf '%s\0'`) on stdout. NUL framing keeps
+# multi-line argv (e.g. a `-p` prompt with embedded newlines) intact.
+#
+# Env hints (e.g. CI=true for non-interactive prompt mode) are NOT smuggled
+# through stderr — that conflated env-channel and user diagnostics, and any
+# manifest line matching the magic value would be silently consumed. Instead
+# the wrapper allocates RIOTBOX_INJECT_ENV_FILE per call; manifests append
+# `KEY=VAL` lines there, and we read+export them after the call returns.
+# Stderr from the manifest passes through unchanged.
+RIOTBOX_INJECT_ENV_FILE="$(mktemp)"
+export RIOTBOX_INJECT_ENV_FILE
+trap 'rm -f "${RIOTBOX_INJECT_ENV_FILE}"' EXIT
+mapfile -d '' -t new_args < <(agent_call "${agent}" wrapper_inject "$@")
+
+# Read each KEY=VAL line and export it. Lines that don't look like a valid
+# `KEY=VAL` env assignment are skipped — manifests own this file and the
+# format is strict on purpose.
+if [ -s "${RIOTBOX_INJECT_ENV_FILE}" ]; then
+    while IFS= read -r _line || [ -n "${_line}" ]; do
+        # Match KEY=VAL where KEY is [A-Za-z_][A-Za-z0-9_]*
+        if [[ "${_line}" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            export "${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
+        fi
+    done < "${RIOTBOX_INJECT_ENV_FILE}"
 fi
-# Forward any non-CI stderr from the manifest (errors, notices) to the real
-# stderr so the user sees them.
-grep -vx 'CI=1' "${inject_stderr}" >&2 || true
-rm -f "${inject_stderr}"
+rm -f "${RIOTBOX_INJECT_ENV_FILE}"
 trap - EXIT
+unset RIOTBOX_INJECT_ENV_FILE _line
 
 exec "${REAL_BIN}" "${new_args[@]}"

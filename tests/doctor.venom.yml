@@ -1,0 +1,548 @@
+name: scripts/preflight.sh — claude-riotbox doctor preflight
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Pins the public contract of scripts/preflight.sh: every check has a fixed
+# exit code, every failure surfaces a fix hint, and the modes (default,
+# QUIET, JSON, ALL) behave per the doctor spec.
+#
+# The tests source preflight.sh and exercise the per-check functions in
+# isolation — that way a green test depends only on the function under
+# test, not on the surrounding podman/state of the host that runs venom.
+# preflight_run is exercised through a few representative scenarios that
+# don't require touching the real podman state.
+
+testcases:
+  # ── Per-check happy paths (functions return 0 + emit [ok]) ───────────────
+
+  - name: preflight_check_task passes when task is on PATH
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          out="$(preflight_check_task)"
+          rc=$?
+          echo "${out}"
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          case "${out}" in
+              *"[ok]"*"task runner available"*) echo "OK" ;;
+              *) echo "BAD output: ${out}" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_git passes when git is on PATH
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          preflight_check_git
+          rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_jq passes when jq is on PATH
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          preflight_check_jq
+          rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_fuse_overlayfs passes when binary is present
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          preflight_check_fuse_overlayfs
+          rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_creds passes with ANTHROPIC_API_KEY
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          ANTHROPIC_API_KEY="sk-test" preflight_check_creds
+          rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_creds passes with ~/.claude.json
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          echo '{}' > "${FAKE_HOME}/.claude.json"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" preflight_check_creds
+          rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_creds passes with ~/.claude/.credentials.json
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/.claude"
+          echo '{}' > "${FAKE_HOME}/.claude/.credentials.json"
+          unset ANTHROPIC_API_KEY
+          HOME="${FAKE_HOME}" preflight_check_creds
+          rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_plugins_dir passes when dir is absent
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          # Absent directory is a pass per spec (#8 "if it exists" semantics).
+          HOME="${FAKE_HOME}" preflight_check_plugins_dir
+          rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_skills_dir passes when dir is absent
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          HOME="${FAKE_HOME}" preflight_check_skills_dir
+          rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # ── Per-check failure paths (each emits its specific exit code + hint) ──
+
+  - name: preflight_check_podman fails with exit 12 when podman is missing
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          # Strip podman from PATH; the function MUST emit its [12] line
+          # plus the "Install podman" hint and return 12.
+          out="$(PATH=/usr/bin:/bin preflight_check_podman 2>&1 || echo "EXIT=$?")"
+          echo "${out}"
+          case "${out}" in
+              *"EXIT=12"*) ;;
+              *) echo "BAD: missing exit 12" >&2; exit 1 ;;
+          esac
+          case "${out}" in
+              *"Install podman"*) echo "OK" ;;
+              *) echo "BAD: missing install hint" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_task fails with exit 14 when task is missing
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          # PATH that has nothing but core utils, so `task` is absent.
+          out="$(PATH=/usr/bin:/bin preflight_check_task 2>&1 || echo "EXIT=$?")"
+          echo "${out}"
+          case "${out}" in
+              *"EXIT=14"*) ;;
+              *) echo "BAD: missing exit 14" >&2; exit 1 ;;
+          esac
+          case "${out}" in
+              *"https://taskfile.dev"*) echo "OK" ;;
+              *) echo "BAD: missing fix hint" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_image fails with exit 17 for a synthetic tag
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          # IMAGE_NAME is read at call time (the public contract), so a
+          # per-call override picks a tag that demonstrably does not exist.
+          out="$(IMAGE_NAME="riotbox-doctor-test-$(date +%s%N)-no-such-tag" \
+              preflight_check_image 2>&1 || echo "EXIT=$?")"
+          echo "${out}"
+          case "${out}" in
+              *"EXIT=17"*) ;;
+              *) echo "BAD: missing exit 17" >&2; exit 1 ;;
+          esac
+          case "${out}" in
+              *"claude-riotbox build"*) echo "OK" ;;
+              *) echo "BAD: missing build hint" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_creds fails with exit 18 when no creds are present
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          unset ANTHROPIC_API_KEY
+          out="$(HOME="${FAKE_HOME}" preflight_check_creds 2>&1 || echo "EXIT=$?")"
+          echo "${out}"
+          case "${out}" in
+              *"EXIT=18"*) ;;
+              *) echo "BAD: missing exit 18" >&2; exit 1 ;;
+          esac
+          case "${out}" in
+              *"ANTHROPIC_API_KEY"*) echo "OK" ;;
+              *) echo "BAD: missing API key hint" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_plugins_dir fails with exit 19 when dir is unreadable
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          FAKE_HOME="$(mktemp -d)"
+          # Restore mode before rm so the trap cleanup can recurse in.
+          trap 'chmod -R u+rwX "${FAKE_HOME}" 2>/dev/null; rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/.claude/plugins"
+          chmod 000 "${FAKE_HOME}/.claude/plugins"
+          out="$(HOME="${FAKE_HOME}" preflight_check_plugins_dir 2>&1 || echo "EXIT=$?")"
+          echo "${out}"
+          case "${out}" in
+              *"EXIT=19"*) echo "OK" ;;
+              *) echo "BAD: missing exit 19" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_skills_dir fails with exit 20 when dir is unreadable
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          FAKE_HOME="$(mktemp -d)"
+          trap 'chmod -R u+rwX "${FAKE_HOME}" 2>/dev/null; rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/.claude/skills"
+          chmod 000 "${FAKE_HOME}/.claude/skills"
+          out="$(HOME="${FAKE_HOME}" preflight_check_skills_dir 2>&1 || echo "EXIT=$?")"
+          echo "${out}"
+          case "${out}" in
+              *"EXIT=20"*) echo "OK" ;;
+              *) echo "BAD: missing exit 20" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # ── Modes ───────────────────────────────────────────────────────────────
+
+  - name: JSON mode emits one valid JSON line per check with required fields
+    steps:
+      - type: exec
+        script: |
+          # Stub podman/image so the run is deterministic regardless of
+          # the test container's nested podman state. Then exercise JSON
+          # mode end-to-end: every line must parse, every line must have
+          # check+result, and the failing image line must carry a hint.
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          preflight_check_podman() { _preflight_report podman ok "podman stub"; return 0; }
+          preflight_check_image()  { _preflight_report image fail "image stub" 17 "Run claude-riotbox build"; return 17; }
+          out="$(RIOTBOX_DOCTOR_JSON=1 RIOTBOX_DOCTOR_ALL=1 \
+              ANTHROPIC_API_KEY=sk-test \
+              HOME="${FAKE_HOME}" \
+              preflight_run 2>&1 || true)"
+          echo "${out}"
+          # Every line must be valid JSON.
+          while IFS= read -r line; do
+              [ -z "${line}" ] && continue
+              echo "${line}" | jq -e . >/dev/null || {
+                  echo "BAD: invalid JSON: ${line}" >&2; exit 1;
+              }
+              # check + result fields are mandatory.
+              echo "${line}" | jq -e '.check and .result' >/dev/null || {
+                  echo "BAD: missing check/result: ${line}" >&2; exit 1;
+              }
+          done <<< "${out}"
+          # The image line must be a fail with a hint.
+          image_line="$(echo "${out}" | jq -c 'select(.check=="image")')"
+          [ "$(echo "${image_line}" | jq -r .result)" = "fail" ] || {
+              echo "BAD: image not failing: ${image_line}" >&2; exit 1;
+          }
+          [ "$(echo "${image_line}" | jq -r .hint)" = "Run claude-riotbox build" ] || {
+              echo "BAD: wrong hint: ${image_line}" >&2; exit 1;
+          }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: ALL mode runs every check and returns the FIRST failure code
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          # Stub the podman + image checks: the test container has podman
+          # installed but `podman info` cannot start a daemon nested. We
+          # are exercising the composer's iteration order and exit-code
+          # selection here, not the podman check itself (covered above).
+          # Force two failures: image (17) before creds (18). With ALL=1
+          # both lines must appear, and the return code must be 17 (the
+          # first failure) — not 18.
+          preflight_check_podman() { _preflight_report podman ok "podman stub"; return 0; }
+          preflight_check_image()  { _preflight_report image fail "image stub" 17 "Run claude-riotbox build"; return 17; }
+          unset ANTHROPIC_API_KEY
+          out="$(RIOTBOX_DOCTOR_ALL=1 HOME="${FAKE_HOME}" preflight_run 2>&1 || echo "EXIT=$?")"
+          echo "${out}"
+          case "${out}" in
+              *"image stub"*"claude credentials readable"*) ;;
+              *) echo "BAD: did not run all checks" >&2; exit 1 ;;
+          esac
+          case "${out}" in
+              *"EXIT=17"*) echo "OK" ;;
+              *) echo "BAD: expected EXIT=17 (first failure)" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Default mode stops at the first failure
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          # Same stub strategy as ALL-mode test above: pin podman to ok and
+          # image to fail so the assertion targets the composer behavior.
+          preflight_check_podman() { _preflight_report podman ok "podman stub"; return 0; }
+          preflight_check_image()  { _preflight_report image fail "image stub" 17 "Run claude-riotbox build"; return 17; }
+          unset ANTHROPIC_API_KEY
+          # Without ALL=1 the run must exit at the image check (code 17)
+          # and never reach the creds check.
+          out="$(HOME="${FAKE_HOME}" preflight_run 2>&1 || echo "EXIT=$?")"
+          echo "${out}"
+          case "${out}" in
+              *"image stub"*) ;;
+              *) echo "BAD: did not run image check" >&2; exit 1 ;;
+          esac
+          case "${out}" in
+              *"claude credentials readable"*)
+                  echo "BAD: should have stopped before creds" >&2; exit 1 ;;
+          esac
+          case "${out}" in
+              *"EXIT=17"*) echo "OK" ;;
+              *) echo "BAD: expected EXIT=17" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: QUIET mode suppresses ok lines but still prints failures
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          # QUIET on a passing check must produce no output.
+          out="$(RIOTBOX_DOCTOR_QUIET=1 preflight_check_jq)"
+          [ -z "${out}" ] || { echo "BAD: QUIET emitted: ${out}" >&2; exit 1; }
+          # QUIET on a failing check must still print the fail line + hint.
+          out_fail="$(PATH=/usr/bin:/bin RIOTBOX_DOCTOR_QUIET=1 preflight_check_task 2>&1 || true)"
+          case "${out_fail}" in
+              *"task runner available"*"taskfile.dev"*) echo "OK" ;;
+              *) echo "BAD: QUIET swallowed failure: ${out_fail}" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # ── End-to-end: invoking preflight.sh as a script ────────────────────────
+
+  # Script-invocation tests run preflight.sh as a subprocess. The test
+  # container has podman installed but cannot run `podman info` (no nested
+  # daemon), so the podman check fails first and the script's overall
+  # exit code is always 12 in this environment. We use RIOTBOX_DOCTOR_ALL
+  # so every line is still emitted and assert on the per-check label/hint.
+  # The exit-code/return contract is covered by the sourced preflight_run
+  # tests above, which stub podman to ok.
+
+  - name: preflight.sh reports task missing with hint (script invocation, ALL mode)
+    steps:
+      - type: exec
+        script: |
+          # PATH omits `task`. We DO NOT assert exit 14 here because the
+          # podman check fires first in this container — that's exactly
+          # what production users see when their host lacks podman, and
+          # the test rightly mirrors that. The contract under test: even
+          # under ALL mode, a downstream check that fails surfaces its
+          # own [code] prefix and fix hint.
+          out="$(PATH=/usr/bin:/bin RIOTBOX_DOCTOR_ALL=1 \
+              "{{.riotbox_dir}}/scripts/preflight.sh" 2>&1 || true)"
+          echo "${out}"
+          case "${out}" in
+              *"[14]"*"task runner available"*"https://taskfile.dev"*) echo "OK" ;;
+              *) echo "BAD: missing task fail line" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight.sh reports image missing with build hint (script invocation, ALL mode)
+    steps:
+      - type: exec
+        script: |
+          out="$(IMAGE_NAME="riotbox-doctor-test-$(date +%s%N)-no-such-tag" \
+              RIOTBOX_DOCTOR_ALL=1 \
+              "{{.riotbox_dir}}/scripts/preflight.sh" 2>&1 || true)"
+          echo "${out}"
+          case "${out}" in
+              *"[17]"*"riotbox image present"*"claude-riotbox build"*) echo "OK" ;;
+              *) echo "BAD: missing image fail line" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight.sh reports creds missing with hint (script invocation, ALL mode)
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          out="$(RIOTBOX_DOCTOR_ALL=1 \
+              HOME="${FAKE_HOME}" \
+              env -u ANTHROPIC_API_KEY \
+              "{{.riotbox_dir}}/scripts/preflight.sh" 2>&1 || true)"
+          echo "${out}"
+          case "${out}" in
+              *"[18]"*"claude credentials readable"*"ANTHROPIC_API_KEY"*) echo "OK" ;;
+              *) echo "BAD: missing creds fail line" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight.sh JSON mode round-trips through jq (script invocation)
+    steps:
+      - type: exec
+        script: |
+          out="$(IMAGE_NAME="riotbox-doctor-test-$(date +%s%N)-no-such-tag" \
+              RIOTBOX_DOCTOR_JSON=1 RIOTBOX_DOCTOR_ALL=1 \
+              "{{.riotbox_dir}}/scripts/preflight.sh" 2>&1 || true)"
+          echo "${out}"
+          while IFS= read -r line; do
+              [ -z "${line}" ] && continue
+              echo "${line}" | jq -e '.check and .result and .ts and .level and .step and .msg' >/dev/null \
+                  || { echo "BAD: malformed JSON line: ${line}" >&2; exit 1; }
+          done <<< "${out}"
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # ── Library contract: sourcing must not modify the caller's shell ───────
+
+  - name: sourcing does not leak set -u or pipefail to caller
+    steps:
+      - type: exec
+        script: |
+          # A library script must not flip strict mode in the caller's
+          # shell. Start with both options off, source preflight.sh, and
+          # confirm both are still off afterwards.
+          bash -c '
+            set +u
+            set +o pipefail
+            source "{{.riotbox_dir}}/scripts/preflight.sh"
+            case "$-" in *u*) echo "LEAK_U: set -u was enabled"; exit 1 ;; esac
+            if shopt -qo pipefail 2>/dev/null; then
+              echo "LEAK_PIPEFAIL: set -o pipefail was enabled"; exit 1
+            fi
+            echo "OK no leak"
+          '
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK no leak"
+
+  - name: sourced caller can override image via IMAGE_NAME env var
+    steps:
+      - type: exec
+        script: |
+          # The public contract is IMAGE_NAME — a per-call override on a
+          # sourced function must take effect (i.e. the value is read at
+          # call time, not snapshotted at source time).
+          bash -c '
+            source "{{.riotbox_dir}}/scripts/preflight.sh"
+            if IMAGE_NAME=nonexistent-image-tag-xyz preflight_check_image >/dev/null 2>&1; then
+              echo "BUG: should have failed for nonexistent tag"; exit 1
+            fi
+            echo "OK"
+          '
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # ── CLI integration: install.sh wires `doctor` into the wrapper ──────────
+
+  - name: claude-riotbox wrapper exposes the doctor subcommand
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}" >/dev/null
+          # Wrapper must list `doctor` in its usage and dispatch to
+          # scripts/preflight.sh.
+          grep -q '^  doctor ' "${TEST_DIR}/claude-riotbox" \
+              || { echo "BAD: usage missing doctor" >&2; exit 1; }
+          grep -q 'scripts/preflight.sh' "${TEST_DIR}/claude-riotbox" \
+              || { echo "BAD: dispatch missing preflight.sh" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"

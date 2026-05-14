@@ -11,10 +11,14 @@
 # ═════════════════════════════════════════════════════════════════════════════
 # Stage 1: Download standalone tool binaries
 # ═════════════════════════════════════════════════════════════════════════════
-# TODO(security): Pin to a specific digest for supply chain integrity:
-#   FROM quay.io/centos/centos:stream10@sha256:<digest> AS tools
-# Run: podman inspect quay.io/centos/centos:stream10 --format '{{index .RepoDigests 0}}'
-FROM quay.io/centos/centos:stream10 AS tools
+# Pinned for supply-chain integrity. To refresh:
+#   podman pull quay.io/centos/centos:stream10
+#   podman image inspect quay.io/centos/centos:stream10 \
+#     --format '{{index .RepoDigests 0}}'
+# Both `FROM` lines (tools + runtime) MUST reference the same digest so the
+# binaries baked in the tools stage match the libc they will be COPYed onto
+# in runtime.
+FROM quay.io/centos/centos:stream10@sha256:661b0c97d34a9269eac34154da69621d37d8aad1847a90371708453ccc3f7003 AS tools
 
 RUN dnf -y install curl tar gzip && dnf clean all
 
@@ -40,11 +44,27 @@ RUN curl -sL https://taskfile.dev/install.sh | sh -s -- -b /tools/bin && \
     /tools/bin/task --version
 
 # venom — integration test framework (https://github.com/ovh/venom)
-# TODO(security): No checksums or signatures published upstream. Pin to a
-#   version and verify a self-computed SHA256 if supply-chain risk is a concern.
+# Pinned per supply-chain review. Upstream publishes no checksums or
+# signatures, so we self-compute and verify SHA256 per arch. To refresh:
+#   1. Pick a new tag at https://github.com/ovh/venom/releases (stable only)
+#   2. Compute SHA256 for amd64 + arm64:
+#        for a in amd64 arm64; do
+#          curl -sL "https://github.com/ovh/venom/releases/download/<TAG>/venom.linux-$a" \
+#            | sha256sum | awk '{print $1}'
+#        done
+#   3. Update VENOM_VERSION + VENOM_SHA256_AMD64 + VENOM_SHA256_ARM64 below
+ARG VENOM_VERSION=v1.3.0
+ARG VENOM_SHA256_AMD64=89832ec25e820c605cf0d3c09122e60bad43d13c1724aa6d375ef7109fbfe201
+ARG VENOM_SHA256_ARM64=aada8ac76cb642daecbc8e31e830c94c42bcdd78fecd3a9d9d1a73c37c60d946
 RUN ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/') && \
-    curl -LO "https://github.com/ovh/venom/releases/latest/download/venom.linux-${ARCH}" && \
-    mv "venom.linux-${ARCH}" /tools/bin/venom && \
+    case "${ARCH}" in \
+        amd64) EXPECTED_SHA="${VENOM_SHA256_AMD64}" ;; \
+        arm64) EXPECTED_SHA="${VENOM_SHA256_ARM64}" ;; \
+        *) echo "unsupported arch: ${ARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSLo /tmp/venom "https://github.com/ovh/venom/releases/download/${VENOM_VERSION}/venom.linux-${ARCH}" && \
+    echo "${EXPECTED_SHA}  /tmp/venom" | sha256sum -c - && \
+    mv /tmp/venom /tools/bin/venom && \
     chmod +x /tools/bin/venom && \
     /tools/bin/venom version
 
@@ -52,8 +72,9 @@ RUN ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/') && \
 # ═════════════════════════════════════════════════════════════════════════════
 # Stage 2: Runtime image
 # ═════════════════════════════════════════════════════════════════════════════
-# TODO(security): Pin to same digest as tools stage
-FROM quay.io/centos/centos:stream10 AS runtime
+# Pinned to the same digest as the tools stage. See refresh procedure at the
+# top of the tools stage; both `FROM` lines must move together.
+FROM quay.io/centos/centos:stream10@sha256:661b0c97d34a9269eac34154da69621d37d8aad1847a90371708453ccc3f7003 AS runtime
 
 # ── Build args (populated by build.sh from host introspection) ────────────────
 ARG NVM_INSTALLER_VERSION=0.39.7

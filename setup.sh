@@ -372,6 +372,32 @@ else
     fi
 fi
 
+# ── 7. Final verification ───────────────────────────────────────────────────
+step "7. Final verification"
+
+# Run the same preflight the user gets via `claude-riotbox doctor`. This
+# catches mismatches between the per-step prompts above and the runtime
+# environment (e.g. podman installed but storage.conf still wrong, image
+# build skipped, creds removed mid-setup).
+#
+# Preflight is skipped when earlier steps already raised ERRORS (the user
+# has unfinished prerequisite work) or WARNINGS (e.g. podman queryable
+# only after a `system reset` — the warning already covered it). In both
+# cases the summary block below surfaces what to do next, so re-checking
+# via preflight would be noise. After fixing the warnings, the user can
+# re-run setup.sh or call `claude-riotbox doctor` directly.
+if [ ${ERRORS} -gt 0 ]; then
+    warn "Skipping preflight: ${ERRORS} error(s) above must be resolved first."
+elif [ ${WARNINGS} -gt 0 ]; then
+    warn "Skipping preflight: ${WARNINGS} warning(s) above. Re-run setup.sh or \`claude-riotbox doctor\` after addressing them."
+elif "${SCRIPT_DIR}/scripts/preflight.sh"; then
+    ok "All checks pass — riotbox is ready"
+else
+    rc=$?
+    fail "Some checks failed (exit code ${rc}). Run \`claude-riotbox doctor\` for detail or to re-check after fixing."
+    exit "${rc}"
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 step "Setup complete"
 

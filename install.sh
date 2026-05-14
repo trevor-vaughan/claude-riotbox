@@ -55,6 +55,7 @@ Overlay commands (podman-only):
 
 Info:
   agents                       List registered agents (riotbox name + binary)
+  doctor                       Verify host setup (preflight checks)
   version                      Show the current version
 
 Task runner:
@@ -103,6 +104,9 @@ case "${cmd}" in
         ;;
     version|--version|-V)
         echo "claude-riotbox ${RIOTBOX_VERSION}"
+        ;;
+    doctor)
+        exec "${RIOTBOX_DIR}/scripts/preflight.sh" "$@"
         ;;
     agents)
         # List registered agents with their real binary name. Two columns

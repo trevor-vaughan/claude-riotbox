@@ -145,6 +145,7 @@ Your host `~/.config/opencode/` (agents, commands, themes, `opencode.json`) is c
 | `claude-riotbox overlay-accept [project]` | Apply overlay changes to host project |
 | `claude-riotbox overlay-reject [project]` | Discard overlay changes |
 | `claude-riotbox agents` | List registered agents (riotbox name + binary) |
+| `claude-riotbox doctor` | Verify host setup; reports each preflight check with a fix hint. Exits non-zero on failure. |
 
 ## Pre-installed tools
 
@@ -553,6 +554,8 @@ echo "options overlay metacopy=on" | sudo tee /etc/modprobe.d/overlay.conf
 ```
 
 ## Troubleshooting
+
+When something breaks, the first thing to try is `claude-riotbox doctor` — it walks every host prerequisite (podman, fuse-overlayfs, task, image build, credentials, plugin/skill dirs) and prints a fix hint per failure. The same checks run at the end of `./setup.sh`, so a fresh install is self-verifying.
 
 ### Container startup hangs
 

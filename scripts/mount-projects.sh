@@ -2,13 +2,23 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # mount-projects.sh — Resolves project directories into container mount flags.
 #
-# Sourced (not executed) by taskfile scripts. Sets these variables:
-#   PROJECT_DIRS         — bash array of resolved host paths
-#   PROJECT_VOLUME_FLAGS — -v flags for podman/docker run (includes riotbox session mount)
-#   PROJECT_SUMMARY      — human-readable list for status output
-#   WORKDIR              — container working directory
-#   CONTAINER_NAME       — unique container name for --name flag
-#   RIOTBOX_SESSION_DIR  — host-side session directory path
+# Two invocation modes:
+#
+#   1. Sourced (existing taskfile scripts). Sets these variables:
+#        PROJECT_DIRS         — bash array of resolved host paths
+#        PROJECT_VOLUME_FLAGS — -v flags for podman/docker run (includes
+#                               riotbox session mount)
+#        PROJECT_SUMMARY      — human-readable list for status output
+#        WORKDIR              — container working directory
+#        CONTAINER_NAME       — unique container name for --name flag
+#        RIOTBOX_SESSION_DIR  — host-side session directory path
+#
+#   2. Executed (downstream config generators / tests). Accepts:
+#        --format=podman   one `-v host:container[:flag]` line per mount
+#                          (default; matches sourced PROJECT_VOLUME_FLAGS).
+#        --format=triple   one `host:container:mode` line per mount, where
+#                          mode is `rw` or `ro`.
+#      Project paths come from "$@" (after flags) or RIOTBOX_PROJECTS.
 #
 # Single project:  mounted at /workspace (backward compatible)
 # Multiple projects: each mounted at /workspace/<dirname>
@@ -213,3 +223,93 @@ setup_projects() {
     # ── Container name ────────────────────────────────────────────────
     generate_container_name "${PROJECT_DIRS[@]}"
 }
+
+# Print the resolved mount table in `host:container:mode` form (one per
+# line, mode is `rw` or `ro`). Reads from PROJECT_VOLUME_FLAGS, so the
+# caller must run setup_projects first.
+print_mounts_triple() {
+    local flag suffix host container mode
+    # PROJECT_VOLUME_FLAGS is space-separated `-v <spec>` pairs. Parse with
+    # a simple state machine: each `-v` token is followed by one spec.
+    local expect_spec=0
+    # shellcheck disable=SC2086  # intentional word-splitting on the flag string
+    for flag in ${PROJECT_VOLUME_FLAGS}; do
+        if [ "${expect_spec}" = "0" ]; then
+            if [ "${flag}" = "-v" ]; then
+                expect_spec=1
+            fi
+            continue
+        fi
+        expect_spec=0
+        # Spec is host:container[:opts]. Split on the LAST colon to allow
+        # paths to contain `:` is unsupported (matches the existing whole-
+        # script LIMITATION). Use the first two colons as separators.
+        host="${flag%%:*}"
+        local rest="${flag#*:}"
+        # rest is `container[:opts]`. opts can be `z`, `ro`, `ro,z`, `rw,z`.
+        # The container path itself never contains `:` in this codebase.
+        if [[ "${rest}" == *:* ]]; then
+            container="${rest%%:*}"
+            suffix="${rest#*:}"
+        else
+            container="${rest}"
+            suffix=""
+        fi
+        case ",${suffix}," in
+            *,ro,*) mode="ro" ;;
+            *)      mode="rw" ;;
+        esac
+        printf '%s:%s:%s\n' "${host}" "${container}" "${mode}"
+    done
+}
+
+# ── Script-mode entry ────────────────────────────────────────────────
+# When this file is executed (not sourced), parse --format= flags and
+# emit the resolved mount table on stdout. Sourced callers reach the
+# top of the file and stop here without running setup.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+    set -euo pipefail
+
+    OUTPUT_FORMAT="podman"
+    PROJECT_ARGS=()
+    for arg in "$@"; do
+        case "${arg}" in
+            --format=podman) OUTPUT_FORMAT="podman" ;;
+            --format=triple) OUTPUT_FORMAT="triple" ;;
+            --format=*)
+                echo "ERROR: unknown --format value: ${arg#--format=}" >&2
+                echo "       allowed: podman, triple" >&2
+                exit 2
+                ;;
+            *) PROJECT_ARGS+=("${arg}") ;;
+        esac
+    done
+
+    # ROOT_DIR is required by setup_projects (sources agents/registry.sh).
+    if [ -z "${ROOT_DIR:-}" ]; then
+        ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    fi
+
+    raw="${RIOTBOX_PROJECTS:-${PROJECT_ARGS[*]:-}}"
+    setup_projects "${raw}"
+
+    case "${OUTPUT_FORMAT}" in
+        podman)
+            # Trim leading whitespace and emit each `-v <spec>` pair on its
+            # own line so output is consistent with detect-mounts.sh.
+            # shellcheck disable=SC2086  # intentional word-splitting
+            set -- ${PROJECT_VOLUME_FLAGS}
+            while [ $# -ge 2 ]; do
+                if [ "$1" = "-v" ]; then
+                    printf -- '-v %s\n' "$2"
+                    shift 2
+                else
+                    shift
+                fi
+            done
+            ;;
+        triple)
+            print_mounts_triple
+            ;;
+    esac
+fi

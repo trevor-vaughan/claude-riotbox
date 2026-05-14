@@ -1,0 +1,155 @@
+name: mount-detection scripts --format=triple output
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Pins the new --format=triple output mode and protects the existing
+# default (podman-flavored -v flag) from regression. Both detect-mounts.sh
+# and mount-projects.sh accept --format=podman|triple; default is podman.
+
+testcases:
+  # ── detect-mounts.sh ───────────────────────────────────────────────────────
+
+  - name: detect-mounts default format emits podman -v flags (regression guard)
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin" "${FAKE_HOME}/.config/claude-riotbox"
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/scripts/detect-mounts.sh"
+        assertions:
+          - result.code ShouldEqual 0
+          # bin and .config/claude-riotbox are :ro,z (functional mounts)
+          - result.systemout ShouldContainSubstring "-v"
+          - result.systemout ShouldContainSubstring "/bin:/home/claude/bin:ro,z"
+          - result.systemout ShouldContainSubstring ":ro,z"
+          # Cache mounts are named volumes with no SELinux suffix
+          - result.systemout ShouldContainSubstring "riotbox-cache-npm:/home/claude/.npm"
+
+  - name: detect-mounts --format=podman matches default
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          a="$(HOME="${FAKE_HOME}" "{{.riotbox_dir}}/scripts/detect-mounts.sh")"
+          b="$(HOME="${FAKE_HOME}" "{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=podman)"
+          if [ "${a}" = "${b}" ]; then echo "MATCH"; else echo "DIFFER"; fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MATCH"
+
+  - name: detect-mounts --format=triple emits host:container:mode lines
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          mkdir -p "${FAKE_HOME}/bin"
+          out="$(HOME="${FAKE_HOME}" "{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple)"
+          echo "${out}"
+          # Every non-empty line must have exactly two `:` separators
+          # producing three fields, with the last being `rw` or `ro`.
+          while IFS= read -r line; do
+              [ -z "${line}" ] && continue
+              # Count colons
+              colons="$(echo "${line}" | tr -cd ':' | wc -c)"
+              if [ "${colons}" -lt 2 ]; then
+                  echo "BAD: not enough colons: ${line}" >&2; exit 1
+              fi
+              mode="${line##*:}"
+              case "${mode}" in
+                  rw|ro) ;;
+                  *) echo "BAD: bad mode '${mode}' in: ${line}" >&2; exit 1 ;;
+              esac
+          done <<< "${out}"
+          echo "ALL_LINES_VALID"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":ro"
+          - result.systemout ShouldContainSubstring ":rw"
+          # Functional mount has ro mode
+          - result.systemout ShouldContainSubstring "/bin:/home/claude/bin:ro"
+          # Cache mount is rw and is a named volume
+          - result.systemout ShouldContainSubstring "riotbox-cache-npm:/home/claude/.npm:rw"
+          - result.systemout ShouldContainSubstring "ALL_LINES_VALID"
+          # NO `-v ` prefix in triple mode
+          - result.systemout ShouldNotContainSubstring "-v "
+
+  - name: detect-mounts rejects unknown --format value
+    steps:
+      - type: exec
+        script: |
+          "{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=garbage 2>&1 || echo "EXIT=$?"
+        assertions:
+          - result.systemout ShouldContainSubstring "unknown --format"
+          - result.systemout ShouldContainSubstring "EXIT="
+
+  # ── mount-projects.sh ──────────────────────────────────────────────────────
+
+  - name: mount-projects default format emits podman -v flags (regression guard)
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/projects/foo"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export HOME="${TEST_DIR}/home"
+          mkdir -p "${HOME}"
+          out="$("{{.riotbox_dir}}/scripts/mount-projects.sh" "${TEST_DIR}/projects/foo")"
+          echo "${out}"
+        assertions:
+          - result.code ShouldEqual 0
+          # The project mounts at /workspace
+          - result.systemout ShouldContainSubstring "-v"
+          - result.systemout ShouldContainSubstring "/projects/foo:/workspace:z"
+          # The session dir is bound to ~/.claude inside the container
+          - result.systemout ShouldContainSubstring ":/home/claude/.claude:z"
+
+  - name: mount-projects --format=triple emits host:container:mode lines
+    steps:
+      - type: exec
+        script: |
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/projects/foo"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export HOME="${TEST_DIR}/home"
+          mkdir -p "${HOME}"
+          out="$("{{.riotbox_dir}}/scripts/mount-projects.sh" --format=triple "${TEST_DIR}/projects/foo")"
+          echo "${out}"
+          # Validate every line has 3 colon-separated fields with rw/ro mode.
+          while IFS= read -r line; do
+              [ -z "${line}" ] && continue
+              colons="$(echo "${line}" | tr -cd ':' | wc -c)"
+              if [ "${colons}" -lt 2 ]; then
+                  echo "BAD: not enough colons: ${line}" >&2; exit 1
+              fi
+              mode="${line##*:}"
+              case "${mode}" in
+                  rw|ro) ;;
+                  *) echo "BAD: bad mode '${mode}' in: ${line}" >&2; exit 1 ;;
+              esac
+          done <<< "${out}"
+          echo "ALL_LINES_VALID"
+        assertions:
+          - result.code ShouldEqual 0
+          # The project's mount appears as host:container:rw (no :z suffix)
+          - result.systemout ShouldContainSubstring "/projects/foo:/workspace:rw"
+          # The session dir bound to .claude is rw
+          - result.systemout ShouldContainSubstring ":/home/claude/.claude:rw"
+          - result.systemout ShouldContainSubstring "ALL_LINES_VALID"
+          - result.systemout ShouldNotContainSubstring "-v "
+
+  - name: mount-projects rejects unknown --format value
+    steps:
+      - type: exec
+        script: |
+          export ROOT_DIR="{{.riotbox_dir}}"
+          "{{.riotbox_dir}}/scripts/mount-projects.sh" --format=garbage 2>&1 || echo "EXIT=$?"
+        assertions:
+          - result.systemout ShouldContainSubstring "unknown --format"
+          - result.systemout ShouldContainSubstring "EXIT="

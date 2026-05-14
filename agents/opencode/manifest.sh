@@ -60,8 +60,11 @@ agent_opencode_wrapper_inject() {
         fi
         printf '%s\0' "${arg}"
     done
-    if [ "${saw_run}" -eq 1 ]; then
-        echo "CI=1" >&2
+    # Env hints go to the wrapper-allocated sidecar file (one KEY=VAL per
+    # line). The wrapper reads + exports it after we return. Stderr is
+    # reserved for user-facing diagnostics.
+    if [ "${saw_run}" -eq 1 ] && [ -n "${RIOTBOX_INJECT_ENV_FILE:-}" ]; then
+        printf 'CI=true\n' >> "${RIOTBOX_INJECT_ENV_FILE}"
     fi
 }
 

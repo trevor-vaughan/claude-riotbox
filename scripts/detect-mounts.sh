@@ -2,10 +2,16 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # detect-mounts.sh — Auto-detect home directory paths to mount into the riotbox.
 #
-# Outputs docker/podman -v flags, one per line. Separates mounts into:
-#   1. Functional dirs (settings, scripts) — bind mounts with :z
-#   2. Package caches — named volumes (no SELinux relabeling needed)
-#   3. User-defined mounts from mounts.conf — bind mounts (read-only :ro,z)
+# Output formats (--format=<podman|triple>, default podman):
+#   podman  one `-v host:container[:flag]` line per mount (current behavior)
+#   triple  one `host:container:mode` line per mount, where mode is `rw` or
+#           `ro`. Intended for downstream config generators / tests that need
+#           a structured mount table without regex-parsing podman flags.
+#
+# Separates mounts into:
+#   1. Functional dirs (settings, scripts) — bind mounts with :z (rw or ro)
+#   2. Package caches — named volumes (rw, no SELinux relabeling needed)
+#   3. User-defined mounts from mounts.conf — bind mounts, always ro
 #
 # Sensitive directories (.ssh, .gnupg, .kube, .aws, etc.) are NEVER mounted
 # by the auto-detection. Users can explicitly mount files via mounts.conf.
@@ -14,6 +20,50 @@ set -euo pipefail
 
 CONTAINER_HOME="/home/claude"
 RIOTBOX_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-riotbox"
+
+# ── Output format ───────────────────────────────────────────────────────────
+OUTPUT_FORMAT="podman"
+for arg in "$@"; do
+    case "${arg}" in
+        --format=podman) OUTPUT_FORMAT="podman" ;;
+        --format=triple) OUTPUT_FORMAT="triple" ;;
+        --format=*)
+            echo "ERROR: unknown --format value: ${arg#--format=}" >&2
+            echo "       allowed: podman, triple" >&2
+            exit 2
+            ;;
+        *)
+            echo "ERROR: unknown argument: ${arg}" >&2
+            exit 2
+            ;;
+    esac
+done
+
+# Emit one mount in the active format.
+#   $1 host path
+#   $2 container path
+#   $3 mode: rw (default) or ro
+# In podman mode we preserve the existing flag shape: rw mounts get bare ":z"
+# (or no suffix for named volumes), ro mounts get ":ro,z". Whether to add :z
+# is controlled by the optional 4th arg (selinux=z|none, default z).
+emit_mount() {
+    local host="$1" container="$2" mode="${3:-rw}" selinux="${4:-z}"
+    case "${OUTPUT_FORMAT}" in
+        triple)
+            printf '%s:%s:%s\n' "${host}" "${container}" "${mode}"
+            ;;
+        podman)
+            local suffix=""
+            case "${mode}:${selinux}" in
+                rw:z)    suffix=":z" ;;
+                rw:none) suffix="" ;;
+                ro:z)    suffix=":ro,z" ;;
+                ro:none) suffix=":ro" ;;
+            esac
+            printf -- '-v %s:%s%s\n' "${host}" "${container}" "${suffix}"
+            ;;
+    esac
+}
 
 # ── Functional mounts ────────────────────────────────────────────────────────
 # These are directories the container needs for correct operation.
@@ -69,13 +119,14 @@ CACHE_MOUNTS=(
 for rel in "${FUNCTIONAL_MOUNTS[@]}"; do
     src="${HOME}/${rel}"
     if [ -e "${src}" ]; then
-        echo "-v ${src}:${CONTAINER_HOME}/${rel}:ro,z"
+        emit_mount "${src}" "${CONTAINER_HOME}/${rel}" ro z
     fi
 done
 
 for entry in "${CACHE_MOUNTS[@]}"; do
     read -r vol_name rel_path <<< "${entry}"
-    echo "-v ${vol_name}:${CONTAINER_HOME}/${rel_path}"
+    # Named volumes get container_file_t labelling automatically; no :z.
+    emit_mount "${vol_name}" "${CONTAINER_HOME}/${rel_path}" rw none
 done
 
 # ── User-defined mounts from mounts.conf ─────────────────────────────────────
@@ -120,7 +171,7 @@ if [ -f "${MOUNTS_CONF}" ]; then
         esac
 
         if [ -e "${src}" ]; then
-            echo "-v ${src}:${dst}:ro,z"
+            emit_mount "${src}" "${dst}" ro z
         fi
     done < "${MOUNTS_CONF}"
 fi

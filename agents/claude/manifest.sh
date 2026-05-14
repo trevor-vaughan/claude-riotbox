@@ -59,8 +59,11 @@ agent_claude_wrapper_inject() {
     for arg in "$@"; do
         printf '%s\0' "${arg}"
     done
-    if [ "${set_ci}" = "1" ]; then
-        echo "CI=1" >&2
+    # Env hints go to the wrapper-allocated sidecar file (one KEY=VAL per
+    # line). The wrapper reads + exports it after we return. Stderr is
+    # reserved for user-facing diagnostics.
+    if [ "${set_ci}" = "1" ] && [ -n "${RIOTBOX_INJECT_ENV_FILE:-}" ]; then
+        printf 'CI=true\n' >> "${RIOTBOX_INJECT_ENV_FILE}"
     fi
 }
 

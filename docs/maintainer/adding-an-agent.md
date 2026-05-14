@@ -117,7 +117,8 @@ typically returns the same tokens as `run_argv`.
 agent_<name>_wrapper_inject() {
     # Read the user's argv as positional parameters.
     # Print the rewritten argv on stdout (NUL-terminated tokens).
-    # Print the literal string "CI=1" on stderr if CI=true should be set.
+    # Append KEY=VAL lines to "${RIOTBOX_INJECT_ENV_FILE}" for env hints
+    # (e.g. CI=true) the wrapper should export to the agent.
     ...
 }
 ```
@@ -137,9 +138,13 @@ The contract is:
 - Write the rewritten argv to stdout as NUL-terminated tokens
   (`printf '%s\0' <token>`); the wrapper reads them with
   `mapfile -d ''`. NUL framing preserves multi-line argv tokens.
-- Optionally write the literal string `CI=1` to stderr to signal that
-  the wrapper should `export CI=true`.
-- Any other stderr output is forwarded to the user as a notice/error.
+- For each env var the agent should see set, append a `KEY=VAL` line to
+  the file pointed to by `${RIOTBOX_INJECT_ENV_FILE}` (the wrapper
+  allocates a fresh tmpfile per call and exports the var before calling
+  this function). The wrapper reads the file and exports each entry
+  after the function returns.
+- Stderr is reserved for user-facing diagnostics; nothing on stderr is
+  parsed by the wrapper.
 
 See `agents/claude/manifest.sh` and `agents/opencode/manifest.sh` for two
 complete implementations.
@@ -274,7 +279,9 @@ agent_aider_wrapper_inject() {
         if [ "${arg}" = "--message" ]; then set_ci=1; break; fi
     done
     for arg in "$@"; do printf '%s\0' "${arg}"; done
-    [ "${set_ci}" = "1" ] && echo "CI=1" >&2
+    if [ "${set_ci}" = "1" ] && [ -n "${RIOTBOX_INJECT_ENV_FILE:-}" ]; then
+        printf 'CI=true\n' >> "${RIOTBOX_INJECT_ENV_FILE}"
+    fi
     return 0
 }
 

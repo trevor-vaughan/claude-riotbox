@@ -19,7 +19,7 @@ testcases:
           echo "original" > "${PROJECT}/existing.txt"
           echo "new file content" > "${OVERLAY}/upper/newfile.txt"
 
-          echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay.sh" accept "${PROJECT}"
 
           [ -f "${PROJECT}/newfile.txt" ] || { echo "FAIL: newfile.txt missing"; exit 1; }
           [ "$(cat "${PROJECT}/newfile.txt")" = "new file content" ] || { echo "FAIL: wrong content"; exit 1; }
@@ -41,7 +41,7 @@ testcases:
           echo "old content" > "${PROJECT}/file.txt"
           echo "new content" > "${OVERLAY}/upper/file.txt"
 
-          echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay.sh" accept "${PROJECT}"
 
           [ "$(cat "${PROJECT}/file.txt")" = "new content" ] || { echo "FAIL: content not updated"; exit 1; }
           echo "accept_modify=pass"
@@ -61,7 +61,7 @@ testcases:
           echo "to be deleted" > "${PROJECT}/removeme.txt"
           touch "${OVERLAY}/upper/.wh.removeme.txt"
 
-          echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay.sh" accept "${PROJECT}"
 
           [ ! -f "${PROJECT}/removeme.txt" ] || { echo "FAIL: file should be deleted"; exit 1; }
           echo "accept_whiteout=pass"
@@ -86,7 +86,7 @@ testcases:
           touch "${OVERLAY}/upper/subdir/.wh..wh..opq"
           echo "replacement" > "${OVERLAY}/upper/subdir/new.txt"
 
-          echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay.sh" accept "${PROJECT}"
 
           [ ! -f "${PROJECT}/subdir/old.txt" ] || { echo "FAIL: old.txt should be gone"; exit 1; }
           [ ! -f "${PROJECT}/subdir/other.txt" ] || { echo "FAIL: other.txt should be gone"; exit 1; }
@@ -109,7 +109,7 @@ testcases:
           echo "#!/bin/bash" > "${OVERLAY}/upper/script.sh"
           chmod 755 "${OVERLAY}/upper/script.sh"
 
-          echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay.sh" accept "${PROJECT}"
 
           [ -x "${PROJECT}/script.sh" ] || { echo "FAIL: not executable"; exit 1; }
           echo "accept_perms=pass"
@@ -128,7 +128,7 @@ testcases:
 
           echo "data" > "${OVERLAY}/upper/file.txt"
 
-          echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay.sh" accept "${PROJECT}"
 
           [ -d "${OVERLAY}/upper" ] || { echo "FAIL: upper dir missing"; exit 1; }
           [ -d "${OVERLAY}/work" ] || { echo "FAIL: work dir missing"; exit 1; }
@@ -147,7 +147,7 @@ testcases:
           setup_overlay_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
 
-          "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
+          "{{.riotbox_dir}}/scripts/overlay.sh" accept "${PROJECT}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "No overlay changes to apply"
@@ -163,13 +163,55 @@ testcases:
 
           echo "data" > "${OVERLAY}/upper/file.txt"
 
-          "{{.riotbox_dir}}/scripts/overlay-accept.sh" --force "${PROJECT}"
+          "{{.riotbox_dir}}/scripts/overlay.sh" accept --force "${PROJECT}"
 
           [ -f "${PROJECT}/file.txt" ] || { echo "FAIL: file not applied"; exit 1; }
           echo "accept_force=pass"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "accept_force=pass"
+
+  - name: Accept aborts and preserves overlay data when a copy fails mid-apply
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          # Restore perms before cleanup so trap can rm the locked dir.
+          trap 'chmod -R u+w "${TEST_DIR}" 2>/dev/null; rm -rf "${TEST_DIR}"' EXIT
+
+          # Two files in the overlay. `find ... | sort` visits a.txt before
+          # locked/b.txt, so the first cp should succeed and the second fail.
+          echo "first" > "${OVERLAY}/upper/a.txt"
+          mkdir -p "${OVERLAY}/upper/locked"
+          echo "second" > "${OVERLAY}/upper/locked/b.txt"
+
+          # Pre-create the target subdir read-only so `cp` into it fails.
+          # Use 0500 so `mkdir -p` is a no-op and `cp` hits EACCES.
+          mkdir -p "${PROJECT}/locked"
+          chmod 0500 "${PROJECT}/locked"
+
+          # Capture output but don't let the failure tear down the test.
+          set +e
+          "{{.riotbox_dir}}/scripts/overlay.sh" accept --force "${PROJECT}"
+          rc=$?
+          set -e
+
+          # Restore perms so the assertions and trap can read/clean the tree.
+          chmod 0700 "${PROJECT}/locked"
+
+          [ "${rc}" -ne 0 ] || { echo "FAIL: expected non-zero exit, got ${rc}"; exit 1; }
+
+          # Contract: cleanup at the end of pass 3 must NOT have run, so the
+          # overlay data is still present for retry.
+          [ -d "${OVERLAY}/upper" ] || { echo "FAIL: upper dir gone"; exit 1; }
+          [ -f "${OVERLAY}/upper/a.txt" ] || { echo "FAIL: upper/a.txt gone"; exit 1; }
+          [ -f "${OVERLAY}/upper/locked/b.txt" ] || { echo "FAIL: upper/locked/b.txt gone"; exit 1; }
+          echo "accept_partial_failure_preserves_overlay=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "accept_partial_failure_preserves_overlay=pass"
 
   # ── overlay-reject ──────────────────────────────────────────────────────
 
@@ -185,7 +227,7 @@ testcases:
           echo "data" > "${OVERLAY}/upper/file.txt"
           echo "workdata" > "${OVERLAY}/work/something"
 
-          echo "y" | "{{.riotbox_dir}}/scripts/overlay-reject.sh" "${PROJECT}"
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay.sh" reject "${PROJECT}"
 
           [ -d "${OVERLAY}/upper" ] || { echo "FAIL: upper dir missing"; exit 1; }
           [ -d "${OVERLAY}/work" ] || { echo "FAIL: work dir missing"; exit 1; }
@@ -208,7 +250,7 @@ testcases:
 
           echo "data" > "${OVERLAY}/upper/file.txt"
 
-          "{{.riotbox_dir}}/scripts/overlay-reject.sh" --force "${PROJECT}"
+          "{{.riotbox_dir}}/scripts/overlay.sh" reject --force "${PROJECT}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "Overlay data discarded"
@@ -222,7 +264,7 @@ testcases:
           setup_overlay_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
 
-          "{{.riotbox_dir}}/scripts/overlay-reject.sh" "${PROJECT}"
+          "{{.riotbox_dir}}/scripts/overlay.sh" reject "${PROJECT}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "No overlay changes to discard"
@@ -240,7 +282,7 @@ testcases:
 
           echo "brand new" > "${OVERLAY}/upper/added.txt"
 
-          "{{.riotbox_dir}}/scripts/overlay-diff.sh" "${PROJECT}"
+          "{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJECT}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "A  added.txt"
@@ -257,7 +299,7 @@ testcases:
           echo "original" > "${PROJECT}/existing.txt"
           echo "modified" > "${OVERLAY}/upper/existing.txt"
 
-          "{{.riotbox_dir}}/scripts/overlay-diff.sh" "${PROJECT}"
+          "{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJECT}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "M  existing.txt"
@@ -274,7 +316,7 @@ testcases:
           echo "to delete" > "${PROJECT}/gone.txt"
           touch "${OVERLAY}/upper/.wh.gone.txt"
 
-          "{{.riotbox_dir}}/scripts/overlay-diff.sh" "${PROJECT}"
+          "{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJECT}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "D  ./gone.txt"
@@ -299,7 +341,7 @@ testcases:
           echo "data" > "${OVERLAY}/upper/file2.txt"
           touch "${OVERLAY}/upper/.wh.deleted.txt"
 
-          "{{.riotbox_dir}}/scripts/overlay-list.sh"
+          "{{.riotbox_dir}}/scripts/overlay.sh" list
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "Pending overlays:"
@@ -317,7 +359,7 @@ testcases:
           export XDG_DATA_HOME="${TEST_DIR}/data"
           mkdir -p "${XDG_DATA_HOME}/claude-riotbox"
 
-          "{{.riotbox_dir}}/scripts/overlay-list.sh"
+          "{{.riotbox_dir}}/scripts/overlay.sh" list
         assertions:
           - result.code ShouldEqual 1
           - result.systemout ShouldContainSubstring "No pending overlays"
@@ -330,7 +372,7 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
 
           export XDG_DATA_HOME="${TEST_DIR}/nonexistent"
-          "{{.riotbox_dir}}/scripts/overlay-list.sh"
+          "{{.riotbox_dir}}/scripts/overlay.sh" list
         assertions:
           - result.code ShouldEqual 1
           - result.systemout ShouldContainSubstring "No pending overlays"
@@ -351,7 +393,7 @@ testcases:
           mkdir -p "${XDG_DATA_HOME}/claude-riotbox"
 
           export ROOT_DIR="{{.riotbox_dir}}"
-          "{{.riotbox_dir}}/scripts/overlay-diff.sh" "${PROJECT}" 2>&1
+          "{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJECT}" 2>&1
         assertions:
           - result.code ShouldNotEqual 0
           - result.systemout ShouldContainSubstring "No session found"
@@ -373,7 +415,7 @@ testcases:
           echo "${PROJECT}" > "${SESSION}/.projects"
 
           export ROOT_DIR="{{.riotbox_dir}}"
-          "{{.riotbox_dir}}/scripts/overlay-diff.sh" "${PROJECT}" 2>&1
+          "{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJECT}" 2>&1
         assertions:
           - result.code ShouldNotEqual 0
           - result.systemout ShouldContainSubstring "No overlay data found"
@@ -383,10 +425,39 @@ testcases:
       - type: exec
         script: |
           export ROOT_DIR="{{.riotbox_dir}}"
-          "{{.riotbox_dir}}/scripts/overlay-diff.sh" "/nonexistent/path" 2>&1
+          "{{.riotbox_dir}}/scripts/overlay.sh" diff "/nonexistent/path" 2>&1
         assertions:
           - result.code ShouldNotEqual 0
           - result.systemout ShouldContainSubstring "is not a directory"
+
+  # ── Subcommand dispatch ─────────────────────────────────────────────────
+
+  - name: Dispatch with no subcommand exits 2 and prints usage
+    steps:
+      - type: exec
+        script: |
+          "{{.riotbox_dir}}/scripts/overlay.sh" 2>&1
+        assertions:
+          - result.code ShouldEqual 2
+          - result.systemout ShouldContainSubstring "overlay.sh <subcommand>"
+
+  - name: Dispatch with unknown subcommand exits 2
+    steps:
+      - type: exec
+        script: |
+          "{{.riotbox_dir}}/scripts/overlay.sh" badcmd 2>&1
+        assertions:
+          - result.code ShouldEqual 2
+          - result.systemout ShouldContainSubstring "unknown subcommand"
+
+  - name: Dispatch help prints usage and exits 0
+    steps:
+      - type: exec
+        script: |
+          "{{.riotbox_dir}}/scripts/overlay.sh" help
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "overlay.sh <subcommand>"
 
   # ── Docker detection in launch.sh ───────────────────────────────────────
 

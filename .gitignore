@@ -10,3 +10,6 @@ docs/superpowers/
 .test-output/
 venom.log
 venom.*.log
+
+# Scratch space for spikes / one-off experiments
+tmp/

@@ -1,0 +1,139 @@
+name: scripts/lib/log.sh structured JSON logger
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Pins the public contract of scripts/lib/log.sh. log_emit MUST emit valid
+# JSON with the four base fields (ts, level, step, msg) and an ISO 8601
+# UTC timestamp; extras MUST merge into the same object. log_fmt MUST
+# round-trip a known JSON line into a single human-readable line.
+
+testcases:
+  - name: log_emit produces JSON with the four base fields
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/lib/log.sh"
+          line="$(log_emit info launch sandbox-up)"
+          echo "${line}"
+          # Validate the four base fields exist and have the expected values.
+          got_level="$(echo "${line}" | jq -r '.level')"
+          got_step="$(echo "${line}" | jq -r '.step')"
+          got_msg="$(echo "${line}" | jq -r '.msg')"
+          got_ts="$(echo "${line}" | jq -r '.ts')"
+          [ "${got_level}" = "info" ] || { echo "BAD level=${got_level}" >&2; exit 1; }
+          [ "${got_step}" = "launch" ] || { echo "BAD step=${got_step}" >&2; exit 1; }
+          [ "${got_msg}" = "sandbox-up" ] || { echo "BAD msg=${got_msg}" >&2; exit 1; }
+          # ISO 8601 UTC: YYYY-MM-DDTHH:MM:SSZ
+          if ! [[ "${got_ts}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+              echo "BAD ts=${got_ts}" >&2; exit 1
+          fi
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: log_emit output is single-line JSON (no embedded newlines)
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/lib/log.sh"
+          out="$(log_emit info launch sandbox-up)"
+          # Count newline bytes in the captured value via tr | wc -c.
+          # Command substitution strips the single trailing newline jq
+          # appends, so a well-formed single-line JSON must contain ZERO
+          # remaining newline bytes.
+          nl_count="$(printf '%s' "${out}" | tr -cd '\n' | wc -c)"
+          [ "${nl_count}" = "0" ] || { echo "BAD: ${nl_count} embedded newlines" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: log_emit merges extras into the same object
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/lib/log.sh"
+          line="$(log_emit info launch sandbox-up '{"key":"abc","count":3}')"
+          echo "${line}"
+          got_key="$(echo "${line}" | jq -r '.key')"
+          got_count="$(echo "${line}" | jq -r '.count')"
+          [ "${got_key}" = "abc" ] || { echo "BAD key=${got_key}" >&2; exit 1; }
+          [ "${got_count}" = "3" ] || { echo "BAD count=${got_count}" >&2; exit 1; }
+          # Base fields must still be present.
+          [ "$(echo "${line}" | jq -r '.level')" = "info" ] || exit 1
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: log_emit rejects malformed extras JSON
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/lib/log.sh"
+          # An unbalanced JSON snippet must cause jq to fail and bubble out
+          # (because the function uses --argjson, which validates).
+          log_emit info launch sandbox-up '{not json' 2>&1 || echo "EXIT=$?"
+        assertions:
+          - result.systemout ShouldContainSubstring "EXIT="
+
+  - name: log_emit fails when level is missing
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/lib/log.sh"
+          # ${1:?...} fails the call. In non-interactive bash this aborts
+          # the shell on the failed expansion, so we run the call in a
+          # subshell to isolate that exit and capture the status.
+          (log_emit) 2>&1 || echo "EXIT=$?"
+        assertions:
+          - result.systemout ShouldContainSubstring "level required"
+          - result.systemout ShouldContainSubstring "EXIT="
+
+  - name: log_fmt round-trips a known JSON line
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/lib/log.sh"
+          line='{"ts":"2026-05-07T14:30:00Z","level":"info","step":"launch","msg":"sandbox-up","key":"abc"}'
+          out="$(log_fmt "${line}")"
+          echo "${out}"
+          # Expected: ISO ts, [INFO] (uppercase), step, msg.
+          expected="2026-05-07T14:30:00Z [INFO] launch: sandbox-up"
+          [ "${out}" = "${expected}" ] || { echo "BAD: got '${out}'" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: log_fmt uppercases the level field
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/lib/log.sh"
+          line='{"ts":"2026-05-07T14:30:00Z","level":"warn","step":"x","msg":"y"}'
+          out="$(log_fmt "${line}")"
+          echo "${out}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "[WARN]"
+
+  - name: log_emit and log_fmt round-trip end-to-end
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/lib/log.sh"
+          line="$(log_emit error build failed)"
+          echo "JSON: ${line}"
+          human="$(log_fmt "${line}")"
+          echo "HUMAN: ${human}"
+          # Single line, contains [ERROR], step, msg.
+          case "${human}" in
+              *"[ERROR] build: failed"*) echo "OK" ;;
+              *) echo "BAD: ${human}" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
