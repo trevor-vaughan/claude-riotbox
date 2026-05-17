@@ -188,6 +188,15 @@ fi
 
 # shellcheck source=./passthrough-vars.sh
 source "$(dirname "${BASH_SOURCE[0]}")/passthrough-vars.sh"
+# Must run before passthrough_flags: KEY=VALUE entries are exported into
+# this shell's env so the podman child process (which receives `-e KEY`
+# without a value) can read them by name. Inside a subshell the export
+# would die — that's why this call is direct, not $(...).
+# Failure (invalid KEY) propagates via `return 1`; `set -euo pipefail`
+# at the top of this file aborts the launch. Do NOT add `|| true` or
+# wrap this call in a subshell — either would silently swallow KEY
+# validation failures and start the container with missing env vars.
+passthrough_export
 PASSTHROUGH_FLAGS="$(passthrough_flags)"
 
 # Must run before credfile_flags(): if the user accepts, this exports

@@ -1,0 +1,139 @@
+name: passthrough-vars KEY=VALUE entries reach the container env
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Layer 3 — container E2E. Actually launches the riotbox container with a
+# test config and runs `printenv` inside to verify values land. Gated on
+# CONTAINER_CMD being available and the test image being built; tests
+# detect missing runtime/image and skip cleanly.
+
+testcases:
+  - name: E1 KEY=literal and KEY=$(cmd) entries are visible inside the container via printenv
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+
+          CONTAINER_CMD="$(command -v podman 2>/dev/null || command -v docker 2>/dev/null || true)"
+          if [ -z "${CONTAINER_CMD}" ]; then
+            echo "SKIP: no container runtime available"
+            echo "OK"
+            exit 0
+          fi
+
+          IMAGE_NAME="${IMAGE_NAME:-claude-riotbox-test}"
+          if ! "${CONTAINER_CMD}" image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
+            echo "SKIP: image ${IMAGE_NAME} not built (run 'task test:build')"
+            echo "OK"
+            exit 0
+          fi
+
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          export HOME="${tmp}/home"
+          export XDG_CONFIG_HOME="${tmp}/home/.config"
+          export XDG_DATA_HOME="${tmp}/home/.local/share"
+          mkdir -p "${XDG_CONFIG_HOME}/claude-riotbox" "${XDG_DATA_HOME}"
+          : > "${XDG_CONFIG_HOME}/claude-riotbox/mounts.conf"
+
+          cat > "${XDG_CONFIG_HOME}/claude-riotbox/config" <<'CFG'
+          RIOTBOX_PASSTHROUGH_VARS="
+            FOO=hello
+            GREETING=hello world
+            DYNAMIC=$(echo dyn-value)
+          "
+          CFG
+
+          export CONTAINER_CMD IMAGE_NAME
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_PROJECTS="${tmp}"
+
+          # Run printenv inside the container and capture stdout
+          rc=0
+          out="$(bash .taskfiles/scripts/launch.sh \
+              sh -c 'printenv FOO; printenv GREETING; printenv DYNAMIC' 2>"${tmp}/err.log")" || rc=$?
+
+          if [ "${rc}" != "0" ]; then
+            echo "BAD: launcher exited ${rc}" >&2
+            cat "${tmp}/err.log" >&2
+            exit 1
+          fi
+
+          case "${out}" in
+            *"hello world"*) ;;
+            *) echo "BAD: 'hello world' not in output: ${out}" >&2; exit 1 ;;
+          esac
+
+          case "${out}" in
+            *"dyn-value"*) ;;
+            *) echo "BAD: 'dyn-value' not in output: ${out}" >&2; exit 1 ;;
+          esac
+
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: E2 invalid KEY entry aborts the launcher before any container starts
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+
+          CONTAINER_CMD="$(command -v podman 2>/dev/null || command -v docker 2>/dev/null || true)"
+          if [ -z "${CONTAINER_CMD}" ]; then
+            echo "SKIP: no container runtime available"
+            echo "OK"
+            exit 0
+          fi
+
+          IMAGE_NAME="${IMAGE_NAME:-claude-riotbox-test}"
+          if ! "${CONTAINER_CMD}" image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
+            echo "SKIP: image ${IMAGE_NAME} not built"
+            echo "OK"
+            exit 0
+          fi
+
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          export HOME="${tmp}/home"
+          export XDG_CONFIG_HOME="${tmp}/home/.config"
+          export XDG_DATA_HOME="${tmp}/home/.local/share"
+          mkdir -p "${XDG_CONFIG_HOME}/claude-riotbox" "${XDG_DATA_HOME}"
+          : > "${XDG_CONFIG_HOME}/claude-riotbox/mounts.conf"
+
+          cat > "${XDG_CONFIG_HOME}/claude-riotbox/config" <<'CFG'
+          RIOTBOX_PASSTHROUGH_VARS="1FOO=bar"
+          CFG
+
+          export CONTAINER_CMD IMAGE_NAME
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_PROJECTS="${tmp}"
+
+          rc=0
+          bash .taskfiles/scripts/launch.sh true >"${tmp}/out.log" 2>"${tmp}/err.log" || rc=$?
+
+          if [ "${rc}" = "0" ]; then
+            echo "BAD: launcher succeeded despite invalid KEY (expected non-zero exit)" >&2
+            exit 1
+          fi
+
+          err="$(cat "${tmp}/err.log")"
+
+          case "${err}" in
+            *"invalid KEY"*) ;;
+            *) echo "BAD: 'invalid KEY' not in stderr: ${err}" >&2; exit 1 ;;
+          esac
+
+          case "${err}" in
+            *"1FOO=bar"*) ;;
+            *) echo "BAD: '1FOO=bar' not in stderr: ${err}" >&2; exit 1 ;;
+          esac
+
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"

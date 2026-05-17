@@ -3,38 +3,41 @@
 # passthrough-vars.sh — Build container -e flags for configured env vars.
 #
 # Sourced (not executed) by launch.sh. Provides:
-#   passthrough_flags  — prints "-e NAME" tokens (one per set variable),
-#                        whitespace-separated. Empty output when nothing is set.
+#   passthrough_export  — export each KEY=VALUE entry from
+#                         RIOTBOX_PASSTHROUGH_VARS into the calling shell's
+#                         process env. MUST be called in the launcher's
+#                         current shell (no command substitution).
+#   passthrough_flags   — print "-e NAME" tokens (whitespace-separated)
+#                         for podman/docker. Safe to call via $(...).
 #
-# The default list of variables is the union of every registered agent's
-# `agent_<name>_env_vars` output (see agents/*/manifest.sh). This keeps
-# the source-of-truth co-located with each agent: adding a provider key
-# means editing one manifest, not this file.
+# RIOTBOX_PASSTHROUGH_VARS entry forms (parsed line-by-line):
+#   - bare NAME      — emit `-e NAME` iff NAME is non-empty in env
+#   - KEY=VALUE      — export KEY="$VALUE" then unconditionally emit `-e KEY`
+#                      (user-explicit assignment, empty values forwarded)
 #
-# RIOTBOX_PASSTHROUGH_VARS (whitespace-separated) overrides the registry
-# union when set — power users who want a curated passthrough list keep
-# full control. Override via env or ~/.config/claude-riotbox/config.
+# Multiple bare names on one whitespace-separated line are accepted
+# (backwards compatible with the historical single-line idiom). A line
+# containing `=` is treated as one whole KEY=VALUE entry — values may
+# contain whitespace, KEY=VALUE must be on its own line.
 #
-# Values are NOT inlined — `-e NAME` (without `=value`) tells podman/docker
-# to copy the value from the calling environment. This avoids quoting
-# issues and keeps secrets out of process argv.
+# Comment lines (leading `#` after trim) and blank lines are skipped.
+#
+# Values are bash-expanded at config-source time (~/.config/claude-riotbox/
+# config is `source`d), so `FOO=$BAR` and `FOO=$(cmd)` Just Work — they
+# are NOT re-expanded here, which would be a security regression.
+#
+# Default (when RIOTBOX_PASSTHROUGH_VARS is unset): the agent-registry
+# union of every agent's env_vars output — bare names only.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Resolve the riotbox source root from this file's location. The script is
-# always at <root>/.taskfiles/scripts/passthrough-vars.sh, so two levels up
-# gets us to <root>. This works regardless of caller cwd or whether ROOT_DIR
-# happens to be set in the environment, which keeps the script sourceable
-# from both launch.sh (where ROOT_DIR is set) and standalone test scripts
-# (where it may not be).
 _PASSTHROUGH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # shellcheck source=../../agents/registry.sh
 source "${_PASSTHROUGH_ROOT}/agents/registry.sh"
 
 # _passthrough_registry_vars
-#   Print the deduped, sorted union of every registered agent's env_vars.
-#   One name per line — env var names cannot contain whitespace or NULs,
-#   so newline framing is unambiguous and round-trips through `mapfile -t`.
+#   Print the deduped union of every registered agent's env_vars,
+#   one name per line.
 _passthrough_registry_vars() {
     local _agent
     for _agent in "${AGENT_REGISTRY[@]}"; do
@@ -42,27 +45,87 @@ _passthrough_registry_vars() {
     done | sort -u
 }
 
-passthrough_flags() {
-    local vars
+# _passthrough_source
+#   Print the raw input — user override if set, else registry union.
+_passthrough_source() {
     if [ -n "${RIOTBOX_PASSTHROUGH_VARS:-}" ]; then
-        # User override: whitespace-separated string. Word-split as-is.
-        vars="${RIOTBOX_PASSTHROUGH_VARS}"
+        printf '%s' "${RIOTBOX_PASSTHROUGH_VARS}"
     else
-        # Registry union, newline-separated. Word-splitting in the loop
-        # below handles whitespace (including newlines) uniformly.
-        vars="$(_passthrough_registry_vars)"
+        _passthrough_registry_vars
     fi
-    local flags=""
-    local name
-    for name in ${vars}; do
-        # Indirect expansion: ${!name} is the value of the var named $name.
-        if [ -n "${!name:-}" ]; then
-            if [ -z "${flags}" ]; then
-                flags="-e ${name}"
-            else
-                flags="${flags} -e ${name}"
-            fi
+}
+
+# _passthrough_valid_key NAME
+#   Return 0 iff NAME is a POSIX identifier ([A-Za-z_][A-Za-z0-9_]*).
+_passthrough_valid_key() {
+    [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
+}
+
+# _passthrough_trim VAR_NAME
+#   Trim leading and trailing whitespace from the named variable in place.
+_passthrough_trim() {
+    local __v="${!1}"
+    __v="${__v#"${__v%%[![:space:]]*}"}"
+    __v="${__v%"${__v##*[![:space:]]}"}"
+    printf -v "$1" '%s' "${__v}"
+}
+
+# passthrough_export
+#   For each KEY=VALUE entry in the source, export KEY="$VALUE" into the
+#   calling shell's process env. Bare-name entries are ignored here
+#   (handled by passthrough_flags). Returns 1 (and prints to stderr) on
+#   invalid KEY — caller's `set -e` will abort the launch.
+passthrough_export() {
+    local raw line key value
+    raw="$(_passthrough_source)"
+    while IFS= read -r line; do
+        _passthrough_trim line
+        [ -z "${line}" ] && continue
+        case "${line}" in \#*) continue ;; esac
+        [[ "${line}" == *=* ]] || continue
+        key="${line%%=*}"
+        value="${line#*=}"
+        if ! _passthrough_valid_key "${key}"; then
+            printf 'passthrough-vars: invalid KEY in entry: %s\n' "${line}" >&2
+            return 1
         fi
-    done
+        export "${key}=${value}"
+    done <<< "${raw}"
+}
+
+# passthrough_flags
+#   Print "-e NAME" tokens for podman/docker, whitespace-separated.
+#   Safe to call in a subshell ($(...)). Bare names are emitted only when
+#   non-empty in env; KEY=VALUE entries are always emitted (user-explicit).
+#   Returns 1 (and prints to stderr) on invalid KEY/NAME.
+passthrough_flags() {
+    local raw line key name flags=""
+    raw="$(_passthrough_source)"
+    while IFS= read -r line; do
+        _passthrough_trim line
+        [ -z "${line}" ] && continue
+        case "${line}" in \#*) continue ;; esac
+        if [[ "${line}" == *=* ]]; then
+            key="${line%%=*}"
+            if ! _passthrough_valid_key "${key}"; then
+                printf 'passthrough-vars: invalid KEY in entry: %s\n' "${line}" >&2
+                return 1
+            fi
+            flags="${flags:+${flags} }-e ${key}"
+        else
+            # shellcheck disable=SC2086
+            # Intentional word-splitting: bare-name lines may carry multiple
+            # space-separated names (backwards-compatible single-line idiom).
+            for name in ${line}; do
+                if ! _passthrough_valid_key "${name}"; then
+                    printf 'passthrough-vars: invalid NAME in entry: %s\n' "${name}" >&2
+                    return 1
+                fi
+                if [ -n "${!name:-}" ]; then
+                    flags="${flags:+${flags} }-e ${name}"
+                fi
+            done
+        fi
+    done <<< "${raw}"
     printf '%s' "${flags}"
 }

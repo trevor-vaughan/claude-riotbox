@@ -1,0 +1,551 @@
+name: passthrough-vars.sh parses RIOTBOX_PASSTHROUGH_VARS correctly
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Layer 1 — unit tests: source passthrough-vars.sh, call passthrough_export
+# (current shell) and passthrough_flags ($()), assert on stdout and process
+# env. Each test runs in an isolated bash subshell so env mutations cannot
+# bleed between cases.
+#
+# Layer 2 (added in Task 9) — argv-hygiene: stub `podman` on PATH and run
+# launch.sh end-to-end; assert sensitive values never appear in captured
+# argv.
+
+testcases:
+
+  - name: U1 single-line whitespace-separated bare names emit -e for each set var
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS
+          export FOO=fooval
+          export BAR=barval
+          export RIOTBOX_PASSTHROUGH_VARS="FOO BAR"
+          source .taskfiles/scripts/passthrough-vars.sh
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO -e BAR]"
+
+  - name: U2 newline-separated bare names emit -e for each set var
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS
+          export FOO=fooval
+          export BAR=barval
+          export RIOTBOX_PASSTHROUGH_VARS=$'FOO\nBAR'
+          source .taskfiles/scripts/passthrough-vars.sh
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO -e BAR]"
+
+  - name: U3 bare name unset in host env is skipped silently
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS NOT_SET_ANYWHERE
+          export FOO=fooval
+          export RIOTBOX_PASSTHROUGH_VARS="FOO NOT_SET_ANYWHERE"
+          source .taskfiles/scripts/passthrough-vars.sh
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO]"
+          - result.systemout ShouldNotContainSubstring "NOT_SET_ANYWHERE"
+
+  - name: U23 registry default path emits agent-registry bare names when no override set
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS
+          export ANTHROPIC_API_KEY=test-key
+          source .taskfiles/scripts/passthrough-vars.sh
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "-e ANTHROPIC_API_KEY"
+
+  - name: U4 KEY=literal exports KEY into launcher env and emits -e KEY
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS FOO
+          export RIOTBOX_PASSTHROUGH_VARS="FOO=hello"
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "FOO=[${FOO-<unset>}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO]"
+          - result.systemout ShouldContainSubstring "FOO=[hello]"
+
+  - name: U5 KEY=$HOST_VAR uses bash source-time expansion
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS FOO
+          export BAR=world
+          export RIOTBOX_PASSTHROUGH_VARS="FOO=$BAR"
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "FOO=[${FOO-<unset>}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO]"
+          - result.systemout ShouldContainSubstring "FOO=[world]"
+
+  - name: U6 KEY=$(cmd) uses bash command substitution at source time
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS FOO
+          export RIOTBOX_PASSTHROUGH_VARS="FOO=$(echo hi)"
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "FOO=[${FOO-<unset>}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO]"
+          - result.systemout ShouldContainSubstring "FOO=[hi]"
+
+  - name: U7 KEY=VALUE on its own line preserves whitespace inside VALUE
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS GREETING
+          export RIOTBOX_PASSTHROUGH_VARS=$'GREETING=hello world'
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "GREETING=[${GREETING-<unset>}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e GREETING]"
+          - result.systemout ShouldContainSubstring "GREETING=[hello world]"
+
+  - name: U8 mixed bare-name and KEY=VALUE entries on separate lines both honored
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS FOO TOKEN
+          export FOO=fooval
+          export RIOTBOX_PASSTHROUGH_VARS=$'FOO\nTOKEN=tok-123'
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "TOKEN=[${TOKEN-<unset>}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO -e TOKEN]"
+          - result.systemout ShouldContainSubstring "TOKEN=[tok-123]"
+
+  - name: U9 comment lines starting with hash are skipped
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS FOO
+          export FOO=fooval
+          export RIOTBOX_PASSTHROUGH_VARS=$'# this is a comment\nFOO\n  # indented comment\n'
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO]"
+
+  - name: U10 empty and whitespace-only lines are skipped
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS FOO
+          export FOO=fooval
+          export RIOTBOX_PASSTHROUGH_VARS=$'\n\n   \nFOO\n\t\n'
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO]"
+
+  - name: U11 digit-leading KEY rejected with clear error
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS
+          export RIOTBOX_PASSTHROUGH_VARS="1FOO=bar"
+          source .taskfiles/scripts/passthrough-vars.sh
+          rc=0
+          passthrough_export 2>err.log || rc=$?
+          echo "EXIT=${rc}"
+          cat err.log
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "EXIT=1"
+          - result.systemout ShouldContainSubstring "invalid KEY"
+          - result.systemout ShouldContainSubstring "1FOO=bar"
+
+  - name: U12 KEY containing space rejected
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS
+          export RIOTBOX_PASSTHROUGH_VARS="FOO BAR=baz"
+          source .taskfiles/scripts/passthrough-vars.sh
+          rc=0
+          passthrough_export 2>err.log || rc=$?
+          echo "EXIT=${rc}"
+          cat err.log
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "EXIT=1"
+          - result.systemout ShouldContainSubstring "invalid KEY"
+          - result.systemout ShouldContainSubstring "FOO BAR=baz"
+
+  - name: U13 KEY containing hyphen rejected
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS
+          export RIOTBOX_PASSTHROUGH_VARS="FOO-BAR=baz"
+          source .taskfiles/scripts/passthrough-vars.sh
+          rc=0
+          passthrough_export 2>err.log || rc=$?
+          echo "EXIT=${rc}"
+          cat err.log
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "EXIT=1"
+          - result.systemout ShouldContainSubstring "invalid KEY"
+          - result.systemout ShouldContainSubstring "FOO-BAR=baz"
+
+  - name: U14 empty VALUE exports empty string and unconditionally emits -e KEY
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS FOO
+          export RIOTBOX_PASSTHROUGH_VARS="FOO="
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          if [ "${FOO+set}" = set ]; then
+            echo "FOO=set/[${FOO}]"
+          else
+            echo "FOO=unset"
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO]"
+          - result.systemout ShouldContainSubstring "FOO=set/[]"
+
+  - name: U15 duplicate KEY entries — last-wins env; passthrough_flags emits -e KEY for each occurrence
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS FOO
+          export RIOTBOX_PASSTHROUGH_VARS=$'FOO=first\nFOO=second'
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "FOO=[${FOO}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO -e FOO]"
+          - result.systemout ShouldContainSubstring "FOO=[second]"
+
+  - name: U16 equals sign inside VALUE preserved; split happens on first equals
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS URL
+          export RIOTBOX_PASSTHROUGH_VARS="URL=https://x.example/path?q=1&r=2"
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "URL=[${URL}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e URL]"
+          - result.systemout ShouldContainSubstring "URL=[https://x.example/path?q=1&r=2]"
+
+  - name: U17 UTF-8 multibyte content in VALUE preserved end-to-end
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS MOTTO
+          export LANG=C.UTF-8 LC_ALL=C.UTF-8
+          export RIOTBOX_PASSTHROUGH_VARS="MOTTO=日本語"
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "MOTTO=[${MOTTO}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e MOTTO]"
+          - result.systemout ShouldContainSubstring "MOTTO=[日本語]"
+
+  - name: U18 long (4 KB) VALUE preserved without truncation
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS BIG
+          big="$(head -c 4096 /dev/urandom | base64 | tr -d '\n' | head -c 4096)"
+          export RIOTBOX_PASSTHROUGH_VARS="BIG=${big}"
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "LEN=${#BIG}"
+          [ "${BIG}" = "${big}" ] && echo "MATCH=yes" || echo "MATCH=no"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e BIG]"
+          - result.systemout ShouldContainSubstring "LEN=4096"
+          - result.systemout ShouldContainSubstring "MATCH=yes"
+
+  - name: U19 tab characters inside VALUE preserved
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS COLS
+          export RIOTBOX_PASSTHROUGH_VARS=$'COLS=a\tb\tc'
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          # Render the value with tabs visible. od -c shows tabs as \t.
+          printf 'OD_COLS:' ; printf '%s' "${COLS}" | od -An -c | tr -s ' '
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e COLS]"
+          - result.systemout ShouldContainSubstring "a \t b \t c"
+
+  - name: U20 VALUE that looks like a podman flag is stored as a string, not spliced into argv
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS FOO
+          export RIOTBOX_PASSTHROUGH_VARS="FOO=-v /etc:/etc:ro"
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "FOO=[${FOO}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO]"
+          - result.systemout ShouldContainSubstring "FOO=[-v /etc:/etc:ro]"
+          - result.systemout ShouldNotContainSubstring "FLAGS=[-e FOO -v"
+
+  - name: U21 a literal dollar-name in VALUE is preserved, not re-expanded at parse time
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS FOO NOT_EXPANDED
+          export NOT_EXPANDED=should_not_appear
+          # Single quotes around the value mean the inner $NOT_EXPANDED is
+          # NOT expanded at config-source time, so the var contains the
+          # literal string FOO=$NOT_EXPANDED.
+          export RIOTBOX_PASSTHROUGH_VARS='FOO=$NOT_EXPANDED'
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "FOO=[${FOO}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO]"
+          - result.systemout ShouldContainSubstring "FOO=[$NOT_EXPANDED]"
+          - result.systemout ShouldNotContainSubstring "FOO=[should_not_appear]"
+
+  - name: U22 line-level trim only; whitespace inside VALUE preserved after first equals
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS FOO
+          # Line has leading and trailing spaces around the whole entry,
+          # and a leading space INSIDE the value after the equals.
+          export RIOTBOX_PASSTHROUGH_VARS=$'   FOO= hello   '
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "FOO=[${FOO}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO]"
+          - result.systemout ShouldContainSubstring "FOO=[ hello]"
+
+  - name: U24 calling passthrough_flags via subshell does NOT export KEY=VALUE entries to parent
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS LEAK
+          export RIOTBOX_PASSTHROUGH_VARS="LEAK=should-not-leak"
+          source .taskfiles/scripts/passthrough-vars.sh
+          # Deliberately do NOT call passthrough_export. Then call
+          # passthrough_flags via command substitution. The parent shell
+          # MUST NOT see LEAK exported afterward.
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          if [ "${LEAK+set}" = set ]; then
+            echo "LEAK=LEAKED/[${LEAK}]"
+          else
+            echo "LEAK=isolated"
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e LEAK]"
+          - result.systemout ShouldContainSubstring "LEAK=isolated"
+
+  - name: H1 argv hygiene — secret values from KEY=VALUE entries never appear in podman argv
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+
+          # Build a stub podman that captures argv to a file then exits 0.
+          stub_dir="$(mktemp -d)"
+          trap 'rm -rf "${stub_dir}"' EXIT
+
+          cat > "${stub_dir}/podman" <<'STUB'
+          #!/usr/bin/env bash
+          # Write each argv element on its own line — preserves args with spaces.
+          printf '%s\n' "$@" > "${STUB_ARGV_FILE}"
+          exit 0
+          STUB
+          chmod +x "${stub_dir}/podman"
+
+          # Redirect HOME and XDG dirs into stub_dir so launch.sh never writes
+          # to the real user home and RIOTBOX_DATA_DIR lands under stub_dir.
+          export HOME="${stub_dir}/home"
+          export XDG_CONFIG_HOME="${stub_dir}/home/.config"
+          export XDG_DATA_HOME="${stub_dir}/home/.local/share"
+          mkdir -p \
+              "${XDG_CONFIG_HOME}/claude-riotbox" \
+              "${XDG_DATA_HOME}"
+
+          # Empty mounts.conf so detect-mounts.sh processes no user entries.
+          : > "${XDG_CONFIG_HOME}/claude-riotbox/mounts.conf"
+
+          # Config: ONE KEY=VALUE entry containing a recognisable secret.
+          cat > "${XDG_CONFIG_HOME}/claude-riotbox/config" <<'CFG'
+          RIOTBOX_PASSTHROUGH_VARS="TOKEN=super-secret-value"
+          CFG
+
+          # Point launch.sh at the riotbox root so it can source sub-scripts.
+          export ROOT_DIR="{{.riotbox_dir}}"
+
+          # Stub podman on PATH so the stub intercepts the final container run.
+          export PATH="${stub_dir}:${PATH}"
+          export CONTAINER_CMD="${stub_dir}/podman"
+          export IMAGE_NAME="claude-riotbox-stub"
+          export STUB_ARGV_FILE="${stub_dir}/argv.txt"
+
+          # Mount a real directory as the project (stub_dir itself works).
+          export RIOTBOX_PROJECTS="${stub_dir}"
+
+          # Run the launcher; ignore its exit code — stub podman exits 0 but
+          # the -it TTY flags may make the real exit path non-zero.
+          bash .taskfiles/scripts/launch.sh true 2>"${stub_dir}/launch.err" || true
+
+          echo "--- ARGV ---"
+          cat "${STUB_ARGV_FILE}" 2>/dev/null || echo "(no argv captured)"
+          echo "--- END ARGV ---"
+
+          echo "--- STDERR ---"
+          cat "${stub_dir}/launch.err" 2>/dev/null || true
+          echo "--- END STDERR ---"
+        assertions:
+          - result.systemout ShouldContainSubstring "-e"
+          - result.systemout ShouldContainSubstring "TOKEN"
+          - result.systemout ShouldNotContainSubstring "super-secret-value"
+
+  - name: U25 bare name containing hyphen rejected by passthrough_flags
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS
+          export RIOTBOX_PASSTHROUGH_VARS="FOO-BAR"
+          source .taskfiles/scripts/passthrough-vars.sh
+          rc=0
+          FLAGS="$(passthrough_flags 2>err.log)" || rc=$?
+          echo "EXIT=${rc}"
+          cat err.log
+          rm -f err.log
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "EXIT=1"
+          - result.systemout ShouldContainSubstring "invalid NAME"
+          - result.systemout ShouldContainSubstring "FOO-BAR"

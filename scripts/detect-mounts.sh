@@ -163,6 +163,7 @@ if [ -f "${MOUNTS_CONF}" ]; then
         # That bug silently dropped every tilde-prefixed mounts.conf
         # entry by routing it to the relative branch with a non-existent
         # ${HOME}/~/... source.
+        # shellcheck disable=SC2088  # matching the literal "~/" prefix in user config, not expanding it
         if [[ "${line}" == "~/"* ]]; then
             src="${HOME}/${line:2}"
             dst="${CONTAINER_HOME}/${line:2}"

@@ -1,4 +1,4 @@
-# riotbox-config-version: 4
+# riotbox-config-version: 5
 # ~/.config/claude-riotbox/config — Persistent defaults for claude-riotbox.
 #
 # This file is sourced as shell script by the launcher. Values use the
@@ -45,16 +45,30 @@
 # : "${RIOTBOX_AGENT:=claude}"
 
 # ── Provider env var & routing passthrough ──────────────────────────────
-# Whitespace-separated list of environment variables to pass into the
-# container if they are set on the host. Used by Claude (provider routing)
-# and opencode (provider keys). Unset variables are silently skipped.
+# Controls which env vars are forwarded from your host shell into the
+# container, and lets you inject new ones computed at launch time.
+#
+# Two entry forms (entries are parsed line-by-line):
+#
+#   bare NAME      Forward NAME from host env. Skipped silently if NAME
+#                  is unset or empty on the host. Multiple bare names
+#                  may appear on one line, whitespace-separated (BC).
+#
+#   KEY=VALUE      Set KEY inside the container. VALUE is bash-expanded
+#                  at the time this file is sourced — so $BAR pulls from
+#                  the host shell, $(cmd) runs a command, and literals
+#                  are passed through verbatim. KEY=VALUE entries must
+#                  be on their own line; values may contain spaces.
+#
+# Comment lines starting with `#` and blank lines are skipped.
 #
 # DEFAULT (when this variable is unset): the union of every registered
 # agent's `agent_<name>_env_vars` declaration, deduplicated. Each agent
 # manifest at agents/<name>/manifest.sh is the source of truth for the
-# vars THAT agent reads — adding a new agent or a new provider key means
-# editing one manifest, not this config and not passthrough-vars.sh.
-# Today that union covers:
+# vars THAT agent reads — adding a provider key means editing one
+# manifest, not this config and not passthrough-vars.sh.
+#
+# Today that default covers:
 #   * Claude Code (agents/claude/manifest.sh): ANTHROPIC_API_KEY,
 #     ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, ANTHROPIC_VERTEX_*,
 #     ANTHROPIC_BEDROCK_BASE_URL, CLAUDE_CODE_USE_VERTEX,
@@ -64,8 +78,23 @@
 #     OPENAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, GROQ_API_KEY,
 #     MISTRAL_API_KEY, DEEPSEEK_API_KEY, XAI_API_KEY.
 #
-# Setting RIOTBOX_PASSTHROUGH_VARS here overrides the registry union with
-# a curated whitespace-separated list of your choice.
+# Setting RIOTBOX_PASSTHROUGH_VARS REPLACES the default — it does not
+# merge. If you set it, list everything you want forwarded.
+#
+# Security:
+#   * Sensitive values from KEY=VALUE entries never appear in `ps`/argv —
+#     the launcher exports them into its own env and passes only `-e KEY`
+#     (no `=value`) to podman.
+#   * Use double quotes (or no quotes) around the string so bash expands
+#     $VAR / $(cmd) at source time; single quotes suppress expansion.
+#   * `set -u` is active when this file is sourced — `FOO=$BAR` with BAR
+#     unset will ABORT the launcher with `bash: BAR: unbound variable`.
+#     For an optional default, use `FOO=${BAR:-}` or `FOO=${BAR:-fallback}`.
+#   * Command substitution failures inside an assignment (`FOO=$(missing)`)
+#     are NOT caught by `set -e`; the resulting VALUE is empty.
+#   * Values must not contain newlines. For multiline values, define and
+#     export the variable in this file as a separate statement and pass
+#     it by bare name.
 #
 # Excluded from the default by design — uncomment in your shell to opt in:
 #   * AWS access keys (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
@@ -76,13 +105,20 @@
 #     model and gives the container live signing access for the host
 #     SSH agent's lifetime; out of scope here.
 #
-# Name-only (no `=value`) tells the container runtime to copy the value
-# from the caller's environment, keeping secrets out of process argv.
+# Examples:
 #
+# Single-line, bare names only (BC with prior versions):
 # : "${RIOTBOX_PASSTHROUGH_VARS:=ANTHROPIC_API_KEY OPENAI_API_KEY}"
 #
-# Example: extend with additional providers (registry union plus extras)
-# RIOTBOX_PASSTHROUGH_VARS="$RIOTBOX_PASSTHROUGH_VARS COHERE_API_KEY TOGETHER_API_KEY"
+# Multi-line, mixed forms:
+# RIOTBOX_PASSTHROUGH_VARS="
+#     ANTHROPIC_API_KEY
+#     OPENAI_API_KEY
+#     PROJECT_NAME=$(basename "${PWD}")
+#     GIT_BRANCH=$(git -C "${PWD}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+#     TOKEN=$(cat ~/.secrets/work-api-token)
+#     EDITOR=vim
+# "
 
 # ── Credential-file mounts ───────────────────────────────────────────────
 # Whitespace-separated list of "VAR_NAME:/container/path" entries. For
