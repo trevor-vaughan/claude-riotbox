@@ -1,0 +1,121 @@
+name: detect-mounts.sh reads mounts.conf with the three documented path forms
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Pins the three documented path forms in mounts.conf:
+#   ~/foo    → ${HOME}/foo on host  → /home/claude/foo  in container
+#   /abs/x   → /abs/x  on host       → /abs/x           in container
+#   rel/y    → ${HOME}/rel/y on host → /home/claude/rel/y in container
+# Each entry produces a `-v host:container:ro,z` flag; missing source
+# files are silently skipped (existing behaviour we want to preserve).
+
+testcases:
+
+  - name: mounts.conf tilde-prefixed entry resolves to HOME on host and /home/claude in container
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          unset XDG_CONFIG_HOME
+          mkdir -p "${HOME}/.config/claude-riotbox" "${HOME}/somefile.d"
+          touch "${HOME}/somefile.d/marker"
+          echo "~/somefile.d" > "${HOME}/.config/claude-riotbox/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
+          echo "OUT=${out}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/somefile.d:/home/claude/somefile.d:ro"
+
+  - name: mounts.conf absolute-path entry mounts unchanged at both ends
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          unset XDG_CONFIG_HOME
+          mkdir -p "${HOME}/.config/claude-riotbox"
+          mkdir -p "${TMP}/abs"
+          touch "${TMP}/abs/marker"
+          echo "${TMP}/abs" > "${HOME}/.config/claude-riotbox/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
+          echo "OUT=${out}"
+          # Venom does not shell-interpolate assertion strings, so probe
+          # for the expected triple in the script and emit a sentinel
+          # the assertion can match literally.
+          if printf '%s\n' "${out}" | grep -qE "^${TMP}/abs:${TMP}/abs:ro\$"; then
+              echo "ABS_TRIPLE_MATCH"
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ABS_TRIPLE_MATCH"
+
+  - name: mounts.conf bare relative entry is interpreted as HOME-relative on both sides
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          unset XDG_CONFIG_HOME
+          mkdir -p "${HOME}/.config/claude-riotbox" "${HOME}/relfile.d"
+          touch "${HOME}/relfile.d/marker"
+          echo "relfile.d" > "${HOME}/.config/claude-riotbox/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
+          echo "OUT=${out}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/relfile.d:/home/claude/relfile.d:ro"
+
+  - name: mounts.conf entry whose host source does not exist is silently skipped
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          unset XDG_CONFIG_HOME
+          mkdir -p "${HOME}/.config/claude-riotbox"
+          echo "~/this-does-not-exist" > "${HOME}/.config/claude-riotbox/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
+          echo "OUT=${out}"
+          # Output must contain no line whose source matches the missing path
+          if printf '%s\n' "${out}" | grep -q "this-does-not-exist"; then
+              echo "PRESENT"
+          else
+              echo "SKIPPED"
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SKIPPED"
+
+  - name: mounts.conf blank lines and comment lines are ignored
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          unset XDG_CONFIG_HOME
+          mkdir -p "${HOME}/.config/claude-riotbox" "${HOME}/keep.d"
+          touch "${HOME}/keep.d/marker"
+          cat >"${HOME}/.config/claude-riotbox/mounts.conf" <<'EOF'
+          # leading comment
+
+          ~/keep.d
+          # trailing comment after the entry
+          EOF
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
+          count=$(printf '%s\n' "${out}" | grep -c "/keep.d:/home/claude/keep.d:ro" || true)
+          echo "COUNT=${count}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "COUNT=1"

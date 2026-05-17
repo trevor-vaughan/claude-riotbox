@@ -169,7 +169,7 @@ testcases:
           claude -p "do work" 2>&1 || echo "EXIT=$?"
         assertions:
           - result.systemout ShouldContainSubstring "could not find the real claude"
-          - result.systemout ShouldContainSubstring "EXIT="
+          - result.systemout ShouldContainSubstring "EXIT=1"
 
   - name: agent-wrapper rejects an invocation under an unregistered name (typo symlink)
     steps:
@@ -189,4 +189,4 @@ testcases:
         assertions:
           - result.systemout ShouldContainSubstring "no such agent is registered"
           - result.systemout ShouldContainSubstring "cluade"
-          - result.systemout ShouldContainSubstring "EXIT="
+          - result.systemout ShouldContainSubstring "EXIT=1"

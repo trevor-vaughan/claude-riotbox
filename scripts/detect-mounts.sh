@@ -156,19 +156,23 @@ if [ -f "${MOUNTS_CONF}" ]; then
         line="$(echo "${line}" | xargs)" # trim whitespace
         [ -z "${line}" ] && continue
 
-        # Resolve host path
-        case "${line}" in
-            ~/*) src="${HOME}/${line#\~/}" ;;
-            /*)  src="${line}" ;;
-            *)   src="${HOME}/${line}" ;;
-        esac
-
-        # Resolve container destination
-        case "${line}" in
-            /*) dst="${line}" ;;
-            ~/*) dst="${CONTAINER_HOME}/${line#\~/}" ;;
-            *)  dst="${CONTAINER_HOME}/${line}" ;;
-        esac
+        # Resolve host and container paths. Use [[ == "~/"* ]] (quoted
+        # tilde) rather than a `case ~/*` glob: bash tilde-expands an
+        # unquoted ~ in case patterns, so `~/*` matches paths starting
+        # with $HOME instead of paths starting with the literal "~/".
+        # That bug silently dropped every tilde-prefixed mounts.conf
+        # entry by routing it to the relative branch with a non-existent
+        # ${HOME}/~/... source.
+        if [[ "${line}" == "~/"* ]]; then
+            src="${HOME}/${line:2}"
+            dst="${CONTAINER_HOME}/${line:2}"
+        elif [[ "${line}" == "/"* ]]; then
+            src="${line}"
+            dst="${line}"
+        else
+            src="${HOME}/${line}"
+            dst="${CONTAINER_HOME}/${line}"
+        fi
 
         if [ -e "${src}" ]; then
             emit_mount "${src}" "${dst}" ro z

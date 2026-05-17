@@ -85,7 +85,7 @@ testcases:
           "{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=garbage 2>&1 || echo "EXIT=$?"
         assertions:
           - result.systemout ShouldContainSubstring "unknown --format"
-          - result.systemout ShouldContainSubstring "EXIT="
+          - result.systemout ShouldContainSubstring "EXIT=2"
 
   # ── mount-projects.sh ──────────────────────────────────────────────────────
 
@@ -152,4 +152,4 @@ testcases:
           "{{.riotbox_dir}}/scripts/mount-projects.sh" --format=garbage 2>&1 || echo "EXIT=$?"
         assertions:
           - result.systemout ShouldContainSubstring "unknown --format"
-          - result.systemout ShouldContainSubstring "EXIT="
+          - result.systemout ShouldContainSubstring "EXIT=2"

@@ -829,3 +829,38 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "llm=0 total=21"
+
+  # -- Preflight checks --
+
+  - name: reown-commits exits 1 with install hint when git-filter-repo is missing
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          # Build a minimal PATH containing git (and the coreutils the
+          # script needs) but NOT git-filter-repo. Symlinking git is the
+          # simplest way to expose only the binaries we want.
+          mkdir -p "${TMP}/bin"
+          for b in git bash cat head tail grep sed awk tr cut sort uniq wc \
+                   printf echo true false test [ env mkdir rm ls cp mv \
+                   chmod date dirname basename mktemp xargs; do
+              if command -v "${b}" >/dev/null 2>&1; then
+                  ln -sf "$(command -v "${b}")" "${TMP}/bin/${b}"
+              fi
+          done
+          export PATH="${TMP}/bin"
+          mkdir -p "${TMP}/repo"
+          cd "${TMP}/repo"
+          git init -q .
+          git -c user.name=t -c user.email=t@t commit --allow-empty -qm seed
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" 2>"${TMP}/err.log"
+          rc=$?
+          echo "RC=${rc}"
+          echo "STDERR=$(cat "${TMP}/err.log")"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RC=1"
+          - result.systemout ShouldContainSubstring "git-filter-repo is not installed"
+          - result.systemout ShouldContainSubstring "pip install git-filter-repo"

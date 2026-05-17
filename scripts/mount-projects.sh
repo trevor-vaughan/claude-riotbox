@@ -154,7 +154,8 @@ resolve_projects() {
         raw_projects="$(pwd)"
     fi
 
-    # Resolve each path to absolute.
+    # Resolve each path to absolute, canonicalising symlinks so the same
+    # project reached via different paths produces the same session key.
     # Disable globbing so paths with metacharacters (*, ?) aren't expanded.
     # Paths are space-separated by design (CLI args joined by the caller).
     local _old_glob
@@ -162,7 +163,11 @@ resolve_projects() {
     set -f
     for p in ${raw_projects}; do
         local resolved
-        resolved="$(cd "${p}" && pwd)"
+        if ! resolved="$(cd "${p}" 2>/dev/null && pwd -P)"; then
+            eval "${_old_glob}"
+            echo "ERROR: project path does not exist or is not a directory: ${p}" >&2
+            return 1
+        fi
         PROJECT_DIRS+=("${resolved}")
     done
     eval "${_old_glob}"

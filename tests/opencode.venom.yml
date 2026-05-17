@@ -174,7 +174,7 @@ testcases:
           opencode --version 2>&1 || echo "EXIT=$?"
         assertions:
           - result.systemout ShouldContainSubstring "could not find the real opencode"
-          - result.systemout ShouldContainSubstring "EXIT="
+          - result.systemout ShouldContainSubstring "EXIT=1"
 
   - name: opencode-setup places AGENTS.md from the template on first run
     steps:

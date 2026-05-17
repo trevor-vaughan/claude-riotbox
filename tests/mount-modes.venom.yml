@@ -1,0 +1,130 @@
+name: mount mode flags (RIOTBOX_READONLY, RIOTBOX_OVERLAY)
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Pins the read-only and overlay mount-mode behaviour in
+# setup_projects(). Both flags are user-facing knobs whose only contract
+# is the resulting PROJECT_VOLUME_FLAGS — without this coverage a
+# refactor of the mount-suffix logic could silently degrade either mode.
+
+testcases:
+
+  - name: RIOTBOX_READONLY=1 produces :ro,z mount suffixes for a single project
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/proj"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_READONLY=1
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/proj"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":/workspace:ro,z"
+          - result.systemout ShouldNotContainSubstring ":/workspace:z "
+
+  - name: RIOTBOX_READONLY=1 produces :ro,z suffix for every multi-project mount
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/a" "${BASE}/b" "${BASE}/c"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_READONLY=1
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/a ${BASE}/b ${BASE}/c"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          count_ro=$(printf '%s\n' "${PROJECT_VOLUME_FLAGS}" | grep -oE ':/workspace/[abc]:ro,z' | wc -l)
+          echo "RO_MOUNTS=${count_ro}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RO_MOUNTS=3"
+
+  - name: default mode (no flag) keeps :z suffix and does not emit :ro,z for projects
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/proj"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/proj"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":/workspace:z"
+          - result.systemout ShouldNotContainSubstring ":/workspace:ro,z"
+
+  - name: RIOTBOX_OVERLAY=1 single-project creates overlay/upper and overlay/work and pairs ro lower with rw overlay
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/proj"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_OVERLAY=1
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/proj"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          [ -d "${RIOTBOX_SESSION_DIR}/overlay/project/upper" ] && echo "UPPER_OK"
+          [ -d "${RIOTBOX_SESSION_DIR}/overlay/project/work" ]  && echo "WORK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":/mnt/lower:ro,z"
+          - result.systemout ShouldContainSubstring ":/mnt/overlay:z"
+          - result.systemout ShouldContainSubstring "UPPER_OK"
+          - result.systemout ShouldContainSubstring "WORK_OK"
+
+  - name: RIOTBOX_OVERLAY=1 multi-project creates an overlay tree per project and namespaces the container paths
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/alpha" "${BASE}/bravo"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_OVERLAY=1
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/alpha ${BASE}/bravo"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          for name in alpha bravo; do
+              [ -d "${RIOTBOX_SESSION_DIR}/overlay/${name}/upper" ] && echo "UPPER_${name}_OK"
+              [ -d "${RIOTBOX_SESSION_DIR}/overlay/${name}/work"  ] && echo "WORK_${name}_OK"
+          done
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":/mnt/lower/alpha:ro,z"
+          - result.systemout ShouldContainSubstring ":/mnt/lower/bravo:ro,z"
+          - result.systemout ShouldContainSubstring ":/mnt/overlay/alpha:z"
+          - result.systemout ShouldContainSubstring ":/mnt/overlay/bravo:z"
+          - result.systemout ShouldContainSubstring "UPPER_alpha_OK"
+          - result.systemout ShouldContainSubstring "WORK_alpha_OK"
+          - result.systemout ShouldContainSubstring "UPPER_bravo_OK"
+          - result.systemout ShouldContainSubstring "WORK_bravo_OK"

@@ -43,10 +43,13 @@ testcases:
           else
               echo "LEN_OVER"
           fi
-          if mkdir -p "${RIOTBOX_SESSION_DIR}" 2>err.log; then
+          # err.log must live in a writable dir — venom runs steps with cwd
+          # at the read-only riotbox mount, and a failed redirection there
+          # would masquerade as an mkdir failure.
+          if mkdir -p "${RIOTBOX_SESSION_DIR}" 2>"${STORE}/err.log"; then
               echo "MKDIR_OK"
           else
-              echo "MKDIR_FAIL: $(cat err.log)"
+              echo "MKDIR_FAIL: $(cat "${STORE}/err.log")"
           fi
         assertions:
           - result.code ShouldEqual 0
@@ -137,3 +140,80 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "MATCH"
+
+  - name: resolve_projects exits non-zero with clear error for nonexistent path
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${STORE}"' EXIT
+          export XDG_DATA_HOME="${STORE}"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          # Run in a subshell so the failure does not abort this script
+          ( resolve_projects "/nonexistent/path/that/cannot/exist" ) 2>"${STORE}/err.log"
+          rc=$?
+          echo "RC=${rc}"
+          echo "STDERR=$(cat "${STORE}/err.log")"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RC=1"
+          - result.systemout ShouldContainSubstring "/nonexistent/path/that/cannot/exist"
+
+  - name: resolve_projects canonicalises symlinks so link and target share a session dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/real"
+          ln -s "${BASE}/real" "${BASE}/link"
+          export XDG_DATA_HOME="${STORE}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          resolve_projects "${BASE}/link"
+          via_link="$(basename "${RIOTBOX_SESSION_DIR}")"
+          resolve_projects "${BASE}/real"
+          via_real="$(basename "${RIOTBOX_SESSION_DIR}")"
+          echo "VIA_LINK=${via_link}"
+          echo "VIA_REAL=${via_real}"
+          if [ "${via_link}" = "${via_real}" ]; then echo "MATCH"; else echo "DIFFER"; fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MATCH"
+
+  - name: setup_projects exits 1 with a clear error when the session dir is not writable
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          BASE="$(mktemp -d)"
+          BASE="$(cd "${BASE}" && pwd -P)"
+          STORE="$(mktemp -d)"
+          # Restore writability before rm so cleanup can succeed.
+          trap '/usr/bin/chmod -R u+w "${STORE}" 2>/dev/null; rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/proj"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          # Make the data dir read-only so setup_projects' mkdir -p of the
+          # session dir fails. The [ ! -w ] probe then fires on a missing
+          # path (which test reports as "not writable") and we get the
+          # wrong-UID error wording without needing real UID divergence
+          # (sudo unavailable in the test container). Pre-chmod a-w on the
+          # session dir itself does NOT work: setup_projects runs chmod
+          # 700 first, which the dir owner can always do, restoring write
+          # perms before the probe.
+          mkdir -p "${STORE}/claude-riotbox"
+          /usr/bin/chmod a-w "${STORE}/claude-riotbox"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          ( setup_projects "${BASE}/proj" ) >"${STORE}/out.log" 2>"${STORE}/err.log"
+          rc=$?
+          echo "RC=${rc}"
+          echo "STDERR=$(cat "${STORE}/err.log")"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RC=1"
+          - result.systemout ShouldContainSubstring "not writable"

@@ -77,7 +77,7 @@ testcases:
           # (because the function uses --argjson, which validates).
           log_emit info launch sandbox-up '{not json' 2>&1 || echo "EXIT=$?"
         assertions:
-          - result.systemout ShouldContainSubstring "EXIT="
+          - result.systemout ShouldContainSubstring "EXIT=2"
 
   - name: log_emit fails when level is missing
     steps:
@@ -90,7 +90,7 @@ testcases:
           (log_emit) 2>&1 || echo "EXIT=$?"
         assertions:
           - result.systemout ShouldContainSubstring "level required"
-          - result.systemout ShouldContainSubstring "EXIT="
+          - result.systemout ShouldContainSubstring "EXIT=1"
 
   - name: log_fmt round-trips a known JSON line
     steps:

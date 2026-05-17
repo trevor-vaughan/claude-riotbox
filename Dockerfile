@@ -273,6 +273,9 @@ ENV NVM_DIR=/home/claude/.nvm
 ENV GOPATH=/home/claude/go
 ENV PATH=/home/claude/.riotbox/bin:/home/claude/.local/bin:/home/claude/.cargo/bin:/home/claude/go/bin:/usr/lib/golang/bin:/home/claude/bin:${PATH}
 
+# ── Workaround uv and SELinux issuees ──────────────────────────────────────────
+ENV UV_LINK_MODE=hardlink
+
 # Fix ownership after root-stage COPY that creates dirs under /home/claude.
 RUN chown -R claude:claude /home/claude
 

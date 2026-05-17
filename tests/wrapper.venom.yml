@@ -479,7 +479,7 @@ testcases:
           "${TEST_DIR}/bin/claude-riotbox" --agent=garbage run "x" 2>&1 || echo "EXIT=$?"
         assertions:
           - result.systemout ShouldContainSubstring "must be one of"
-          - result.systemout ShouldContainSubstring "EXIT="
+          - result.systemout ShouldContainSubstring "EXIT=2"
 
   - name: RIOTBOX_AGENT env var is honored when no flag is given
     steps:
@@ -571,4 +571,4 @@ testcases:
           "${TEST_DIR}/bin/claude-riotbox" --agent=garbage agents 2>&1 || echo "EXIT=$?"
         assertions:
           - result.systemout ShouldContainSubstring "must be one of"
-          - result.systemout ShouldContainSubstring "EXIT="
+          - result.systemout ShouldContainSubstring "EXIT=2"

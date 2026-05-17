@@ -271,7 +271,7 @@ testcases:
           out="$(agent_call no_such_agent real_binary 2>&1 || echo "EXIT=$?")"
           echo "${out}"
         assertions:
-          - result.systemout ShouldContainSubstring "EXIT="
+          - result.systemout ShouldContainSubstring "EXIT=2"
           - result.systemout ShouldContainSubstring "no_such_agent"
 
   - name: agent_call rejects an unknown verb with a clear error
@@ -287,7 +287,7 @@ testcases:
           out="$(agent_call "${first}" no_such_verb 2>&1 || echo "EXIT=$?")"
           echo "${out}"
         assertions:
-          - result.systemout ShouldContainSubstring "EXIT="
+          - result.systemout ShouldContainSubstring "EXIT=2"
           - result.systemout ShouldContainSubstring "no_such_verb"
 
   - name: agent_is_registered returns 0 for known agents and 1 for unknown

@@ -395,7 +395,7 @@ testcases:
           export ROOT_DIR="{{.riotbox_dir}}"
           "{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJECT}" 2>&1
         assertions:
-          - result.code ShouldNotEqual 0
+          - result.code ShouldEqual 1
           - result.systemout ShouldContainSubstring "No session found"
 
   - name: Resolve errors when session has no overlay data
@@ -417,7 +417,7 @@ testcases:
           export ROOT_DIR="{{.riotbox_dir}}"
           "{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJECT}" 2>&1
         assertions:
-          - result.code ShouldNotEqual 0
+          - result.code ShouldEqual 1
           - result.systemout ShouldContainSubstring "No overlay data found"
 
   - name: Resolve errors when project path is not a directory
@@ -427,7 +427,7 @@ testcases:
           export ROOT_DIR="{{.riotbox_dir}}"
           "{{.riotbox_dir}}/scripts/overlay.sh" diff "/nonexistent/path" 2>&1
         assertions:
-          - result.code ShouldNotEqual 0
+          - result.code ShouldEqual 1
           - result.systemout ShouldContainSubstring "is not a directory"
 
   # ── Subcommand dispatch ─────────────────────────────────────────────────
@@ -472,5 +472,5 @@ testcases:
           export RIOTBOX_PROJECTS="."
           "{{.riotbox_dir}}/.taskfiles/scripts/launch.sh" echo test 2>&1
         assertions:
-          - result.code ShouldNotEqual 0
+          - result.code ShouldEqual 1
           - result.systemout ShouldContainSubstring "Overlay mode requires podman"
