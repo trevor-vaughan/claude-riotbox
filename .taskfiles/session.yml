@@ -111,6 +111,48 @@ tasks:
       - "{{.ROOT_DIR}}/.taskfiles/scripts/checkpoint.sh"
       - "{{.ROOT_DIR}}/.taskfiles/scripts/launch.sh bash"
 
+  socket-run:
+    desc: "Run with shared host podman socket (WARNING: grants host root)"
+    dir: "{{.USER_WORKING_DIR}}"
+    deps: [ensure-image]
+    vars:
+      ARGS: "{{.ARGS | default .CLI_ARGS}}"
+    env:
+      CONTAINER_CMD: "{{.CONTAINER_CMD}}"
+      IMAGE_NAME: "{{.IMAGE_NAME}}"
+      ROOT_DIR: "{{.ROOT_DIR}}"
+      RIOTBOX_SOCKET: "1"
+      RIOTBOX_AGENT: "{{.RIOTBOX_AGENT}}"
+    cmds:
+      - cmd: echo "WARNING{{":"}} Socket mode bind-mounts the host podman socket into the container." >&2
+      - cmd: echo "         This grants the container effective root on the host. Use only" >&2
+      - cmd: echo "         with trusted code — this is a broader trust delegation than nested" >&2
+      - cmd: echo "         mode. See README \"Container runtime modes\" for alternatives." >&2
+      - cmd: echo "" >&2
+      - "{{.ROOT_DIR}}/.taskfiles/scripts/run.sh {{.ARGS}}"
+
+  socket-shell:
+    desc: "Shell with shared host podman socket (WARNING: grants host root)"
+    dir: "{{.USER_WORKING_DIR}}"
+    deps: [ensure-image]
+    vars:
+      ARGS: "{{.ARGS | default .CLI_ARGS}}"
+    env:
+      CONTAINER_CMD: "{{.CONTAINER_CMD}}"
+      IMAGE_NAME: "{{.IMAGE_NAME}}"
+      ROOT_DIR: "{{.ROOT_DIR}}"
+      RIOTBOX_SOCKET: "1"
+      RIOTBOX_PROJECTS: "{{.ARGS}}"
+      RIOTBOX_AGENT: "{{.RIOTBOX_AGENT}}"
+    cmds:
+      - cmd: echo "WARNING{{":"}} Socket mode bind-mounts the host podman socket into the container." >&2
+      - cmd: echo "         This grants the container effective root on the host. Use only" >&2
+      - cmd: echo "         with trusted code — this is a broader trust delegation than nested" >&2
+      - cmd: echo "         mode. See README \"Container runtime modes\" for alternatives." >&2
+      - cmd: echo "" >&2
+      - "{{.ROOT_DIR}}/.taskfiles/scripts/checkpoint.sh"
+      - "{{.ROOT_DIR}}/.taskfiles/scripts/launch.sh bash"
+
   list-sessions:
     desc: List riotbox sessions with project paths and last-used info
     cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/list-sessions.sh"

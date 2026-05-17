@@ -1,0 +1,139 @@
+name: session directory naming (hashed for multi-project to fit NAME_MAX)
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Pins the shape of resolve_projects() in mount-projects.sh. The
+# multi-project session dir basename must fit within Linux's 255-byte
+# NAME_MAX so mkdir -p succeeds on every supported filesystem, must be
+# deterministic across argument ordering, and must share its hash suffix
+# with the container name so a project set carries a single identity
+# across the on-disk store and the runtime container. The single-project
+# case keeps the human-readable path-mangled key so list-sessions output
+# and the test helpers in tests/lib/ remain decodable by reversing the
+# `s|/|-|g` mangling.
+
+testcases:
+
+  - name: multi-project session dir fits within NAME_MAX and mkdir succeeds
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          # Reproduce the failing scenario: 8 long-path Claude skill projects
+          # under a deep parent, which is what overflowed the unhashed key.
+          for d in Claude_Skill_Guided_Implementation Claude_Skill_Handoff \
+                   Claude_Skill_Humanize Claude_Skill_Justfile \
+                   Claude_Skill_Project_Docs Claude_Skill_Taskfile \
+                   Claude_Skill_Test_Gap_Analysis Claude_Skill_Venom; do
+              mkdir -p "${BASE}/Projects/${d}"
+          done
+          export XDG_DATA_HOME="${STORE}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          resolve_projects "${BASE}/Projects/Claude_Skill_Guided_Implementation ${BASE}/Projects/Claude_Skill_Handoff ${BASE}/Projects/Claude_Skill_Humanize ${BASE}/Projects/Claude_Skill_Justfile ${BASE}/Projects/Claude_Skill_Project_Docs ${BASE}/Projects/Claude_Skill_Taskfile ${BASE}/Projects/Claude_Skill_Test_Gap_Analysis ${BASE}/Projects/Claude_Skill_Venom"
+          base_component="$(basename "${RIOTBOX_SESSION_DIR}")"
+          echo "BASENAME=${base_component}"
+          echo "LEN=${#base_component}"
+          if [ "${#base_component}" -le 255 ]; then
+              echo "LEN_OK"
+          else
+              echo "LEN_OVER"
+          fi
+          if mkdir -p "${RIOTBOX_SESSION_DIR}" 2>err.log; then
+              echo "MKDIR_OK"
+          else
+              echo "MKDIR_FAIL: $(cat err.log)"
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEN_OK"
+          - result.systemout ShouldContainSubstring "MKDIR_OK"
+
+  - name: multi-project session dir is deterministic across argument orderings
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/aaa" "${BASE}/bbb" "${BASE}/ccc"
+          export XDG_DATA_HOME="${STORE}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          resolve_projects "${BASE}/aaa ${BASE}/bbb ${BASE}/ccc"
+          name1="$(basename "${RIOTBOX_SESSION_DIR}")"
+          resolve_projects "${BASE}/ccc ${BASE}/bbb ${BASE}/aaa"
+          name2="$(basename "${RIOTBOX_SESSION_DIR}")"
+          echo "NAME1=${name1}"
+          echo "NAME2=${name2}"
+          if [ "${name1}" = "${name2}" ]; then echo "DETERMINISTIC"; else echo "DIFFER"; fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DETERMINISTIC"
+
+  - name: container name and session dir share the same hash suffix
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          for d in alpha bravo charlie delta echo-dir foxtrot golf hotel; do
+              mkdir -p "${BASE}/${d}"
+          done
+          export XDG_DATA_HOME="${STORE}"
+          # Force the running-container probe to return empty so single-
+          # project disambiguation does not run here (irrelevant — these are
+          # multi-project — but keeps the test hermetic).
+          export CONTAINER_CMD=true
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          set -- "${BASE}/alpha" "${BASE}/bravo" "${BASE}/charlie" \
+                 "${BASE}/delta" "${BASE}/echo-dir" "${BASE}/foxtrot" \
+                 "${BASE}/golf" "${BASE}/hotel"
+          generate_container_name "$@"
+          c_name="${CONTAINER_NAME}"
+          resolve_projects "$*"
+          s_name="$(basename "${RIOTBOX_SESSION_DIR}")"
+          echo "CONTAINER=${c_name}"
+          echo "SESSION=${s_name}"
+          c_hash="$(printf '%s' "${c_name}" | grep -oE '[0-9a-f]{8}$' || true)"
+          s_hash="$(printf '%s' "${s_name}" | grep -oE '[0-9a-f]{8}$' || true)"
+          echo "C_HASH=${c_hash}"
+          echo "S_HASH=${s_hash}"
+          if [ -n "${c_hash}" ] && [ "${c_hash}" = "${s_hash}" ]; then
+              echo "HASH_SHARED"
+          else
+              echo "HASH_DIFFER"
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "HASH_SHARED"
+
+  - name: single-project session dir retains the path-mangled key
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/myproject"
+          export XDG_DATA_HOME="${STORE}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          resolve_projects "${BASE}/myproject"
+          name="$(basename "${RIOTBOX_SESSION_DIR}")"
+          expected="$(printf '%s\n' "${BASE}/myproject" | sed 's|/|-|g; s|^-||')"
+          echo "NAME=${name}"
+          echo "EXPECTED=${expected}"
+          if [ "${name}" = "${expected}" ]; then echo "MATCH"; else echo "MISMATCH"; fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MATCH"

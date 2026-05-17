@@ -1,0 +1,279 @@
+name: .taskfiles/scripts/socket-vars.sh — RIOTBOX_SOCKET flag builder
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Pins the public contract of socket-vars.sh: a sourced helper that detects a
+# usable host podman socket and builds the bind-mount + env-var flags for
+# socket mode. Each testcase sources the helper in its own clean env and
+# exercises one function. Tests that depend on the absence of a rootful
+# socket short-circuit if the test host happens to have one.
+
+testcases:
+  - name: socket_flags is a no-op when RIOTBOX_SOCKET is unset
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          unset RIOTBOX_SOCKET
+          out="$(socket_flags 2>/dev/null)"
+          rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          [ -z "${out}" ] || { echo "BAD output: '${out}'" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: socket_flags is a no-op when RIOTBOX_SOCKET is empty string
+    steps:
+      - type: exec
+        script: |
+          # Pins the empty-string contract: an exported but empty
+          # RIOTBOX_SOCKET must behave identically to unset (no flags,
+          # no error, exit 0). Without this, a caller that does
+          # `export RIOTBOX_SOCKET=""` could silently fall through to
+          # the activation path.
+          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          export RIOTBOX_SOCKET=""
+          out="$(socket_flags 2>/dev/null)"
+          rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          [ -z "${out}" ] || { echo "BAD output: '${out}'" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: socket_flags is a no-op for any non-"1" value (e.g. RIOTBOX_SOCKET=yes)
+    steps:
+      - type: exec
+        script: |
+          # Pins the strict =1 activation contract. launch.sh gates the
+          # mutual-exclusion check on RIOTBOX_SOCKET=1 exactly, so the
+          # helper must match — otherwise a value like "yes" or "true"
+          # would activate socket mode here while being ignored by the
+          # mutual-exclusion guard, breaking the invariant.
+          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          export RIOTBOX_SOCKET=yes
+          out="$(socket_flags 2>/dev/null)"
+          rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          [ -z "${out}" ] || { echo "BAD output: '${out}'" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: socket_flags fails with actionable error when no socket exists
+    steps:
+      - type: exec
+        script: |
+          if [ -S /run/podman/podman.sock ]; then
+              echo "skipped (rootful socket present on test host)"
+              echo "OK"
+              exit 0
+          fi
+          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          export RIOTBOX_SOCKET=1
+          export XDG_RUNTIME_DIR="/tmp/empty-$RANDOM-$$"
+          err="$(socket_flags 2>&1 1>/dev/null)"
+          rc=$?
+          [ "${rc}" = "1" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          case "${err}" in
+              *"no working podman socket"*) echo "OK" ;;
+              *) echo "BAD stderr: ${err}" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: socket_flags fails when socket file exists but is not podman API
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          tmp="$(mktemp -d)"
+          pidfile="$tmp/listener.pid"
+          cleanup() {
+              if [ -f "$pidfile" ]; then
+                  pid="$(cat "$pidfile" 2>/dev/null)"
+                  [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null
+              fi
+              rm -rf "$tmp"
+          }
+          trap cleanup EXIT
+          export RIOTBOX_SOCKET=1
+          export XDG_RUNTIME_DIR="$tmp"
+          mkdir -p "$tmp/podman"
+          # Redirect stdin/stdout/stderr to /dev/null so the listener does
+          # not inherit venom's pipes (which would make venom's exec block
+          # waiting for them to close). Keep the listener as a normal bash
+          # background job — no setsid, no disown — so if this shell dies
+          # unexpectedly the kernel reaps the listener via SIGHUP instead
+          # of leaving an orphan holding $tmp.
+          python3 -c '
+          import socket, os, sys
+          p = sys.argv[1]
+          s = socket.socket(socket.AF_UNIX)
+          s.bind(p)
+          s.listen(1)
+          while True:
+              conn, _ = s.accept()
+              conn.close()
+          ' "$tmp/podman/podman.sock" </dev/null >/dev/null 2>&1 &
+          echo "$!" > "$pidfile"
+          # Wait for the socket file to appear (bounded).
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+              [ -S "$tmp/podman/podman.sock" ] && break
+              sleep 0.1
+          done
+          [ -S "$tmp/podman/podman.sock" ] || { echo "BAD: socket never appeared" >&2; exit 1; }
+          err="$(socket_flags 2>&1 1>/dev/null)"
+          rc=$?
+          [ "${rc}" = "1" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          case "${err}" in
+              *"no working podman socket"*) echo "OK" ;;
+              *) echo "BAD stderr: ${err}" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: socket_detect_host_path finds the rootless XDG socket
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          export XDG_RUNTIME_DIR="$tmp"
+          mkdir -p "$tmp/podman"
+          python3 -c '
+          import socket, sys
+          s = socket.socket(socket.AF_UNIX)
+          s.bind(sys.argv[1])
+          ' "$tmp/podman/podman.sock"
+          [ -S "$tmp/podman/podman.sock" ] || { echo "BAD: socket not bound" >&2; exit 1; }
+          out="$(socket_detect_host_path)"
+          rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          [ "${out}" = "$tmp/podman/podman.sock" ] || {
+              echo "BAD output: '${out}' != '$tmp/podman/podman.sock'" >&2
+              exit 1
+          }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: socket_detect_host_path returns 1 with empty stdout when no candidate exists
+    steps:
+      - type: exec
+        script: |
+          if [ -S /run/podman/podman.sock ]; then
+              echo "skipped (rootful socket present on test host)"
+              echo "OK"
+              exit 0
+          fi
+          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          export XDG_RUNTIME_DIR="/nonexistent-$RANDOM-$$"
+          out="$(socket_detect_host_path)"
+          rc=$?
+          [ "${rc}" = "1" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          [ -z "${out}" ] || { echo "BAD output: '${out}'" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: sourcing socket-vars.sh does not leak set -u or pipefail to caller
+    steps:
+      - type: exec
+        script: |
+          # A library script must not flip strict mode in the caller's
+          # shell. Start with both options off, source the helper, confirm
+          # both are still off afterwards.
+          bash -c '
+            set +u
+            set +o pipefail
+            source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+            case "$-" in *u*) echo "LEAK_U: set -u was enabled"; exit 1 ;; esac
+            if shopt -qo pipefail 2>/dev/null; then
+              echo "LEAK_PIPEFAIL: set -o pipefail was enabled"; exit 1
+            fi
+            echo "OK no leak"
+          '
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK no leak"
+
+  - name: launch.sh refuses to start when both RIOTBOX_NESTED and RIOTBOX_SOCKET are set
+    steps:
+      - type: exec
+        script: |
+          # The mutual-exclusion guard must fire before any side-effectful
+          # work (mount setup, image lookup, podman invocation). CONTAINER_CMD
+          # is stubbed to /bin/true so even if the guard regressed and the
+          # script reached the run command, no real container would launch.
+          # XDG_DATA_HOME is redirected into a throwaway dir so that even if
+          # the guard regressed, setup_projects would not pollute the
+          # runner's real data directory.
+          fake_xdg="$(mktemp -d)"
+          trap 'rm -rf "$fake_xdg"' EXIT
+          set +e
+          out_err="$(RIOTBOX_NESTED=1 RIOTBOX_SOCKET=1 \
+                     CONTAINER_CMD=/bin/true \
+                     IMAGE_NAME=fake \
+                     ROOT_DIR="{{.riotbox_dir}}" \
+                     XDG_DATA_HOME="$fake_xdg" \
+                     "{{.riotbox_dir}}/.taskfiles/scripts/launch.sh" bash 2>&1 1>/dev/null)"
+          rc=$?
+          echo "rc=${rc}"
+          echo "stderr: ${out_err}"
+          [ "${rc}" = "1" ] || { echo "BAD rc=${rc}"; exit 1; }
+          case "${out_err}" in
+              *"mutually exclusive"*) echo "OK" ;;
+              *) echo "BAD stderr"; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: launch.sh fails loud when RIOTBOX_SOCKET=1 but no socket exists
+    steps:
+      - type: exec
+        script: |
+          # Proves the helper's error path is reached via launch.sh (not just
+          # via direct function call). Skips cleanly if a rootful socket
+          # exists on the test host, since socket-vars.sh would find it and
+          # the test couldn't drive the no-socket path.
+          # XDG_DATA_HOME is redirected into a throwaway dir so that
+          # setup_projects (which runs before the socket check) does not
+          # touch the runner's real data directory.
+          if [ -S /run/podman/podman.sock ]; then
+              echo "skipped (rootful socket present on test host)"
+              echo "OK"
+              exit 0
+          fi
+          fake_xdg="$(mktemp -d)"
+          trap 'rm -rf "$fake_xdg"' EXIT
+          set +e
+          out_err="$(RIOTBOX_SOCKET=1 \
+                     XDG_RUNTIME_DIR="/nonexistent-$RANDOM-$$" \
+                     CONTAINER_CMD=/bin/true \
+                     IMAGE_NAME=fake \
+                     ROOT_DIR="{{.riotbox_dir}}" \
+                     XDG_DATA_HOME="$fake_xdg" \
+                     "{{.riotbox_dir}}/.taskfiles/scripts/launch.sh" bash 2>&1 1>/dev/null)"
+          rc=$?
+          echo "rc=${rc}"
+          echo "stderr: ${out_err}"
+          [ "${rc}" = "1" ] || { echo "BAD rc=${rc}"; exit 1; }
+          case "${out_err}" in
+              *"no working podman socket"*) echo "OK" ;;
+              *) echo "BAD stderr"; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"

@@ -41,3 +41,10 @@ tasks:
     cmds:
       - mkdir -p "{{.TEST_DIR}}"
       - "{{.ROOT_DIR}}/.taskfiles/scripts/run-tests.sh {{.ARGS}}"
+
+  direct:
+    desc: "Run venom tests directly without the test container (artifacts to .test-output/)"
+    vars:
+      ARGS: "{{.ARGS | default .CLI_ARGS}}"
+    cmds:
+      - "{{.ROOT_DIR}}/scripts/venom-run.sh {{.ARGS}}"

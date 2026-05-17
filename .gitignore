@@ -10,6 +10,12 @@ docs/superpowers/
 .test-output/
 venom.log
 venom.*.log
+# Top-level venom test result spew (anchored to repo root). The .test-output/
+# rule above covers the correct location; these rules ensure that if someone
+# runs `venom run --format=xml --output-dir=.` from the repo root, the result
+# files won't be committed by accident.
+/test_results_*.xml
+/test_results_*.json
 
 # Diagnostic dumps and runtime logs (never commit)
 *.log

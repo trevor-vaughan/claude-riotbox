@@ -2,7 +2,7 @@
 set -euo pipefail
 # Set up mounts and launch a container with the given command.
 # Required env: CONTAINER_CMD, IMAGE_NAME, ROOT_DIR
-# Optional env: RIOTBOX_PROJECTS, RIOTBOX_NETWORK, RIOTBOX_NESTED
+# Optional env: RIOTBOX_PROJECTS, RIOTBOX_NETWORK, RIOTBOX_NESTED, RIOTBOX_SOCKET
 # Arguments: command and args to run inside the container
 
 # Source user config for persistent defaults (e.g. RIOTBOX_NETWORK=none).
@@ -10,6 +10,24 @@ set -euo pipefail
 RIOTBOX_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/claude-riotbox/config"
 # shellcheck disable=SC1090
 [ -f "${RIOTBOX_CONFIG}" ] && source "${RIOTBOX_CONFIG}"
+
+# Mutual-exclusion guard for the two container-runtime delegation modes.
+# Fires before any side-effectful work (mount setup, image lookup, podman
+# invocation) so an obviously-broken env never reaches the run command.
+if [ "${RIOTBOX_NESTED:-}" = "1" ] && [ "${RIOTBOX_SOCKET:-}" = "1" ]; then
+    cat >&2 <<'EOF'
+ERROR: RIOTBOX_NESTED=1 and RIOTBOX_SOCKET=1 are mutually exclusive.
+
+  RIOTBOX_NESTED=1   Run a podman engine inside the container. Isolated,
+                     uses vfs storage, every session re-pulls images.
+  RIOTBOX_SOCKET=1   Bind-mount the host podman socket. Shared image
+                     cache and auth across sessions; container has
+                     effective root on the host.
+
+Pick one. See README "Container runtime modes" for trade-offs.
+EOF
+    exit 1
+fi
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
 setup_projects "${RIOTBOX_PROJECTS:-}"
@@ -141,6 +159,17 @@ if [ "${RIOTBOX_OVERLAY:-}" = "1" ]; then
     OVERLAY_FLAGS="--device /dev/fuse"
 fi
 
+# RIOTBOX_SOCKET=1 bind-mounts the host's podman socket and sets
+# CONTAINER_HOST so in-container podman is a remote client of the host
+# engine. Detection and the failure path live in socket-vars.sh — a missing
+# or non-responsive socket fails loud here, not silently at runtime.
+SOCKET_FLAGS=""
+if [ "${RIOTBOX_SOCKET:-}" = "1" ]; then
+    # shellcheck source=./socket-vars.sh
+    source "$(dirname "${BASH_SOURCE[0]}")/socket-vars.sh"
+    SOCKET_FLAGS="$(socket_flags)" || exit 1
+fi
+
 # ── SELinux pre-labeling ─────────────────────────────────────────────────────
 # Files created by setup_projects (mkdir, cp) inherit the parent directory's
 # SELinux type (e.g. user_home_t). The :z mount flag asks the runtime to
@@ -178,6 +207,7 @@ ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${USER_FLAG} ${IN
     ${NET_FLAG} \
     ${NESTED_FLAGS} \
     ${OVERLAY_FLAGS} \
+    ${SOCKET_FLAGS} \
     ${PROJECT_VOLUME_FLAGS} \
     ${MOUNTS} \
     ${PASSTHROUGH_FLAGS} \

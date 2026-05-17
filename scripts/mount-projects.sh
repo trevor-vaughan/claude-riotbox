@@ -30,28 +30,84 @@
 # extremely uncommon for development project directories.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Compute the canonical multi-project identity components.
+#
+# Emits three lines on stdout:
+#   1. first_seg  — sed-mangled basename of the lexically first path
+#   2. n_more     — count of remaining paths after the first
+#   3. hash8      — first 8 hex chars of sha256 of the canonical form
+#
+# The canonical hash input is the sorted paths with `/` → `-`, any leading
+# `-` stripped, joined by `+`. The container name and session directory
+# basename are both derived from this output so a project set carries a
+# single identity across the runtime container and its on-disk store.
+# Callers consume the three lines with a grouped `read` block.
+compute_multi_project_identity() {
+    local -a sorted=()
+    local sorted_line
+    while IFS= read -r sorted_line; do
+        sorted+=("${sorted_line}")
+    done < <(printf '%s\n' "$@" | LC_ALL=C sort)
+
+    local first_seg
+    first_seg="$(basename "${sorted[0]}")"
+    first_seg="$(printf '%s' "${first_seg}" | sed 's/[^a-zA-Z0-9_.-]/-/g; s/--*/-/g; s/^-//; s/-$//')"
+
+    local n_more=$(( ${#sorted[@]} - 1 ))
+    local hash_input hash8
+    hash_input="$(printf '%s\n' "${sorted[@]}" | sed 's|/|-|g; s|^-||' | paste -sd'+' -)"
+    hash8="$(printf '%s' "${hash_input}" | sha256sum | cut -c1-8)"
+
+    printf '%s\n%s\n%s\n' "${first_seg}" "${n_more}" "${hash8}"
+}
+
 # Generate a unique container name from project paths.
-# Builds from the leaf (basename) upward, adding parent segments only if
-# there's a naming conflict with an already-running container.
-# CONTAINER_CMD must be set by the caller (podman or docker).
+#
+# Single-project: builds from the leaf (basename) upward, walking parent
+# segments only when an existing container already owns the candidate name.
+# A random suffix is appended if the path is fully consumed.
+#
+# Multi-project: emits `riotbox-<first_basename>-<N>more-<hash8>` using the
+# identity from compute_multi_project_identity. The hash is what makes the
+# name unique — naive basename concatenation overflowed the 64-char cap and
+# the left-truncation that followed silently collapsed distinct project
+# sets that happened to share a trailing run of basenames into one name.
+#
+# CONTAINER_CMD must be set by the caller (podman or docker) for the
+# single-project disambiguation probe.
 generate_container_name() {
     local -a dirs=("$@")
     local max_len=64
     local prefix="riotbox"
 
-    # Build the base name from project basenames
-    local base=""
-    for dir in "${dirs[@]}"; do
-        local seg
-        seg="$(basename "${dir}")"
-        if [ -n "${base}" ]; then
-            base="${base}+${seg}"
-        else
-            base="${seg}"
-        fi
-    done
+    if [ ${#dirs[@]} -eq 0 ]; then
+        # shellcheck disable=SC2034  # used by caller after sourcing
+        CONTAINER_NAME="${prefix}"
+        return
+    fi
 
-    # Split the first project path into segments (for disambiguation)
+    # ── Multi-project ────────────────────────────────────────────────
+    if [ ${#dirs[@]} -gt 1 ]; then
+        local first_seg n_more hash8
+        { read -r first_seg
+          read -r n_more
+          read -r hash8
+        } < <(compute_multi_project_identity "${dirs[@]}")
+
+        local suffix="-${n_more}more-${hash8}"
+        local readable_max=$(( max_len - ${#prefix} - 1 - ${#suffix} ))
+        if [ "${#first_seg}" -gt "${readable_max}" ]; then
+            first_seg="${first_seg:0:${readable_max}}"
+        fi
+        # shellcheck disable=SC2034  # used by caller after sourcing
+        CONTAINER_NAME="${prefix}-${first_seg}${suffix}"
+        return
+    fi
+
+    # ── Single-project ───────────────────────────────────────────────
+    local base
+    base="$(basename "${dirs[0]}")"
+
     local first_dir="${dirs[0]}"
     local -a segments=()
     local tmp="${first_dir}"
@@ -60,34 +116,24 @@ generate_container_name() {
         tmp="$(dirname "${tmp}")"
     done
 
-    # Start with just the basename(s), add parent segments on conflict
     local candidate="${prefix}-${base}"
-    # Sanitize: only keep [a-zA-Z0-9_.-], replace everything else with -
-    candidate="$(echo "${candidate}" | sed 's/[^a-zA-Z0-9_.-]/-/g; s/--*/-/g')"
+    candidate="$(printf '%s' "${candidate}" | sed 's/[^a-zA-Z0-9_.-]/-/g; s/--*/-/g')"
 
-    # Only disambiguate for single-project (multi-project names are already unique enough)
-    if [ ${#dirs[@]} -eq 1 ]; then
-        # Find the basename's position in segments array
-        local base_idx=$(( ${#segments[@]} - 1 ))
-        local depth=0
+    local base_idx=$(( ${#segments[@]} - 1 ))
+    local depth=0
+    while ${CONTAINER_CMD:-podman} ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "${candidate}"; do
+        depth=$(( depth + 1 ))
+        local parent_idx=$(( base_idx - depth ))
+        if [ ${parent_idx} -lt 0 ]; then
+            candidate="${candidate}-$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' ')"
+            break
+        fi
+        candidate="${prefix}-${segments[${parent_idx}]}-${base}"
+        candidate="$(printf '%s' "${candidate}" | sed 's/[^a-zA-Z0-9_.-]/-/g; s/--*/-/g')"
+    done
 
-        while ${CONTAINER_CMD:-podman} ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "${candidate}"; do
-            depth=$(( depth + 1 ))
-            local parent_idx=$(( base_idx - depth ))
-            if [ ${parent_idx} -lt 0 ]; then
-                # Exhausted path segments — append a random suffix
-                candidate="${candidate}-$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' ')"
-                break
-            fi
-            candidate="${prefix}-${segments[${parent_idx}]}-${base}"
-            candidate="$(echo "${candidate}" | sed 's/[^a-zA-Z0-9_.-]/-/g; s/--*/-/g')"
-        done
-    fi
-
-    # Truncate from the LEFT (keep the specific tail) if over max length
     if [ ${#candidate} -gt ${max_len} ]; then
         candidate="${candidate: -${max_len}}"
-        # Ensure it starts with an alphanumeric character
         candidate="${candidate#"${candidate%%[a-zA-Z0-9]*}"}"
     fi
 
@@ -137,10 +183,25 @@ resolve_projects() {
     fi
 
     # ── Session key ───────────────────────────────────────────────────
-    # Mangle: sort paths, join with +, replace / with -, strip leading -
+    # Single-project keeps the human-readable, path-mangled key so
+    # list-sessions output and the test helpers in tests/lib/ remain
+    # decodable by reversing the `s|/|-|g` mangling. Multi-project uses
+    # the same hashed identity as the container name — naive
+    # concatenation of N path-mangled segments overflows NAME_MAX (255)
+    # on every supported filesystem for non-trivial project sets, and
+    # mkdir fails with ENAMETOOLONG.
     local session_key
-    session_key="$(printf '%s\n' "${PROJECT_DIRS[@]}" | sort | sed 's|/|-|g; s|^-||' | paste -sd'+' -)"
     RIOTBOX_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/claude-riotbox"
+    if [ ${#PROJECT_DIRS[@]} -le 1 ]; then
+        session_key="$(printf '%s\n' "${PROJECT_DIRS[@]}" | sed 's|/|-|g; s|^-||')"
+    else
+        local first_seg n_more hash8
+        { read -r first_seg
+          read -r n_more
+          read -r hash8
+        } < <(compute_multi_project_identity "${PROJECT_DIRS[@]}")
+        session_key="${first_seg}-${n_more}more-${hash8}"
+    fi
     RIOTBOX_SESSION_DIR="${RIOTBOX_DATA_DIR}/${session_key}"
 }
 

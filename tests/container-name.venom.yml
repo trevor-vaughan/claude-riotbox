@@ -1,0 +1,148 @@
+name: container name generation (truncation + hash for uniqueness)
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Pins the shape of generate_container_name() in mount-projects.sh. The
+# multi-project case must produce a name that (a) fits within the cap,
+# (b) is deterministic per project set regardless of CLI ordering, and
+# (c) cannot collide with a different project set that happens to share
+# a trailing run of basenames. The single-project case must keep its
+# existing parent-disambiguation behavior.
+
+testcases:
+
+  - name: multi-project name fits within 64 chars
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}"' EXIT
+          for d in alpha bravo charlie delta echo-dir foxtrot golf hotel india juliet kilo lima; do
+              mkdir -p "${BASE}/${d}"
+          done
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          generate_container_name \
+              "${BASE}/alpha" "${BASE}/bravo" "${BASE}/charlie" "${BASE}/delta" \
+              "${BASE}/echo-dir" "${BASE}/foxtrot" "${BASE}/golf" "${BASE}/hotel" \
+              "${BASE}/india" "${BASE}/juliet" "${BASE}/kilo" "${BASE}/lima"
+          echo "NAME=${CONTAINER_NAME}"
+          echo "LEN=${#CONTAINER_NAME}"
+          # Verify name starts with the riotbox prefix (not left-truncated away)
+          case "${CONTAINER_NAME}" in
+              riotbox-*) echo "PREFIX_OK" ;;
+              *) echo "PREFIX_LOST" ;;
+          esac
+          # Verify only podman-legal characters
+          if printf '%s' "${CONTAINER_NAME}" | grep -Eq '^[a-zA-Z0-9][a-zA-Z0-9_.-]*$'; then
+              echo "CHARS_OK"
+          else
+              echo "CHARS_BAD"
+          fi
+          # Verify length <= 64
+          if [ "${#CONTAINER_NAME}" -le 64 ]; then
+              echo "LEN_OK"
+          else
+              echo "LEN_OVER"
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PREFIX_OK"
+          - result.systemout ShouldContainSubstring "CHARS_OK"
+          - result.systemout ShouldContainSubstring "LEN_OK"
+
+  - name: multi-project name is deterministic across argument orderings
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}"' EXIT
+          mkdir -p "${BASE}/aaa" "${BASE}/bbb" "${BASE}/ccc"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          generate_container_name "${BASE}/aaa" "${BASE}/bbb" "${BASE}/ccc"
+          name1="${CONTAINER_NAME}"
+          generate_container_name "${BASE}/ccc" "${BASE}/bbb" "${BASE}/aaa"
+          name2="${CONTAINER_NAME}"
+          echo "NAME1=${name1}"
+          echo "NAME2=${name2}"
+          if [ "${name1}" = "${name2}" ]; then echo "DETERMINISTIC"; else echo "DIFFER"; fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DETERMINISTIC"
+
+  - name: different project sets sharing a trailing tail do not collide
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}"' EXIT
+          # Two project sets that differ only in the first directory.
+          # Under the old left-truncation strategy the long trailing tail
+          # would dominate and the names would collide.
+          mkdir -p "${BASE}/group1/unique-leader-aaaaaaaaaaaaaaaaaaaaa"
+          mkdir -p "${BASE}/group2/unique-leader-bbbbbbbbbbbbbbbbbbbbb"
+          for d in shared-tail-1 shared-tail-2 shared-tail-3 shared-tail-4 shared-tail-5; do
+              mkdir -p "${BASE}/group1/${d}" "${BASE}/group2/${d}"
+          done
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          generate_container_name \
+              "${BASE}/group1/unique-leader-aaaaaaaaaaaaaaaaaaaaa" \
+              "${BASE}/group1/shared-tail-1" "${BASE}/group1/shared-tail-2" \
+              "${BASE}/group1/shared-tail-3" "${BASE}/group1/shared-tail-4" \
+              "${BASE}/group1/shared-tail-5"
+          name1="${CONTAINER_NAME}"
+          generate_container_name \
+              "${BASE}/group2/unique-leader-bbbbbbbbbbbbbbbbbbbbb" \
+              "${BASE}/group2/shared-tail-1" "${BASE}/group2/shared-tail-2" \
+              "${BASE}/group2/shared-tail-3" "${BASE}/group2/shared-tail-4" \
+              "${BASE}/group2/shared-tail-5"
+          name2="${CONTAINER_NAME}"
+          echo "NAME1=${name1}"
+          echo "NAME2=${name2}"
+          if [ "${name1}" != "${name2}" ]; then echo "UNIQUE"; else echo "COLLIDE"; fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "UNIQUE"
+
+  - name: multi-project name carries the first basename and a project-count marker
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}"' EXIT
+          mkdir -p "${BASE}/alpha" "${BASE}/bravo" "${BASE}/charlie"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          # Sorted order is alpha < bravo < charlie, so alpha is the first.
+          generate_container_name "${BASE}/charlie" "${BASE}/alpha" "${BASE}/bravo"
+          echo "NAME=${CONTAINER_NAME}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "riotbox-alpha-"
+          - result.systemout ShouldContainSubstring "-2more-"
+
+  - name: single-project name retains the basename and no hash suffix
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}"' EXIT
+          mkdir -p "${BASE}/myproject"
+          # Force the running-container probe to return empty so no
+          # disambiguation is triggered.
+          export CONTAINER_CMD=true
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          generate_container_name "${BASE}/myproject"
+          echo "NAME=${CONTAINER_NAME}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NAME=riotbox-myproject"

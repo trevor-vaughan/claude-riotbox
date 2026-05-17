@@ -125,6 +125,20 @@ tasks:
         vars:
           ARGS: "{{.CLI_ARGS}}"
 
+  socket-run:
+    desc: "Alias for session:socket-run"
+    cmds:
+      - task: session:socket-run
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
+  socket-shell:
+    desc: "Alias for session:socket-shell"
+    cmds:
+      - task: session:socket-shell
+        vars:
+          ARGS: "{{.CLI_ARGS}}"
+
   session-list:
     desc: "Alias for session:list-sessions"
     cmds:

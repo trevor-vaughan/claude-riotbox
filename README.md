@@ -137,6 +137,8 @@ Your host `~/.config/opencode/` (agents, commands, themes, `opencode.json`) is c
 | `claude-riotbox mounts` | Show auto-detected mounts (useful for debugging) |
 | `claude-riotbox nested-run "<task>" [dir]` | Run with podman-in-podman support (disables SELinux) |
 | `claude-riotbox nested-shell [dir]` | Shell with podman-in-podman support (disables SELinux) |
+| `claude-riotbox socket-run "<task>" [dir]` | Run with shared host podman socket (WARNING: grants host root) |
+| `claude-riotbox socket-shell [dir]` | Shell with shared host podman socket (WARNING: grants host root) |
 | `claude-riotbox session-list` | List all riotbox sessions |
 | `claude-riotbox session-remove [key/path]` | Remove a session by key or project path (or `--all`) |
 | `claude-riotbox session-reset` | Reset session cache (forces fresh skill/config copy) |
@@ -304,7 +306,69 @@ Inside the container, `claude` is a wrapper script (`container/claude-wrapper.sh
 
 The system prompt is pre-rendered at build time into `/etc/claude-code/CLAUDE.md` (the managed policy path). This location is loaded automatically by Claude Code, cannot be excluded, and survives context compression. Build-time rendering avoids SELinux AVC denials that occur when `container_t` writes to `etc_t` paths in the overlay filesystem. The `RIOTBOX_PROMPT` env var can override the template at runtime if needed. Using the managed policy path frees `~/.claude/CLAUDE.md` for the user's own instructions — personal CLAUDE.md and rules from the host are synced into the session directory at launch.
 
-## Nested containers (podman-in-podman)
+## Container runtime modes
+
+The riotbox supports three modes for code that needs to run containers
+inside the session. Pick based on your trust posture and use case.
+
+| Mode    | Flag                | Trust posture                        | Image cache          | Auth                       | Isolation                 |
+|---------|---------------------|--------------------------------------|----------------------|----------------------------|---------------------------|
+| Default | (none)              | tight (single-uid keep-id)           | n/a                  | n/a                        | full                      |
+| Nested  | `RIOTBOX_NESTED=1`  | broad-trust inside outer userns      | per-session vfs (large) | per-session `podman login` | inner namespace           |
+| Socket  | `RIOTBOX_SOCKET=1`  | **host root** (effective)            | shared with host     | host's podman login state  | none — containers run on host |
+
+`RIOTBOX_NESTED=1` and `RIOTBOX_SOCKET=1` are mutually exclusive. The
+launcher refuses to start if both are set.
+
+**Which to pick:**
+
+- **Need authenticated registry pulls across many sessions with minimum
+  fuss** → socket mode. Bind-mounts the host's `podman.sock`, so
+  `podman pull ghcr.io/private/img` uses your host's `podman login` state
+  automatically. The container has effective root on the host; use only
+  with trusted code.
+- **Need actually-isolated nested containers, accept the per-session vfs
+  storage cost, willing to `podman login` inside the container** →
+  nested mode.
+- **Don't need a container engine inside the session** → default mode.
+
+### Socket mode (shared host podman engine)
+
+Enable the user-level podman socket on the host (once per machine):
+
+```sh
+systemctl --user enable --now podman.socket
+```
+
+Verify the socket is alive:
+
+```sh
+podman --url unix://${XDG_RUNTIME_DIR}/podman/podman.sock info
+```
+
+Then run a session with the shared socket:
+
+```sh
+RIOTBOX_SOCKET=1 claude-riotbox shell
+# or
+task socket-shell
+```
+
+The launcher auto-detects the socket at `$XDG_RUNTIME_DIR/podman/podman.sock`
+(rootless) and falls back to `/run/podman/podman.sock` (rootful). If
+neither is available, it exits with an actionable error message that
+explains the setup. The nested-podman setup (vfs storage override, subuid
+plumbing, v3 file caps) is skipped — there is no inner engine.
+
+**Trust caveat:** the host podman socket is roughly equivalent to root on
+the host. Any process inside the container that can reach the socket can
+`podman run --privileged --pid=host -v /:/host alpine chroot /host` and
+own the machine. This is the same delegation Docker Desktop ships by
+default and the same pattern CI runners use with `-v /var/run/docker.sock`
+— well-trodden, but a well-known attack vector. Use only with code you
+trust.
+
+### Nested mode (podman-in-podman)
 
 If Claude needs to build or run containers (e.g., testing Dockerfiles, running docker-compose stacks), use the nested variants:
 
@@ -480,6 +544,14 @@ Session branching is automatically disabled for `claude-riotbox run` (non-intera
   - `--device /dev/fuse`, `--device /dev/net/tun` — outer storage and pasta networking.
 
   Inside the container, entrypoint runs `nested-podman-setup.sh` which: (a) writes **v3** file capabilities on `newuidmap`/`newgidmap` via `setcap -n $(id -u) cap_setuid/setgid+ep` — v2 caps don't apply when the running process isn't root in the host's userns, which is why setuid-via-setcap silently no-ops without the `-n` flag; (b) writes `/etc/sub{u,g}id` as up to two ranges that cover the outer's mapped uids minus uid 0 (kernel restriction) and minus the user's own uid (newuidmap restriction); (c) overrides `~/.config/containers/storage.conf` to use the `vfs` driver, since nested overlay/fuse-overlayfs makes inner crun fail on `mkdir /run/secrets`. Only used when explicitly requested via `nested-run`/`nested-shell` or `RIOTBOX_NESTED=1`.
+- **Socket mode**: `RIOTBOX_SOCKET=1` bind-mounts the host's `podman.sock`
+  (auto-detected at `$XDG_RUNTIME_DIR/podman/podman.sock` rootless or
+  `/run/podman/podman.sock` rootful) and sets `CONTAINER_HOST` so the
+  in-container `podman` is a thin remote client of the host engine. This
+  shares image cache and registry credentials across sessions but grants
+  the container effective root on the host (anyone with API access to the
+  socket can `podman run --privileged -v /:/host alpine chroot /host`).
+  Mutually exclusive with `RIOTBOX_NESTED=1`.
 
 ## Development
 
@@ -497,11 +569,14 @@ The following are only needed if you want to run the linters or tests locally (o
 task check          # run all quality gates (lint + test + venom lint)
 task lint           # shellcheck + hadolint
 task test           # integration tests (builds test container, runs venom suites)
+task test:direct    # run venom directly on host (skip container build)
 task tests:lint     # structural lint of .venom.yml test suites
 task tests:list     # list available test suites
 ```
 
 The `check` task runs all three gates in parallel: `lint` (shellcheck and hadolint), `test` (venom integration suites in a container), and `tests:lint` (structural validation of venom test files).
+
+For quick iteration on a single suite — or when working in an agent sandbox without the test image built — use `task test:direct -- tests/<suite>.venom.yml` (or `scripts/venom-run.sh tests/<suite>.venom.yml` if you prefer to skip task). The wrapper runs venom directly on the host and routes all output (logs and result files) into `.test-output/`. Do **not** run `venom run` from the repo root yourself: venom writes `venom.log` to CWD on every invocation (and rotates earlier runs to `venom.N.log`) with no flag to redirect it, so a bare invocation litters the working tree.
 
 ## Podman setup
 
