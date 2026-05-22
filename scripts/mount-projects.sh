@@ -210,6 +210,36 @@ resolve_projects() {
     RIOTBOX_SESSION_DIR="${RIOTBOX_DATA_DIR}/${session_key}"
 }
 
+# Return 0 if the given path should be treated as not-owned by the host
+# user (i.e. ineligible for `:z` relabel; routed to podman's `:O` overlay).
+#
+# Production gate: the path's owner UID differs from the effective UID.
+# Test seam via RIOTBOX_FORCE_UNOWNED_MOUNTS:
+#   ""            production check (`[ ! -O "$p" ]`)
+#   "1"           sledgehammer — every path treated as unowned
+#   "/a:/b:…"     literal colon-separated path list — only listed paths
+#                 treated as unowned; other paths fall through to the
+#                 production check
+#
+# The dual-mode seam exists because venom tests cannot create
+# root-owned fixtures without sudo. The path-list form covers the true
+# mixed case (owned + unowned in the same project set), which is the
+# most interesting per-dir branching scenario.
+_mount_path_is_unowned() {
+    local p="$1"
+    case "${RIOTBOX_FORCE_UNOWNED_MOUNTS:-}" in
+        1)
+            return 0
+            ;;
+        "")
+            [ ! -O "${p}" ]
+            ;;
+        *)
+            [[ ":${RIOTBOX_FORCE_UNOWNED_MOUNTS}:" == *":${p}:"* ]]
+            ;;
+    esac
+}
+
 setup_projects() {
     local raw_projects="$1"
     PROJECT_VOLUME_FLAGS=""
@@ -218,40 +248,110 @@ setup_projects() {
 
     resolve_projects "${raw_projects}"
 
+    # ── Engine guard for unowned mounts ───────────────────────────────
+    # Unowned paths require podman's `:O` overlay (no Docker equivalent).
+    # If any path is unowned and the runtime is not podman, abort before
+    # any filesystem side effects (no session dir, no overlay tree).
+    local _engine="${CONTAINER_CMD:-podman}"
+    if [ "${_engine}" != "podman" ]; then
+        local _unowned_paths=""
+        local _dir
+        for _dir in "${PROJECT_DIRS[@]}"; do
+            if _mount_path_is_unowned "${_dir}"; then
+                _unowned_paths="${_unowned_paths}${_dir}"$'\n'
+            fi
+        done
+        if [ -n "${_unowned_paths}" ]; then
+            {
+                echo "ERROR: project path is not owned by you and requires podman's \`:O\` overlay mount:"
+                # shellcheck disable=SC2086  # intentional word-splitting on newlines in the path list
+                printf '         %s\n' ${_unowned_paths}
+                echo "       This feature is podman-only. Docker does not support per-mount overlays."
+                echo "       Either run under podman, or copy the tree to a location you own."
+            } >&2
+            return 1
+        fi
+        unset _dir _unowned_paths
+    fi
+
     if [ "${RIOTBOX_OVERLAY:-}" = "1" ]; then
-        # ── Overlay mode: project read-only + overlay data volume ─────
+        # ── Overlay mode: per-path branch on ownership ────────────────
+        # Owned path → :ro,z lower + session-dir :z upper (persistent).
+        # Unowned path → :O only (ephemeral; no session upper/work). The
+        # original :ro,z lower would chcon-fail on unowned dirs; :O has
+        # the same essential shape (RO source + writable container view)
+        # and is the safe fallback. Persistence is fundamentally
+        # incoherent against a tree you cannot write back to.
+        local _unowned_for_warn=""
+        local _name _lower_path _overlay_path _overlay_dir
         if [ ${#PROJECT_DIRS[@]} -eq 1 ]; then
-            PROJECT_VOLUME_FLAGS="-v ${PROJECT_DIRS[0]}:/mnt/lower:ro,z"
-            local overlay_dir="${RIOTBOX_SESSION_DIR}/overlay/project"
-            mkdir -p "${overlay_dir}/upper" "${overlay_dir}/work"
-            PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${overlay_dir}:/mnt/overlay:z"
+            _lower_path="/mnt/lower"
+            _overlay_path="/mnt/overlay"
+            _name="project"
+            if _mount_path_is_unowned "${PROJECT_DIRS[0]}"; then
+                PROJECT_VOLUME_FLAGS="-v ${PROJECT_DIRS[0]}:${_lower_path}:O"
+                _unowned_for_warn="${PROJECT_DIRS[0]}"$'\n'
+            else
+                PROJECT_VOLUME_FLAGS="-v ${PROJECT_DIRS[0]}:${_lower_path}:ro,z"
+                _overlay_dir="${RIOTBOX_SESSION_DIR}/overlay/${_name}"
+                mkdir -p "${_overlay_dir}/upper" "${_overlay_dir}/work"
+                PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${_overlay_dir}:${_overlay_path}:z"
+            fi
         else
             for dir in "${PROJECT_DIRS[@]}"; do
-                local name
-                name="$(basename "${dir}")"
-                PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${dir}:/mnt/lower/${name}:ro,z"
-                local overlay_dir="${RIOTBOX_SESSION_DIR}/overlay/${name}"
-                mkdir -p "${overlay_dir}/upper" "${overlay_dir}/work"
-                PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${overlay_dir}:/mnt/overlay/${name}:z"
+                _name="$(basename "${dir}")"
+                _lower_path="/mnt/lower/${_name}"
+                _overlay_path="/mnt/overlay/${_name}"
+                if _mount_path_is_unowned "${dir}"; then
+                    PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${dir}:${_lower_path}:O"
+                    _unowned_for_warn="${_unowned_for_warn}${dir}"$'\n'
+                else
+                    PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${dir}:${_lower_path}:ro,z"
+                    _overlay_dir="${RIOTBOX_SESSION_DIR}/overlay/${_name}"
+                    mkdir -p "${_overlay_dir}/upper" "${_overlay_dir}/work"
+                    PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${_overlay_dir}:${_overlay_path}:z"
+                fi
             done
+        fi
+        if [ -n "${_unowned_for_warn}" ]; then
+            {
+                echo "WARN: RIOTBOX_OVERLAY=1 falls back to ephemeral overlay (:O) for unowned paths:"
+                # shellcheck disable=SC2086  # intentional word-splitting on newlines in the path list
+                printf '        %s\n' ${_unowned_for_warn}
+                echo "      Writes to these paths will not persist between runs."
+            } >&2
         fi
     else
         # ── Normal mode: direct bind mount ────────────────────────────
-        # RIOTBOX_READONLY=1 mounts projects read-only (for untrusted repos)
-        local mount_suffix=":z"
+        # Per-path branching on ownership:
+        #   owned + RIOTBOX_READONLY=1   → :ro,z
+        #   owned + default              → :z
+        #   not owned (either)           → :O    (podman overlay; ephemeral writes)
+        local _ro_suffix=":z"
         if [ "${RIOTBOX_READONLY:-}" = "1" ]; then
-            mount_suffix=":ro,z"
+            _ro_suffix=":ro,z"
         fi
 
+        local _suffix _container_path
         if [ ${#PROJECT_DIRS[@]} -eq 1 ]; then
-            # Single project: mount at /workspace (backward compatible)
-            PROJECT_VOLUME_FLAGS="-v ${PROJECT_DIRS[0]}:/workspace${mount_suffix}"
+            _container_path="/workspace"
+            if _mount_path_is_unowned "${PROJECT_DIRS[0]}"; then
+                _suffix=":O"
+            else
+                _suffix="${_ro_suffix}"
+            fi
+            PROJECT_VOLUME_FLAGS="-v ${PROJECT_DIRS[0]}:${_container_path}${_suffix}"
         else
-            # Multiple projects: mount each at /workspace/<dirname>
             for dir in "${PROJECT_DIRS[@]}"; do
                 local name
                 name="$(basename "${dir}")"
-                PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${dir}:/workspace/${name}${mount_suffix}"
+                _container_path="/workspace/${name}"
+                if _mount_path_is_unowned "${dir}"; then
+                    _suffix=":O"
+                else
+                    _suffix="${_ro_suffix}"
+                fi
+                PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${dir}:${_container_path}${_suffix}"
             done
         fi
     fi
@@ -291,8 +391,8 @@ setup_projects() {
 }
 
 # Print the resolved mount table in `host:container:mode` form (one per
-# line, mode is `rw` or `ro`). Reads from PROJECT_VOLUME_FLAGS, so the
-# caller must run setup_projects first.
+# line, mode is `rw`, `ro`, or `ovl` (`:O` overlay)). Reads from
+# PROJECT_VOLUME_FLAGS, so the caller must run setup_projects first.
 print_mounts_triple() {
     local flag suffix host container mode
     # PROJECT_VOLUME_FLAGS is space-separated `-v <spec>` pairs. Parse with
@@ -321,9 +421,15 @@ print_mounts_triple() {
             container="${rest}"
             suffix=""
         fi
-        case ",${suffix}," in
-            *,ro,*) mode="ro" ;;
-            *)      mode="rw" ;;
+        case "${suffix}" in
+            "")      mode="rw" ;;
+            "O")     mode="ovl" ;;
+            *)
+                case ",${suffix}," in
+                    *,ro,*) mode="ro" ;;
+                    *)      mode="rw" ;;
+                esac
+                ;;
         esac
         printf '%s:%s:%s\n' "${host}" "${container}" "${mode}"
     done

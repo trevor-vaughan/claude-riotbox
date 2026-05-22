@@ -426,6 +426,31 @@ claude-riotbox overlay-reject    # Discard all changes
 
 > Overlay mode requires podman. Docker is not supported due to differences in how it handles bind-mounted overlays.
 
+### Unowned project directories
+
+When `claude-riotbox` is pointed at a directory you do not own (e.g.
+a tree under `/usr/src`, a coworker's checkout, a shared-storage
+clone), the launcher automatically substitutes podman's `:O` overlay
+mount for that path. This bypasses the SELinux relabel that ordinary
+bind mounts require — the host source is never modified.
+
+Two consequences:
+
+- **Writes are ephemeral.** Anything the container writes to an
+  unowned path lands in an in-memory overlay layer that is discarded
+  when the container exits. To persist changes, copy or clone the
+  source to a location you own first.
+- **Podman only.** Docker has no per-mount overlay equivalent. If you
+  run under Docker and any project path is unowned, the launcher
+  refuses to start with an error naming the offending path.
+
+The check is per-mount: a multi-project set with a mix of owned and
+unowned directories works — owned paths use the normal `:z` mount and
+keep persistent writes, only the unowned ones go ephemeral. When
+`RIOTBOX_OVERLAY=1` is set alongside an unowned path, the launcher
+emits a short warning naming the affected paths so the persistence
+delta is visible.
+
 ## What could go wrong
 
 Claude runs autonomously with full write access to your project directory and passwordless sudo inside the container. This is powerful but comes with real risks:

@@ -61,7 +61,7 @@ testcases:
               fi
               mode="${line##*:}"
               case "${mode}" in
-                  rw|ro) ;;
+                  rw|ro|ovl) ;;
                   *) echo "BAD: bad mode '${mode}' in: ${line}" >&2; exit 1 ;;
               esac
           done <<< "${out}"
@@ -130,7 +130,7 @@ testcases:
               fi
               mode="${line##*:}"
               case "${mode}" in
-                  rw|ro) ;;
+                  rw|ro|ovl) ;;
                   *) echo "BAD: bad mode '${mode}' in: ${line}" >&2; exit 1 ;;
               esac
           done <<< "${out}"

@@ -136,6 +136,25 @@
 #
 # : "${RIOTBOX_CREDFILE_VARS:=GOOGLE_APPLICATION_CREDENTIALS:/run/secrets/gcp-creds.json AWS_SHARED_CREDENTIALS_FILE:/run/secrets/aws-credentials AWS_CONFIG_FILE:/run/secrets/aws-config KUBECONFIG:/run/secrets/kubeconfig}"
 
+# ── Internal / test seam (not for everyday use) ──────────────────────
+#
+# RIOTBOX_FORCE_UNOWNED_MOUNTS forces the unowned-mount branch in
+# setup_projects regardless of real path ownership. Two forms:
+#
+#   =1                 sledgehammer — every project path treated as
+#                      unowned (uses :O instead of :z / :ro,z)
+#   =/a:/b:…           literal colon-separated list — only paths
+#                      whose canonical form matches an entry are
+#                      treated as unowned; other paths fall back to
+#                      the real ownership check
+#
+# This exists so venom tests can exercise the unowned-mount code path
+# without root-owned fixtures (which can't be created without sudo).
+# Production code does not need this set; the real production gate is
+# `[ ! -O "$dir" ]` and runs automatically.
+#
+# RIOTBOX_FORCE_UNOWNED_MOUNTS=
+
 # ── Vertex ADC prompt ────────────────────────────────────────────────────
 # When CLAUDE_CODE_USE_VERTEX is set on the host but
 # GOOGLE_APPLICATION_CREDENTIALS is not, and

@@ -17,7 +17,8 @@ testcases:
           set -euo pipefail
           BASE="$(mktemp -d)"
           STORE="$(mktemp -d)"
-          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
           mkdir -p "${BASE}/proj"
           export XDG_DATA_HOME="${STORE}"
           export ROOT_DIR="{{.riotbox_dir}}"
@@ -26,10 +27,12 @@ testcases:
           source "{{.riotbox_dir}}/scripts/mount-projects.sh"
           setup_projects "${BASE}/proj"
           echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          chcon_marker_clean
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring ":/workspace:ro,z"
           - result.systemout ShouldNotContainSubstring ":/workspace:z "
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
 
   - name: RIOTBOX_READONLY=1 produces :ro,z suffix for every multi-project mount
     steps:
@@ -38,7 +41,8 @@ testcases:
           set -euo pipefail
           BASE="$(mktemp -d)"
           STORE="$(mktemp -d)"
-          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
           mkdir -p "${BASE}/a" "${BASE}/b" "${BASE}/c"
           export XDG_DATA_HOME="${STORE}"
           export ROOT_DIR="{{.riotbox_dir}}"
@@ -49,9 +53,11 @@ testcases:
           echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
           count_ro=$(printf '%s\n' "${PROJECT_VOLUME_FLAGS}" | grep -oE ':/workspace/[abc]:ro,z' | wc -l)
           echo "RO_MOUNTS=${count_ro}"
+          chcon_marker_clean
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "RO_MOUNTS=3"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
 
   - name: default mode (no flag) keeps :z suffix and does not emit :ro,z for projects
     steps:
@@ -60,7 +66,8 @@ testcases:
           set -euo pipefail
           BASE="$(mktemp -d)"
           STORE="$(mktemp -d)"
-          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
           mkdir -p "${BASE}/proj"
           export XDG_DATA_HOME="${STORE}"
           export ROOT_DIR="{{.riotbox_dir}}"
@@ -68,10 +75,12 @@ testcases:
           source "{{.riotbox_dir}}/scripts/mount-projects.sh"
           setup_projects "${BASE}/proj"
           echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          chcon_marker_clean
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring ":/workspace:z"
           - result.systemout ShouldNotContainSubstring ":/workspace:ro,z"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
 
   - name: RIOTBOX_OVERLAY=1 single-project creates overlay/upper and overlay/work and pairs ro lower with rw overlay
     steps:
@@ -80,7 +89,8 @@ testcases:
           set -euo pipefail
           BASE="$(mktemp -d)"
           STORE="$(mktemp -d)"
-          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
           mkdir -p "${BASE}/proj"
           export XDG_DATA_HOME="${STORE}"
           export ROOT_DIR="{{.riotbox_dir}}"
@@ -91,12 +101,15 @@ testcases:
           echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
           [ -d "${RIOTBOX_SESSION_DIR}/overlay/project/upper" ] && echo "UPPER_OK"
           [ -d "${RIOTBOX_SESSION_DIR}/overlay/project/work" ]  && echo "WORK_OK"
+          chcon_marker_clean
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring ":/mnt/lower:ro,z"
           - result.systemout ShouldContainSubstring ":/mnt/overlay:z"
           - result.systemout ShouldContainSubstring "UPPER_OK"
           - result.systemout ShouldContainSubstring "WORK_OK"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+          - result.systemerr ShouldNotContainSubstring "WARN:"
 
   - name: RIOTBOX_OVERLAY=1 multi-project creates an overlay tree per project and namespaces the container paths
     steps:
@@ -105,7 +118,8 @@ testcases:
           set -euo pipefail
           BASE="$(mktemp -d)"
           STORE="$(mktemp -d)"
-          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
           mkdir -p "${BASE}/alpha" "${BASE}/bravo"
           export XDG_DATA_HOME="${STORE}"
           export ROOT_DIR="{{.riotbox_dir}}"
@@ -118,6 +132,7 @@ testcases:
               [ -d "${RIOTBOX_SESSION_DIR}/overlay/${name}/upper" ] && echo "UPPER_${name}_OK"
               [ -d "${RIOTBOX_SESSION_DIR}/overlay/${name}/work"  ] && echo "WORK_${name}_OK"
           done
+          chcon_marker_clean
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring ":/mnt/lower/alpha:ro,z"
@@ -128,3 +143,415 @@ testcases:
           - result.systemout ShouldContainSubstring "WORK_alpha_OK"
           - result.systemout ShouldContainSubstring "UPPER_bravo_OK"
           - result.systemout ShouldContainSubstring "WORK_bravo_OK"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+
+  - name: M5 owned multi-project default mode keeps :z suffix per mount
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/a" "${BASE}/b" "${BASE}/c"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/a ${BASE}/b ${BASE}/c"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          count_z=$(printf '%s\n' "${PROJECT_VOLUME_FLAGS}" | grep -oE ':/workspace/[abc]:z' | wc -l)
+          echo "Z_MOUNTS=${count_z}"
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Z_MOUNTS=3"
+          - result.systemout ShouldNotContainSubstring ":/workspace/a:ro,z"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+
+  - name: M13 RIOTBOX_FORCE_UNOWNED_MOUNTS=yes is treated as a non-matching path list, not a sledgehammer
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/proj"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_FORCE_UNOWNED_MOUNTS=yes
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/proj"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":/workspace:z"
+          - result.systemout ShouldNotContainSubstring ":/workspace:O"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+
+  - name: M3 unowned single-project default mode emits :O and triple `ovl`
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/proj"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_FORCE_UNOWNED_MOUNTS=1
+          export CONTAINER_CMD=podman
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/proj"
+          echo "PODMAN_FLAGS=${PROJECT_VOLUME_FLAGS}"
+          TRIPLE="$(print_mounts_triple | grep ':/workspace:' || true)"
+          echo "TRIPLE=${TRIPLE}"
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":/workspace:O"
+          - result.systemout ShouldNotContainSubstring ":/workspace:z"
+          - result.systemout ShouldNotContainSubstring ":/workspace:ro,z"
+          - result.systemout ShouldContainSubstring ":/workspace:ovl"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+
+  - name: M4 unowned single-project with RIOTBOX_READONLY=1 also emits :O (RO redundant)
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/proj"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_FORCE_UNOWNED_MOUNTS=1
+          export RIOTBOX_READONLY=1
+          export CONTAINER_CMD=podman
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/proj"
+          echo "PODMAN_FLAGS=${PROJECT_VOLUME_FLAGS}"
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":/workspace:O"
+          - result.systemout ShouldNotContainSubstring ":/workspace:ro,z"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+
+  - name: M6 sledgehammer RIOTBOX_FORCE_UNOWNED_MOUNTS=1 across multi-project
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/a" "${BASE}/b" "${BASE}/c"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_FORCE_UNOWNED_MOUNTS=1
+          export CONTAINER_CMD=podman
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/a ${BASE}/b ${BASE}/c"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          count_O=$(printf '%s\n' "${PROJECT_VOLUME_FLAGS}" | grep -oE ':/workspace/[abc]:O' | wc -l)
+          echo "O_MOUNTS=${count_O}"
+          count_z=$(printf '%s\n' "${PROJECT_VOLUME_FLAGS}" | grep -oE ':/workspace/[abc]:z' | wc -l || true)
+          echo "Z_MOUNTS=${count_z}"
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "O_MOUNTS=3"
+          - result.systemout ShouldContainSubstring "Z_MOUNTS=0"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+
+  - name: M7 path-list mixes :O for listed paths with :z for the rest in default mode
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/a" "${BASE}/b" "${BASE}/c"
+          # Canonicalize paths so the path-list match works against the
+          # same form that resolve_projects produces internally.
+          A="$(cd "${BASE}/a" && pwd -P)"
+          B="$(cd "${BASE}/b" && pwd -P)"
+          C="$(cd "${BASE}/c" && pwd -P)"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_FORCE_UNOWNED_MOUNTS="${A}:${C}"
+          export CONTAINER_CMD=podman
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${A} ${B} ${C}"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          # Sanity-check the per-mount mode token via the triple format
+          print_mounts_triple | grep ':/workspace/' | sort
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":/workspace/a:O"
+          - result.systemout ShouldContainSubstring ":/workspace/b:z"
+          - result.systemout ShouldContainSubstring ":/workspace/c:O"
+          - result.systemout ShouldNotContainSubstring ":/workspace/b:O"
+          - result.systemout ShouldNotContainSubstring ":/workspace/a:z "
+          - result.systemout ShouldContainSubstring "/workspace/a:ovl"
+          - result.systemout ShouldContainSubstring "/workspace/b:rw"
+          - result.systemout ShouldContainSubstring "/workspace/c:ovl"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+
+  - name: M8 unowned path with CONTAINER_CMD=docker hard-fails before session-dir creation
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/proj"
+          A="$(cd "${BASE}/proj" && pwd -P)"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_FORCE_UNOWNED_MOUNTS=1
+          export CONTAINER_CMD=docker
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          ( setup_projects "${A}" ) 2>"${STORE}/err.log"
+          rc=$?
+          echo "RC=${rc}"
+          grep -q "podman" "${STORE}/err.log" && echo "ERROR_MENTIONS_PODMAN"
+          grep -qF "${A}" "${STORE}/err.log" && echo "ERROR_MENTIONS_PATH"
+          # Session dir must NOT have been created on a failed launch
+          # The session key for a single canonical path is the path with
+          # / replaced by - and leading - stripped.
+          KEY="$(printf '%s\n' "${A}" | sed 's|/|-|g; s|^-||')"
+          if [ -d "${STORE}/claude-riotbox/${KEY}" ]; then
+              echo "SESSION_DIR_LEAKED"
+          else
+              echo "NO_SESSION_DIR"
+          fi
+          chcon_marker_clean
+        assertions:
+          - result.systemout ShouldNotContainSubstring "RC=0"
+          - result.systemout ShouldContainSubstring "ERROR_MENTIONS_PODMAN"
+          - result.systemout ShouldContainSubstring "ERROR_MENTIONS_PATH"
+          - result.systemout ShouldContainSubstring "NO_SESSION_DIR"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+
+  - name: M15 engine guard fires before RIOTBOX_OVERLAY=1 creates any overlay dirs
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/proj"
+          A="$(cd "${BASE}/proj" && pwd -P)"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_FORCE_UNOWNED_MOUNTS=1
+          export RIOTBOX_OVERLAY=1
+          export CONTAINER_CMD=docker
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          ( setup_projects "${A}" ) 2>"${STORE}/err.log"
+          rc=$?
+          echo "RC=${rc}"
+          KEY="$(printf '%s\n' "${A}" | sed 's|/|-|g; s|^-||')"
+          if [ -e "${STORE}/claude-riotbox/${KEY}/overlay" ]; then
+              echo "OVERLAY_LEAKED"
+          else
+              echo "NO_OVERLAY"
+          fi
+          chcon_marker_clean
+        assertions:
+          - result.systemout ShouldNotContainSubstring "RC=0"
+          - result.systemout ShouldContainSubstring "NO_OVERLAY"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+
+  - name: M9 unowned single-project under RIOTBOX_OVERLAY=1 uses :O and skips session upper/work
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/proj"
+          A="$(cd "${BASE}/proj" && pwd -P)"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_FORCE_UNOWNED_MOUNTS=1
+          export RIOTBOX_OVERLAY=1
+          export CONTAINER_CMD=podman
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${A}" 2>"${STORE}/err.log"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          grep -q "WARN:" "${STORE}/err.log" && echo "WARN_EMITTED"
+          grep -q "ephemeral overlay" "${STORE}/err.log" && echo "WARN_SAYS_EPHEMERAL"
+          grep -qF "${A}" "${STORE}/err.log" && echo "WARN_NAMES_PATH"
+          if [ -e "${RIOTBOX_SESSION_DIR}/overlay/project/upper" ]; then
+              echo "UPPER_LEAKED"
+          else
+              echo "NO_UPPER"
+          fi
+          if [ -e "${RIOTBOX_SESSION_DIR}/overlay/project/work" ]; then
+              echo "WORK_LEAKED"
+          else
+              echo "NO_WORK"
+          fi
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":/mnt/lower:O"
+          - result.systemout ShouldNotContainSubstring ":/mnt/lower:ro,z"
+          - result.systemout ShouldNotContainSubstring ":/mnt/overlay:"
+          - result.systemout ShouldContainSubstring "NO_UPPER"
+          - result.systemout ShouldContainSubstring "NO_WORK"
+          - result.systemout ShouldContainSubstring "WARN_EMITTED"
+          - result.systemout ShouldContainSubstring "WARN_SAYS_EPHEMERAL"
+          - result.systemout ShouldContainSubstring "WARN_NAMES_PATH"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+
+  - name: M10 unowned mix under RIOTBOX_OVERLAY=1 emits :O for unowned and full overlay for owned, with one warning
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/a" "${BASE}/b" "${BASE}/c"
+          A="$(cd "${BASE}/a" && pwd -P)"
+          B="$(cd "${BASE}/b" && pwd -P)"
+          C="$(cd "${BASE}/c" && pwd -P)"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_FORCE_UNOWNED_MOUNTS="${A}:${C}"
+          export RIOTBOX_OVERLAY=1
+          export CONTAINER_CMD=podman
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${A} ${B} ${C}" 2>"${STORE}/err.log"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          grep -q "WARN:" "${STORE}/err.log" && echo "WARN_EMITTED"
+          grep -qF "${A}" "${STORE}/err.log" && echo "WARN_NAMES_A"
+          grep -qF "${C}" "${STORE}/err.log" && echo "WARN_NAMES_C"
+          # B is owned — it must NOT appear in the warning
+          grep -qF "${B}" "${STORE}/err.log" || echo "WARN_OMITS_B"
+          # Owned dir b gets the full lower+upper pair
+          [ -d "${RIOTBOX_SESSION_DIR}/overlay/b/upper" ] && echo "B_UPPER_OK"
+          [ -d "${RIOTBOX_SESSION_DIR}/overlay/b/work"  ] && echo "B_WORK_OK"
+          # Unowned dirs a and c MUST NOT have upper/work
+          [ ! -e "${RIOTBOX_SESSION_DIR}/overlay/a" ] && echo "A_NO_OVERLAY"
+          [ ! -e "${RIOTBOX_SESSION_DIR}/overlay/c" ] && echo "C_NO_OVERLAY"
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":/mnt/lower/a:O"
+          - result.systemout ShouldContainSubstring ":/mnt/lower/b:ro,z"
+          - result.systemout ShouldContainSubstring ":/mnt/lower/c:O"
+          - result.systemout ShouldContainSubstring ":/mnt/overlay/b:z"
+          - result.systemout ShouldNotContainSubstring ":/mnt/lower/a:ro,z"
+          - result.systemout ShouldNotContainSubstring ":/mnt/lower/c:ro,z"
+          - result.systemout ShouldNotContainSubstring ":/mnt/overlay/a:"
+          - result.systemout ShouldNotContainSubstring ":/mnt/overlay/c:"
+          - result.systemout ShouldContainSubstring "B_UPPER_OK"
+          - result.systemout ShouldContainSubstring "B_WORK_OK"
+          - result.systemout ShouldContainSubstring "A_NO_OVERLAY"
+          - result.systemout ShouldContainSubstring "C_NO_OVERLAY"
+          - result.systemout ShouldContainSubstring "WARN_EMITTED"
+          - result.systemout ShouldContainSubstring "WARN_NAMES_A"
+          - result.systemout ShouldContainSubstring "WARN_NAMES_C"
+          - result.systemout ShouldContainSubstring "WARN_OMITS_B"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+
+  - name: M12 path-list with a non-matching path leaves owned project on :z
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/proj"
+          A="$(cd "${BASE}/proj" && pwd -P)"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_FORCE_UNOWNED_MOUNTS="/some/other/path/not/in/this/set"
+          export CONTAINER_CMD=podman
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${A}"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":/workspace:z"
+          - result.systemout ShouldNotContainSubstring ":/workspace:O"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+
+  - name: M14 setup_projects is idempotent across calls
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/proj"
+          A="$(cd "${BASE}/proj" && pwd -P)"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_FORCE_UNOWNED_MOUNTS=1
+          export RIOTBOX_READONLY=1
+          export CONTAINER_CMD=podman
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${A}"
+          FIRST="${PROJECT_VOLUME_FLAGS}"
+          setup_projects "${A}"
+          SECOND="${PROJECT_VOLUME_FLAGS}"
+          if [ "${FIRST}" = "${SECOND}" ]; then
+              echo "IDEMPOTENT"
+          else
+              echo "FIRST=${FIRST}"
+              echo "SECOND=${SECOND}"
+              echo "NOT_IDEMPOTENT"
+          fi
+          # Helper locals should not leak into the calling shell
+          [ -z "${_suffix:-}" ]      && echo "NO_LEAK_SUFFIX"
+          [ -z "${_ro_suffix:-}" ]   && echo "NO_LEAK_RO_SUFFIX"
+          [ -z "${_engine:-}" ]      && echo "NO_LEAK_ENGINE"
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "IDEMPOTENT"
+          - result.systemout ShouldContainSubstring "NO_LEAK_SUFFIX"
+          - result.systemout ShouldContainSubstring "NO_LEAK_RO_SUFFIX"
+          - result.systemout ShouldContainSubstring "NO_LEAK_ENGINE"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
