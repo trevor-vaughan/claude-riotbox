@@ -83,7 +83,7 @@ OpenShell publishes:
 - A supported way to install just the controller + CRD without the CLI/gateway (so consumers can integrate with their own k8s cluster rather than spinning up the bundled k3s).
 - Stability guarantees for the CRD shape (semver, deprecation policy).
 
-Riotbox in this world becomes a Kubernetes operator: the user's command (`claude-riotbox run …`) translates into creating a `Sandbox` resource with hostPath mounts in the pod template, then waiting on its status. Considerably more infrastructure to manage but the cleanest separation of concerns long-term.
+Riotbox in this world becomes a Kubernetes operator: the user's command (`riotbox run …`) translates into creating a `Sandbox` resource with hostPath mounts in the pod template, then waiting on its status. Considerably more infrastructure to manage but the cleanest separation of concerns long-term.
 
 The reach of this path is wider than the riotbox use case — it would unlock a lot of "use OpenShell as a sandbox primitive" use cases beyond ours.
 

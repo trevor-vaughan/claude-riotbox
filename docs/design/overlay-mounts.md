@@ -10,7 +10,7 @@ the user reviews changes from the host CLI and explicitly accepts or rejects.
 **Podman-only.** Docker has no equivalent for overlay mounts on bind-mounted
 host directories. Detect Docker and error.
 
-**Opt-in.** `RIOTBOX_OVERLAY=1` env var or `~/.config/claude-riotbox/config`.
+**Opt-in.** `RIOTBOX_OVERLAY=1` env var or `~/.config/riotbox/config`.
 
 ## Architecture
 
@@ -25,7 +25,7 @@ session/overlay/ ──(bind :z)──→    /mnt/overlay/         (upper + work
                                       work  = /mnt/overlay/work
 ```
 
-Overlay data lives at `~/.local/share/claude-riotbox/<session-key>/overlay/`.
+Overlay data lives at `~/.local/share/riotbox/<session-key>/overlay/`.
 Single project uses `overlay/project/{upper,work}`. Multi-project uses
 `overlay/<basename>/{upper,work}` per project.
 
@@ -74,7 +74,7 @@ resolve_overlay() {
 
     if [ ! -d "${OVERLAY_SESSION_DIR}" ]; then
         echo "ERROR: No session found for '${project_path}'." >&2
-        echo "Run 'claude-riotbox session-list' to see available sessions." >&2
+        echo "Run 'riotbox session-list' to see available sessions." >&2
         return 1
     fi
 
@@ -91,7 +91,7 @@ resolve_overlay() {
             OVERLAY_DIR="${overlay_base}/${name}"
         else
             echo "ERROR: No overlay data found for '${project_path}'." >&2
-            echo "Run 'claude-riotbox overlays' to see pending overlays." >&2
+            echo "Run 'riotbox overlays' to see pending overlays." >&2
             return 1
         fi
     fi
@@ -116,7 +116,7 @@ set -euo pipefail
 # overlay-list.sh — List sessions with pending overlay data.
 # Exit 0 if overlays exist, 1 if none.
 
-session_root="${XDG_DATA_HOME:-$HOME/.local/share}/claude-riotbox"
+session_root="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
 
 if [ ! -d "${session_root}" ]; then
     echo "No pending overlays."
@@ -514,9 +514,9 @@ overlay_teardown() {
 
     echo ""
     echo "  Next steps (run from your host):"
-    echo "    claude-riotbox overlay-diff      Review changes"
-    echo "    claude-riotbox overlay-accept     Apply to project"
-    echo "    claude-riotbox overlay-reject     Discard changes"
+    echo "    riotbox overlay-diff      Review changes"
+    echo "    riotbox overlay-accept     Apply to project"
+    echo "    riotbox overlay-reject     Discard changes"
 }
 ```
 
@@ -604,9 +604,9 @@ if [ "${RIOTBOX_OVERLAY:-}" = "1" ]; then
             [ -d "${overlay_subdir}/upper" ] || continue
             if [ -n "$(ls -A "${overlay_subdir}/upper" 2>/dev/null)" ]; then
                 echo "ERROR: Pending overlay data exists. Accept or reject before starting a new session." >&2
-                echo "  claude-riotbox overlay-diff      Review changes" >&2
-                echo "  claude-riotbox overlay-accept     Apply to project" >&2
-                echo "  claude-riotbox overlay-reject     Discard changes" >&2
+                echo "  riotbox overlay-diff      Review changes" >&2
+                echo "  riotbox overlay-accept     Apply to project" >&2
+                echo "  riotbox overlay-reject     Discard changes" >&2
                 exit 1
             fi
         done
@@ -883,10 +883,10 @@ Example test structure for accept:
 
         # Set XDG_DATA_HOME so resolve_projects finds our fake session
         export XDG_DATA_HOME="${TEST_DIR}/data"
-        mkdir -p "${XDG_DATA_HOME}/claude-riotbox"
+        mkdir -p "${XDG_DATA_HOME}/riotbox"
         # Compute the session key the same way mount-projects.sh does
         session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
-        ln -s "${SESSION}" "${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+        ln -s "${SESSION}" "${XDG_DATA_HOME}/riotbox/${session_key}"
 
         export ROOT_DIR="{{.riotbox_dir}}"
         echo "y" | "{{.riotbox_dir}}/scripts/overlay-accept.sh" "${PROJECT}"
@@ -915,19 +915,19 @@ all changes in a separate layer. The host project is never modified directly.
 
 ```bash
 # Enable for a single session
-RIOTBOX_OVERLAY=1 claude-riotbox shell .
+RIOTBOX_OVERLAY=1 riotbox shell .
 
 # Enable permanently
-echo 'RIOTBOX_OVERLAY=1' >> ~/.config/claude-riotbox/config
+echo 'RIOTBOX_OVERLAY=1' >> ~/.config/riotbox/config
 ```
 
 After the session exits, review and apply or discard:
 
 ```bash
-claude-riotbox overlays          # List pending overlays
-claude-riotbox overlay-diff      # See what changed
-claude-riotbox overlay-accept    # Apply changes to your project
-claude-riotbox overlay-reject    # Discard all changes
+riotbox overlays          # List pending overlays
+riotbox overlay-diff      # See what changed
+riotbox overlay-accept    # Apply changes to your project
+riotbox overlay-reject    # Discard all changes
 ```
 
 > Overlay mode requires podman. Docker is not supported due to differences in
