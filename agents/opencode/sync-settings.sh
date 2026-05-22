@@ -7,7 +7,10 @@
 #            <host-config-dir> <host-data-dir> <session-dir>
 #
 # Behavior:
-#   * <session-dir>/.config-opencode/      — host config copy, refreshed
+#   * <session-dir>/.config-opencode/      — host config copy, refreshed,
+#       minus opencode's plugin-install output (node_modules/, package.json,
+#       package-lock.json, bun.lock, .gitignore) which the container rebuilds
+#       from the persistent riotbox-cache-opencode volume.
 #   * <session-dir>/.local-share-opencode/ — empty session-owned data dir
 #
 # Volume flags printed to stdout:
@@ -51,8 +54,25 @@ if [ -d "${HOST_CONFIG_DIR}" ]; then
     # under -L, valid symlinks report their target's type, so only broken
     # symlinks retain -type l. Stream paths through tar -h to dereference
     # and copy. Mirrors the fix in container/plugin-setup.sh (commit 0f0ed53).
+    #
+    # Exclude opencode's plugin-install output. When opencode.jsonc declares
+    # plugins it runs `bun install` at startup and writes node_modules/ plus
+    # package.json/package-lock.json/bun.lock/.gitignore into the config dir
+    # (these are exactly the entries opencode's own generated .gitignore
+    # marks disposable). They are large and platform-specific (native
+    # node_modules), and the container rebuilds them in ~2s from the
+    # persistent riotbox-cache-opencode volume, so carrying the host copy
+    # across would only risk host/container ABI mismatch. Prune the
+    # node_modules tree and skip the four generated top-level files.
     ( cd "${HOST_CONFIG_DIR}" \
-        && find -L . ! -type l -print0 \
+        && find -L . \
+            -path './node_modules' -prune -o \
+            \( ! -type l \
+               ! -path './package.json' \
+               ! -path './package-lock.json' \
+               ! -path './bun.lock' \
+               ! -path './.gitignore' \
+               -print0 \) \
         | tar -ch --null --no-recursion --files-from=- -f - \
     ) | tar -xf - -C "${SESSION_CONFIG}/" --no-same-owner 2>/dev/null
 else

@@ -130,6 +130,10 @@ Your host `~/.config/opencode/` (agents, commands, themes, `opencode.json`, `ope
 
 A banner comment in the generated `opencode.jsonc` records these forced keys. To change anything else (model, theme, agents, commands, etc.), edit your host `opencode.json` or `opencode.jsonc`; the next launch picks up the change.
 
+### Opencode plugins
+
+Plugins listed in your `opencode.jsonc` `plugin` array (npm packages or git URLs) are installed by opencode itself via `bun install` the first time you run a session. The install output (`node_modules/`, `package.json`, `package-lock.json`, `bun.lock`, `.gitignore`) is **not** copied from your host — those files are platform-specific and opencode's own `.gitignore` marks them disposable. Instead the install lands in `~/.cache/opencode`, which the riotbox keeps in a persistent named volume (`riotbox-cache-opencode`). The cold install takes ~15s; later sessions resolve plugins from the warm cache in ~2s, offline. Because the plugins are built inside the container, their native dependencies always match the container platform regardless of your host OS.
+
 ## Commands
 
 | Command | Description |
@@ -265,6 +269,7 @@ Riotbox sessions are isolated from your host `~/.claude` — it is never mounted
 | `riotbox-cache-m2` | `~/.m2/repository` |
 | `riotbox-cache-gradle` | `~/.gradle/caches` |
 | `riotbox-cache-bun` | `~/.bun/install` |
+| `riotbox-cache-opencode` | `~/.cache/opencode` |
 
 Package caches use named podman/docker volumes rather than bind mounts. This avoids SELinux relabeling overhead — bind-mounting gigabytes of cache with `:z` causes recursive `chcon` on every container start, which can take minutes. Named volumes get `container_file_t` automatically. The tradeoff is that caches are not shared with the host.
 

@@ -107,6 +107,12 @@ CACHE_MOUNTS=(
     "riotbox-cache-m2           .m2/repository"
     "riotbox-cache-gradle       .gradle/caches"
     "riotbox-cache-bun          .bun/install"
+    # opencode installs its configured plugins (npm + git) here via `bun
+    # install` at startup. Persisting it across sessions means the ~15s
+    # cold install happens once; later sessions resolve plugins from the
+    # warm cache in ~2s, offline. Built inside the container, so the native
+    # deps match the container platform regardless of the host OS.
+    "riotbox-cache-opencode     .cache/opencode"
 )
 
 # ── Sensitive directories — NEVER mount these ────────────────────────────────

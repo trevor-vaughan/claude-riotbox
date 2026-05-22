@@ -783,6 +783,43 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
 
+  - name: sync-opencode-settings excludes opencode-generated plugin artifacts
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_sync_test withconfig noauth
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # opencode writes these into ~/.config/opencode at startup when
+          # plugins are configured. Its own generated .gitignore lists them
+          # as disposable. They are platform-specific (native node_modules)
+          # and are rebuilt in-container from the persistent cache, so the
+          # host copy must NOT carry them across.
+          mkdir -p "${FAKE_HOME}/.config/opencode/node_modules/zod"
+          printf '{}\n'        > "${FAKE_HOME}/.config/opencode/node_modules/zod/package.json"
+          printf '{}\n'        > "${FAKE_HOME}/.config/opencode/package.json"
+          printf '{}\n'        > "${FAKE_HOME}/.config/opencode/package-lock.json"
+          printf ''            > "${FAKE_HOME}/.config/opencode/bun.lock"
+          printf 'node_modules\n' > "${FAKE_HOME}/.config/opencode/.gitignore"
+          session_dir="${TEST_DIR}/session"
+          mkdir -p "${session_dir}"
+          "${RIOTBOX_DIR}/agents/opencode/sync-settings.sh" \
+              "${FAKE_HOME}/.config/opencode" \
+              "${FAKE_HOME}/.local/share/opencode" \
+              "${session_dir}" >/dev/null
+          # Real, human-authored config IS copied
+          test -f "${session_dir}/.config-opencode/opencode.json"
+          test -f "${session_dir}/.config-opencode/agents/myagent.md"
+          # Generated artifacts are NOT copied
+          ! test -e "${session_dir}/.config-opencode/node_modules"
+          ! test -e "${session_dir}/.config-opencode/package.json"
+          ! test -e "${session_dir}/.config-opencode/package-lock.json"
+          ! test -e "${session_dir}/.config-opencode/bun.lock"
+          ! test -e "${session_dir}/.config-opencode/.gitignore"
+        assertions:
+          - result.code ShouldEqual 0
+
   - name: passthrough-vars emits flags only for set variables
     steps:
       - type: exec

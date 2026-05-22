@@ -26,6 +26,8 @@ testcases:
           - result.systemout ShouldContainSubstring ":ro,z"
           # Cache mounts are named volumes with no SELinux suffix
           - result.systemout ShouldContainSubstring "riotbox-cache-npm:/home/claude/.npm"
+          # opencode plugin cache is a persistent named volume too
+          - result.systemout ShouldContainSubstring "riotbox-cache-opencode:/home/claude/.cache/opencode"
 
   - name: detect-mounts --format=podman matches default
     steps:
@@ -74,6 +76,7 @@ testcases:
           - result.systemout ShouldContainSubstring "/bin:/home/claude/bin:ro"
           # Cache mount is rw and is a named volume
           - result.systemout ShouldContainSubstring "riotbox-cache-npm:/home/claude/.npm:rw"
+          - result.systemout ShouldContainSubstring "riotbox-cache-opencode:/home/claude/.cache/opencode:rw"
           - result.systemout ShouldContainSubstring "ALL_LINES_VALID"
           # NO `-v ` prefix in triple mode
           - result.systemout ShouldNotContainSubstring "-v "
