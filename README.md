@@ -592,7 +592,7 @@ Session branching is automatically disabled for `riotbox run` (non-interactive) 
 | User scripts (`~/bin`) | read-only bind mount | Available but not writable |
 | User-defined mounts | read-only bind mount | From `~/.config/riotbox/mounts.conf` |
 | Package caches | named volumes | Shared across containers, not with host |
-| Network | enabled | the agent needs npm/PyPI/crates.io etc. |
+| Network | enabled | The agent needs npm/PyPI/crates.io etc. |
 
 ### What's NOT exposed
 
