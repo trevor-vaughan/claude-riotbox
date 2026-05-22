@@ -71,7 +71,7 @@ SESSION_ID="$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d
 #
 # --user is layered on top of --userns=keep-id for a second, independent
 # reason: podman's /etc/passwd rewrite for keep-id stamps the image's user
-# entry as `claude:x:HOST_UID:HOST_UID` regardless of `:gid=`, so the
+# entry as `llm:x:HOST_UID:HOST_UID` regardless of `:gid=`, so the
 # process started from the image's USER directive would run with
 # egid=HOST_UID, not HOST_GID — even though the kernel gid_map is now
 # correct. --user X:Y bypasses /etc/passwd and forces the process's runtime
@@ -81,7 +81,7 @@ SESSION_ID="$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d
 # both knobs set, inner podman fails with `newgidmap: write to gid_map
 # failed: Operation not permitted` on the first `podman run`. With
 # host uid == host gid both are no-ops; with mismatched uid/gid both are
-# load-bearing. The Dockerfile builds claude with the host user's UID *and*
+# load-bearing. The Dockerfile builds llm with the host user's UID *and*
 # GID (build.sh threads both as build-args), so an image built for the
 # running user has its USER entry already aligned and these flags become
 # no-ops; they remain in place as defense for images built without
