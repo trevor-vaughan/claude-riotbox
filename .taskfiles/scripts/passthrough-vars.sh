@@ -28,6 +28,14 @@
 #
 # Default (when RIOTBOX_PASSTHROUGH_VARS is unset): the agent-registry
 # union of every agent's env_vars output — bare names only.
+#
+# RIOTBOX_PASSTHROUGH_EXTRA_VARS uses the same syntax and, when non-empty,
+# is APPENDED to the base source (whether base is the override or the
+# registry default). Because passthrough_export walks line by line and
+# `export` overwrites, a later KEY=VALUE in EXTRA_VARS wins over an
+# earlier one in the base — that's the documented "extras wins on
+# conflict" property. Bare names from EXTRA_VARS simply add to the set
+# of forwarded vars.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PASSTHROUGH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -46,12 +54,18 @@ _passthrough_registry_vars() {
 }
 
 # _passthrough_source
-#   Print the raw input — user override if set, else registry union.
+#   Print the raw input — user override if set, else registry union —
+#   followed by RIOTBOX_PASSTHROUGH_EXTRA_VARS (if non-empty) on a new
+#   line. Late-binding placement lets extras win KEY=VALUE conflicts via
+#   passthrough_export's line-by-line overwrite semantics.
 _passthrough_source() {
     if [ -n "${RIOTBOX_PASSTHROUGH_VARS:-}" ]; then
         printf '%s' "${RIOTBOX_PASSTHROUGH_VARS}"
     else
         _passthrough_registry_vars
+    fi
+    if [ -n "${RIOTBOX_PASSTHROUGH_EXTRA_VARS:-}" ]; then
+        printf '\n%s' "${RIOTBOX_PASSTHROUGH_EXTRA_VARS}"
     fi
 }
 

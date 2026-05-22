@@ -229,7 +229,8 @@ Constraints:
 
 Users can still override the registry-derived default with
 `RIOTBOX_PASSTHROUGH_VARS` (whitespace-separated) for power-user setups
-that want a curated list.
+that want a curated list, or add to it without restating the base via
+`RIOTBOX_PASSTHROUGH_EXTRA_VARS` (same syntax, appended after the base).
 
 ## Worked example: adding `aider`
 

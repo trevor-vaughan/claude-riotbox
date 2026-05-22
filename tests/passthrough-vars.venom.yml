@@ -549,3 +549,141 @@ testcases:
           - result.systemout ShouldContainSubstring "EXIT=1"
           - result.systemout ShouldContainSubstring "invalid NAME"
           - result.systemout ShouldContainSubstring "FOO-BAR"
+
+  # ── RIOTBOX_PASSTHROUGH_EXTRA_VARS append behavior ───────────────────────
+  # EXTRA_VARS is concatenated AFTER the base source (override or registry
+  # default) so that line-by-line `export` overwrites give extras the
+  # "later wins" property on KEY=VALUE conflicts.
+
+  - name: X1 EXTRA_VARS bare names append to RIOTBOX_PASSTHROUGH_VARS bare names
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS RIOTBOX_PASSTHROUGH_EXTRA_VARS
+          export FOO=fooval
+          export BAR=barval
+          export RIOTBOX_PASSTHROUGH_VARS="FOO"
+          export RIOTBOX_PASSTHROUGH_EXTRA_VARS="BAR"
+          source .taskfiles/scripts/passthrough-vars.sh
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "-e FOO"
+          - result.systemout ShouldContainSubstring "-e BAR"
+
+  - name: X2 EXTRA_VARS KEY=VALUE wins over RIOTBOX_PASSTHROUGH_VARS KEY=VALUE
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS RIOTBOX_PASSTHROUGH_EXTRA_VARS FOO
+          export RIOTBOX_PASSTHROUGH_VARS="FOO=base"
+          export RIOTBOX_PASSTHROUGH_EXTRA_VARS="FOO=extra"
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "FOO=[${FOO-<unset>}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FOO=[extra]"
+          - result.systemout ShouldContainSubstring "-e FOO"
+
+  - name: X3 EXTRA_VARS KEY=VALUE overrides bare-name forwarding from base
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS RIOTBOX_PASSTHROUGH_EXTRA_VARS
+          export FOO=host-value
+          export RIOTBOX_PASSTHROUGH_VARS="FOO"
+          export RIOTBOX_PASSTHROUGH_EXTRA_VARS="FOO=overridden"
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          echo "FOO=[${FOO}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FOO=[overridden]"
+
+  - name: X4 EXTRA_VARS layers bare names and KEY=VALUE on top of registry default
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS RIOTBOX_PASSTHROUGH_EXTRA_VARS MY_TOKEN
+          export ANTHROPIC_API_KEY=test-key
+          export EDITOR=vim
+          export RIOTBOX_PASSTHROUGH_EXTRA_VARS=$'EDITOR\nMY_TOKEN=secret'
+          source .taskfiles/scripts/passthrough-vars.sh
+          passthrough_export
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+          echo "MY_TOKEN=[${MY_TOKEN-<unset>}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "-e ANTHROPIC_API_KEY"
+          - result.systemout ShouldContainSubstring "-e EDITOR"
+          - result.systemout ShouldContainSubstring "-e MY_TOKEN"
+          - result.systemout ShouldContainSubstring "MY_TOKEN=[secret]"
+
+  - name: X5 invalid KEY in EXTRA_VARS aborts passthrough_export
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS RIOTBOX_PASSTHROUGH_EXTRA_VARS
+          export RIOTBOX_PASSTHROUGH_EXTRA_VARS="BAD-KEY=value"
+          source .taskfiles/scripts/passthrough-vars.sh
+          rc=0
+          passthrough_export 2>err.log || rc=$?
+          echo "EXIT=${rc}"
+          cat err.log
+          rm -f err.log
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "EXIT=1"
+          - result.systemout ShouldContainSubstring "invalid KEY"
+          - result.systemout ShouldContainSubstring "BAD-KEY=value"
+
+  - name: X6 empty RIOTBOX_PASSTHROUGH_EXTRA_VARS leaves base behavior unchanged
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS RIOTBOX_PASSTHROUGH_EXTRA_VARS
+          export FOO=fooval
+          export RIOTBOX_PASSTHROUGH_VARS="FOO"
+          export RIOTBOX_PASSTHROUGH_EXTRA_VARS=""
+          source .taskfiles/scripts/passthrough-vars.sh
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAGS=[-e FOO]"
+
+  - name: X7 comments and blank lines in EXTRA_VARS are skipped
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS RIOTBOX_PASSTHROUGH_EXTRA_VARS
+          export FOO=fooval
+          export BAR=barval
+          export RIOTBOX_PASSTHROUGH_VARS="FOO"
+          export RIOTBOX_PASSTHROUGH_EXTRA_VARS=$'# add bar\n\nBAR\n'
+          source .taskfiles/scripts/passthrough-vars.sh
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "-e FOO"
+          - result.systemout ShouldContainSubstring "-e BAR"

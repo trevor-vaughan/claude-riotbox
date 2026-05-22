@@ -1,4 +1,4 @@
-# riotbox-config-version: 5
+# riotbox-config-version: 6
 # ~/.config/claude-riotbox/config — Persistent defaults for claude-riotbox.
 #
 # This file is sourced as shell script by the launcher. Values use the
@@ -79,7 +79,9 @@
 #     MISTRAL_API_KEY, DEEPSEEK_API_KEY, XAI_API_KEY.
 #
 # Setting RIOTBOX_PASSTHROUGH_VARS REPLACES the default — it does not
-# merge. If you set it, list everything you want forwarded.
+# merge. If you set it, list everything you want forwarded. To ADD to
+# whichever set is active (default OR your override) without replacing
+# it, use RIOTBOX_PASSTHROUGH_EXTRA_VARS (documented below).
 #
 # Security:
 #   * Sensitive values from KEY=VALUE entries never appear in `ps`/argv —
@@ -118,6 +120,38 @@
 #     GIT_BRANCH=$(git -C "${PWD}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
 #     TOKEN=$(cat ~/.secrets/work-api-token)
 #     EDITOR=vim
+# "
+
+# ── Provider env var passthrough — append-only ──────────────────────────
+# Same syntax as RIOTBOX_PASSTHROUGH_VARS (bare names and KEY=VALUE lines,
+# multi-line, comments allowed). When non-empty, this is APPENDED to the
+# active base — whether the base is the agent-registry default or your
+# own RIOTBOX_PASSTHROUGH_VARS override. Use this to add to the set
+# without restating it.
+#
+# Conflict resolution: extras win. A KEY=VALUE in EXTRA_VARS takes
+# precedence over a KEY=VALUE OR bare-name entry for the same key in the
+# base set. (Mechanism: entries are processed top to bottom; later
+# `export` calls overwrite earlier ones.)
+#
+# Bare-name entries from extras simply add to the set of vars forwarded
+# from the host — they don't override anything by themselves.
+#
+# Validation, security, and shell-expansion rules are identical to
+# RIOTBOX_PASSTHROUGH_VARS above. Invalid KEYs abort the launcher.
+#
+# Examples:
+#
+# Keep the registry default, just add EDITOR and a token:
+# RIOTBOX_PASSTHROUGH_EXTRA_VARS="
+#     EDITOR
+#     WORK_TOKEN=$(cat ~/.secrets/work-api-token)
+# "
+#
+# Override the default but layer per-invocation extras on top:
+# : "${RIOTBOX_PASSTHROUGH_VARS:=ANTHROPIC_API_KEY OPENAI_API_KEY}"
+# RIOTBOX_PASSTHROUGH_EXTRA_VARS="
+#     GIT_BRANCH=$(git -C "${PWD}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
 # "
 
 # ── Credential-file mounts ───────────────────────────────────────────────
