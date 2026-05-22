@@ -1,0 +1,90 @@
+name: startup-scripts integration tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  startup_helpers: "{{.root}}/tests/lib/startup-scripts-test-helpers.sh"
+
+testcases:
+  - name: startup_scripts_run executes an executable script
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.startup_helpers}}"
+          setup_startup_scripts_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          write_marker_script "10-touch.sh" "ran"
+          source "${RIOTBOX_DIR}/container/startup-scripts.sh"
+          startup_scripts_run
+          test -f "${MARKER_DIR}/ran"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: startup_scripts_run skips non-executable scripts with a notice
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.startup_helpers}}"
+          setup_startup_scripts_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          write_non_executable_script "20-skip.sh" "should-not-exist"
+          source "${RIOTBOX_DIR}/container/startup-scripts.sh"
+          startup_scripts_run 2> "${TEST_DIR}/stderr.txt"
+          test ! -f "${MARKER_DIR}/should-not-exist"
+          grep -F "Skipping 20-skip.sh: not executable" "${TEST_DIR}/stderr.txt"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: startup_scripts_run warns on failure but does not abort
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.startup_helpers}}"
+          setup_startup_scripts_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          write_failing_script "30-fail.sh" 7
+          write_marker_script "40-after.sh" "still-ran"
+          source "${RIOTBOX_DIR}/container/startup-scripts.sh"
+          startup_scripts_run 2> "${TEST_DIR}/stderr.txt"
+          # 30-fail.sh produced a warning
+          grep -F "WARN: 30-fail.sh exited with status 7" "${TEST_DIR}/stderr.txt"
+          # 40-after.sh still ran after the failure
+          test -f "${MARKER_DIR}/still-ran"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: startup_scripts_run honors lexicographic filename order
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.startup_helpers}}"
+          setup_startup_scripts_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          write_append_script "30-c.sh" "c" "order"
+          write_append_script "10-a.sh" "a" "order"
+          write_append_script "20-b.sh" "b" "order"
+          source "${RIOTBOX_DIR}/container/startup-scripts.sh"
+          startup_scripts_run
+          test "$(cat "${MARKER_DIR}/order")" = "abc"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: startup_scripts_run is a no-op when the directory does not exist
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.startup_helpers}}"
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}/home"
+          mkdir -p "${HOME}"
+          # No ~/.config/claude-riotbox/startup_scripts/ at all
+          source "${RIOTBOX_DIR}/container/startup-scripts.sh"
+          startup_scripts_run
+          # Function returned 0 without error
+        assertions:
+          - result.code ShouldEqual 0

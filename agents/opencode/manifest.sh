@@ -68,8 +68,9 @@ agent_opencode_wrapper_inject() {
     fi
 }
 
-# Container-side runtime setup. setup.sh places AGENTS.md and a baseline
-# opencode.json on every container start; both are idempotent.
+# Container-side runtime setup. setup.sh places AGENTS.md and a merged
+# opencode.jsonc (combining host opencode.json + opencode.jsonc with
+# riotbox-mandatory overrides) on every container start; both are idempotent.
 agent_opencode_container_setup() {
     # shellcheck source=./setup.sh
     source "${_AGENT_OPENCODE_DIR}/setup.sh"

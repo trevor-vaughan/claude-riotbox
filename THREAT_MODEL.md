@@ -185,7 +185,7 @@ Provider env vars are exposed by name only (`-e VAR`); values come from the call
 
 Credential-file env vars listed in `RIOTBOX_CREDFILE_VARS` get a different treatment: when the var is set and points to an existing regular file, the file is bind-mounted **read-only** at a stable container path (e.g. `/run/secrets/gcp-creds.json`) and the env var inside the container is rewritten to that in-container path. Defaults: `GOOGLE_APPLICATION_CREDENTIALS`, `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE`, `KUBECONFIG`. Targets that don't exist or aren't regular files are skipped with a stderr notice — never auto-mounted as directories. SSH agent forwarding (`SSH_AUTH_SOCK`) is out of scope: socket forwarding gives the container live signing access for the host agent's lifetime, which doesn't fit the same threat model.
 
-opencode's session-share feature is disabled by default in the generated baseline `opencode.json` (`"share": "disabled"`), matching the `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` posture for Claude. A user-supplied host `opencode.json` with `share: "enabled"` is honored — the riotbox does not override host-provided config.
+opencode's session-share feature is enforced disabled inside the container regardless of host config. At session start the runtime merges `~/.config/opencode/opencode.json` and `opencode.jsonc` and forces `share = "disabled"`, `permission = "allow"`, `autoupdate = false`, and ensures `~/.config/opencode/AGENTS.md` is in `instructions`. A host `opencode.json` with `share: "enabled"` is overridden during the merge — the host file is removed and the merged `opencode.jsonc` is the single source of truth opencode loads.
 
 ## Findings
 

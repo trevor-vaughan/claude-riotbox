@@ -191,25 +191,7 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
 
-  - name: opencode-setup writes baseline opencode.json when none exists
-    steps:
-      - type: exec
-        script: |
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.opencode_helpers}}"
-          setup_opencode_setup_test noconfig noprompt
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
-          opencode_setup
-          test -f "${OPENCODE_JSON}"
-          jq -e '.permission == "allow"' "${OPENCODE_JSON}"
-          jq -e '.autoupdate == false' "${OPENCODE_JSON}"
-          jq -e '.share == "disabled"' "${OPENCODE_JSON}"
-          jq -e '.instructions[0]' "${OPENCODE_JSON}"
-        assertions:
-          - result.code ShouldEqual 0
-
-  - name: opencode-setup does not overwrite existing opencode.json
+  - name: opencode-setup preserves host opencode.json data while forcing overrides
     steps:
       - type: exec
         script: |
@@ -219,10 +201,16 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
           opencode_setup
-          # The original host-synced content is preserved
-          jq -e '.model == "anthropic/claude-sonnet-4-5"' "${OPENCODE_JSON}"
-          # Baseline-only keys are NOT injected
-          ! jq -e '.permission' "${OPENCODE_JSON}" >/dev/null 2>&1
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          test -f "${OPENCODE_JSONC}"
+          test ! -f "${OPENCODE_JSON}"
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          # The original host model survives
+          echo "${stripped}" | jq -e '.model == "anthropic/claude-sonnet-4-5"'
+          # Mandatory overrides applied
+          echo "${stripped}" | jq -e '.permission == "allow"'
+          echo "${stripped}" | jq -e '.share == "disabled"'
+          echo "${stripped}" | jq -e '.autoupdate == false'
         assertions:
           - result.code ShouldEqual 0
 
@@ -234,13 +222,389 @@ testcases:
           source "{{.opencode_helpers}}"
           setup_opencode_setup_test noconfig noprompt
           trap 'rm -rf "${TEST_DIR}"' EXIT
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
           source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
           opencode_setup
-          ts1="$(stat -c %Y "${OPENCODE_JSON}")"
-          sleep 1
+          # Capture full file content (not just mtime) — opencode_setup
+          # regenerates the file on every call, so mtime will change.
+          # Idempotency means content equivalence.
+          first="$(cat "${OPENCODE_JSONC}")"
           opencode_setup
-          ts2="$(stat -c %Y "${OPENCODE_JSON}")"
-          test "${ts1}" -eq "${ts2}"
+          second="$(cat "${OPENCODE_JSONC}")"
+          test "${first}" = "${second}"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup warns and falls back when host opencode.json is not a JSON object
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # Seed a host opencode.json that is valid JSON but not an object
+          printf '[1, 2, 3]\n' > "${OPENCODE_JSON}"
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup 2> "${TEST_DIR}/stderr.txt"
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          test -f "${OPENCODE_JSONC}"
+          test ! -f "${OPENCODE_JSON}"
+          # Warning was emitted on stderr
+          grep -F "is not a valid JSON object" "${TEST_DIR}/stderr.txt"
+          # The merged file still has the riotbox baseline + mandatory keys
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          echo "${stripped}" | jq -e '.permission == "allow"'
+          echo "${stripped}" | jq -e '.share == "disabled"'
+          echo "${stripped}" | jq -e '.autoupdate == false'
+          echo "${stripped}" | jq -e '.instructions[0] == "~/.config/opencode/AGENTS.md"'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup warns and falls back when host opencode.json is empty
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # Zero-byte host opencode.json: jq sees empty input and exits non-zero,
+          # but the previous code path could still leave json_obj empty, which
+          # then crashed the merge --argjson call.
+          : > "${OPENCODE_JSON}"
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup 2> "${TEST_DIR}/stderr.txt"
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          test -f "${OPENCODE_JSONC}"
+          test ! -f "${OPENCODE_JSON}"
+          grep -F "is not a valid JSON object" "${TEST_DIR}/stderr.txt"
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          echo "${stripped}" | jq -e '.permission == "allow"'
+          echo "${stripped}" | jq -e '.share == "disabled"'
+          echo "${stripped}" | jq -e '.autoupdate == false'
+          echo "${stripped}" | jq -e '.instructions[0] == "~/.config/opencode/AGENTS.md"'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup warns and falls back when host opencode.jsonc is empty
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # Zero-byte host opencode.jsonc: the JSONC strip yields empty output,
+          # which used to slip past the parse check and crash --argjson.
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          : > "${OPENCODE_JSONC}"
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup 2> "${TEST_DIR}/stderr.txt"
+          test -f "${OPENCODE_JSONC}"
+          grep -F "is not a valid JSONC object" "${TEST_DIR}/stderr.txt"
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          echo "${stripped}" | jq -e '.permission == "allow"'
+          echo "${stripped}" | jq -e '.share == "disabled"'
+          echo "${stripped}" | jq -e '.autoupdate == false'
+          echo "${stripped}" | jq -e '.instructions[0] == "~/.config/opencode/AGENTS.md"'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup warns and falls back when host opencode.json is whitespace-only
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # Whitespace-only host opencode.json.
+          printf '   \n\n  \t\n' > "${OPENCODE_JSON}"
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup 2> "${TEST_DIR}/stderr.txt"
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          test -f "${OPENCODE_JSONC}"
+          test ! -f "${OPENCODE_JSON}"
+          grep -F "is not a valid JSON object" "${TEST_DIR}/stderr.txt"
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          echo "${stripped}" | jq -e '.permission == "allow"'
+          echo "${stripped}" | jq -e '.share == "disabled"'
+          echo "${stripped}" | jq -e '.autoupdate == false'
+          echo "${stripped}" | jq -e '.instructions[0] == "~/.config/opencode/AGENTS.md"'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup warns and falls back when host opencode.jsonc is comment-only
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # Comment-only host opencode.jsonc: the strip step succeeds (jq sees
+          # empty stdin), so the empty-guard is the only thing keeping the
+          # merge from crashing with `jq: invalid JSON text passed to --argjson`.
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          printf '// just a comment\n' > "${OPENCODE_JSONC}"
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup 2> "${TEST_DIR}/stderr.txt"
+          test -f "${OPENCODE_JSONC}"
+          grep -F "is not a valid JSONC object" "${TEST_DIR}/stderr.txt"
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          echo "${stripped}" | jq -e '.permission == "allow"'
+          echo "${stripped}" | jq -e '.share == "disabled"'
+          echo "${stripped}" | jq -e '.autoupdate == false'
+          echo "${stripped}" | jq -e '.instructions[0] == "~/.config/opencode/AGENTS.md"'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup forces permission=allow over host opencode.json
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # Seed a host opencode.json that wants permission=ask
+          cat > "${OPENCODE_JSON}" <<'JSON'
+          {"model": "anthropic/claude-sonnet-4-5", "permission": "ask"}
+          JSON
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          # The merged file is opencode.jsonc
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          test -f "${OPENCODE_JSONC}"
+          # opencode.json is removed after merge
+          test ! -f "${OPENCODE_JSON}"
+          # permission forced to allow; host's "ask" overridden
+          # Strip JSONC comments before piping to jq
+          json_only="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          echo "${json_only}" | jq -e '.permission == "allow"'
+          echo "${json_only}" | jq -e '.share == "disabled"'
+          echo "${json_only}" | jq -e '.autoupdate == false'
+          # Host's model preserved
+          echo "${json_only}" | jq -e '.model == "anthropic/claude-sonnet-4-5"'
+          # instructions array has AGENTS.md
+          echo "${json_only}" | jq -e '.instructions | index("~/.config/opencode/AGENTS.md") != null'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup merges host opencode.jsonc and drops comments
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_jsonc_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          # Only opencode.jsonc remains
+          test -f "${OPENCODE_JSONC}"
+          test ! -f "${OPENCODE_JSON}"
+          # Strip the leading banner comments for jq. The merged JSON body
+          # itself contains no comments — only the riotbox-authored banner
+          # uses `//` lines, so a simple line-prefix grep is sufficient and
+          # avoids embedding a JSONC stripper inside a YAML literal block
+          # (which has fragile escaping). The implementation under test
+          # uses _opencode_strip_jsonc on the host JSONC before merging.
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          echo "${stripped}" | jq -e '.permission == "allow"'
+          # Host's model survives the merge
+          echo "${stripped}" | jq -e '.model == "anthropic/claude-sonnet-4-5"'
+          # Banner comment is present in the file
+          grep -F "generated by claude-riotbox" "${OPENCODE_JSONC}"
+          # The host's `// host wants to be asked` comment from the input
+          # JSONC is gone after the merge (only the banner's `//` lines remain).
+          ! grep -F "host wants to be asked" "${OPENCODE_JSONC}"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup merges both files with jsonc winning on conflict
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_both_test \
+              '{"model": "anthropic/claude-sonnet-4-5", "theme": "dark", "permission": "ask"}' \
+              '// jsonc layer
+          {"theme": "light", "permission": {"file_read": "allow"}}'
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          test -f "${OPENCODE_JSONC}"
+          test ! -f "${OPENCODE_JSON}"
+          # Strip comments for jq
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          # jsonc wins on theme
+          echo "${stripped}" | jq -e '.theme == "light"'
+          # permission forced to the string "allow", replacing the object
+          echo "${stripped}" | jq -e '.permission == "allow"'
+          # json-only key (model) preserved
+          echo "${stripped}" | jq -e '.model == "anthropic/claude-sonnet-4-5"'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup generates baseline opencode.jsonc when host has no config
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          test -f "${OPENCODE_JSONC}"
+          test ! -f "${OPENCODE_JSON}"
+          # Banner present
+          grep -F "generated by claude-riotbox" "${OPENCODE_JSONC}"
+          # All mandatory keys present
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          echo "${stripped}" | jq -e '.permission == "allow"'
+          echo "${stripped}" | jq -e '.share == "disabled"'
+          echo "${stripped}" | jq -e '.autoupdate == false'
+          echo "${stripped}" | jq -e '.instructions[0] == "~/.config/opencode/AGENTS.md"'
+          echo "${stripped}" | jq -e '."$schema" == "https://opencode.ai/config.json"'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup does not duplicate AGENTS.md already present in host instructions
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cat > "${OPENCODE_JSON}" <<'JSON'
+          {"instructions": ["~/.config/opencode/AGENTS.md", "other.md"]}
+          JSON
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          # Both entries preserved, AGENTS.md not duplicated
+          echo "${stripped}" | jq -e '.instructions | length == 2'
+          echo "${stripped}" | jq -e '.instructions[0] == "~/.config/opencode/AGENTS.md"'
+          echo "${stripped}" | jq -e '.instructions[1] == "other.md"'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup replaces non-array instructions with single-element default
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cat > "${OPENCODE_JSON}" <<'JSON'
+          {"instructions": "some-string-not-an-array"}
+          JSON
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          # Replaced entirely with the default single-element array
+          echo "${stripped}" | jq -e '.instructions | type == "array"'
+          echo "${stripped}" | jq -e '.instructions | length == 1'
+          echo "${stripped}" | jq -e '.instructions[0] == "~/.config/opencode/AGENTS.md"'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup preserves a host-supplied $schema value
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cat > "${OPENCODE_JSON}" <<'JSON'
+          {"$schema": "https://custom.example/config.json", "model": "x"}
+          JSON
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          # Host $schema survives; not overwritten by the riotbox default
+          echo "${stripped}" | jq -e '."$schema" == "https://custom.example/config.json"'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup warns and falls back when host opencode.jsonc is not a JSONC object
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cat > "${HOME}/.config/opencode/opencode.jsonc" <<'JSONC'
+          // header comment
+          [1, 2, 3]
+          JSONC
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup 2> "${TEST_DIR}/stderr.txt"
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          grep -F "is not a valid JSONC object" "${TEST_DIR}/stderr.txt"
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          echo "${stripped}" | jq -e '.permission == "allow"'
+          echo "${stripped}" | jq -e '.share == "disabled"'
+          echo "${stripped}" | jq -e '.autoupdate == false'
+          echo "${stripped}" | jq -e '.instructions[0] == "~/.config/opencode/AGENTS.md"'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup preserves URLs containing slash-slash inside string values
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cat > "${HOME}/.config/opencode/opencode.jsonc" <<'JSONC'
+          // banner
+          {"endpoint": "https://example.com/v1/chat", "model": "x"}
+          JSONC
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          # The // inside the string survives the JSONC stripper
+          echo "${stripped}" | jq -e '.endpoint == "https://example.com/v1/chat"'
+          echo "${stripped}" | jq -e '.model == "x"'
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: opencode-setup strips JSONC block comments
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_setup_test noconfig noprompt
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cat > "${HOME}/.config/opencode/opencode.jsonc" <<'JSONC'
+          /* multi-line
+             block comment */
+          {"model": "from-block-test"}
+          JSONC
+          source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
+          opencode_setup
+          OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+          stripped="$(grep -v '^[[:space:]]*//' "${OPENCODE_JSONC}")"
+          echo "${stripped}" | jq -e '.model == "from-block-test"'
+          # Block-comment content is gone from the output (banner uses // only).
+          ! grep -F "multi-line" "${OPENCODE_JSONC}"
+          ! grep -F "block comment" "${OPENCODE_JSONC}"
         assertions:
           - result.code ShouldEqual 0
 

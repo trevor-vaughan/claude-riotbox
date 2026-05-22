@@ -121,7 +121,14 @@ Long-lived AWS access keys (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS
 
 ### Opencode config
 
-Your host `~/.config/opencode/` (agents, commands, themes, `opencode.json`) is copied into the session dir at every launch. If you have no host opencode config, the container generates a minimal baseline `opencode.json` with `permission: "allow"`, `share: "disabled"`, and `instructions: ["~/.config/opencode/AGENTS.md"]`.
+Your host `~/.config/opencode/` (agents, commands, themes, `opencode.json`, `opencode.jsonc`) is copied into the session dir at every launch. The container then merges `opencode.json` and `opencode.jsonc` into a single `opencode.jsonc` (jsonc wins on key conflict) and forces these keys to riotbox values regardless of host input:
+
+- `permission = "allow"` — the container is the riotbox; per-tool permission prompts are pointless inside it.
+- `share = "disabled"` — no session telemetry from the container.
+- `autoupdate = false` — the image pins opencode at build time.
+- `instructions` includes `~/.config/opencode/AGENTS.md` — the riotbox autonomy prompt is always loaded.
+
+A banner comment in the generated `opencode.jsonc` records these forced keys. To change anything else (model, theme, agents, commands, etc.), edit your host `opencode.json` or `opencode.jsonc`; the next launch picks up the change.
 
 ## Commands
 
@@ -290,6 +297,27 @@ You can set default values for any `RIOTBOX_*` environment variable in the `conf
 # Disable network by default (air-gapped sessions)
 : "${RIOTBOX_NETWORK:=none}"
 ```
+
+**Startup scripts** (`~/.config/claude-riotbox/startup_scripts/*.sh`):
+
+Drop executable scripts at `~/.config/claude-riotbox/startup_scripts/*.sh` to run arbitrary setup inside the container after plugins, agent setup, overlay, and session branch are all in place — for example, registering a CA, exporting credentials assembled at runtime, or warming a local cache.
+
+```sh
+mkdir -p ~/.config/claude-riotbox/startup_scripts
+cat > ~/.config/claude-riotbox/startup_scripts/10-register-ca.sh << 'EOF'
+#!/usr/bin/env bash
+# CA file is sourced from the riotbox config dir (bind-mounted read-write).
+sudo trust anchor --store ~/.config/claude-riotbox/internal-ca.crt
+EOF
+chmod +x ~/.config/claude-riotbox/startup_scripts/10-register-ca.sh
+```
+
+Conventions:
+
+- Scripts must have the executable bit (`chmod +x`); non-executable files are skipped with a notice on stderr.
+- Scripts run in lexicographic filename order; prefix with `10-`, `20-`, etc. to control ordering.
+- The script's shebang chooses the interpreter (`#!/usr/bin/env bash`, `#!/usr/bin/env python3`, etc.).
+- A failing script (non-zero exit) prints a warning and the session continues. One broken hook will not brick your sessions.
 
 **XDG directory layout:**
 

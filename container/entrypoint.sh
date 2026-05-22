@@ -64,6 +64,7 @@ RIOTBOX_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${RIOTBOX_SCRIPT_DIR}/session-branch.sh"
 source "${RIOTBOX_SCRIPT_DIR}/overlay-setup.sh"
 source "${RIOTBOX_SCRIPT_DIR}/plugin-setup.sh"
+source "${RIOTBOX_SCRIPT_DIR}/startup-scripts.sh"
 
 # Nested podman setup: file caps on newuidmap/newgidmap and /etc/sub{u,g}id
 # alignment with the outer keep-id user namespace. Only run when nested mode
@@ -87,9 +88,9 @@ plugin_setup
 
 # Per-agent runtime setup. The agent registry drives this — every manifest
 # defines container_setup. claude renders the system prompt (a no-op when
-# the build-time render is current); opencode places AGENTS.md and the
-# baseline opencode.json. Adding a new agent extends this loop with no
-# edit to entrypoint.sh.
+# the build-time render is current); opencode places AGENTS.md and a merged
+# opencode.jsonc with riotbox-mandatory overrides. Adding a new agent extends
+# this loop with no edit to entrypoint.sh.
 # shellcheck source=./agents/registry.sh
 source "${RIOTBOX_SCRIPT_DIR}/agents/registry.sh"
 for _agent in "${AGENT_REGISTRY[@]}"; do
@@ -104,6 +105,11 @@ overlay_setup
 # and not suppressed). Must run after all setup is complete, before the main
 # command, so Claude starts on the right branch.
 session_branch_setup
+
+# User startup scripts: run any executable *.sh under
+# ~/.config/claude-riotbox/startup_scripts/ in lexicographic order. Failures
+# warn and continue; the session is still usable.
+startup_scripts_run
 
 # Run the main command without exec so this shell survives to run teardown.
 # exec was originally used to avoid bash -lc semantics — sourcing .bashrc above

@@ -130,3 +130,73 @@ TEMPLATE
         unset RIOTBOX_PROMPT
     fi
 }
+
+# Set up a fake HOME with a host-synced opencode.jsonc only (no opencode.json).
+# Args: $1 — file content (JSONC source); defaults to a minimal commented config
+# Sets: TEST_DIR, OPENCODE_JSON, OPENCODE_JSONC, AGENTS_TARGET, TEMPLATE_PATH
+# Exports: HOME
+setup_opencode_jsonc_test() {
+    local content="${1:-}"
+    TEST_DIR="$(mktemp -d)"
+    export HOME="${TEST_DIR}/home"
+    mkdir -p "${HOME}/.riotbox" "${HOME}/.config/opencode"
+
+    # shellcheck disable=SC2034
+    TEMPLATE_PATH="${HOME}/.riotbox/AGENTS.md.template"
+    # shellcheck disable=SC2034
+    AGENTS_TARGET="${HOME}/.config/opencode/AGENTS.md"
+    # shellcheck disable=SC2034
+    OPENCODE_JSON="${HOME}/.config/opencode/opencode.json"
+    # shellcheck disable=SC2034
+    OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+
+    cat > "${TEMPLATE_PATH}" <<'TEMPLATE'
+You are in a riotbox running Linux.
+
+This is the autonomy prompt.
+TEMPLATE
+
+    if [ -z "${content}" ]; then
+        cat > "${OPENCODE_JSONC}" <<'JSONC'
+// Host-authored config with comments
+{
+    "model": "anthropic/claude-sonnet-4-5",
+    "permission": "ask"  // host wants to be asked
+}
+JSONC
+    else
+        printf '%s' "${content}" > "${OPENCODE_JSONC}"
+    fi
+
+    unset RIOTBOX_PROMPT
+}
+
+# Set up a fake HOME with both opencode.json and opencode.jsonc on the host.
+# Args: $1 — JSON content; $2 — JSONC content
+# Sets: TEST_DIR, OPENCODE_JSON, OPENCODE_JSONC, AGENTS_TARGET, TEMPLATE_PATH
+# Exports: HOME
+setup_opencode_both_test() {
+    local json_content="$1"
+    local jsonc_content="$2"
+    TEST_DIR="$(mktemp -d)"
+    export HOME="${TEST_DIR}/home"
+    mkdir -p "${HOME}/.riotbox" "${HOME}/.config/opencode"
+
+    # shellcheck disable=SC2034
+    TEMPLATE_PATH="${HOME}/.riotbox/AGENTS.md.template"
+    # shellcheck disable=SC2034
+    AGENTS_TARGET="${HOME}/.config/opencode/AGENTS.md"
+    OPENCODE_JSON="${HOME}/.config/opencode/opencode.json"
+    OPENCODE_JSONC="${HOME}/.config/opencode/opencode.jsonc"
+
+    cat > "${TEMPLATE_PATH}" <<'TEMPLATE'
+You are in a riotbox running Linux.
+
+This is the autonomy prompt.
+TEMPLATE
+
+    printf '%s' "${json_content}" > "${OPENCODE_JSON}"
+    printf '%s' "${jsonc_content}" > "${OPENCODE_JSONC}"
+
+    unset RIOTBOX_PROMPT
+}

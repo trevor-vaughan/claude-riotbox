@@ -215,10 +215,12 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS
           export RIOTBOX_PASSTHROUGH_VARS="1FOO=bar"
           source .taskfiles/scripts/passthrough-vars.sh
+          err_log="$(mktemp)"
+          trap 'rm -f "${err_log}"' EXIT
           rc=0
-          passthrough_export 2>err.log || rc=$?
+          passthrough_export 2>"${err_log}" || rc=$?
           echo "EXIT=${rc}"
-          cat err.log
+          cat "${err_log}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "EXIT=1"
@@ -234,10 +236,12 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS
           export RIOTBOX_PASSTHROUGH_VARS="FOO BAR=baz"
           source .taskfiles/scripts/passthrough-vars.sh
+          err_log="$(mktemp)"
+          trap 'rm -f "${err_log}"' EXIT
           rc=0
-          passthrough_export 2>err.log || rc=$?
+          passthrough_export 2>"${err_log}" || rc=$?
           echo "EXIT=${rc}"
-          cat err.log
+          cat "${err_log}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "EXIT=1"
@@ -253,10 +257,12 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS
           export RIOTBOX_PASSTHROUGH_VARS="FOO-BAR=baz"
           source .taskfiles/scripts/passthrough-vars.sh
+          err_log="$(mktemp)"
+          trap 'rm -f "${err_log}"' EXIT
           rc=0
-          passthrough_export 2>err.log || rc=$?
+          passthrough_export 2>"${err_log}" || rc=$?
           echo "EXIT=${rc}"
-          cat err.log
+          cat "${err_log}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "EXIT=1"
@@ -539,11 +545,12 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS
           export RIOTBOX_PASSTHROUGH_VARS="FOO-BAR"
           source .taskfiles/scripts/passthrough-vars.sh
+          err_log="$(mktemp)"
+          trap 'rm -f "${err_log}"' EXIT
           rc=0
-          FLAGS="$(passthrough_flags 2>err.log)" || rc=$?
+          FLAGS="$(passthrough_flags 2>"${err_log}")" || rc=$?
           echo "EXIT=${rc}"
-          cat err.log
-          rm -f err.log
+          cat "${err_log}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "EXIT=1"
@@ -641,11 +648,12 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS RIOTBOX_PASSTHROUGH_EXTRA_VARS
           export RIOTBOX_PASSTHROUGH_EXTRA_VARS="BAD-KEY=value"
           source .taskfiles/scripts/passthrough-vars.sh
+          err_log="$(mktemp)"
+          trap 'rm -f "${err_log}"' EXIT
           rc=0
-          passthrough_export 2>err.log || rc=$?
+          passthrough_export 2>"${err_log}" || rc=$?
           echo "EXIT=${rc}"
-          cat err.log
-          rm -f err.log
+          cat "${err_log}"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "EXIT=1"
