@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/overlay.sh — host-side fuse-overlayfs lifecycle for riotbox sessions.
+# scripts/overlay.sh — host-side fuse-overlayfs lifecycle for RiotBox sessions.
 #
 # Subcommands:
 #   resolve  Resolve a project path to its overlay data directory (sourced).

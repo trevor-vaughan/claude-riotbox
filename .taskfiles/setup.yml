@@ -6,7 +6,7 @@ tasks:
     cmd: task setup --list
 
   install:
-    desc: Install riotbox CLI wrapper to ~/bin (or specify dir)
+    desc: Install RiotBox CLI wrapper to ~/bin (or specify dir)
     cmd: "{{.ROOT_DIR}}/install.sh {{.CLI_ARGS | default \"$HOME/bin\"}}"
 
   install-hooks:

@@ -22,7 +22,7 @@ the socket-related `launch.sh` wiring, or the `session:socket-*` recipes in
   systemctl --user enable --now podman.socket
   loginctl enable-linger "$USER"   # keeps it up across logouts
   ```
-- The riotbox container image built. From a clone of this repo:
+- The RiotBox container image built. From a clone of this repo:
   ```bash
   task docker:build
   ```
@@ -33,7 +33,7 @@ the socket-related `launch.sh` wiring, or the `session:socket-*` recipes in
 ## Setup verification
 
 Before any test, prove the host side is healthy. From a normal terminal on
-the host (no riotbox container running):
+the host (no RiotBox container running):
 
 ```bash
 podman --url "unix://${XDG_RUNTIME_DIR}/podman/podman.sock" info
@@ -53,7 +53,7 @@ RIOTBOX_SOCKET=1 riotbox shell
 # (equivalently: RIOTBOX_SOCKET=1 task socket-shell)
 ```
 
-On first launch inside a git repo, riotbox prompts for a session-branch
+On first launch inside a git repo, RiotBox prompts for a session-branch
 name (`Create session branch 'riotbox/...'?`). Either answer the prompt or
 prefix the command with `SESSION_BRANCH=0` to skip it for these smoke tests.
 

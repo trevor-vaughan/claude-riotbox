@@ -25,7 +25,7 @@
 #                            Mutually exclusive with QUIET (JSON wins).
 #   RIOTBOX_DOCTOR_ALL=1     Run every check even after a failure. Exit code
 #                            reflects the FIRST failure (0 if all pass).
-#   IMAGE_NAME               Riotbox image tag to look for (default
+#   IMAGE_NAME               RiotBox image tag to look for (default
 #                            `riotbox`, matches scripts/build.sh).
 #                            Read at call time inside preflight_check_image,
 #                            so sourced callers can override per-call.
@@ -37,7 +37,7 @@
 #   14  task missing
 #   15  git missing
 #   16  jq missing
-#   17  riotbox image not built
+#   17  RiotBox image not built
 #   18  no readable credentials (ANTHROPIC_API_KEY unset and no creds file)
 #   19  ~/.claude/plugins exists but is not readable
 #   20  ~/.claude/skills exists but is not readable

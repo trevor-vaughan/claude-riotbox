@@ -71,7 +71,7 @@ emit_mount() {
 FUNCTIONAL_MOUNTS=(
     # User scripts and tools
     "bin"
-    # Riotbox config (plugins.conf, etc.)
+    # RiotBox config (plugins.conf, etc.)
     ".config/riotbox"
 )
 
@@ -84,7 +84,7 @@ FUNCTIONAL_MOUNTS=(
 # CLAUDE_CONFIG_DIR is set in the entrypoint so Claude Code finds both files
 # inside the bind-mounted session dir.
 
-# ── Riotbox session data ─────────────────────────────────────────────────────
+# ── RiotBox session data ─────────────────────────────────────────────────────
 # Session isolation is handled by mount-projects.sh, which mounts a
 # project-specific subdirectory of $XDG_DATA_HOME/riotbox/ as ~/.claude.
 # The real ~/.claude is NEVER mounted — this prevents an autonomous

@@ -11,7 +11,7 @@ tasks:
     cmd: task docker --list
 
   build:
-    desc: Build the riotbox image (detects your local toolchains)
+    desc: Build the RiotBox image (detects your local toolchains)
     cmd: "{{.ROOT_DIR}}/scripts/build.sh"
 
   rebuild:
@@ -21,7 +21,7 @@ tasks:
     cmd: "{{.ROOT_DIR}}/scripts/build.sh"
 
   clean:
-    desc: Remove the riotbox image
+    desc: Remove the RiotBox image
     cmds:
       - "{{.CONTAINER_CMD}} rmi {{.IMAGE_NAME}} 2>/dev/null || true"
       - echo "Image removed"

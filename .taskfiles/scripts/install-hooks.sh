@@ -28,9 +28,9 @@ fi
 
 if [ -f "${hook_dst}" ]; then
     if grep -q 'RIOTBOX-HOOK' "${hook_dst}"; then
-        echo "Updating existing riotbox pre-push hook."
+        echo "Updating existing RiotBox pre-push hook."
     else
-        echo "ERROR: ${hook_dst} already exists and was not installed by riotbox." >&2
+        echo "ERROR: ${hook_dst} already exists and was not installed by RiotBox." >&2
         echo "To install manually, add the contents of:" >&2
         echo "  ${ROOT_DIR}/hooks/pre-push" >&2
         echo "to your existing hook." >&2

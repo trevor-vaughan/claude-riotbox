@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Remove one or more riotbox sessions by session key or project path.
+# Remove one or more RiotBox sessions by session key or project path.
 # Required env: ROOT_DIR
 # Arguments: <session-key-or-path> [...] | --all
 

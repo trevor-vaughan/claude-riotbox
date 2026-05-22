@@ -434,7 +434,7 @@ export DEBIAN_FRONTEND=noninteractive
 export HISTSIZE=10000
 export HISTFILESIZE=10000
 
-# Make it obvious we're in the riotbox
+# Make it obvious we're in RiotBox
 export PS1='[\[\e[36m\]riotbox\[\e[0m\]] \w \$ '
 
 # ── nvm ──────────────────────────────────────────────────────────────────────
@@ -472,7 +472,7 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 RUN npm install -g @mermaid-js/mermaid-cli && mmdc --version
 
-# ── Riotbox scripts: agent registry + generic wrapper ───────────────────────
+# ── RiotBox scripts: agent registry + generic wrapper ───────────────────────
 # The agent registry (agents/<name>.sh + agents/registry.sh) is the single
 # source of truth for which CLI agents this image supports. The Dockerfile
 # stays agent-agnostic: agent-wrapper.sh is installed once, and per-agent

@@ -82,7 +82,7 @@ opencode_setup() {
         cp "${template}" "${agents_md}"
     fi
 
-    # ── opencode.jsonc: merge host JSON + JSONC, then force riotbox overrides
+    # ── opencode.jsonc: merge host JSON + JSONC, then force RiotBox overrides
     local json_obj='{}'
     local jsonc_obj='{}'
 

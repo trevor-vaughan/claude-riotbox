@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# sync-opencode-settings.sh — Copy host opencode config into a riotbox
+# sync-opencode-settings.sh — Copy host opencode config into a RiotBox
 # session dir, and print volume flags to bind-mount it into the container.
 #
 # Usage: sync-opencode-settings.sh \

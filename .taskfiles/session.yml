@@ -78,7 +78,7 @@ tasks:
       - "{{.ROOT_DIR}}/.taskfiles/scripts/run.sh {{.ARGS}}"
 
   shell:
-    desc: Open a shell inside the riotbox
+    desc: Open a shell inside RiotBox
     dir: "{{.USER_WORKING_DIR}}"
     deps: [ensure-image]
     vars:
@@ -154,7 +154,7 @@ tasks:
       - "{{.ROOT_DIR}}/.taskfiles/scripts/launch.sh bash"
 
   list-sessions:
-    desc: List riotbox sessions with project paths and last-used info
+    desc: List RiotBox sessions with project paths and last-used info
     cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/list-sessions.sh"
 
   remove-session:

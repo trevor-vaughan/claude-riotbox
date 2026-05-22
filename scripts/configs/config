@@ -32,7 +32,7 @@
 # : "${RIOTBOX_NESTED:=1}"
 
 # ── Container image name ─────────────────────────────────────────────────
-# Override if you maintain multiple riotbox images (e.g. per-project).
+# Override if you maintain multiple RiotBox images (e.g. per-project).
 #
 # : "${IMAGE_NAME:=riotbox}"
 

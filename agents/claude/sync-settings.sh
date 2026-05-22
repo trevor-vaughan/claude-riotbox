@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# sync-claude-settings.sh — Copy host Claude config files into a riotbox session dir.
+# sync-claude-settings.sh — Copy host Claude config files into a RiotBox session dir.
 #
 # Usage: sync-claude-settings.sh <host-claude-dir> <session-dir>
 #
@@ -57,7 +57,7 @@ if [ -f "${HOME}/.claude.json" ]; then
 fi
 
 # ── User CLAUDE.md ───────────────────────────────────────────────────────────
-# The riotbox system prompt lives at the managed policy path
+# The RiotBox system prompt lives at the managed policy path
 # (/etc/claude-code/CLAUDE.md) inside the container, so ~/.claude/CLAUDE.md is
 # free for the user's personal instructions. Copy from host if present; remove
 # stale copies if the host file was deleted.

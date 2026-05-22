@@ -1,4 +1,4 @@
-# Adding a new CLI agent to the riotbox
+# Adding a new CLI agent to RiotBox
 
 This document is for maintainers who want to add a third (or fourth, or
 fifth) CLI agent alongside `claude` and `opencode` — for example

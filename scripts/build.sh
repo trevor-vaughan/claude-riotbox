@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# build.sh — Introspects your local environment and builds the riotbox image.
+# build.sh — Introspects your local environment and builds the RiotBox image.
 # Can be run from anywhere; resolves paths relative to the project root.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail

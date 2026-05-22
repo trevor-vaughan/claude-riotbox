@@ -91,7 +91,7 @@ SESSION_ID="$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d
 # Default mode uses the bare 1-uid mapping; nested mode widens to
 # size=65536 so the inner container can carve out subordinate uids for
 # itself while this outer container still owns its bind-mounted host paths
-# (project dirs and the riotbox session dir keep their on-disk owner:group).
+# (project dirs and the RiotBox session dir keep their on-disk owner:group).
 USERNS_FLAG=""
 INIT_FLAG=""
 USER_FLAG=""

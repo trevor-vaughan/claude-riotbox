@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# List riotbox session directories with project paths and usage info.
+# List RiotBox session directories with project paths and usage info.
 
 session_root="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
 

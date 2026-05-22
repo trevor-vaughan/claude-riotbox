@@ -1,28 +1,28 @@
 # OpenShell Port Evaluation — What Would Make It Viable
 
-**Status:** Port abandoned in riotbox 0.5.x — see [Why we abandoned](#why-we-abandoned). This document records what an "OpenShell-as-engine" port of riotbox would require, so a future re-evaluation starts from concrete requirements rather than fresh assumptions.
+**Status:** Port abandoned in RiotBox 0.5.x — see [Why we abandoned](#why-we-abandoned). This document records what an "OpenShell-as-engine" port of RiotBox would require, so a future re-evaluation starts from concrete requirements rather than fresh assumptions.
 
 **Evaluation date:** 2026-05-07
 **Evaluated against:** [NVIDIA/OpenShell](https://github.com/NVIDIA/OpenShell) v0.0.36, base image `ghcr.io/nvidia/openshell-community/sandboxes/base@sha256:11c73b5a...c67c68` (revision `8f7d0da`, 2026-04-03).
 
 ## TL;DR
 
-Riotbox needs a "split local/container workflow": the host edits files in real time, the sandboxed agent operates against the same files, and changes are mutually visible immediately so the user can run tests, observe IDE updates, and intervene without ceremony. OpenShell 0.0.36 cannot serve this pattern because (a) its CLI exposes no host bind mount or environment injection surface, and (b) its runtime is k3s + containerd inside a privileged container, so sandboxes are Kubernetes pods rather than host-resolvable containers — there is no host-side mechanism for adding bind mounts post-create.
+RiotBox needs a "split local/container workflow": the host edits files in real time, the sandboxed agent operates against the same files, and changes are mutually visible immediately so the user can run tests, observe IDE updates, and intervene without ceremony. OpenShell 0.0.36 cannot serve this pattern because (a) its CLI exposes no host bind mount or environment injection surface, and (b) its runtime is k3s + containerd inside a privileged container, so sandboxes are Kubernetes pods rather than host-resolvable containers — there is no host-side mechanism for adding bind mounts post-create.
 
 For a port to become viable, OpenShell needs either:
 
 1. CLI-level bind mounts (`--mount` / `-v`) plus environment injection (`--env`), exposing host filesystem state to sandboxes in a live, bidirectional way; or
-2. A documented and stable CRD-level integration path so that riotbox can become a `Sandbox`-resource consumer rather than a CLI wrapper.
+2. A documented and stable CRD-level integration path so that RiotBox can become a `Sandbox`-resource consumer rather than a CLI wrapper.
 
 Neither exists today. The gap is structural, not incidental.
 
 ## What "split local/container workflow" means
 
-Riotbox exists because the user wants this exact interaction loop:
+RiotBox exists because the user wants this exact interaction loop:
 
 1. The user opens their project in their IDE on the host. Files are real host files.
 2. They ask the agent (Claude / opencode / etc.) to do something — fix a bug, add a feature, run a refactor.
-3. The agent runs in a sandboxed container that mirrors the host's toolchain (nvm/uv/Go/Rust/Ruby — all matched at riotbox image build time).
+3. The agent runs in a sandboxed container that mirrors the host's toolchain (nvm/uv/Go/Rust/Ruby — all matched at RiotBox image build time).
 4. As the agent edits files, **those edits land directly on the host filesystem in real time**. The IDE picks them up, file watchers (jest, webpack, cargo-watch) see them, `git status` shows them.
 5. The user can, at any moment, run a test or build on the host against the live state without waiting for the sandbox to finish.
 6. The agent's container is isolated from host secrets and credentials by default but has writeback access to its own credential file (so OAuth refresh flows work).
@@ -41,10 +41,10 @@ Verified in [research artifacts](#research-artifacts).
 - `Privacy router` — routes inference traffic through a controlled backend (default behavior not characterized in this evaluation; see Spike #8 in research artifacts).
 - Backend: `openshell gateway start` brings up a privileged container running k3s + flannel + containerd + Helm. Sandboxes are scheduled as Kubernetes pods inside that container, managed by `agent-sandbox-controller` via a `Sandbox` CRD.
 
-What is missing for the riotbox use case:
+What is missing for the RiotBox use case:
 
 - **No host bind mount surface.** No `--mount`, `-v`, `--volume`, `--bind`, or any equivalent. `--upload` is the only host→sandbox file path and it is one-shot.
-- **No environment variable injection from the CLI.** The protobuf at `proto/openshell.proto` has `SandboxSpec.environment` and `SandboxTemplate.environment` map fields, but `crates/openshell-cli/src/run.rs` builds `CreateSandboxRequest` with `SandboxSpec::default()` — the CLI never populates env. Riotbox passes ~15 env vars per sandbox today (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_VERTEX`, `GOOGLE_APPLICATION_CREDENTIALS`, `AWS_PROFILE`, etc.). None of those reach the sandbox.
+- **No environment variable injection from the CLI.** The protobuf at `proto/openshell.proto` has `SandboxSpec.environment` and `SandboxTemplate.environment` map fields, but `crates/openshell-cli/src/run.rs` builds `CreateSandboxRequest` with `SandboxSpec::default()` — the CLI never populates env. RiotBox passes ~15 env vars per sandbox today (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_VERTEX`, `GOOGLE_APPLICATION_CREDENTIALS`, `AWS_PROFILE`, etc.). None of those reach the sandbox.
 - **No host-resolvable sandbox container.** Because OpenShell's runtime is k3s, the host's container engine never sees a "sandbox container" it could `exec` into to retrofit a bind mount. The host sees one container — the cluster — which contains the entire k8s control plane and all sandbox pods. Three namespaces of separation between the host and the sandbox process.
 - **No bidirectional file sync mechanism.** A `--forward`-tunneled rclone/SFTP/9p arrangement is technically feasible (run a server on host, mount inside sandbox) but introduces a cache and sync-flush window that breaks the "run tests on host instantly" requirement. Confirmed against the user's stated constraint.
 - **No documented CRD integration path for external consumers.** The `Sandbox` CRD exists and is loaded by `agent-sandbox-controller:v0.1.0`, but the schema, stability guarantees, and supported integration patterns aren't documented in the repo's user-facing material. Building against it today would mean reverse-engineering and binding to internals.
@@ -53,9 +53,9 @@ What is missing for the riotbox use case:
 
 The two findings together — CLI surface lacks the primitives we need, and the runtime architecture forecloses the obvious workaround — make adoption a fork-or-rewrite job:
 
-- **Adopt as-is** would force the workflow to either (a) lose live host↔sandbox sync (using `--upload` and an exit-time sync-back), or (b) tunnel a network filesystem through `--forward` (rclone/SSHFS/9p), trading native FS performance and semantics for portability we don't currently need. Both regress the riotbox UX in ways the user explicitly rejected.
+- **Adopt as-is** would force the workflow to either (a) lose live host↔sandbox sync (using `--upload` and an exit-time sync-back), or (b) tunnel a network filesystem through `--forward` (rclone/SSHFS/9p), trading native FS performance and semantics for portability we don't currently need. Both regress the RiotBox UX in ways the user explicitly rejected.
 - **Adopt and patch** would require coordinated changes across the CLI (env injection, mount flag), the protobuf schema (host-mount field on `SandboxSpec`), the gRPC plumbing, the agent-sandbox controller (translate the new field into pod hostPath mounts), and the policy engine (the Landlock layer would need to allow the new mounts). That is a multi-component upstream contribution against an alpha project, with our work blocked behind it.
-- **Adopt at the CRD level** is the architecturally correct path if the goal is "riotbox uses OpenShell." Riotbox would write `Sandbox` CRDs against the cluster, with hostPath / PVC mounts in the pod template. But the CRD's schema isn't documented for external use, the stability guarantees are unclear, and riotbox's control loop becomes a Kubernetes operator. That is a much bigger project than the original "wrap the CLI" port — well beyond the scope under consideration.
+- **Adopt at the CRD level** is the architecturally correct path if the goal is "RiotBox uses OpenShell." RiotBox would write `Sandbox` CRDs against the cluster, with hostPath / PVC mounts in the pod template. But the CRD's schema isn't documented for external use, the stability guarantees are unclear, and RiotBox's control loop becomes a Kubernetes operator. That is a much bigger project than the original "wrap the CLI" port — well beyond the scope under consideration.
 
 The spec and plan written for this port are preserved on disk under `docs/superpowers/specs/2026-05-07-openshell-port-design.md` and `docs/superpowers/plans/2026-05-07-openshell-port.md` (gitignored — local working notes). They remain useful as a record of the intended design.
 
@@ -71,21 +71,21 @@ OpenShell adds, at the CLI level:
 - `--env <KEY=VAL>` and/or `--env-file <path>`. Wires through `SandboxSpec.environment` (the proto field already exists; CLI plumbing is missing).
 - Optional but high-value: `--mount-secret <host>:<sandbox>` — a bind mount that is excluded from filesystem-policy-enforced read/write tracking, intended for credential-style files where the user has accepted that the file itself is privileged.
 
-This is the smallest set of CLI features that would let riotbox layer on top of OpenShell without architectural compromise. The proto additions for `--mount` are non-trivial (need to land in `SandboxSpec` / `SandboxTemplate`, propagate through the controller into pod hostPath mounts, and have the policy engine reason about them); `--env` is comparatively trivial (proto field exists, just needs CLI wiring).
+This is the smallest set of CLI features that would let RiotBox layer on top of OpenShell without architectural compromise. The proto additions for `--mount` are non-trivial (need to land in `SandboxSpec` / `SandboxTemplate`, propagate through the controller into pod hostPath mounts, and have the policy engine reason about them); `--env` is comparatively trivial (proto field exists, just needs CLI wiring).
 
-If Path 1 lands, the existing riotbox-on-OpenShell spec at `docs/superpowers/specs/2026-05-07-openshell-port-design.md` becomes broadly applicable again with minor adjustments — the rest of Phase 0 (Spikes 3–8) would need re-running but the high-level architecture stands.
+If Path 1 lands, the existing RiotBox-on-OpenShell spec at `docs/superpowers/specs/2026-05-07-openshell-port-design.md` becomes broadly applicable again with minor adjustments — the rest of Phase 0 (Spikes 3–8) would need re-running but the high-level architecture stands.
 
 ### Path 2 — Stable CRD-level integration
 
 OpenShell publishes:
 
-- A documented, versioned `Sandbox` CRD schema with explicit support for external consumers (riotbox is one such consumer; others would be CI systems, internal developer platforms, etc.).
+- A documented, versioned `Sandbox` CRD schema with explicit support for external consumers (RiotBox is one such consumer; others would be CI systems, internal developer platforms, etc.).
 - A supported way to install just the controller + CRD without the CLI/gateway (so consumers can integrate with their own k8s cluster rather than spinning up the bundled k3s).
 - Stability guarantees for the CRD shape (semver, deprecation policy).
 
-Riotbox in this world becomes a Kubernetes operator: the user's command (`riotbox run …`) translates into creating a `Sandbox` resource with hostPath mounts in the pod template, then waiting on its status. Considerably more infrastructure to manage but the cleanest separation of concerns long-term.
+RiotBox in this world becomes a Kubernetes operator: the user's command (`riotbox run …`) translates into creating a `Sandbox` resource with hostPath mounts in the pod template, then waiting on its status. Considerably more infrastructure to manage but the cleanest separation of concerns long-term.
 
-The reach of this path is wider than the riotbox use case — it would unlock a lot of "use OpenShell as a sandbox primitive" use cases beyond ours.
+The reach of this path is wider than the RiotBox use case — it would unlock a lot of "use OpenShell as a sandbox primitive" use cases beyond ours.
 
 ### Path 3 — Direct-runtime mode
 
@@ -93,7 +93,7 @@ OpenShell adds an optional non-k8s backend — direct podman or direct Docker �
 
 This is the most invasive change for OpenShell (a parallel runtime path through the codebase) but it would also serve a lot of users who want OpenShell's policy/router story without paying for k8s in environments where it's overkill.
 
-If Path 3 lands, riotbox can use OpenShell as a host-side sandbox runner with all the same workflows we have today (post-create bind via host podman becomes feasible because the sandbox is now a real host podman container).
+If Path 3 lands, RiotBox can use OpenShell as a host-side sandbox runner with all the same workflows we have today (post-create bind via host podman becomes feasible because the sandbox is now a real host podman container).
 
 ## Re-evaluation criteria
 
@@ -146,4 +146,4 @@ If a future contributor wants to re-run the evaluation, the relevant `tmp/spike-
 
 ## Decision
 
-For riotbox 0.5.x: stay on direct podman. The OpenShell port is not viable today and the architectural premise needs upstream movement before it becomes so. File the two issues above when convenient. Set a quarterly reminder to skim OpenShell's release notes for the re-evaluation signals.
+For RiotBox 0.5.x: stay on direct podman. The OpenShell port is not viable today and the architectural premise needs upstream movement before it becomes so. File the two issues above when convenient. Set a quarterly reminder to skim OpenShell's release notes for the re-evaluation signals.

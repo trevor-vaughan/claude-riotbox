@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — Install the riotbox CLI wrapper.
+# install.sh — Install the RiotBox CLI wrapper.
 # Usage: ./install.sh [target_dir]
 set -euo pipefail
 
@@ -43,7 +43,7 @@ Session commands:
   run "prompt" [projects...]   Run agent with a prompt
   resume [projects...]         Resume the last session
   reown [flags...]             Rewrite Claude's commits to your git identity
-  session-list                 List all riotbox sessions
+  session-list                 List all RiotBox sessions
   session-remove [key/path]    Remove a session by key or project path (or --all)
   session-reset [all] [force]  Reset session cache (forces fresh skill/config copy)
 

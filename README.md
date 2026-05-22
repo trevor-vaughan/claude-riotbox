@@ -29,7 +29,7 @@ Finally...it was fun!
 1. **`scripts/build.sh`** introspects your local environment (nvm, uv, Go, Rust/rustup, Ruby/RVM, UID, tool configs) and passes them as build args.
 2. The **Dockerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. The agent CLIs are installed last — opencode via its [installer](https://opencode.ai/install), then Claude Code via the [official installer](https://claude.ai/install.sh) — for optimal layer caching.
 3. At runtime your project directory is bind-mounted into the container. Auth credentials are synced into an isolated session directory: `~/.claude/.credentials.json` is bind-mounted read-write (so token refreshes write back to the host), and `~/.claude.json` is copied so each container gets a writable snapshot without host contention.
-4. **A single generic wrapper** (`container/agent-wrapper.sh`) shadows the real agent binaries via per-agent symlinks under `~/.riotbox/bin/`. The wrapper detects which agent it's running as from its own filename, looks up that agent's manifest at `agents/<name>/manifest.sh`, and applies the manifest's flag-injection rules. The riotbox autonomy prompt lives at `/etc/claude-code/CLAUDE.md` (managed-policy path read by Claude) and at `~/.config/opencode/AGENTS.md` (placed at runtime by the agent's setup hook). Selection happens via `--agent=claude|opencode` (default `claude`); see `riotbox agents` to list the registered set.
+4. **A single generic wrapper** (`container/agent-wrapper.sh`) shadows the real agent binaries via per-agent symlinks under `~/.riotbox/bin/`. The wrapper detects which agent it's running as from its own filename, looks up that agent's manifest at `agents/<name>/manifest.sh`, and applies the manifest's flag-injection rules. The RiotBox autonomy prompt lives at `/etc/claude-code/CLAUDE.md` (managed-policy path read by Claude) and at `~/.config/opencode/AGENTS.md` (placed at runtime by the agent's setup hook). Selection happens via `--agent=claude|opencode` (default `claude`); see `riotbox agents` to list the registered set.
 
 ## Prerequisites
 
@@ -92,7 +92,7 @@ riotbox reown
 
 ## Using opencode
 
-The riotbox ships with [opencode](https://opencode.ai/) installed alongside Claude Code. Pick the agent per command with the `--agent` flag:
+RiotBox ships with [opencode](https://opencode.ai/) installed alongside Claude Code. Pick the agent per command with the `--agent` flag:
 
 ```sh
 # Run opencode against the current directory
@@ -121,18 +121,18 @@ Long-lived AWS access keys (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS
 
 ### Opencode config
 
-Your host `~/.config/opencode/` (agents, commands, themes, `opencode.json`, `opencode.jsonc`) is copied into the session dir at every launch. The container then merges `opencode.json` and `opencode.jsonc` into a single `opencode.jsonc` (jsonc wins on key conflict) and forces these keys to riotbox values regardless of host input:
+Your host `~/.config/opencode/` (agents, commands, themes, `opencode.json`, `opencode.jsonc`) is copied into the session dir at every launch. The container then merges `opencode.json` and `opencode.jsonc` into a single `opencode.jsonc` (jsonc wins on key conflict) and forces these keys to RiotBox values regardless of host input:
 
-- `permission = "allow"` — the container is the riotbox; per-tool permission prompts are pointless inside it.
+- `permission = "allow"` — the container is RiotBox; per-tool permission prompts are pointless inside it.
 - `share = "disabled"` — no session telemetry from the container.
 - `autoupdate = false` — the image pins opencode at build time.
-- `instructions` includes `~/.config/opencode/AGENTS.md` — the riotbox autonomy prompt is always loaded.
+- `instructions` includes `~/.config/opencode/AGENTS.md` — the RiotBox autonomy prompt is always loaded.
 
 A banner comment in the generated `opencode.jsonc` records these forced keys. To change anything else (model, theme, agents, commands, etc.), edit your host `opencode.json` or `opencode.jsonc`; the next launch picks up the change.
 
 ### Opencode plugins
 
-Plugins listed in your `opencode.jsonc` `plugin` array (npm packages or git URLs) are installed by opencode itself via `bun install` the first time you run a session. The install output (`node_modules/`, `package.json`, `package-lock.json`, `bun.lock`, `.gitignore`) is **not** copied from your host — those files are platform-specific and opencode's own `.gitignore` marks them disposable. Instead the install lands in `~/.cache/opencode`, which the riotbox keeps in a persistent named volume (`riotbox-cache-opencode`). The cold install takes ~15s; later sessions resolve plugins from the warm cache in ~2s, offline. Because the plugins are built inside the container, their native dependencies always match the container platform regardless of your host OS.
+Plugins listed in your `opencode.jsonc` `plugin` array (npm packages or git URLs) are installed by opencode itself via `bun install` the first time you run a session. The install output (`node_modules/`, `package.json`, `package-lock.json`, `bun.lock`, `.gitignore`) is **not** copied from your host — those files are platform-specific and opencode's own `.gitignore` marks them disposable. Instead the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent named volume (`riotbox-cache-opencode`). The cold install takes ~15s; later sessions resolve plugins from the warm cache in ~2s, offline. Because the plugins are built inside the container, their native dependencies always match the container platform regardless of your host OS.
 
 ## Commands
 
@@ -150,7 +150,7 @@ Plugins listed in your `opencode.jsonc` `plugin` array (npm packages or git URLs
 | `riotbox nested-shell [dir]` | Shell with podman-in-podman support (disables SELinux) |
 | `riotbox socket-run "<task>" [dir]` | Run with shared host podman socket (WARNING: grants host root) |
 | `riotbox socket-shell [dir]` | Shell with shared host podman socket (WARNING: grants host root) |
-| `riotbox session-list` | List all riotbox sessions |
+| `riotbox session-list` | List all RiotBox sessions |
 | `riotbox session-remove [key/path]` | Remove a session by key or project path (or `--all`) |
 | `riotbox session-reset` | Reset session cache (forces fresh skill/config copy) |
 | `riotbox overlays` | List sessions with pending overlay data (podman-only) |
@@ -207,7 +207,7 @@ EOF
 
 ## Status bar customization
 
-Claude Code can display a custom status line beneath the input box. To enable it, create an executable script at `~/.claude/statusline-command.sh` on your host. The riotbox copies it into the session directory on every launch and wires it into Claude Code's settings automatically.
+Claude Code can display a custom status line beneath the input box. To enable it, create an executable script at `~/.claude/statusline-command.sh` on your host. RiotBox copies it into the session directory on every launch and wires it into Claude Code's settings automatically.
 
 The script receives a JSON object on stdin and its stdout is displayed in the status bar. The JSON includes:
 
@@ -235,7 +235,7 @@ model=$(echo "$input" | jq -r '.model.display_name // "unknown"')
 echo "${model} | ctx ${pct}%"
 ```
 
-The riotbox ships a more complete default script with a Unicode progress bar and color coding — run `/statusline` inside Claude Code to regenerate or customise it.
+RiotBox ships a more complete default script with a Unicode progress bar and color coding — run `/statusline` inside Claude Code to regenerate or customise it.
 
 ## Auto-detected mounts
 
@@ -254,7 +254,7 @@ At runtime, `scripts/detect-mounts.sh` generates mount flags for the container. 
 | `~/.claude/plugins/` | `~/.host-plugins` | bind mount (read-only, `:z`) |
 | `~/bin` | `~/bin` | bind mount (read-only) |
 
-Riotbox sessions are isolated from your host `~/.claude` — it is never mounted directly. `.credentials.json` is bind-mounted read-write so OAuth token refreshes write directly back to the host file (rotating refresh tokens require this). `.claude.json` is copied so each container gets a writable snapshot without host contention.
+RiotBox sessions are isolated from your host `~/.claude` — it is never mounted directly. `.credentials.json` is bind-mounted read-write so OAuth token refreshes write directly back to the host file (rotating refresh tokens require this). `.claude.json` is copied so each container gets a writable snapshot without host contention.
 
 **Package caches** (named volumes, shared across containers):
 
@@ -326,7 +326,7 @@ Conventions:
 
 **XDG directory layout:**
 
-All riotbox paths follow the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/):
+All RiotBox paths follow the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/):
 
 | XDG variable | Default | Contents |
 |---|---|---|
@@ -335,13 +335,13 @@ All riotbox paths follow the [XDG Base Directory Specification](https://specific
 
 ## Agent wrapper
 
-Inside the container, each agent binary is shadowed by a single generic wrapper (`container/agent-wrapper.sh`) that injects the agent's autonomy flags (for Claude Code, `--dangerously-skip-permissions`) — this is safe here because the container **is** the riotbox. The agent can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
+Inside the container, each agent binary is shadowed by a single generic wrapper (`container/agent-wrapper.sh`) that injects the agent's autonomy flags (for Claude Code, `--dangerously-skip-permissions`) — this is safe here because the container **is** RiotBox. The agent can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
 
 The system prompt is pre-rendered at build time into `/etc/claude-code/CLAUDE.md` (the managed policy path). This location is loaded automatically by Claude Code, cannot be excluded, and survives context compression. Build-time rendering avoids SELinux AVC denials that occur when `container_t` writes to `etc_t` paths in the overlay filesystem. The `RIOTBOX_PROMPT` env var can override the template at runtime if needed. Using the managed policy path frees `~/.claude/CLAUDE.md` for the user's own instructions — personal CLAUDE.md and rules from the host are synced into the session directory at launch.
 
 ## Container runtime modes
 
-The riotbox supports three modes for code that needs to run containers
+RiotBox supports three modes for code that needs to run containers
 inside the session. Pick based on your trust posture and use case.
 
 | Mode    | Flag                | Trust posture                        | Image cache          | Auth                       | Isolation                 |
@@ -420,7 +420,7 @@ riotbox nested-run "build and test the Dockerfile"
 riotbox nested-shell
 ```
 
-This passes `--device /dev/fuse` and `--security-opt label=disable` to the outer container, enabling rootless podman inside the riotbox. The image includes podman, fuse-overlayfs, and slirp4netns pre-installed with proper subuid/subgid mappings.
+This passes `--device /dev/fuse` and `--security-opt label=disable` to the outer container, enabling rootless podman inside RiotBox. The image includes podman, fuse-overlayfs, and slirp4netns pre-installed with proper subuid/subgid mappings.
 
 > **WARNING:** Nested mode disables SELinux confinement on the outer container. This is a meaningful reduction in host isolation — the container processes are no longer confined by SELinux policy. Only use this when the agent actually needs container capabilities.
 
@@ -444,7 +444,7 @@ riotbox reown abc123       # rewrites only commits since a specific ref
 
 > **Note:** This uses `git filter-repo` under the hood, which rewrites commit hashes. Only use this on commits that haven't been pushed to a shared remote, or be prepared to force-push. A backup tag (`backup/pre-reown-<timestamp>`) is created before rewriting — use `git diff <backup-tag>..<branch>` to verify the result.
 >
-> `reown` recognises the current container identity (`llm@riotbox`) and three legacy identities used by older riotbox versions (`claude@riotbox`, `llm@localhost`, `riotbox@local`), so old commits are also caught.
+> `reown` recognises the current container identity (`llm@riotbox`) and three legacy identities used by older RiotBox versions (`claude@riotbox`, `llm@localhost`, `riotbox@local`), so old commits are also caught.
 
 ## Overlay mode (podman-only)
 
@@ -506,12 +506,12 @@ The agent runs autonomously with full write access to your project directory and
 
 ### Built-in protections
 
-The riotbox includes several layers of protection, but none are foolproof:
+RiotBox includes several layers of protection, but none are foolproof:
 
 - **Local bare backup**: Before every `run`, all refs and tags are pushed to a bare clone at `~/.local/share/riotbox/backups/<project>.git`. This backup lives outside the container's mount tree — the agent cannot access or modify it. Even if the agent deletes every file and rewrites all history, the backup is intact.
 - **Checkpoint tags**: A git tag (`riotbox-checkpoint/<timestamp>`) is created on the current HEAD before each run. Tags survive history rewrites inside the container.
 - **Session branches**: On `shell` sessions, the container offers to create a `riotbox/<id>` branch. The agent works there; on exit the branch is fast-forward merged back so the full commit history lands seamlessly on your branch. See [Session branches](#session-branches).
-- **Non-git-repo warning**: If a project directory isn't a git repo, the riotbox warns you that there's no checkpoint protection.
+- **Non-git-repo warning**: If a project directory isn't a git repo, RiotBox warns you that there's no checkpoint protection.
 - **Git guardrails**: Inside the container, `receive.denyNonFastForwards` and `receive.denyDeletes` are enabled to prevent the most destructive git operations.
 - **Container isolation**: The agent can't access your SSH keys, cloud credentials, or anything outside the mounted directories.
 
@@ -587,7 +587,7 @@ Session branching is automatically disabled for `riotbox run` (non-interactive) 
 | Session data (`~/.local/share/riotbox/`) | bind mount (`:z`) | Isolated per project set |
 | `~/.claude/.credentials.json` | nested bind mount (RW) | OAuth token refreshes must write back to host |
 | `~/.claude.json` | file copy into session dir | Each container gets a writable snapshot |
-| Riotbox config (`~/.config/riotbox/`) | bind mount (`:z`) | `plugins.conf`, `config`, `mounts.conf` |
+| RiotBox config (`~/.config/riotbox/`) | bind mount (`:z`) | `plugins.conf`, `config`, `mounts.conf` |
 | Host plugins (`~/.claude/plugins/`) | read-only bind mount | Merged into session at startup |
 | User scripts (`~/bin`) | read-only bind mount | Available but not writable |
 | User-defined mounts | read-only bind mount | From `~/.config/riotbox/mounts.conf` |
@@ -688,7 +688,7 @@ Create `~/.config/containers/containers.conf`:
 init = false
 ```
 
-This disables catatonit (podman's default init process), which segfaults on EL10 (`catatonit-0.2.1-3.el10`). The riotbox image has its own entrypoint that handles signal forwarding.
+This disables catatonit (podman's default init process), which segfaults on EL10 (`catatonit-0.2.1-3.el10`). The RiotBox image has its own entrypoint that handles signal forwarding.
 
 ### Optional: enable metacopy at the kernel level
 
@@ -748,7 +748,7 @@ cat ~/.claude/debug/latest
 
 **Symptom**: Claude Code starts but says you're not logged in.
 
-**Cause**: auth credentials aren't reaching the container. Before each run, the riotbox copies `~/.claude.json` into the session directory and bind-mounts `~/.claude/.credentials.json` into it.
+**Cause**: auth credentials aren't reaching the container. Before each run, RiotBox copies `~/.claude.json` into the session directory and bind-mounts `~/.claude/.credentials.json` into it.
 
 **Check**:
 - Verify the files exist on the host: `ls -la ~/.claude.json ~/.claude/.credentials.json`
