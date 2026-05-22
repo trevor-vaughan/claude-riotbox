@@ -382,11 +382,21 @@ RIOTBOX_SOCKET=1 claude-riotbox shell
 task socket-shell
 ```
 
-The launcher auto-detects the socket at `$XDG_RUNTIME_DIR/podman/podman.sock`
-(rootless) and falls back to `/run/podman/podman.sock` (rootful). If
-neither is available, it exits with an actionable error message that
-explains the setup. The nested-podman setup (vfs storage override, subuid
-plumbing, v3 file caps) is skipped — there is no inner engine.
+The launcher only uses your **rootless** socket. It checks
+`$XDG_RUNTIME_DIR/podman/podman.sock` first, then falls back to
+`/run/user/$(id -u)/podman/podman.sock`. The rootful socket at
+`/run/podman/podman.sock` is intentionally NOT used: with
+`--userns=keep-id`, a root-owned bind mount is unreachable from the
+in-container user (it appears as `nobody:nobody` and every `podman` call
+fails with permission denied). If neither candidate is alive, the
+launcher exits with an actionable error rather than mounting the wrong
+one. The bind mount uses podman's `:z` shared-label option so SELinux
+relabels the host socket to `container_file_t:s0` — without this, the
+in-container `container_t` process is denied `connect(2)` on the host
+socket's `user_runtime_t` label even when Unix permissions match
+(a no-op on hosts without SELinux). The nested-podman setup (vfs
+storage override, subuid plumbing, v3 file caps) is skipped — there is
+no inner engine.
 
 **Trust caveat:** the host podman socket is roughly equivalent to root on
 the host. Any process inside the container that can reach the socket can
@@ -597,14 +607,17 @@ Session branching is automatically disabled for `claude-riotbox run` (non-intera
   - `--device /dev/fuse`, `--device /dev/net/tun` — outer storage and pasta networking.
 
   Inside the container, entrypoint runs `nested-podman-setup.sh` which: (a) writes **v3** file capabilities on `newuidmap`/`newgidmap` via `setcap -n $(id -u) cap_setuid/setgid+ep` — v2 caps don't apply when the running process isn't root in the host's userns, which is why setuid-via-setcap silently no-ops without the `-n` flag; (b) writes `/etc/sub{u,g}id` as up to two ranges that cover the outer's mapped uids minus uid 0 (kernel restriction) and minus the user's own uid (newuidmap restriction); (c) overrides `~/.config/containers/storage.conf` to use the `vfs` driver, since nested overlay/fuse-overlayfs makes inner crun fail on `mkdir /run/secrets`. Only used when explicitly requested via `nested-run`/`nested-shell` or `RIOTBOX_NESTED=1`.
-- **Socket mode**: `RIOTBOX_SOCKET=1` bind-mounts the host's `podman.sock`
-  (auto-detected at `$XDG_RUNTIME_DIR/podman/podman.sock` rootless or
-  `/run/podman/podman.sock` rootful) and sets `CONTAINER_HOST` so the
-  in-container `podman` is a thin remote client of the host engine. This
-  shares image cache and registry credentials across sessions but grants
-  the container effective root on the host (anyone with API access to the
-  socket can `podman run --privileged -v /:/host alpine chroot /host`).
-  Mutually exclusive with `RIOTBOX_NESTED=1`.
+- **Socket mode**: `RIOTBOX_SOCKET=1` bind-mounts the invoking user's
+  rootless `podman.sock` (at `$XDG_RUNTIME_DIR/podman/podman.sock`, or
+  `/run/user/$(id -u)/podman/podman.sock` when `XDG_RUNTIME_DIR` is unset)
+  and sets `CONTAINER_HOST` so the in-container `podman` is a thin remote
+  client of the host engine. The rootful socket `/run/podman/podman.sock`
+  is deliberately not considered — with `--userns=keep-id` it would be
+  unreachable from the in-container user. This shares image cache and
+  registry credentials across sessions but grants the container effective
+  root on the host (anyone with API access to the socket can
+  `podman run --privileged -v /:/host alpine chroot /host`). Mutually
+  exclusive with `RIOTBOX_NESTED=1`.
 
 ## Development
 
