@@ -36,7 +36,7 @@ for dir in "${PROJECT_DIRS[@]}"; do
     fi
 
     # Tag the current HEAD
-    tag_name="claude-checkpoint/${timestamp}"
+    tag_name="riotbox-checkpoint/${timestamp}"
     git -C "${dir}" -c tag.gpgsign=false tag "${tag_name}"
 
     # Push everything to a local bare backup repo

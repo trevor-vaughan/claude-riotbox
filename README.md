@@ -509,7 +509,7 @@ Claude runs autonomously with full write access to your project directory and pa
 The riotbox includes several layers of protection, but none are foolproof:
 
 - **Local bare backup**: Before every `run`, all refs and tags are pushed to a bare clone at `~/.local/share/riotbox/backups/<project>.git`. This backup lives outside the container's mount tree — Claude cannot access or modify it. Even if Claude deletes every file and rewrites all history, the backup is intact.
-- **Checkpoint tags**: A git tag (`claude-checkpoint/<timestamp>`) is created on the current HEAD before each run. Tags survive history rewrites inside the container.
+- **Checkpoint tags**: A git tag (`riotbox-checkpoint/<timestamp>`) is created on the current HEAD before each run. Tags survive history rewrites inside the container.
 - **Session branches**: On `shell` sessions, the container offers to create a `riotbox/<id>` branch. Claude works there; on exit the branch is fast-forward merged back so the full commit history lands seamlessly on your branch. See [Session branches](#session-branches).
 - **Non-git-repo warning**: If a project directory isn't a git repo, the riotbox warns you that there's no checkpoint protection.
 - **Git guardrails**: Inside the container, `receive.denyNonFastForwards` and `receive.denyDeletes` are enabled to prevent the most destructive git operations.
@@ -523,7 +523,7 @@ If Claude makes a mess, you have several recovery options:
 # Fetch everything from the backup into your project
 cd /path/to/my-project
 git fetch ~/.local/share/riotbox/backups/my-project.git --all --tags
-git reset --hard claude-checkpoint/<timestamp>
+git reset --hard riotbox-checkpoint/<timestamp>
 
 # Or clone a fresh copy from the backup
 git clone ~/.local/share/riotbox/backups/my-project.git my-project-restored
@@ -574,7 +574,7 @@ Session branching is automatically disabled for `riotbox run` (non-interactive) 
 
 - **Always use git repos.** The checkpoint and backup mechanisms are your primary safety net.
 - **Push to a remote before running Claude.** Belt and suspenders.
-- **Review changes before merging.** Use `git diff claude-checkpoint/<tag>..HEAD` to see everything Claude did.
+- **Review changes before merging.** Use `git diff riotbox-checkpoint/<tag>..HEAD` to see everything Claude did.
 - **Use branches.** Run Claude on a feature branch, not main. Session branching automates this.
 
 ## Security model

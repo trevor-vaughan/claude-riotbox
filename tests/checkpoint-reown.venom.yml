@@ -19,7 +19,7 @@ testcases:
           # Simulate checkpoint logic
           git add -A
           git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
-              commit -m "checkpoint: pre-claude-test" >/dev/null
+              commit -m "checkpoint: pre-riotbox-test" >/dev/null
           git log --format='%s' | grep -q "^checkpoint: pre-claude-"
           git show HEAD -- dirty.txt | grep -q "dirty work"
           echo "checkpoint_created=true"
@@ -40,7 +40,7 @@ testcases:
           if ! git diff --quiet || ! git diff --cached --quiet || \
              [ -n "$(git ls-files --others --exclude-standard)" ]; then
               git add -A
-              git commit -m "checkpoint: pre-claude-test" >/dev/null
+              git commit -m "checkpoint: pre-riotbox-test" >/dev/null
           fi
           head_after="$(git rev-parse HEAD)"
           echo "before=${head_before} after=${head_after}"
@@ -59,7 +59,7 @@ testcases:
           echo "brand new file" > newfile.txt
           git add -A
           git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
-              commit -m "checkpoint: pre-claude-test" >/dev/null
+              commit -m "checkpoint: pre-riotbox-test" >/dev/null
           git show HEAD -- newfile.txt | grep -q "brand new file"
           echo "untracked_staged=true"
         assertions:
@@ -77,7 +77,7 @@ testcases:
           echo "dirty" >> dirty.txt
           git add -A
           git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
-              commit -m "checkpoint: pre-claude-test" >/dev/null
+              commit -m "checkpoint: pre-riotbox-test" >/dev/null
           author="$(git log --grep='checkpoint: pre-claude' -1 --format='%ae')"
           echo "author=${author}"
           [ "${author}" = "${HUMAN_EMAIL}" ]
@@ -94,7 +94,7 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
           ts="$(date +%Y%m%d-%H%M%S)-1"
-          CHECKPOINT_TAG="claude-checkpoint/${ts}"
+          CHECKPOINT_TAG="riotbox-checkpoint/${ts}"
           git tag "${CHECKPOINT_TAG}"
           tag_ref="$(git rev-parse "${CHECKPOINT_TAG}")"
           head_ref="$(git rev-parse HEAD)"
@@ -115,12 +115,12 @@ testcases:
           mkdir -p "${BACKUP_BASE}"
           human_commit "initial"
           ts="$(date +%Y%m%d-%H%M%S)-1"
-          CHECKPOINT_TAG="claude-checkpoint/${ts}"
+          CHECKPOINT_TAG="riotbox-checkpoint/${ts}"
           git tag "${CHECKPOINT_TAG}"
           backup_dir="${BACKUP_BASE}/project.git"
           git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
           test -d "${backup_dir}"
-          git -C "${backup_dir}" tag -l 'claude-checkpoint/*' | grep -q 'claude-checkpoint/'
+          git -C "${backup_dir}" tag -l 'riotbox-checkpoint/*' | grep -q 'riotbox-checkpoint/'
           echo "backup_created=true"
         assertions:
           - result.code ShouldEqual 0
@@ -140,17 +140,17 @@ testcases:
           human_commit "initial"
           # First checkpoint
           ts1="$(date +%Y%m%d-%H%M%S)-1"
-          git tag "claude-checkpoint/${ts1}"
+          git tag "riotbox-checkpoint/${ts1}"
           git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
 
           human_commit "more human work"
           # Second checkpoint
           ts2="$(date +%Y%m%d-%H%M%S)-2"
-          git tag "claude-checkpoint/${ts2}"
+          git tag "riotbox-checkpoint/${ts2}"
           git push --no-verify --force "${backup_dir}" --all >/dev/null 2>&1
           git push --no-verify --force "${backup_dir}" --tags >/dev/null 2>&1
 
-          tag_count="$(git -C "${backup_dir}" tag -l 'claude-checkpoint/*' | wc -l | tr -d ' ')"
+          tag_count="$(git -C "${backup_dir}" tag -l 'riotbox-checkpoint/*' | wc -l | tr -d ' ')"
           echo "tag_count=${tag_count}"
           [ "${tag_count}" -eq 2 ]
         assertions:
@@ -184,7 +184,7 @@ testcases:
           [ "${sig}" = "N" ]
           # The tag must be lightweight: it resolves directly to a commit
           # object, not a signed/annotated tag object.
-          tag="$(git tag -l 'claude-checkpoint/*' | head -1)"
+          tag="$(git tag -l 'riotbox-checkpoint/*' | head -1)"
           echo "tag=${tag} type=$(git cat-file -t "${tag}")"
           [ "$(git cat-file -t "${tag}")" = "commit" ]
           echo "unsigned_checkpoint_ok=true"
@@ -207,7 +207,7 @@ testcases:
           # checkpoint with dirty state
           git add -A
           git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
-              commit -m "checkpoint: pre-claude-test" >/dev/null
+              commit -m "checkpoint: pre-riotbox-test" >/dev/null
 
           llm_commit "llm feature A"
           llm_commit "llm feature B"
@@ -331,7 +331,7 @@ testcases:
           mkdir -p "${BACKUP_BASE}"
           human_commit "precious work"
           ts="$(date +%Y%m%d-%H%M%S)-1"
-          CHECKPOINT_TAG="claude-checkpoint/${ts}"
+          CHECKPOINT_TAG="riotbox-checkpoint/${ts}"
           git tag "${CHECKPOINT_TAG}"
           backup_dir="${BACKUP_BASE}/project.git"
           git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
@@ -357,7 +357,7 @@ testcases:
           mkdir -p "${BACKUP_BASE}"
           human_commit "precious work"
           ts="$(date +%Y%m%d-%H%M%S)-1"
-          CHECKPOINT_TAG="claude-checkpoint/${ts}"
+          CHECKPOINT_TAG="riotbox-checkpoint/${ts}"
           git tag "${CHECKPOINT_TAG}"
           backup_dir="${BACKUP_BASE}/project.git"
           git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
