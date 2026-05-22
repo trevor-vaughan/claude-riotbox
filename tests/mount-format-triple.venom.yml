@@ -22,12 +22,12 @@ testcases:
           - result.code ShouldEqual 0
           # bin and .config/riotbox are :ro,z (functional mounts)
           - result.systemout ShouldContainSubstring "-v"
-          - result.systemout ShouldContainSubstring "/bin:/home/claude/bin:ro,z"
+          - result.systemout ShouldContainSubstring "/bin:/home/llm/bin:ro,z"
           - result.systemout ShouldContainSubstring ":ro,z"
           # Cache mounts are named volumes with no SELinux suffix
-          - result.systemout ShouldContainSubstring "riotbox-cache-npm:/home/claude/.npm"
+          - result.systemout ShouldContainSubstring "riotbox-cache-npm:/home/llm/.npm"
           # opencode plugin cache is a persistent named volume too
-          - result.systemout ShouldContainSubstring "riotbox-cache-opencode:/home/claude/.cache/opencode"
+          - result.systemout ShouldContainSubstring "riotbox-cache-opencode:/home/llm/.cache/opencode"
 
   - name: detect-mounts --format=podman matches default
     steps:
@@ -73,10 +73,10 @@ testcases:
           - result.systemout ShouldContainSubstring ":ro"
           - result.systemout ShouldContainSubstring ":rw"
           # Functional mount has ro mode
-          - result.systemout ShouldContainSubstring "/bin:/home/claude/bin:ro"
+          - result.systemout ShouldContainSubstring "/bin:/home/llm/bin:ro"
           # Cache mount is rw and is a named volume
-          - result.systemout ShouldContainSubstring "riotbox-cache-npm:/home/claude/.npm:rw"
-          - result.systemout ShouldContainSubstring "riotbox-cache-opencode:/home/claude/.cache/opencode:rw"
+          - result.systemout ShouldContainSubstring "riotbox-cache-npm:/home/llm/.npm:rw"
+          - result.systemout ShouldContainSubstring "riotbox-cache-opencode:/home/llm/.cache/opencode:rw"
           - result.systemout ShouldContainSubstring "ALL_LINES_VALID"
           # NO `-v ` prefix in triple mode
           - result.systemout ShouldNotContainSubstring "-v "
@@ -110,7 +110,7 @@ testcases:
           - result.systemout ShouldContainSubstring "-v"
           - result.systemout ShouldContainSubstring "/projects/foo:/workspace:z"
           # The session dir is bound to ~/.claude inside the container
-          - result.systemout ShouldContainSubstring ":/home/claude/.claude:z"
+          - result.systemout ShouldContainSubstring ":/home/llm/.claude:z"
 
   - name: mount-projects --format=triple emits host:container:mode lines
     steps:
@@ -143,7 +143,7 @@ testcases:
           # The project's mount appears as host:container:rw (no :z suffix)
           - result.systemout ShouldContainSubstring "/projects/foo:/workspace:rw"
           # The session dir bound to .claude is rw
-          - result.systemout ShouldContainSubstring ":/home/claude/.claude:rw"
+          - result.systemout ShouldContainSubstring ":/home/llm/.claude:rw"
           - result.systemout ShouldContainSubstring "ALL_LINES_VALID"
           - result.systemout ShouldNotContainSubstring "-v "
 

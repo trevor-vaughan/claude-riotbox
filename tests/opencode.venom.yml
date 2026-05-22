@@ -658,8 +658,8 @@ testcases:
           test -d "${session_dir}/.config-opencode/agents"
           test -f "${session_dir}/.config-opencode/opencode.json"
           test -d "${session_dir}/.local-share-opencode"
-          grep -F ".config-opencode:/home/claude/.config/opencode:z" "${TEST_DIR}/flags.txt"
-          grep -F ".local-share-opencode:/home/claude/.local/share/opencode:z" "${TEST_DIR}/flags.txt"
+          grep -F ".config-opencode:/home/llm/.config/opencode:z" "${TEST_DIR}/flags.txt"
+          grep -F ".local-share-opencode:/home/llm/.local/share/opencode:z" "${TEST_DIR}/flags.txt"
         assertions:
           - result.code ShouldEqual 0
 
@@ -701,7 +701,7 @@ testcases:
               "${FAKE_HOME}/.local/share/opencode" \
               "${session_dir}" \
               > "${TEST_DIR}/flags.txt"
-          grep -F "auth.json:/home/claude/.local/share/opencode/auth.json:z" \
+          grep -F "auth.json:/home/llm/.local/share/opencode/auth.json:z" \
               "${TEST_DIR}/flags.txt"
         assertions:
           - result.code ShouldEqual 0
@@ -776,8 +776,8 @@ testcases:
           # Dangling symlink NOT present
           ! test -e "${session_dir}/.config-opencode/agents/dangling.md"
           # Volume flags still emitted (the caller depends on them)
-          grep -F ".config-opencode:/home/claude/.config/opencode:z" "${TEST_DIR}/flags.txt"
-          grep -F ".local-share-opencode:/home/claude/.local/share/opencode:z" "${TEST_DIR}/flags.txt"
+          grep -F ".config-opencode:/home/llm/.config/opencode:z" "${TEST_DIR}/flags.txt"
+          grep -F ".local-share-opencode:/home/llm/.local/share/opencode:z" "${TEST_DIR}/flags.txt"
           # No "cannot stat" errors on stderr
           ! grep -F "cannot stat" "${TEST_DIR}/notice.txt"
         assertions:

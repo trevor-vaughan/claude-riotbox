@@ -698,14 +698,14 @@ Add the overlay-setup.sh COPY alongside the other entrypoint files. Insert
 after line 373 (`COPY container/session-branch.sh`):
 
 ```dockerfile
-COPY --chown=claude:claude container/overlay-setup.sh /home/claude/.riotbox/overlay-setup.sh
+COPY --chown=llm:llm container/overlay-setup.sh /home/llm/.riotbox/overlay-setup.sh
 ```
 
 Update the `chmod` on line 375-376 to include the new file:
 
 ```dockerfile
-RUN chmod +x /home/claude/.riotbox/entrypoint.sh /home/claude/.riotbox/inject-claude-md.sh \
-    /home/claude/.riotbox/session-branch.sh /home/claude/.riotbox/overlay-setup.sh
+RUN chmod +x /home/llm/.riotbox/entrypoint.sh /home/llm/.riotbox/inject-claude-md.sh \
+    /home/llm/.riotbox/session-branch.sh /home/llm/.riotbox/overlay-setup.sh
 ```
 
 ---

@@ -767,9 +767,9 @@ sudo chown -R $(id -u):$(id -g) ~/.local/share/riotbox/
 
 ### Build fails with permission denied
 
-**Symptom**: `mkdir: cannot create directory '/home/claude/.cache/...': Permission denied` during build.
+**Symptom**: `mkdir: cannot create directory '/home/llm/.cache/...': Permission denied` during build.
 
-**Cause**: the multi-stage Dockerfile copies security tools and installs semgrep as root, which creates directories under `/home/claude/` with root ownership. The Dockerfile includes a `chown -R claude:claude /home/claude` step after these installs. If you modify the Dockerfile and add root-stage installs after this chown, you'll hit this error. Always ensure the chown runs after all root-stage operations.
+**Cause**: the multi-stage Dockerfile copies security tools and installs semgrep as root, which creates directories under `/home/llm/` with root ownership. The Dockerfile includes a `chown -R llm:llm /home/llm` step after these installs. If you modify the Dockerfile and add root-stage installs after this chown, you'll hit this error. Always ensure the chown runs after all root-stage operations.
 
 ### IPv6 warnings in system journal
 

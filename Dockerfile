@@ -223,12 +223,12 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
 
 # ── Non-root user + root-phase config ─────────────────────────────────────────
 # User creation, dnf config, and system prompt dir. The chown -R happens later
-# (after COPY/pip that create root-owned dirs under /home/claude).
-RUN (groupadd -g ${HOST_GID} claude && \
-     useradd -l -m -u ${HOST_UID} -g claude -s /bin/bash claude) 2>/dev/null || \
-    useradd -l -m -s /bin/bash claude && \
-    mkdir -p /workspace && chown claude /workspace && \
-    echo "claude ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/claude && \
+# (after COPY/pip that create root-owned dirs under /home/llm).
+RUN (groupadd -g ${HOST_GID} llm && \
+     useradd -l -m -u ${HOST_UID} -g llm -s /bin/bash llm) 2>/dev/null || \
+    useradd -l -m -s /bin/bash llm && \
+    mkdir -p /workspace && chown llm /workspace && \
+    echo "llm ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/llm && \
     # /etc/subuid and /etc/subgid are rewritten at runtime by
     # container/nested-podman-setup.sh based on /proc/self/uid_map. Any
     # static range we bake here would point to outer UIDs that aren't
@@ -244,19 +244,19 @@ RUN (groupadd -g ${HOST_GID} claude && \
     # Build-time rendering avoids runtime writes to /etc/ inside the container,
     # which would cause SELinux AVC denials (container_t writing to etc_t).
     mkdir -p /etc/riotbox /etc/claude-code && \
-    chown claude:claude /etc/claude-code
+    chown llm:llm /etc/claude-code
 
 COPY container/CLAUDE.md /etc/riotbox/CLAUDE.md
 RUN . /etc/os-release && \
     awk -v os="${PRETTY_NAME:-Linux}" \
         '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
         /etc/riotbox/CLAUDE.md > /etc/claude-code/CLAUDE.md && \
-    chown claude:claude /etc/claude-code/CLAUDE.md && \
-    mkdir -p /home/claude/.riotbox && \
+    chown llm:llm /etc/claude-code/CLAUDE.md && \
+    mkdir -p /home/llm/.riotbox && \
     awk -v os="${PRETTY_NAME:-Linux}" \
         '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
-        /etc/riotbox/CLAUDE.md > /home/claude/.riotbox/AGENTS.md.template && \
-    chown -R claude:claude /home/claude/.riotbox
+        /etc/riotbox/CLAUDE.md > /home/llm/.riotbox/AGENTS.md.template && \
+    chown -R llm:llm /home/llm/.riotbox
 
 # ── Strip non-English locale data ────────────────────────────────────────────
 # This is a non-interactive automation container; we don't need locale data
@@ -265,22 +265,22 @@ RUN find /usr/share/locale -mindepth 1 -maxdepth 1 -type d ! -name 'en*' \
         -exec rm -rf {} + 2>/dev/null || true
 
 # ── Security tools + task/venom from builder stage ───────────────────────────
-COPY --from=tools --chown=claude:claude /tools/bin/ /home/claude/.local/bin/
+COPY --from=tools --chown=llm:llm /tools/bin/ /home/llm/.local/bin/
 
 # ── Fixed paths (set after useradd so HOME points to the real user dir) ──────
-ENV HOME=/home/claude
-ENV NVM_DIR=/home/claude/.nvm
-ENV GOPATH=/home/claude/go
-ENV PATH=/home/claude/.riotbox/bin:/home/claude/.local/bin:/home/claude/.cargo/bin:/home/claude/go/bin:/usr/lib/golang/bin:/home/claude/bin:${PATH}
+ENV HOME=/home/llm
+ENV NVM_DIR=/home/llm/.nvm
+ENV GOPATH=/home/llm/go
+ENV PATH=/home/llm/.riotbox/bin:/home/llm/.local/bin:/home/llm/.cargo/bin:/home/llm/go/bin:/usr/lib/golang/bin:/home/llm/bin:${PATH}
 
 # ── Workaround uv and SELinux issuees ──────────────────────────────────────────
 ENV UV_LINK_MODE=hardlink
 
-# Fix ownership after root-stage COPY that creates dirs under /home/claude.
-RUN chown -R claude:claude /home/claude
+# Fix ownership after root-stage COPY that creates dirs under /home/llm.
+RUN chown -R llm:llm /home/llm
 
-USER claude
-WORKDIR /home/claude
+USER llm
+WORKDIR /home/llm
 
 # ── nvm ───────────────────────────────────────────────────────────────────────
 RUN curl -fsSL \
@@ -300,7 +300,7 @@ RUN set -e; echo '#!/usr/bin/env bash' > /tmp/install-node.sh; \
     bash /tmp/install-node.sh; rm /tmp/install-node.sh
 
 # Add default node to PATH so npm/claude are available in non-interactive shells
-ENV PATH=/home/claude/.nvm/versions/node/v${NODE_DEFAULT}/bin:${PATH}
+ENV PATH=/home/llm/.nvm/versions/node/v${NODE_DEFAULT}/bin:${PATH}
 
 # ── uv (pins to the version detected on the host) ────────────────────────────
 RUN if [ "${UV_VERSION}" = "latest" ]; then \
@@ -308,7 +308,7 @@ RUN if [ "${UV_VERSION}" = "latest" ]; then \
     else \
         curl -LsSf https://astral.sh/uv/install.sh | UV_TOOL_VERSION="${UV_VERSION}" bash; \
     fi && \
-    /home/claude/.local/bin/uv --version
+    /home/llm/.local/bin/uv --version
 
 # ── Rust (via rustup) + cargo-binstall for pre-built binaries ────────────────
 # Conditional: when RUST_TOOLCHAINS is empty (the default), skip the whole
@@ -320,7 +320,7 @@ RUN if [ -n "${RUST_TOOLCHAINS}" ]; then \
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
             sh -s -- -y --default-toolchain "${RUST_DEFAULT_TC}" && \
         bash -c "\
-            source /home/claude/.cargo/env && \
+            source /home/llm/.cargo/env && \
             for tc in ${RUST_TOOLCHAINS}; do \
                 echo \"==> rustup install \$tc\" && \
                 rustup toolchain install \$tc; \
@@ -328,7 +328,7 @@ RUN if [ -n "${RUST_TOOLCHAINS}" ]; then \
             rustc --version && cargo --version && \
             ARCH=\$(uname -m) && \
             curl -LSfs https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-\${ARCH}-unknown-linux-musl.tgz \
-                | tar xz -C /home/claude/.cargo/bin && \
+                | tar xz -C /home/llm/.cargo/bin && \
             cargo binstall --no-confirm ast-grep && sg --version \
         "; \
     fi
@@ -343,7 +343,7 @@ RUN if [ -n "${RUBY_VERSIONS}" ]; then \
                  --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 \
                              7D2BAF1CF37B13E2069D6956105BD0E739499BDB && \
             curl -sSL https://get.rvm.io | bash -s stable && \
-            source /home/claude/.rvm/scripts/rvm && \
+            source /home/llm/.rvm/scripts/rvm && \
             for v in ${RUBY_VERSIONS}; do \
                 echo \"==> rvm install \$v\" && \
                 rvm install \$v; \
@@ -355,33 +355,33 @@ RUN if [ -n "${RUBY_VERSIONS}" ]; then \
 
 # ── Go tools (installed after user is set up) ───────────────────────────────
 RUN if command -v go >/dev/null 2>&1; then \
-        mkdir -p /home/claude/go /home/claude/.cache/go-build && \
+        mkdir -p /home/llm/go /home/llm/.cache/go-build && \
         go install golang.org/x/tools/gopls@latest; \
     fi
 
 # ── User-phase config (mount targets, podman, gem, git, shell) ───────────────
 # All lightweight config writes combined into one layer.
 RUN mkdir -p \
-        /home/claude/.riotbox/bin \
-        /home/claude/bin \
-        /home/claude/.npm \
-        /home/claude/.cargo/registry \
-        /home/claude/go/pkg \
-        /home/claude/.cache/pip \
-        /home/claude/.cache/uv \
-        /home/claude/.bundle/cache \
-        /home/claude/.m2/repository \
-        /home/claude/.gradle/caches \
-        /home/claude/.bun/install \
-        /home/claude/.config/containers && \
+        /home/llm/.riotbox/bin \
+        /home/llm/bin \
+        /home/llm/.npm \
+        /home/llm/.cargo/registry \
+        /home/llm/go/pkg \
+        /home/llm/.cache/pip \
+        /home/llm/.cache/uv \
+        /home/llm/.bundle/cache \
+        /home/llm/.m2/repository \
+        /home/llm/.gradle/caches \
+        /home/llm/.bun/install \
+        /home/llm/.config/containers && \
     # Inner podman config (for nested container support)
     printf '[storage]\ndriver = "overlay"\n\n[storage.options.overlay]\nmount_program = "/usr/bin/fuse-overlayfs"\n' \
-        > /home/claude/.config/containers/storage.conf && \
+        > /home/llm/.config/containers/storage.conf && \
     printf '[containers]\ninit = false\n' \
-        > /home/claude/.config/containers/containers.conf && \
+        > /home/llm/.config/containers/containers.conf && \
     # Gem / Bundler — skip docs, parallel installs
-    echo 'gem: --no-document' > /home/claude/.gemrc && \
-    printf 'BUNDLE_JOBS: "4"\nBUNDLE_RETRY: "3"\n' > /home/claude/.bundle/config && \
+    echo 'gem: --no-document' > /home/llm/.gemrc && \
+    printf 'BUNDLE_JOBS: "4"\nBUNDLE_RETRY: "3"\n' > /home/llm/.bundle/config && \
     # Git config — generic LLM identity so reown-commits.sh can identify the
     # container's work regardless of which model (Claude, opencode, etc.) ran.
     git config --global user.name "LLM (riotbox)" && \
@@ -397,7 +397,7 @@ RUN mkdir -p \
     git config --global receive.denyDeletes true
 
 # ── Shell config ──────────────────────────────────────────────────────────────
-RUN cat >> /home/claude/.bashrc <<'BASHRC'
+RUN cat >> /home/llm/.bashrc <<'BASHRC'
 
 # ── Non-interactive / automation-friendly defaults ───────────────────────────
 
@@ -464,7 +464,7 @@ BASHRC
 
 # ── Tool configs (.npmrc, pip.conf, etc.) copied from host by build.sh ────────
 # configs/ is always created by build.sh (even if empty)
-COPY --chown=claude:claude configs/ /home/claude/
+COPY --chown=llm:llm configs/ /home/llm/
 
 # ── Diagram tools (for validating generated diagrams) ────────────────────────
 # Skip puppeteer's bundled Chromium (~580 MB) — use the system package instead.
@@ -476,13 +476,13 @@ RUN npm install -g @mermaid-js/mermaid-cli && mmdc --version
 # The agent registry (agents/<name>.sh + agents/registry.sh) is the single
 # source of truth for which CLI agents this image supports. The Dockerfile
 # stays agent-agnostic: agent-wrapper.sh is installed once, and per-agent
-# entries in /home/claude/.riotbox/bin/ are symlinks created from the
+# entries in /home/llm/.riotbox/bin/ are symlinks created from the
 # registry. Adding a new agent is a manifest edit, not a Dockerfile edit.
-COPY --chown=claude:claude agents/ /home/claude/.riotbox/agents/
-COPY --chown=claude:claude container/find-real-bin.sh /home/claude/.riotbox/find-real-bin.sh
-COPY --chown=claude:claude container/agent-wrapper.sh /home/claude/.riotbox/agent-wrapper.sh
-RUN chmod +x /home/claude/.riotbox/agent-wrapper.sh \
-              /home/claude/.riotbox/find-real-bin.sh && \
+COPY --chown=llm:llm agents/ /home/llm/.riotbox/agents/
+COPY --chown=llm:llm container/find-real-bin.sh /home/llm/.riotbox/find-real-bin.sh
+COPY --chown=llm:llm container/agent-wrapper.sh /home/llm/.riotbox/agent-wrapper.sh
+RUN chmod +x /home/llm/.riotbox/agent-wrapper.sh \
+              /home/llm/.riotbox/find-real-bin.sh && \
     # Install one symlink per registered agent. The wrapper detects the
     # agent from basename($0), so the symlink name doubles as the agent
     # name. Reading AGENT_REGISTRY directly keeps the Dockerfile in sync
@@ -490,9 +490,9 @@ RUN chmod +x /home/claude/.riotbox/agent-wrapper.sh \
     bash -c '\
         set -euo pipefail; \
         # shellcheck disable=SC1091  # path verified above \
-        source /home/claude/.riotbox/agents/registry.sh; \
+        source /home/llm/.riotbox/agents/registry.sh; \
         for a in "${AGENT_REGISTRY[@]}"; do \
-            ln -sf ../agent-wrapper.sh "/home/claude/.riotbox/bin/${a}"; \
+            ln -sf ../agent-wrapper.sh "/home/llm/.riotbox/bin/${a}"; \
         done'
 
 WORKDIR /workspace
@@ -501,15 +501,15 @@ WORKDIR /workspace
 # Agent setup scripts (claude/setup.sh, opencode/setup.sh) ride along with
 # the manifests via the COPY agents/ above; the entrypoint reaches them
 # through the registry, so they don't need separate COPY lines.
-COPY --chown=claude:claude container/session-branch.sh /home/claude/.riotbox/session-branch.sh
-COPY --chown=claude:claude container/overlay-setup.sh /home/claude/.riotbox/overlay-setup.sh
-COPY --chown=claude:claude container/plugin-setup.sh /home/claude/.riotbox/plugin-setup.sh
-COPY --chown=claude:claude container/nested-podman-setup.sh /home/claude/.riotbox/nested-podman-setup.sh
-COPY --chown=claude:claude container/entrypoint.sh /home/claude/.riotbox/entrypoint.sh
-RUN chmod +x /home/claude/.riotbox/entrypoint.sh \
-    /home/claude/.riotbox/session-branch.sh /home/claude/.riotbox/overlay-setup.sh \
-    /home/claude/.riotbox/plugin-setup.sh /home/claude/.riotbox/nested-podman-setup.sh
-ENTRYPOINT ["/home/claude/.riotbox/entrypoint.sh"]
+COPY --chown=llm:llm container/session-branch.sh /home/llm/.riotbox/session-branch.sh
+COPY --chown=llm:llm container/overlay-setup.sh /home/llm/.riotbox/overlay-setup.sh
+COPY --chown=llm:llm container/plugin-setup.sh /home/llm/.riotbox/plugin-setup.sh
+COPY --chown=llm:llm container/nested-podman-setup.sh /home/llm/.riotbox/nested-podman-setup.sh
+COPY --chown=llm:llm container/entrypoint.sh /home/llm/.riotbox/entrypoint.sh
+RUN chmod +x /home/llm/.riotbox/entrypoint.sh \
+    /home/llm/.riotbox/session-branch.sh /home/llm/.riotbox/overlay-setup.sh \
+    /home/llm/.riotbox/plugin-setup.sh /home/llm/.riotbox/nested-podman-setup.sh
+ENTRYPOINT ["/home/llm/.riotbox/entrypoint.sh"]
 CMD ["bash"]
 
 # ── opencode (installed alongside Claude Code) ───────────────────────────────
@@ -520,8 +520,8 @@ CMD ["bash"]
 # needed. The .opencode/bin directory itself is left in place — empty after
 # the move and harmless.
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path && \
-    mv /home/claude/.opencode/bin/opencode /home/claude/.local/bin/opencode && \
-    /home/claude/.local/bin/opencode --version
+    mv /home/llm/.opencode/bin/opencode /home/llm/.local/bin/opencode && \
+    /home/llm/.local/bin/opencode --version
 
 # ── Claude Code (LAST — changes most frequently, preserves layer cache) ─────
 RUN curl -fsSL https://claude.ai/install.sh | bash && claude --version
@@ -530,7 +530,7 @@ RUN curl -fsSL https://claude.ai/install.sh | bash && claude --version
 # Installed to a staging dir because ~/.claude is bind-mounted at runtime.
 # The entrypoint copies from here into the session dir on first run, avoiding
 # network access and ~14 Node.js process spawns at startup.
-RUN STAGING_DIR=/home/claude/.riotbox/plugins-staging/.claude && \
+RUN STAGING_DIR=/home/llm/.riotbox/plugins-staging/.claude && \
     mkdir -p "${STAGING_DIR}/plugins/cache" && \
     CLAUDE_CONFIG_DIR="${STAGING_DIR}" claude plugin marketplace add anthropics/claude-plugins-official && \
     for p in \

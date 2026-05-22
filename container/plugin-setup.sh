@@ -196,7 +196,7 @@ plugin_setup() {
     # Claude Code reads settings.json key "statusLine" as an object:
     #   { "type": "command", "command": "<path>" }
     if [ -f ~/.claude/statusline-command.sh ]; then
-        jq '.statusLine = {"type": "command", "command": "/home/claude/.claude/statusline-command.sh"}' \
+        jq '.statusLine = {"type": "command", "command": "/home/llm/.claude/statusline-command.sh"}' \
             ~/.claude/settings.json > ~/.claude/settings.json.tmp \
             && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
     else

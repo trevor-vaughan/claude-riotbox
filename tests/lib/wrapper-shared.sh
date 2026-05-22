@@ -43,7 +43,7 @@ FAKE
 
     export HOME="${TEST_DIR}/home"
     # Coreutils-only system PATH so any real agent installed on the test
-    # host (e.g. /home/claude/.local/bin/opencode) is invisible. The
+    # host (e.g. /home/llm/.local/bin/opencode) is invisible. The
     # wrapper's find-real-bin must resolve to FAKE_REAL_BIN, not the host.
     export PATH="${TEST_DIR}/home/.riotbox/bin:${TEST_DIR}/realbin:/usr/bin:/bin"
 }

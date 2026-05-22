@@ -4,15 +4,15 @@ vars:
   riotbox_dir: "{{.root}}"
 
 # Pins the three documented path forms in mounts.conf:
-#   ~/foo    → ${HOME}/foo on host  → /home/claude/foo  in container
+#   ~/foo    → ${HOME}/foo on host  → /home/llm/foo  in container
 #   /abs/x   → /abs/x  on host       → /abs/x           in container
-#   rel/y    → ${HOME}/rel/y on host → /home/claude/rel/y in container
+#   rel/y    → ${HOME}/rel/y on host → /home/llm/rel/y in container
 # Each entry produces a `-v host:container:ro,z` flag; missing source
 # files are silently skipped (existing behaviour we want to preserve).
 
 testcases:
 
-  - name: mounts.conf tilde-prefixed entry resolves to HOME on host and /home/claude in container
+  - name: mounts.conf tilde-prefixed entry resolves to HOME on host and /home/llm in container
     steps:
       - type: exec
         script: |
@@ -28,7 +28,7 @@ testcases:
           echo "OUT=${out}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "/somefile.d:/home/claude/somefile.d:ro"
+          - result.systemout ShouldContainSubstring "/somefile.d:/home/llm/somefile.d:ro"
 
   - name: mounts.conf absolute-path entry mounts unchanged at both ends
     steps:
@@ -71,7 +71,7 @@ testcases:
           echo "OUT=${out}"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "/relfile.d:/home/claude/relfile.d:ro"
+          - result.systemout ShouldContainSubstring "/relfile.d:/home/llm/relfile.d:ro"
 
   - name: mounts.conf entry whose host source does not exist is silently skipped
     steps:
@@ -114,7 +114,7 @@ testcases:
           # trailing comment after the entry
           EOF
           out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
-          count=$(printf '%s\n' "${out}" | grep -c "/keep.d:/home/claude/keep.d:ro" || true)
+          count=$(printf '%s\n' "${out}" | grep -c "/keep.d:/home/llm/keep.d:ro" || true)
           echo "COUNT=${count}"
         assertions:
           - result.code ShouldEqual 0

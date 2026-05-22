@@ -35,7 +35,7 @@ HOST_CLAUDE_DIR="$1"
 SESSION_DIR="$2"
 
 # Container home — must match the image's user home (see detect-mounts.sh)
-CONTAINER_HOME="/home/claude"
+CONTAINER_HOME="/home/llm"
 
 # ── Credentials (RW bind mount) ───────────────────────────────────────────────
 # Bind-mounted RW as a nested mount inside the session dir so that token
@@ -124,7 +124,7 @@ else
 fi
 
 # ── Host plugins (read-only mount) ───────────────────────────────────────────
-# Mounted at /home/claude/.host-plugins inside the container. plugin-setup.sh
+# Mounted at /home/llm/.host-plugins inside the container. plugin-setup.sh
 # copies contents into ~/.claude/plugins/ at startup, with host plugins taking
 # highest precedence (overwriting pre-staged defaults on conflict).
 if [ -d "${HOST_CLAUDE_DIR}/plugins" ]; then

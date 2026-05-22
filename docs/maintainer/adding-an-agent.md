@@ -294,7 +294,7 @@ agent_aider_host_sync() {
     # present, otherwise no-op.
     if [ -f "${HOME}/.aider.conf.yml" ]; then
         cp "${HOME}/.aider.conf.yml" "${session_dir}/.aider.conf.yml"
-        echo "-v ${session_dir}/.aider.conf.yml:/home/claude/.aider.conf.yml:z"
+        echo "-v ${session_dir}/.aider.conf.yml:/home/llm/.aider.conf.yml:z"
     fi
 }
 

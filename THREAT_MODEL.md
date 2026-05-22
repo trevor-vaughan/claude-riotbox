@@ -178,7 +178,7 @@ flowchart LR
 
 opencode uses two host paths:
 
-- **`~/.local/share/opencode/auth.json`** — bind-mounted **read-write** into the container at `/home/claude/.local/share/opencode/auth.json`. Same trust posture as Claude's `.credentials.json`: the container can read and overwrite this file. Refresh tokens that opencode rotates during a session land back on the host so subsequent runs stay authenticated.
+- **`~/.local/share/opencode/auth.json`** — bind-mounted **read-write** into the container at `/home/llm/.local/share/opencode/auth.json`. Same trust posture as Claude's `.credentials.json`: the container can read and overwrite this file. Refresh tokens that opencode rotates during a session land back on the host so subsequent runs stay authenticated.
 - **`~/.config/opencode/`** — copied (not mounted) into the session dir at launch. The container's writes to its synced copy do not propagate back to the host. Re-copied at every launch so removed/renamed agents and commands do not linger.
 
 Provider env vars are exposed by name only (`-e VAR`); values come from the calling host environment via the container runtime. The set is the union of every registered agent's `agent_<name>_env_vars` manifest function (`agents/claude/manifest.sh` and `agents/opencode/manifest.sh` today), deduplicated with `sort -u`. Each manifest declares only the vars its agent reads, so adding a new provider key for one agent does not silently widen the passthrough surface for the others. The union covers direct provider keys plus Claude Code routing vars for Vertex and Bedrock (`CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_PROJECT_ID`, `AWS_PROFILE`, etc.). Long-lived AWS access keys (`AWS_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_SESSION_TOKEN`) are intentionally excluded from every manifest — shipping static long-lived credentials into an autonomous container that has full filesystem access is a regression. Bedrock users authenticate via `AWS_PROFILE` plus an `AWS_SHARED_CREDENTIALS_FILE` (RO-mounted by `RIOTBOX_CREDFILE_VARS`). Setting `RIOTBOX_PASSTHROUGH_VARS` (whitespace-separated names) overrides the registry union with a curated list — no merging. `RIOTBOX_PASSTHROUGH_EXTRA_VARS` uses the same syntax and validation but is appended to whichever set is active (default or override), letting users add forwarded vars without restating the base; identical KEY validation, identical argv-hygiene for `KEY=VALUE` values, and identical "no AWS long-lived keys" guidance apply.
@@ -611,8 +611,8 @@ recovery path for destructive LLM sessions.
 - **Locations:**
   - `/workspace/scripts/build.sh:147` — `copy_if_exists "${HOME}/.npmrc"
     ".npmrc"`
-  - `/workspace/Dockerfile:356` — `COPY --chown=claude:claude configs/
-    /home/claude/`
+  - `/workspace/Dockerfile:356` — `COPY --chown=llm:llm configs/
+    /home/llm/`
   - `/workspace/.dockerignore:1` — `# Never bake secrets or host identity into
     the image`
 
@@ -655,11 +655,11 @@ recovery path for destructive LLM sessions.
 **Primary:**
 1. Developer runs 'task build'; build.sh copies ~/.npmrc (containing _authToken)
    to configs/.npmrc
-2. Dockerfile COPY configs/ /home/claude/ bakes .npmrc with auth token into a
+2. Dockerfile COPY configs/ /home/llm/ bakes .npmrc with auth token into a
    permanent image layer
 3. The image is pushed to a registry, shared, or left accessible on the host
 4. Attacker extracts the token via 'podman history' layer inspection or 'cat
-   /home/claude/.npmrc' inside a container
+   /home/llm/.npmrc' inside a container
 
 **Attack chaining:**
 - Enabled by: ['None']
@@ -681,7 +681,7 @@ sequenceDiagram
   rect rgb(255, 80, 80)
     Note over Build,Ctx: No token filtering
     Build->>Ctx: cp ~/.npmrc configs/.npmrc
-    Ctx->>Docker: COPY configs/ /home/claude/
+    Ctx->>Docker: COPY configs/ /home/llm/
     Docker->>Image: Token baked into permanent layer
   end
 ```
@@ -753,7 +753,7 @@ _authToken lines before copying.
 1. Ensure ~/.npmrc contains an _authToken line
 1. Run 'task build'
 1. Inspect configs/.npmrc -- verify it contains the _authToken
-1. Run the container: cat /home/claude/.npmrc -- token is present
+1. Run the container: cat /home/llm/.npmrc -- token is present
 
 **Acceptance criteria:**
 - [ ] .npmrc auth tokens are never baked into the image

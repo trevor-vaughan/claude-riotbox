@@ -368,7 +368,7 @@ setup_projects() {
         echo "  Fix with: sudo chown -R $(id -u):$(id -g) ${riotbox_session_dir}" >&2
         exit 1
     fi
-    PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${riotbox_session_dir}:/home/claude/.claude:z"
+    PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${riotbox_session_dir}:/home/llm/.claude:z"
 
     # ── Sync each registered agent's host config into the session dir ──
     # The agent registry tells us which agents to sync. Each manifest's

@@ -18,7 +18,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-CONTAINER_HOME="/home/claude"
+CONTAINER_HOME="/home/llm"
 RIOTBOX_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox"
 
 # ── Output format ───────────────────────────────────────────────────────────
@@ -144,7 +144,7 @@ done
 #   - Paths starting with / or ~ are absolute
 #   - Other paths are relative to $HOME
 #   - All user mounts are read-only (:ro,z)
-#   - Mounted to the same path under /home/claude
+#   - Mounted to the same path under /home/llm
 #
 # Example mounts.conf:
 #   # Private npm registry auth (needed for npm install of private packages)

@@ -14,12 +14,12 @@
 #   * <session-dir>/.local-share-opencode/ — empty session-owned data dir
 #
 # Volume flags printed to stdout:
-#   -v <session>/.config-opencode:/home/claude/.config/opencode:z
-#   -v <session>/.local-share-opencode:/home/claude/.local/share/opencode:z
+#   -v <session>/.config-opencode:/home/llm/.config/opencode:z
+#   -v <session>/.local-share-opencode:/home/llm/.local/share/opencode:z
 #
 # If <host-data-dir>/auth.json exists, an additional RW bind is emitted so
 # OAuth refresh tokens write back to the host file:
-#   -v <host-data-dir>/auth.json:/home/claude/.local/share/opencode/auth.json:z
+#   -v <host-data-dir>/auth.json:/home/llm/.local/share/opencode/auth.json:z
 #
 # Exit codes:
 #   0 — success (including the no-host-config case, which prints a notice)
@@ -36,7 +36,7 @@ HOST_CONFIG_DIR="$1"
 HOST_DATA_DIR="$2"
 SESSION_DIR="$3"
 
-CONTAINER_HOME="/home/claude"
+CONTAINER_HOME="/home/llm"
 SESSION_CONFIG="${SESSION_DIR}/.config-opencode"
 SESSION_DATA="${SESSION_DIR}/.local-share-opencode"
 

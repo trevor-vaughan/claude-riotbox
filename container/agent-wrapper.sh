@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # agent-wrapper.sh — Generic agent wrapper, parameterized by basename($0).
 #
-# Installed at /home/claude/.riotbox/bin/<agent> (one symlink per agent
+# Installed at /home/llm/.riotbox/bin/<agent> (one symlink per agent
 # pointing at this script). The wrapper:
 #
 #   1. Identifies the agent from its own filename — e.g. when invoked as
