@@ -16,11 +16,11 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
-          mkdir -p "${FAKE_HOME}/bin" "${FAKE_HOME}/.config/claude-riotbox"
+          mkdir -p "${FAKE_HOME}/bin" "${FAKE_HOME}/.config/riotbox"
           HOME="${FAKE_HOME}" "{{.riotbox_dir}}/scripts/detect-mounts.sh"
         assertions:
           - result.code ShouldEqual 0
-          # bin and .config/claude-riotbox are :ro,z (functional mounts)
+          # bin and .config/riotbox are :ro,z (functional mounts)
           - result.systemout ShouldContainSubstring "-v"
           - result.systemout ShouldContainSubstring "/bin:/home/claude/bin:ro,z"
           - result.systemout ShouldContainSubstring ":ro,z"

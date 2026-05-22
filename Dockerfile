@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Claude Riotbox — CentOS Stream 10
+# RiotBox — CentOS Stream 10
 # Built to mirror your host dev environment (nvm, uv, Go, Rust, Ruby).
 # Secrets (ANTHROPIC_API_KEY, ~/.claude) are NEVER baked in — mount at runtime.
 #

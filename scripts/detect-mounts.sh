@@ -19,7 +19,7 @@
 set -euo pipefail
 
 CONTAINER_HOME="/home/claude"
-RIOTBOX_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-riotbox"
+RIOTBOX_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox"
 
 # ── Output format ───────────────────────────────────────────────────────────
 OUTPUT_FORMAT="podman"
@@ -72,7 +72,7 @@ FUNCTIONAL_MOUNTS=(
     # User scripts and tools
     "bin"
     # Riotbox config (plugins.conf, etc.)
-    ".config/claude-riotbox"
+    ".config/riotbox"
 )
 
 # ── Auth tokens ───────────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ FUNCTIONAL_MOUNTS=(
 
 # ── Riotbox session data ─────────────────────────────────────────────────────
 # Session isolation is handled by mount-projects.sh, which mounts a
-# project-specific subdirectory of $XDG_DATA_HOME/claude-riotbox/ as ~/.claude.
+# project-specific subdirectory of $XDG_DATA_HOME/riotbox/ as ~/.claude.
 # The real ~/.claude is NEVER mounted — this prevents an autonomous
 # container from reading your host conversation history.
 
@@ -137,7 +137,7 @@ done
 
 # ── User-defined mounts from mounts.conf ─────────────────────────────────────
 # Users can specify additional files/directories to mount into the container
-# by listing them in ~/.config/claude-riotbox/mounts.conf (one per line).
+# by listing them in ~/.config/riotbox/mounts.conf (one per line).
 #
 # Format:
 #   - Lines starting with # are comments; blank lines are ignored

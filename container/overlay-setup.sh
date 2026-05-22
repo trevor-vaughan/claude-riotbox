@@ -88,7 +88,7 @@ overlay_teardown() {
 
     echo ""
     echo "  Next steps (run from your host):"
-    echo "    claude-riotbox overlay-diff      Review changes"
-    echo "    claude-riotbox overlay-accept     Apply to project"
-    echo "    claude-riotbox overlay-reject     Discard changes"
+    echo "    riotbox overlay-diff      Review changes"
+    echo "    riotbox overlay-accept     Apply to project"
+    echo "    riotbox overlay-reject     Discard changes"
 }

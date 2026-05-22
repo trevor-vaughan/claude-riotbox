@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  TEST_IMAGE: claude-riotbox-test
+  TEST_IMAGE: riotbox-test
   TEST_DIR: '{{.ROOT_DIR}}/{{.TEST_DIR | default ".test-output"}}'
   CONTAINER_CMD:
     sh: command -v podman 2>/dev/null || echo docker

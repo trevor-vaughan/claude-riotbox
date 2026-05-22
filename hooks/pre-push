@@ -8,7 +8,7 @@
 #   llm@localhost   — legacy: pre-domain-rename
 #   riotbox@local   — legacy: oldest squash-merge identity
 #
-# Install: claude-riotbox install-hooks
+# Install: riotbox install-hooks
 # Or manually: cp hooks/pre-push .git/hooks/pre-push
 set -euo pipefail
 
@@ -41,7 +41,7 @@ while read -r local_ref local_oid remote_ref remote_oid; do
         echo "${bad_commits}" | sed 's/^/  /' >&2
         echo "" >&2
         echo "Rewrite these commits to use your identity before pushing:" >&2
-        echo "  claude-riotbox reown --all" >&2
+        echo "  riotbox reown --all" >&2
         echo "" >&2
         exit 1
     fi

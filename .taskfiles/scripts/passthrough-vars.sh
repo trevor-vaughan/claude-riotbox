@@ -22,7 +22,7 @@
 #
 # Comment lines (leading `#` after trim) and blank lines are skipped.
 #
-# Values are bash-expanded at config-source time (~/.config/claude-riotbox/
+# Values are bash-expanded at config-source time (~/.config/riotbox/
 # config is `source`d), so `FOO=$BAR` and `FOO=$(cmd)` Just Work — they
 # are NOT re-expanded here, which would be a security regression.
 #

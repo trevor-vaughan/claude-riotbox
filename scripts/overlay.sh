@@ -47,7 +47,7 @@ resolve_overlay() {
 
     if [ ! -d "${OVERLAY_SESSION_DIR}" ]; then
         echo "ERROR: No session found for '${project_path}'." >&2
-        echo "Run 'claude-riotbox session-list' to see available sessions." >&2
+        echo "Run 'riotbox session-list' to see available sessions." >&2
         return 1
     fi
 
@@ -66,7 +66,7 @@ resolve_overlay() {
             OVERLAY_DIR="${overlay_base}/${name}"
         else
             echo "ERROR: No overlay data found for '${project_path}'." >&2
-            echo "Run 'claude-riotbox overlays' to see pending overlays." >&2
+            echo "Run 'riotbox overlays' to see pending overlays." >&2
             return 1
         fi
     fi
@@ -82,7 +82,7 @@ overlay_has_changes() {
 # List sessions with pending overlay data.
 # Exit 0 if overlays exist, 1 if none.
 overlay_list() {
-    local session_root="${XDG_DATA_HOME:-$HOME/.local/share}/claude-riotbox"
+    local session_root="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
 
     if [ ! -d "${session_root}" ]; then
         echo "No pending overlays."

@@ -10,7 +10,7 @@ Error: a prompt is required.
 
 Usage:
   task audit -- "prompt" [project ...]
-  claude-riotbox audit "prompt" [project ...]
+  riotbox audit "prompt" [project ...]
 
 A prompt describes what the agent should do. Projects default to the
 current directory if not specified.
@@ -18,7 +18,7 @@ current directory if not specified.
 Examples:
   task audit -- "review this code for security issues"
   task audit -- "find SQL injection vulnerabilities" . ../shared-lib
-  claude-riotbox audit "check authentication logic" .
+  riotbox audit "check authentication logic" .
 EOF
     exit 1
 fi

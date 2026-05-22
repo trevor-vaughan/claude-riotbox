@@ -13,7 +13,7 @@
 plugin_setup() {
     local STAGING_DIR="${HOME}/.riotbox/plugins-staging/.claude"
     local HOST_PLUGINS_DIR="${HOME}/.host-plugins"
-    local PLUGINS_CONF="${HOME}/.config/claude-riotbox/plugins.conf"
+    local PLUGINS_CONF="${HOME}/.config/riotbox/plugins.conf"
 
     # ── 1. Seed settings.json ──────────────────────────────────────────────
     # Create on first run, or strip legacy enabledPlugins from prior versions.

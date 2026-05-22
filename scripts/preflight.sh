@@ -5,7 +5,7 @@
 # Verifies every prerequisite that has historically caused opaque mid-run
 # failures: container runtime, FUSE driver, task runner, image build, and
 # credential readability. Each check has a short label, an exit code, and a
-# fix hint. The same helpers are reused by `claude-riotbox doctor` (the
+# fix hint. The same helpers are reused by `riotbox doctor` (the
 # user-facing entry point), `setup.sh` (post-install verification), and
 # anywhere else the engine wants to fail-fast with a clear diagnosis.
 #
@@ -26,7 +26,7 @@
 #   RIOTBOX_DOCTOR_ALL=1     Run every check even after a failure. Exit code
 #                            reflects the FIRST failure (0 if all pass).
 #   IMAGE_NAME               Riotbox image tag to look for (default
-#                            `claude-riotbox`, matches scripts/build.sh).
+#                            `riotbox`, matches scripts/build.sh).
 #                            Read at call time inside preflight_check_image,
 #                            so sourced callers can override per-call.
 #
@@ -165,19 +165,19 @@ preflight_check_image() {
     # Read IMAGE_NAME at call time, not at source time — that way a sourced
     # caller can do `IMAGE_NAME=my-tag preflight_check_image` and the
     # override actually takes effect. Default matches scripts/build.sh.
-    local image="${IMAGE_NAME:-claude-riotbox}"
+    local image="${IMAGE_NAME:-riotbox}"
     local label="riotbox image present (${image})"
     # podman image exists is the cheap check; if podman itself is broken
     # the earlier preflight_check_podman has already failed. We still guard
     # here in case this function is called standalone.
     if ! command -v podman >/dev/null 2>&1; then
         _preflight_report image fail "${label}" 17 \
-            "Run claude-riotbox build (image '${image}' not found)"
+            "Run riotbox build (image '${image}' not found)"
         return 17
     fi
     if ! podman image exists "${image}" 2>/dev/null; then
         _preflight_report image fail "${label}" 17 \
-            "Run claude-riotbox build (image '${image}' not found)"
+            "Run riotbox build (image '${image}' not found)"
         return 17
     fi
     _preflight_report image ok "${label}"

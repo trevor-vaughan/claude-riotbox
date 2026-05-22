@@ -26,8 +26,8 @@ the socket-related `launch.sh` wiring, or the `session:socket-*` recipes in
   ```bash
   task docker:build
   ```
-  Confirm the image is present: `podman images | grep claude-riotbox`.
-- The `claude-riotbox` launcher on `PATH` (see README.md §Setup), or
+  Confirm the image is present: `podman images | grep riotbox`.
+- The `riotbox` launcher on `PATH` (see README.md §Setup), or
   invoke the equivalent `task socket-*` recipes from the repo root.
 
 ## Setup verification
@@ -49,7 +49,7 @@ will fail.
 Goal: confirm in-container `podman` is talking to the host engine.
 
 ```bash
-RIOTBOX_SOCKET=1 claude-riotbox shell
+RIOTBOX_SOCKET=1 riotbox shell
 # (equivalently: RIOTBOX_SOCKET=1 task socket-shell)
 ```
 
@@ -92,7 +92,7 @@ podman login ghcr.io
 Then enter a socket-mode session and pull the private image:
 
 ```bash
-RIOTBOX_SOCKET=1 claude-riotbox shell
+RIOTBOX_SOCKET=1 riotbox shell
 # inside:
 podman pull ghcr.io/<your-org>/<private-image>:<tag>
 ```
@@ -182,7 +182,7 @@ the host (the same property that makes socket mode useful for caching
 also means there is no per-session reset).
 
 ```bash
-RIOTBOX_SOCKET=1 claude-riotbox shell
+RIOTBOX_SOCKET=1 riotbox shell
 # inside:
 podman pull hello-world:latest
 podman run -d --name socket-persist-test hello-world:latest

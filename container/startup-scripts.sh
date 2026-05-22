@@ -3,7 +3,7 @@
 #
 # Sourced by entrypoint.sh. Provides:
 #   startup_scripts_run — run every executable *.sh under
-#                         ~/.config/claude-riotbox/startup_scripts/ in
+#                         ~/.config/riotbox/startup_scripts/ in
 #                         lexicographic filename order. Failures warn and
 #                         continue; the session is still usable.
 #
@@ -17,7 +17,7 @@
 #     with 10-, 20-, etc. to control ordering.
 
 startup_scripts_run() {
-    local dir="${HOME}/.config/claude-riotbox/startup_scripts"
+    local dir="${HOME}/.config/riotbox/startup_scripts"
     [ -d "${dir}" ] || return 0
 
     local script

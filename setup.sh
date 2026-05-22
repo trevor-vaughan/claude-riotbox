@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# setup.sh — Guided setup for Claude Riotbox.
+# setup.sh — Guided setup for RiotBox.
 # Checks prerequisites, configures podman, installs the CLI, and builds the
 # image. Idempotent — safe to re-run; skips what's already done.
 #
@@ -56,7 +56,7 @@ ERRORS=0
 WARNINGS=0
 
 # ─────────────────────────────────────────────────────────────────────────────
-echo -e "${BOLD}Claude Riotbox Setup${RESET}"
+echo -e "${BOLD}RiotBox Setup${RESET}"
 echo "This will check prerequisites and configure your system."
 echo ""
 
@@ -317,28 +317,28 @@ fi
 step "5. Install CLI"
 
 INSTALL_DIR="${HOME}/bin"
-WRAPPER="${INSTALL_DIR}/claude-riotbox"
+WRAPPER="${INSTALL_DIR}/riotbox"
 
 if [ -x "${WRAPPER}" ]; then
     # Check if the wrapper points to this repo
     if grep -q "${SCRIPT_DIR}" "${WRAPPER}" 2>/dev/null; then
-        ok "claude-riotbox already installed (${WRAPPER})"
+        ok "riotbox already installed (${WRAPPER})"
     else
-        warn "claude-riotbox exists but points to a different location."
+        warn "riotbox exists but points to a different location."
         if ask_yn "Reinstall from ${SCRIPT_DIR}?"; then
             "${SCRIPT_DIR}/install.sh" "${INSTALL_DIR}"
-            ok "claude-riotbox reinstalled"
+            ok "riotbox reinstalled"
         fi
     fi
 else
-    echo "  This installs the 'claude-riotbox' command to ${INSTALL_DIR}/."
+    echo "  This installs the 'riotbox' command to ${INSTALL_DIR}/."
     if ask_yn "Install?" "y"; then
         if [ -z "${AUTO_YES}" ]; then
             read -rp "  Install directory [${INSTALL_DIR}]: " custom_dir
             INSTALL_DIR="${custom_dir:-${INSTALL_DIR}}"
         fi
         "${SCRIPT_DIR}/install.sh" "${INSTALL_DIR}"
-        ok "claude-riotbox installed to ${INSTALL_DIR}"
+        ok "riotbox installed to ${INSTALL_DIR}"
     else
         warn "Skipped. Run ./install.sh manually when ready."
         WARNINGS=$((WARNINGS + 1))
@@ -348,7 +348,7 @@ fi
 # ── 6. Build image ──────────────────────────────────────────────────────────
 step "6. Build container image"
 
-IMAGE_NAME="${IMAGE_NAME:-claude-riotbox}"
+IMAGE_NAME="${IMAGE_NAME:-riotbox}"
 
 if [ -n "${SKIP_BUILD}" ]; then
     ok "Skipped (--no-build)"
@@ -365,7 +365,7 @@ else
         if ask_yn "Build now?" "y"; then
             "${SCRIPT_DIR}/scripts/build.sh"
         else
-            ok "Skipped. Run 'claude-riotbox build' when ready."
+            ok "Skipped. Run 'riotbox build' when ready."
         fi
     else
         fail "No container runtime available. Cannot build."
@@ -375,7 +375,7 @@ fi
 # ── 7. Final verification ───────────────────────────────────────────────────
 step "7. Final verification"
 
-# Run the same preflight the user gets via `claude-riotbox doctor`. This
+# Run the same preflight the user gets via `riotbox doctor`. This
 # catches mismatches between the per-step prompts above and the runtime
 # environment (e.g. podman installed but storage.conf still wrong, image
 # build skipped, creds removed mid-setup).
@@ -385,16 +385,16 @@ step "7. Final verification"
 # only after a `system reset` — the warning already covered it). In both
 # cases the summary block below surfaces what to do next, so re-checking
 # via preflight would be noise. After fixing the warnings, the user can
-# re-run setup.sh or call `claude-riotbox doctor` directly.
+# re-run setup.sh or call `riotbox doctor` directly.
 if [ ${ERRORS} -gt 0 ]; then
     warn "Skipping preflight: ${ERRORS} error(s) above must be resolved first."
 elif [ ${WARNINGS} -gt 0 ]; then
-    warn "Skipping preflight: ${WARNINGS} warning(s) above. Re-run setup.sh or \`claude-riotbox doctor\` after addressing them."
+    warn "Skipping preflight: ${WARNINGS} warning(s) above. Re-run setup.sh or \`riotbox doctor\` after addressing them."
 elif "${SCRIPT_DIR}/scripts/preflight.sh"; then
     ok "All checks pass — riotbox is ready"
 else
     rc=$?
-    fail "Some checks failed (exit code ${rc}). Run \`claude-riotbox doctor\` for detail or to re-check after fixing."
+    fail "Some checks failed (exit code ${rc}). Run \`riotbox doctor\` for detail or to re-check after fixing."
     exit "${rc}"
 fi
 
@@ -412,6 +412,6 @@ fi
 
 echo ""
 echo "Quick start:"
-echo "  claude-riotbox run \"add tests for the auth module\""
-echo "  claude-riotbox shell"
+echo "  riotbox run \"add tests for the auth module\""
+echo "  riotbox shell"
 echo ""

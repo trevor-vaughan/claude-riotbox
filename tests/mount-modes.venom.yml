@@ -342,7 +342,7 @@ testcases:
           # The session key for a single canonical path is the path with
           # / replaced by - and leading - stripped.
           KEY="$(printf '%s\n' "${A}" | sed 's|/|-|g; s|^-||')"
-          if [ -d "${STORE}/claude-riotbox/${KEY}" ]; then
+          if [ -d "${STORE}/riotbox/${KEY}" ]; then
               echo "SESSION_DIR_LEAKED"
           else
               echo "NO_SESSION_DIR"
@@ -377,7 +377,7 @@ testcases:
           rc=$?
           echo "RC=${rc}"
           KEY="$(printf '%s\n' "${A}" | sed 's|/|-|g; s|^-||')"
-          if [ -e "${STORE}/claude-riotbox/${KEY}/overlay" ]; then
+          if [ -e "${STORE}/riotbox/${KEY}/overlay" ]; then
               echo "OVERLAY_LEAKED"
           else
               echo "NO_OVERLAY"

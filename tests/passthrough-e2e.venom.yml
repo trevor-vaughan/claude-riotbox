@@ -23,7 +23,7 @@ testcases:
             exit 0
           fi
 
-          IMAGE_NAME="${IMAGE_NAME:-claude-riotbox-test}"
+          IMAGE_NAME="${IMAGE_NAME:-riotbox-test}"
           if ! "${CONTAINER_CMD}" image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
             echo "SKIP: image ${IMAGE_NAME} not built (run 'task test:build')"
             echo "OK"
@@ -35,10 +35,10 @@ testcases:
           export HOME="${tmp}/home"
           export XDG_CONFIG_HOME="${tmp}/home/.config"
           export XDG_DATA_HOME="${tmp}/home/.local/share"
-          mkdir -p "${XDG_CONFIG_HOME}/claude-riotbox" "${XDG_DATA_HOME}"
-          : > "${XDG_CONFIG_HOME}/claude-riotbox/mounts.conf"
+          mkdir -p "${XDG_CONFIG_HOME}/riotbox" "${XDG_DATA_HOME}"
+          : > "${XDG_CONFIG_HOME}/riotbox/mounts.conf"
 
-          cat > "${XDG_CONFIG_HOME}/claude-riotbox/config" <<'CFG'
+          cat > "${XDG_CONFIG_HOME}/riotbox/config" <<'CFG'
           RIOTBOX_PASSTHROUGH_VARS="
             FOO=hello
             GREETING=hello world
@@ -90,7 +90,7 @@ testcases:
             exit 0
           fi
 
-          IMAGE_NAME="${IMAGE_NAME:-claude-riotbox-test}"
+          IMAGE_NAME="${IMAGE_NAME:-riotbox-test}"
           if ! "${CONTAINER_CMD}" image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
             echo "SKIP: image ${IMAGE_NAME} not built"
             echo "OK"
@@ -102,10 +102,10 @@ testcases:
           export HOME="${tmp}/home"
           export XDG_CONFIG_HOME="${tmp}/home/.config"
           export XDG_DATA_HOME="${tmp}/home/.local/share"
-          mkdir -p "${XDG_CONFIG_HOME}/claude-riotbox" "${XDG_DATA_HOME}"
-          : > "${XDG_CONFIG_HOME}/claude-riotbox/mounts.conf"
+          mkdir -p "${XDG_CONFIG_HOME}/riotbox" "${XDG_DATA_HOME}"
+          : > "${XDG_CONFIG_HOME}/riotbox/mounts.conf"
 
-          cat > "${XDG_CONFIG_HOME}/claude-riotbox/config" <<'CFG'
+          cat > "${XDG_CONFIG_HOME}/riotbox/config" <<'CFG'
           RIOTBOX_PASSTHROUGH_VARS="1FOO=bar"
           CFG
 

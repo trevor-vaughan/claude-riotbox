@@ -6,7 +6,7 @@ set -euo pipefail
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
 source "${ROOT_DIR}/.taskfiles/scripts/session-summary.sh"
-session_root="${XDG_DATA_HOME:-$HOME/.local/share}/claude-riotbox"
+session_root="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
 
 confirm() {
     [ "${force}" = true ] && return 0

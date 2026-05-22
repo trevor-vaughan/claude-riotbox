@@ -1,4 +1,4 @@
-name: scripts/preflight.sh — claude-riotbox doctor preflight
+name: scripts/preflight.sh — riotbox doctor preflight
 vars:
   root: "."
   riotbox_dir: "{{.root}}"
@@ -209,7 +209,7 @@ testcases:
               *) echo "BAD: missing exit 17" >&2; exit 1 ;;
           esac
           case "${out}" in
-              *"claude-riotbox build"*) echo "OK" ;;
+              *"riotbox build"*) echo "OK" ;;
               *) echo "BAD: missing build hint" >&2; exit 1 ;;
           esac
         assertions:
@@ -291,7 +291,7 @@ testcases:
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
           preflight_check_podman() { _preflight_report podman ok "podman stub"; return 0; }
-          preflight_check_image()  { _preflight_report image fail "image stub" 17 "Run claude-riotbox build"; return 17; }
+          preflight_check_image()  { _preflight_report image fail "image stub" 17 "Run riotbox build"; return 17; }
           out="$(RIOTBOX_DOCTOR_JSON=1 RIOTBOX_DOCTOR_ALL=1 \
               ANTHROPIC_API_KEY=sk-test \
               HOME="${FAKE_HOME}" \
@@ -313,7 +313,7 @@ testcases:
           [ "$(echo "${image_line}" | jq -r .result)" = "fail" ] || {
               echo "BAD: image not failing: ${image_line}" >&2; exit 1;
           }
-          [ "$(echo "${image_line}" | jq -r .hint)" = "Run claude-riotbox build" ] || {
+          [ "$(echo "${image_line}" | jq -r .hint)" = "Run riotbox build" ] || {
               echo "BAD: wrong hint: ${image_line}" >&2; exit 1;
           }
           echo "OK"
@@ -336,7 +336,7 @@ testcases:
           # both lines must appear, and the return code must be 17 (the
           # first failure) — not 18.
           preflight_check_podman() { _preflight_report podman ok "podman stub"; return 0; }
-          preflight_check_image()  { _preflight_report image fail "image stub" 17 "Run claude-riotbox build"; return 17; }
+          preflight_check_image()  { _preflight_report image fail "image stub" 17 "Run riotbox build"; return 17; }
           unset ANTHROPIC_API_KEY
           out="$(RIOTBOX_DOCTOR_ALL=1 HOME="${FAKE_HOME}" preflight_run 2>&1 || echo "EXIT=$?")"
           echo "${out}"
@@ -362,7 +362,7 @@ testcases:
           # Same stub strategy as ALL-mode test above: pin podman to ok and
           # image to fail so the assertion targets the composer behavior.
           preflight_check_podman() { _preflight_report podman ok "podman stub"; return 0; }
-          preflight_check_image()  { _preflight_report image fail "image stub" 17 "Run claude-riotbox build"; return 17; }
+          preflight_check_image()  { _preflight_report image fail "image stub" 17 "Run riotbox build"; return 17; }
           unset ANTHROPIC_API_KEY
           # Without ALL=1 the run must exit at the image check (code 17)
           # and never reach the creds check.
@@ -442,7 +442,7 @@ testcases:
               "{{.riotbox_dir}}/scripts/preflight.sh" 2>&1 || true)"
           echo "${out}"
           case "${out}" in
-              *"[17]"*"riotbox image present"*"claude-riotbox build"*) echo "OK" ;;
+              *"[17]"*"riotbox image present"*"riotbox build"*) echo "OK" ;;
               *) echo "BAD: missing image fail line" >&2; exit 1 ;;
           esac
         assertions:
@@ -529,7 +529,7 @@ testcases:
 
   # ── CLI integration: install.sh wires `doctor` into the wrapper ──────────
 
-  - name: claude-riotbox wrapper exposes the doctor subcommand
+  - name: riotbox wrapper exposes the doctor subcommand
     steps:
       - type: exec
         script: |
@@ -538,9 +538,9 @@ testcases:
           "{{.riotbox_dir}}/install.sh" "${TEST_DIR}" >/dev/null
           # Wrapper must list `doctor` in its usage and dispatch to
           # scripts/preflight.sh.
-          grep -q '^  doctor ' "${TEST_DIR}/claude-riotbox" \
+          grep -q '^  doctor ' "${TEST_DIR}/riotbox" \
               || { echo "BAD: usage missing doctor" >&2; exit 1; }
-          grep -q 'scripts/preflight.sh' "${TEST_DIR}/claude-riotbox" \
+          grep -q 'scripts/preflight.sh' "${TEST_DIR}/riotbox" \
               || { echo "BAD: dispatch missing preflight.sh" >&2; exit 1; }
           echo "OK"
         assertions:

@@ -180,7 +180,7 @@ testcases:
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
           HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
-          test -x "${FAKE_HOME}/bin/claude-riotbox"
+          test -x "${FAKE_HOME}/bin/riotbox"
         assertions:
           - result.code ShouldEqual 0
 
@@ -193,7 +193,7 @@ testcases:
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
           HOME="${FAKE_HOME}" RIOTBOX_DIR="{{.riotbox_dir}}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
-          grep -q 'RIOTBOX_DIR=' "${FAKE_HOME}/bin/claude-riotbox"
+          grep -q 'RIOTBOX_DIR=' "${FAKE_HOME}/bin/riotbox"
         assertions:
           - result.code ShouldEqual 0
 
@@ -206,11 +206,11 @@ testcases:
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
           HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build >/dev/null 2>&1
-          test -x "${FAKE_HOME}/bin/claude-riotbox"
+          test -x "${FAKE_HOME}/bin/riotbox"
           HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "claude-riotbox already installed"
+          - result.systemout ShouldContainSubstring "riotbox already installed"
 
   # -- Idempotency tests --
 

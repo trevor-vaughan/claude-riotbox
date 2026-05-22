@@ -196,7 +196,7 @@ resolve_projects() {
     # on every supported filesystem for non-trivial project sets, and
     # mkdir fails with ENAMETOOLONG.
     local session_key
-    RIOTBOX_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/claude-riotbox"
+    RIOTBOX_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
     if [ ${#PROJECT_DIRS[@]} -le 1 ]; then
         session_key="$(printf '%s\n' "${PROJECT_DIRS[@]}" | sed 's|/|-|g; s|^-||')"
     else

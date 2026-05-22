@@ -18,7 +18,7 @@ setup_overlay_test() {
     local session_key
     session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
     export XDG_DATA_HOME="${TEST_DIR}/data"
-    SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+    SESSION="${XDG_DATA_HOME}/riotbox/${session_key}"
     OVERLAY="${SESSION}/overlay/project"
     mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
     echo "${PROJECT}" > "${SESSION}/.projects"

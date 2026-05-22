@@ -7,7 +7,7 @@ set -euo pipefail
 
 # Source user config for persistent defaults (e.g. RIOTBOX_NETWORK=none).
 # Env vars set by the caller take precedence over the config file.
-RIOTBOX_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/claude-riotbox/config"
+RIOTBOX_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox/config"
 # shellcheck disable=SC1090
 [ -f "${RIOTBOX_CONFIG}" ] && source "${RIOTBOX_CONFIG}"
 
@@ -49,9 +49,9 @@ if [ "${RIOTBOX_OVERLAY:-}" = "1" ]; then
             [ -d "${overlay_subdir}/upper" ] || continue
             if [ -n "$(ls -A "${overlay_subdir}/upper" 2>/dev/null)" ]; then
                 echo "ERROR: Pending overlay data exists. Accept or reject before starting a new session." >&2
-                echo "  claude-riotbox overlay-diff      Review changes" >&2
-                echo "  claude-riotbox overlay-accept     Apply to project" >&2
-                echo "  claude-riotbox overlay-reject     Discard changes" >&2
+                echo "  riotbox overlay-diff      Review changes" >&2
+                echo "  riotbox overlay-accept     Apply to project" >&2
+                echo "  riotbox overlay-reject     Discard changes" >&2
                 exit 1
             fi
         done

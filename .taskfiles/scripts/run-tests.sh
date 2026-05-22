@@ -6,7 +6,7 @@ set -euo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 CONTAINER_CMD="${CONTAINER_CMD:-$(command -v podman 2>/dev/null || echo docker)}"
-TEST_IMAGE="${TEST_IMAGE:-claude-riotbox-test}"
+TEST_IMAGE="${TEST_IMAGE:-riotbox-test}"
 USERNS_FLAG=""
 INIT_FLAG=""
 if [ "$(basename "${CONTAINER_CMD}")" = "podman" ]; then

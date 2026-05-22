@@ -497,14 +497,14 @@ testcases:
           export XDG_CONFIG_HOME="${stub_dir}/home/.config"
           export XDG_DATA_HOME="${stub_dir}/home/.local/share"
           mkdir -p \
-              "${XDG_CONFIG_HOME}/claude-riotbox" \
+              "${XDG_CONFIG_HOME}/riotbox" \
               "${XDG_DATA_HOME}"
 
           # Empty mounts.conf so detect-mounts.sh processes no user entries.
-          : > "${XDG_CONFIG_HOME}/claude-riotbox/mounts.conf"
+          : > "${XDG_CONFIG_HOME}/riotbox/mounts.conf"
 
           # Config: ONE KEY=VALUE entry containing a recognisable secret.
-          cat > "${XDG_CONFIG_HOME}/claude-riotbox/config" <<'CFG'
+          cat > "${XDG_CONFIG_HOME}/riotbox/config" <<'CFG'
           RIOTBOX_PASSTHROUGH_VARS="TOKEN=super-secret-value"
           CFG
 
@@ -514,7 +514,7 @@ testcases:
           # Stub podman on PATH so the stub intercepts the final container run.
           export PATH="${stub_dir}:${PATH}"
           export CONTAINER_CMD="${stub_dir}/podman"
-          export IMAGE_NAME="claude-riotbox-stub"
+          export IMAGE_NAME="riotbox-stub"
           export STUB_ARGV_FILE="${stub_dir}/argv.txt"
 
           # Mount a real directory as the project (stub_dir itself works).

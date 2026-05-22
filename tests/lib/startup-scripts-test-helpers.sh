@@ -10,7 +10,7 @@ setup_startup_scripts_test() {
     TEST_DIR="$(mktemp -d)"
     export HOME="${TEST_DIR}/home"
     # shellcheck disable=SC2034
-    STARTUP_DIR="${HOME}/.config/claude-riotbox/startup_scripts"
+    STARTUP_DIR="${HOME}/.config/riotbox/startup_scripts"
     # shellcheck disable=SC2034
     MARKER_DIR="${TEST_DIR}/markers"
     mkdir -p "${STARTUP_DIR}" "${MARKER_DIR}"

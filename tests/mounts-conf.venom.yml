@@ -21,9 +21,9 @@ testcases:
           trap 'rm -rf "${TMP}"' EXIT
           export HOME="${TMP}/home"
           unset XDG_CONFIG_HOME
-          mkdir -p "${HOME}/.config/claude-riotbox" "${HOME}/somefile.d"
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/somefile.d"
           touch "${HOME}/somefile.d/marker"
-          echo "~/somefile.d" > "${HOME}/.config/claude-riotbox/mounts.conf"
+          echo "~/somefile.d" > "${HOME}/.config/riotbox/mounts.conf"
           out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
           echo "OUT=${out}"
         assertions:
@@ -39,10 +39,10 @@ testcases:
           trap 'rm -rf "${TMP}"' EXIT
           export HOME="${TMP}/home"
           unset XDG_CONFIG_HOME
-          mkdir -p "${HOME}/.config/claude-riotbox"
+          mkdir -p "${HOME}/.config/riotbox"
           mkdir -p "${TMP}/abs"
           touch "${TMP}/abs/marker"
-          echo "${TMP}/abs" > "${HOME}/.config/claude-riotbox/mounts.conf"
+          echo "${TMP}/abs" > "${HOME}/.config/riotbox/mounts.conf"
           out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
           echo "OUT=${out}"
           # Venom does not shell-interpolate assertion strings, so probe
@@ -64,9 +64,9 @@ testcases:
           trap 'rm -rf "${TMP}"' EXIT
           export HOME="${TMP}/home"
           unset XDG_CONFIG_HOME
-          mkdir -p "${HOME}/.config/claude-riotbox" "${HOME}/relfile.d"
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/relfile.d"
           touch "${HOME}/relfile.d/marker"
-          echo "relfile.d" > "${HOME}/.config/claude-riotbox/mounts.conf"
+          echo "relfile.d" > "${HOME}/.config/riotbox/mounts.conf"
           out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
           echo "OUT=${out}"
         assertions:
@@ -82,8 +82,8 @@ testcases:
           trap 'rm -rf "${TMP}"' EXIT
           export HOME="${TMP}/home"
           unset XDG_CONFIG_HOME
-          mkdir -p "${HOME}/.config/claude-riotbox"
-          echo "~/this-does-not-exist" > "${HOME}/.config/claude-riotbox/mounts.conf"
+          mkdir -p "${HOME}/.config/riotbox"
+          echo "~/this-does-not-exist" > "${HOME}/.config/riotbox/mounts.conf"
           out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
           echo "OUT=${out}"
           # Output must contain no line whose source matches the missing path
@@ -105,9 +105,9 @@ testcases:
           trap 'rm -rf "${TMP}"' EXIT
           export HOME="${TMP}/home"
           unset XDG_CONFIG_HOME
-          mkdir -p "${HOME}/.config/claude-riotbox" "${HOME}/keep.d"
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/keep.d"
           touch "${HOME}/keep.d/marker"
-          cat >"${HOME}/.config/claude-riotbox/mounts.conf" <<'EOF'
+          cat >"${HOME}/.config/riotbox/mounts.conf" <<'EOF'
           # leading comment
 
           ~/keep.d

@@ -107,7 +107,7 @@ overlay_setup
 session_branch_setup
 
 # User startup scripts: run any executable *.sh under
-# ~/.config/claude-riotbox/startup_scripts/ in lexicographic order. Failures
+# ~/.config/riotbox/startup_scripts/ in lexicographic order. Failures
 # warn and continue; the session is still usable.
 startup_scripts_run
 

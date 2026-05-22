@@ -4,7 +4,7 @@ set -euo pipefail
 # checkpoint.sh — Create pre-session backup of all project git repos.
 #
 # Creates a checkpoint commit, tags it, and pushes to a local bare backup repo
-# under $XDG_DATA_HOME/claude-riotbox/backups/. The backup is outside the
+# under $XDG_DATA_HOME/riotbox/backups/. The backup is outside the
 # container mount tree so Claude cannot access or modify it.
 #
 # Required env: ROOT_DIR

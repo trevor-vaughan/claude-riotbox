@@ -1,5 +1,5 @@
 # riotbox-config-version: 6
-# ~/.config/claude-riotbox/config — Persistent defaults for claude-riotbox.
+# ~/.config/riotbox/config — Persistent defaults for riotbox.
 #
 # This file is sourced as shell script by the launcher. Values use the
 # : "${VAR:=default}" pattern so that environment variables and task flags
@@ -19,7 +19,7 @@
 # ── Overlay mode (podman only) ───────────────────────────────────────────
 # When enabled, project directories are mounted via fuse-overlayfs so that
 # changes stay inside the container until you explicitly accept them with
-# claude-riotbox overlay-accept. Requires podman and /dev/fuse.
+# riotbox overlay-accept. Requires podman and /dev/fuse.
 #
 # : "${RIOTBOX_OVERLAY:=1}"
 
@@ -34,7 +34,7 @@
 # ── Container image name ─────────────────────────────────────────────────
 # Override if you maintain multiple riotbox images (e.g. per-project).
 #
-# : "${IMAGE_NAME:=claude-riotbox}"
+# : "${IMAGE_NAME:=riotbox}"
 
 # ── Agent selection ──────────────────────────────────────────────────────
 # Choose between Claude Code and opencode for `run`/`resume`/`shell`

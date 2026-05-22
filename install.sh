@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — Install the claude-riotbox CLI wrapper.
+# install.sh — Install the riotbox CLI wrapper.
 # Usage: ./install.sh [target_dir]
 set -euo pipefail
 
@@ -9,9 +9,9 @@ TARGET_DIR="${1:-${HOME}/.local/bin}"
 
 mkdir -p "${TARGET_DIR}"
 
-cat > "${TARGET_DIR}/claude-riotbox" <<'WRAPPER'
+cat > "${TARGET_DIR}/riotbox" <<'WRAPPER'
 #!/usr/bin/env bash
-# claude-riotbox — CLI wrapper for Claude Riotbox
+# riotbox — CLI wrapper for RiotBox
 RIOTBOX_DIR="@@RIOTBOX_DIR@@"
 RIOTBOX_VERSION="@@RIOTBOX_VERSION@@"
 
@@ -30,7 +30,7 @@ all_paths() {
 
 usage() {
     cat <<EOF
-Usage: claude-riotbox [command] [args...]
+Usage: riotbox [command] [args...]
 
 Global flags:
   --agent=<claude|opencode>    Select the AI agent (default: claude).
@@ -103,7 +103,7 @@ case "${cmd}" in
         usage
         ;;
     version|--version|-V)
-        echo "claude-riotbox ${RIOTBOX_VERSION}"
+        echo "riotbox ${RIOTBOX_VERSION}"
         ;;
     doctor)
         exec "${RIOTBOX_DIR}/scripts/preflight.sh" "$@"
@@ -178,18 +178,18 @@ awk -v dir="${SCRIPT_DIR}" -v ver="${VERSION}" \
     '{gsub(/@@RIOTBOX_DIR@@/, dir); \
       gsub(/@@RIOTBOX_VERSION@@/, ver); \
       print}' \
-    "${TARGET_DIR}/claude-riotbox" > "${TARGET_DIR}/claude-riotbox.tmp" \
-    && mv "${TARGET_DIR}/claude-riotbox.tmp" "${TARGET_DIR}/claude-riotbox"
+    "${TARGET_DIR}/riotbox" > "${TARGET_DIR}/riotbox.tmp" \
+    && mv "${TARGET_DIR}/riotbox.tmp" "${TARGET_DIR}/riotbox"
 
-chmod +x "${TARGET_DIR}/claude-riotbox"
-echo "Installed: ${TARGET_DIR}/claude-riotbox"
+chmod +x "${TARGET_DIR}/riotbox"
+echo "Installed: ${TARGET_DIR}/riotbox"
 
 # ── Stub configuration files ─────────────────────────────────────────────
 # Place commented-out config stubs in the user's XDG config directory so
 # they can discover and customise settings. Never overwrite existing files.
 # Each stub has a riotbox-config-version header; if the shipped version is
 # newer, warn the user that new options may be available.
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-riotbox"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox"
 STUBS_DIR="${SCRIPT_DIR}/scripts/configs"
 mkdir -p "${CONFIG_DIR}"
 

@@ -332,7 +332,7 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
 
           export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/fake-session-key"
+          SESSION="${XDG_DATA_HOME}/riotbox/fake-session-key"
           OVERLAY="${SESSION}/overlay/project"
           mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work"
           echo "/some/project" > "${SESSION}/.projects"
@@ -357,7 +357,7 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
 
           export XDG_DATA_HOME="${TEST_DIR}/data"
-          mkdir -p "${XDG_DATA_HOME}/claude-riotbox"
+          mkdir -p "${XDG_DATA_HOME}/riotbox"
 
           "{{.riotbox_dir}}/scripts/overlay.sh" list
         assertions:
@@ -390,7 +390,7 @@ testcases:
           mkdir -p "${PROJECT}"
 
           export XDG_DATA_HOME="${TEST_DIR}/data"
-          mkdir -p "${XDG_DATA_HOME}/claude-riotbox"
+          mkdir -p "${XDG_DATA_HOME}/riotbox"
 
           export ROOT_DIR="{{.riotbox_dir}}"
           "{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJECT}" 2>&1
@@ -410,7 +410,7 @@ testcases:
 
           session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
           export XDG_DATA_HOME="${TEST_DIR}/data"
-          SESSION="${XDG_DATA_HOME}/claude-riotbox/${session_key}"
+          SESSION="${XDG_DATA_HOME}/riotbox/${session_key}"
           mkdir -p "${SESSION}"
           echo "${PROJECT}" > "${SESSION}/.projects"
 

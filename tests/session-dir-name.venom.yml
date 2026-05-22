@@ -205,8 +205,8 @@ testcases:
           # session dir itself does NOT work: setup_projects runs chmod
           # 700 first, which the dir owner can always do, restoring write
           # perms before the probe.
-          mkdir -p "${STORE}/claude-riotbox"
-          /usr/bin/chmod a-w "${STORE}/claude-riotbox"
+          mkdir -p "${STORE}/riotbox"
+          /usr/bin/chmod a-w "${STORE}/riotbox"
           # shellcheck disable=SC1091
           source "{{.riotbox_dir}}/scripts/mount-projects.sh"
           ( setup_projects "${BASE}/proj" ) >"${STORE}/out.log" 2>"${STORE}/err.log"
