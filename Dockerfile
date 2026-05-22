@@ -208,7 +208,7 @@ RUN pip3 install --no-cache-dir --break-system-packages semgrep pyyaml && \
 # `lola-ai` requires Python >=3.13, but the base ships Python 3.12. Install a
 # parallel 3.13 interpreter from EPEL (enabled in the system-packages RUN
 # block above) and use its pip. Entry points land in /usr/local/bin/lola,
-# which is already on PATH for both root and the claude user. Pinned for
+# which is already on PATH for both root and the llm user. Pinned for
 # supply-chain integrity; refresh by bumping LOLA_VERSION below after picking
 # a new release at https://github.com/LobsterTrap/lola/releases.
 ARG LOLA_VERSION=0.4.4

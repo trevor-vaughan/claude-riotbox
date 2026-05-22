@@ -264,7 +264,7 @@ opencode's session-share feature is enforced disabled inside the container regar
 - **Denial Of Service**: ✓ — A poisoned installer could corrupt the image,
   causing all riotbox sessions to fail
 - **Elevation Of Privilege**: ✓ — Malicious code runs as root (in the tools
-  stage) or as the claude user, and could embed persistent backdoors in the
+  stage) or as the llm user, and could embed persistent backdoors in the
   image
 
 #### Preconditions (Vulnerabilities)
@@ -325,7 +325,7 @@ Dockerfile indicate the maintainer is aware but has not yet implemented
 mitigations.
 
 **Technical:** Arbitrary code execution during image build. The tools stage runs
-as root; the runtime stage curl-to-shell commands run as the claude user (UID
+as root; the runtime stage curl-to-shell commands run as the llm user (UID
 1000) with passwordless sudo. A backdoor embedded at build time persists across
 all container sessions.
 
@@ -811,7 +811,7 @@ _authToken lines before copying.
 - **Information Disclosure**: ✓ — Postinstall hooks can exfiltrate environment
   variables and build context
 - **Denial Of Service**: ✓ — Corrupted packages can break the image build
-- **Elevation Of Privilege**: ✓ — Postinstall code runs as the claude user with
+- **Elevation Of Privilege**: ✓ — Postinstall code runs as the llm user with
   passwordless sudo
 
 #### Preconditions (Vulnerabilities)
@@ -868,7 +868,7 @@ new compromised version is pulled automatically.
 
 **Technical:** npm postinstall hooks run arbitrary shell commands during 'npm
 install'. Without version pins or --ignore-scripts, every transitive
-dependency's postinstall hook executes. The claude user has passwordless sudo,
+dependency's postinstall hook executes. The llm user has passwordless sudo,
 so postinstall code can modify the entire filesystem.
 
 **Business:**
@@ -978,7 +978,7 @@ execute arbitrary code during build. Pin to exact versions.
   build environment data
 - **Denial Of Service**: ✓ — Corrupted packages break the image build
 - **Elevation Of Privilege**: ✓ — pip install runs setup.py which executes
-  arbitrary code; the claude user has passwordless sudo
+  arbitrary code; the llm user has passwordless sudo
 
 #### Preconditions (Vulnerabilities)
 
@@ -1029,7 +1029,7 @@ The @latest tag for gopls means any new version is automatically pulled.
 
 **Technical:** pip install runs setup.py hooks. cargo binstall downloads
 pre-built binaries without hash verification (ast-grep). go install fetches and
-compiles from source via the Go module proxy. All run as the claude user with
+compiles from source via the Go module proxy. All run as the llm user with
 sudo access.
 
 **Business:**
@@ -1995,7 +1995,7 @@ low due to timing constraints.
   → step 3: Remove the ~/.riotbox/CLAUDE.md check from inject-claude-md.sh and
   only use /etc/riotbox/CLAUDE.md (which is baked into the image and not
   writable without sudo). Or create ~/.riotbox/ as root-owned and not writable
-  by the claude user.
+  by the llm user.
 
 **Detective controls:**
 
