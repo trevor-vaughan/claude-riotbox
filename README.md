@@ -1,10 +1,10 @@
-# RiotBox - Letting Claude run Wild
+# RiotBox - Letting your coding agent run wild
 
 ---
 
 > 🤖 LLM/AI WARNING 🤖
 >
-> This project was largely written by [Claude](https://claude.ai/).
+> This project was largely written by an AI coding agent.
 > It has been reviewed and tested, but use in production at your own
 > discretion.
 >
@@ -12,7 +12,7 @@
 
 ---
 
-Container-based isolation for running [Claude Code](https://docs.anthropic.com/en/docs/claude-code) autonomously against your projects. The container mirrors your host dev environment (nvm, uv, Go, Rust, Ruby) so Claude has the same toolchain you do, but runs isolated from your credentials and secrets.
+Container-based isolation for running AI coding agents autonomously against your projects. The container ships [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [opencode](https://opencode.ai/) and mirrors your host dev environment (nvm, uv, Go, Rust, Ruby) so the agent has the same toolchain you do, but runs isolated from your credentials and secrets.
 
 > **Security:** This project has an AI-generated [threat model](THREAT_MODEL.md) covering the container isolation boundary, auth handling, mount surface, and nested container mode. Read it before use.
 
@@ -27,7 +27,7 @@ Finally...it was fun!
 ## How it works
 
 1. **`scripts/build.sh`** introspects your local environment (nvm, uv, Go, Rust/rustup, Ruby/RVM, UID, tool configs) and passes them as build args.
-2. The **Dockerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. Claude Code is installed last (via the [official installer](https://claude.ai/install.sh)) for optimal layer caching.
+2. The **Dockerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. The agent CLIs are installed last (Claude Code via its [official installer](https://claude.ai/install.sh)) for optimal layer caching.
 3. At runtime your project directory is bind-mounted into the container. Auth credentials are synced into an isolated session directory: `~/.claude/.credentials.json` is bind-mounted read-write (so token refreshes write back to the host), and `~/.claude.json` is copied so each container gets a writable snapshot without host contention.
 4. **A single generic wrapper** (`container/agent-wrapper.sh`) shadows the real agent binaries via per-agent symlinks under `~/.riotbox/bin/`. The wrapper detects which agent it's running as from its own filename, looks up that agent's manifest at `agents/<name>/manifest.sh`, and applies the manifest's flag-injection rules. The riotbox autonomy prompt lives at `/etc/claude-code/CLAUDE.md` (managed-policy path read by Claude) and at `~/.config/opencode/AGENTS.md` (placed at runtime by the agent's setup hook). Selection happens via `--agent=claude|opencode` (default `claude`); see `riotbox agents` to list the registered set.
 
@@ -77,7 +77,7 @@ If you prefer to set things up yourself:
 ```sh
 cd /path/to/your/project
 
-# Run Claude autonomously against the current directory
+# Run the agent autonomously against the current directory
 riotbox run "add tests for the auth module"
 
 # Or specify a project directory explicitly
@@ -86,7 +86,7 @@ riotbox run "fix lint errors" /path/to/other/project
 # Interactive shell in the riotbox
 riotbox shell
 
-# After a run, rewrite Claude's commits to use your identity
+# After a run, rewrite the agent's commits to use your identity
 riotbox reown
 ```
 
@@ -140,9 +140,9 @@ Plugins listed in your `opencode.jsonc` `plugin` array (npm packages or git URLs
 |---|---|
 | `riotbox build` | Introspect host environment and build the container image |
 | `riotbox rebuild` | Force a clean rebuild with no layer cache |
-| `riotbox run "<task>" [dir]` | Run Claude autonomously (defaults to current directory) |
+| `riotbox run "<task>" [dir]` | Run the agent autonomously (defaults to current directory) |
 | `riotbox shell [dir]` | Interactive shell (defaults to current directory) |
-| `riotbox resume [dir]` | Continue the last Claude session |
+| `riotbox resume [dir]` | Continue the last agent session |
 | `riotbox reown` | Rewrite all container-authored commits to your git identity |
 | `riotbox reown <ref>` | Rewrite only commits since a specific ref |
 | `riotbox mounts` | Show auto-detected mounts (useful for debugging) |
@@ -162,7 +162,7 @@ Plugins listed in your `opencode.jsonc` `plugin` array (npm packages or git URLs
 
 ## Pre-installed tools
 
-The image comes with a broad set of tools pre-installed so Claude can start working immediately without spending time on setup.
+The image comes with a broad set of tools pre-installed so the agent can start working immediately without spending time on setup.
 
 **Development toolchains** (auto-detected from your host):
 - Node.js (via nvm), Python/uv, Rust/cargo, Go, Ruby/RVM, git-lfs
@@ -333,9 +333,9 @@ All riotbox paths follow the [XDG Base Directory Specification](https://specific
 | `XDG_CONFIG_HOME` | `~/.config/riotbox/` | `mounts.conf`, `config` |
 | `XDG_DATA_HOME` | `~/.local/share/riotbox/` | Session dirs, git backups |
 
-## Claude wrapper
+## Agent wrapper
 
-Inside the container, `claude` is a wrapper script (`container/claude-wrapper.sh`) that shadows the npm-installed binary. It passes `--dangerously-skip-permissions` — this is safe here because the container **is** the riotbox. Claude can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
+Inside the container, each agent binary is shadowed by a single generic wrapper (`container/agent-wrapper.sh`) that injects the agent's autonomy flags (for Claude Code, `--dangerously-skip-permissions`) — this is safe here because the container **is** the riotbox. The agent can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
 
 The system prompt is pre-rendered at build time into `/etc/claude-code/CLAUDE.md` (the managed policy path). This location is loaded automatically by Claude Code, cannot be excluded, and survives context compression. Build-time rendering avoids SELinux AVC denials that occur when `container_t` writes to `etc_t` paths in the overlay filesystem. The `RIOTBOX_PROMPT` env var can override the template at runtime if needed. Using the managed policy path frees `~/.claude/CLAUDE.md` for the user's own instructions — personal CLAUDE.md and rules from the host are synced into the session directory at launch.
 
@@ -413,7 +413,7 @@ trust.
 
 ### Nested mode (podman-in-podman)
 
-If Claude needs to build or run containers (e.g., testing Dockerfiles, running docker-compose stacks), use the nested variants:
+If the agent needs to build or run containers (e.g., testing Dockerfiles, running docker-compose stacks), use the nested variants:
 
 ```sh
 riotbox nested-run "build and test the Dockerfile"
@@ -422,7 +422,7 @@ riotbox nested-shell
 
 This passes `--device /dev/fuse` and `--security-opt label=disable` to the outer container, enabling rootless podman inside the riotbox. The image includes podman, fuse-overlayfs, and slirp4netns pre-installed with proper subuid/subgid mappings.
 
-> **WARNING:** Nested mode disables SELinux confinement on the outer container. This is a meaningful reduction in host isolation — the container processes are no longer confined by SELinux policy. Only use this when Claude actually needs container capabilities.
+> **WARNING:** Nested mode disables SELinux confinement on the outer container. This is a meaningful reduction in host isolation — the container processes are no longer confined by SELinux policy. Only use this when the agent actually needs container capabilities.
 
 You can also enable nested mode on any command via the environment variable:
 
@@ -496,28 +496,28 @@ delta is visible.
 
 ## What could go wrong
 
-Claude runs autonomously with full write access to your project directory and passwordless sudo inside the container. This is powerful but comes with real risks:
+The agent runs autonomously with full write access to your project directory and passwordless sudo inside the container. This is powerful but comes with real risks:
 
-- **Claude can delete your entire project and start over.** It may decide your codebase is too messy to fix and `rm -rf` everything. This has happened.
-- **Claude can rewrite git history.** Force-pushes, rebases, and `git reset --hard` are all available.
-- **Claude can install arbitrary packages** via dnf, npm, pip, cargo, etc. These run inside the container and can't affect the host, but they can affect the project.
-- **Claude can make sweeping refactors** that look correct but subtly break things. Always review changes before merging.
+- **The agent can delete your entire project and start over.** It may decide your codebase is too messy to fix and `rm -rf` everything. This has happened.
+- **The agent can rewrite git history.** Force-pushes, rebases, and `git reset --hard` are all available.
+- **The agent can install arbitrary packages** via dnf, npm, pip, cargo, etc. These run inside the container and can't affect the host, but they can affect the project.
+- **The agent can make sweeping refactors** that look correct but subtly break things. Always review changes before merging.
 - **Multiple riotbox runs on the same project can conflict** if run concurrently without separate branches.
 
 ### Built-in protections
 
 The riotbox includes several layers of protection, but none are foolproof:
 
-- **Local bare backup**: Before every `run`, all refs and tags are pushed to a bare clone at `~/.local/share/riotbox/backups/<project>.git`. This backup lives outside the container's mount tree — Claude cannot access or modify it. Even if Claude deletes every file and rewrites all history, the backup is intact.
+- **Local bare backup**: Before every `run`, all refs and tags are pushed to a bare clone at `~/.local/share/riotbox/backups/<project>.git`. This backup lives outside the container's mount tree — the agent cannot access or modify it. Even if the agent deletes every file and rewrites all history, the backup is intact.
 - **Checkpoint tags**: A git tag (`riotbox-checkpoint/<timestamp>`) is created on the current HEAD before each run. Tags survive history rewrites inside the container.
-- **Session branches**: On `shell` sessions, the container offers to create a `riotbox/<id>` branch. Claude works there; on exit the branch is fast-forward merged back so the full commit history lands seamlessly on your branch. See [Session branches](#session-branches).
+- **Session branches**: On `shell` sessions, the container offers to create a `riotbox/<id>` branch. The agent works there; on exit the branch is fast-forward merged back so the full commit history lands seamlessly on your branch. See [Session branches](#session-branches).
 - **Non-git-repo warning**: If a project directory isn't a git repo, the riotbox warns you that there's no checkpoint protection.
 - **Git guardrails**: Inside the container, `receive.denyNonFastForwards` and `receive.denyDeletes` are enabled to prevent the most destructive git operations.
-- **Container isolation**: Claude can't access your SSH keys, cloud credentials, or anything outside the mounted directories.
+- **Container isolation**: The agent can't access your SSH keys, cloud credentials, or anything outside the mounted directories.
 
 ### Recovery
 
-If Claude makes a mess, you have several recovery options:
+If the agent makes a mess, you have several recovery options:
 
 ```sh
 # Fetch everything from the backup into your project
@@ -538,7 +538,7 @@ When you start an interactive session (`riotbox shell`) against a single-repo wo
   Create session branch 'riotbox/20260309-143022-a1b2c3d4'? [Y/n]
 ```
 
-If you say yes, Claude works on `riotbox/<id>` instead of your current branch. On clean exit, the session branch is fast-forward merged back so all commits land directly on your branch with their original messages and timestamps:
+If you say yes, the agent works on `riotbox/<id>` instead of your current branch. On clean exit, the session branch is fast-forward merged back so all commits land directly on your branch with their original messages and timestamps:
 
 ```
   [session-branch] Session complete. Merging riotbox/... → main...
@@ -573,9 +573,9 @@ Session branching is automatically disabled for `riotbox run` (non-interactive) 
 ### Recommendations
 
 - **Always use git repos.** The checkpoint and backup mechanisms are your primary safety net.
-- **Push to a remote before running Claude.** Belt and suspenders.
-- **Review changes before merging.** Use `git diff riotbox-checkpoint/<tag>..HEAD` to see everything Claude did.
-- **Use branches.** Run Claude on a feature branch, not main. Session branching automates this.
+- **Push to a remote before running the agent.** Belt and suspenders.
+- **Review changes before merging.** Use `git diff riotbox-checkpoint/<tag>..HEAD` to see everything the agent did.
+- **Use branches.** Run the agent on a feature branch, not main. Session branching automates this.
 
 ## Security model
 
@@ -583,7 +583,7 @@ Session branching is automatically disabled for `riotbox run` (non-interactive) 
 
 | Resource | Access | Notes |
 |---|---|---|
-| Project directory | read-write bind mount (`:z`) | Your code — Claude needs full access |
+| Project directory | read-write bind mount (`:z`) | Your code — the agent needs full access |
 | Session data (`~/.local/share/riotbox/`) | bind mount (`:z`) | Isolated per project set |
 | `~/.claude/.credentials.json` | nested bind mount (RW) | OAuth token refreshes must write back to host |
 | `~/.claude.json` | file copy into session dir | Each container gets a writable snapshot |
@@ -592,7 +592,7 @@ Session branching is automatically disabled for `riotbox run` (non-interactive) 
 | User scripts (`~/bin`) | read-only bind mount | Available but not writable |
 | User-defined mounts | read-only bind mount | From `~/.config/riotbox/mounts.conf` |
 | Package caches | named volumes | Shared across containers, not with host |
-| Network | enabled | Claude needs npm/PyPI/crates.io etc. |
+| Network | enabled | the agent needs npm/PyPI/crates.io etc. |
 
 ### What's NOT exposed
 
@@ -600,7 +600,7 @@ Session branching is automatically disabled for `riotbox run` (non-interactive) 
 
 ### Other design choices
 
-- **Sudo**: the container user has passwordless `sudo`. Claude often needs to `dnf install` build dependencies, and the container is disposable. This does **not** grant any host privileges.
+- **Sudo**: the container user has passwordless `sudo`. The agent often needs to `dnf install` build dependencies, and the container is disposable. This does **not** grant any host privileges.
 - **UID/GID mapping**: the container user's UID and primary GID match your host UID and GID. The image is built per-host-user via `--build-arg HOST_UID=$(id -u) --build-arg HOST_GID=$(id -g)` so the baked-in llm entry already carries the correct UID/GID for the building user — this is the load-bearing alignment that keeps podman's keep-id /etc/passwd rewrite from producing an inconsistent state. At runtime, `--userns=keep-id:uid=$(id -u),gid=$(id -g)` and `--user $(id -u):$(id -g)` are passed explicitly as belt-and-suspenders for cases where an image is used by a different host user than the one that built it. `fuse-overlayfs` is required for acceptable performance on large images.
 - **SELinux**: project and session bind mounts use `:z`. Package caches use named volumes to avoid relabeling overhead. `.claude.json` is copied rather than mounted to avoid `:z` relabeling issues on 600-permission files; `.credentials.json` is bind-mounted RW inside the session directory (a nested mount that avoids the relabeling problem).
 - <a id="build-time-config-collection"></a>**Tool configs** (`.npmrc`, `.editorconfig`, etc.) are copied at build time — not mounted — so edits inside the container don't affect the host. Auth tokens are stripped from `.npmrc`, `pip.conf`, and `cargo/config.toml` before baking into the image. Use `mounts.conf` to supply live credentials at runtime.
