@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Shared helpers for inject-claude-md Venom tests.
+# Shared helpers for the system-prompt injection Venom tests.
 # Source this file at the top of each test script.
 set -euo pipefail
 
-# Create a test environment for inject-claude-md tests.
+# Create a test environment for the system-prompt injection tests.
 # Args:
 #   $1 — prompt content (written to prompt.md)
 # Sets: TEST_DIR, PROMPT_FILE, MANAGED_POLICY_MD

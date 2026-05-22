@@ -1,4 +1,4 @@
-name: inject-claude-md.sh tests
+name: inject-system-prompt tests
 vars:
   root: "."
   riotbox_dir: "{{.root}}"

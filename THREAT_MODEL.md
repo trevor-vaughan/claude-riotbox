@@ -2028,7 +2028,7 @@ low due to timing constraints.
   `RIOTBOX_PROMPT` env var (host-set before container start, not writable by
   the LLM). The render target `/etc/claude-code/CLAUDE.md` is owned by the llm
   user so the runtime override can be applied, but the source-of-truth is
-  root-owned. The regression test `tests/inject-claude-md.venom.yml`
+  root-owned. The regression test `tests/inject-system-prompt.venom.yml`
   ("Ignores user-writable ~/.riotbox/CLAUDE.md") guards the fix.
 - **Residual risk score:** 1 (L1 × I1) — no LLM-writable path in the
   resolution chain; the RIOTBOX_PROMPT override requires a host-level env var
@@ -2048,7 +2048,7 @@ logic now lives in agents/claude/setup.sh.
 1. Inside the container: mkdir -p ~/.riotbox && echo 'malicious prompt' >
    ~/.riotbox/CLAUDE.md
 1. Trigger system-prompt resolution (historically by re-sourcing the inject
-   script; current behavior is exercised by tests/inject-claude-md.venom.yml)
+   script; current behavior is exercised by tests/inject-system-prompt.venom.yml)
 1. Check the managed policy /etc/claude-code/CLAUDE.md — verify it does NOT
    contain the injected prompt (the user-writable path is ignored)
 
