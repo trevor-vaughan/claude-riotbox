@@ -20,7 +20,7 @@ testcases:
           git add -A
           git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
               commit -m "checkpoint: pre-riotbox-test" >/dev/null
-          git log --format='%s' | grep -q "^checkpoint: pre-claude-"
+          git log --format='%s' | grep -q "^checkpoint: pre-riotbox-"
           git show HEAD -- dirty.txt | grep -q "dirty work"
           echo "checkpoint_created=true"
         assertions:
@@ -78,7 +78,7 @@ testcases:
           git add -A
           git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
               commit -m "checkpoint: pre-riotbox-test" >/dev/null
-          author="$(git log --grep='checkpoint: pre-claude' -1 --format='%ae')"
+          author="$(git log --grep='checkpoint: pre-riotbox' -1 --format='%ae')"
           echo "author=${author}"
           [ "${author}" = "${HUMAN_EMAIL}" ]
         assertions:
@@ -179,7 +179,7 @@ testcases:
           RIOTBOX_DATA_DIR="${TEST_DIR}/data" \
               "{{.riotbox_dir}}/.taskfiles/scripts/checkpoint.sh"
           # The checkpoint commit must exist and be unsigned (%G? = N).
-          sig="$(git log --grep='checkpoint: pre-claude-' -1 --format='%G?')"
+          sig="$(git log --grep='checkpoint: pre-riotbox-' -1 --format='%G?')"
           echo "commit_sig=${sig}"
           [ "${sig}" = "N" ]
           # The tag must be lightweight: it resolves directly to a commit

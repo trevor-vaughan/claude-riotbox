@@ -32,7 +32,7 @@ for dir in "${PROJECT_DIRS[@]}"; do
     if ! git -C "${dir}" diff --quiet || ! git -C "${dir}" diff --cached --quiet || \
        [ -n "$(git -C "${dir}" ls-files --others --exclude-standard)" ]; then
         git -C "${dir}" add -A
-        git -C "${dir}" -c commit.gpgsign=false commit -m "checkpoint: pre-claude-${timestamp}"
+        git -C "${dir}" -c commit.gpgsign=false commit -m "checkpoint: pre-riotbox-${timestamp}"
     fi
 
     # Tag the current HEAD
