@@ -58,8 +58,9 @@ done
 mkdir -p ~/.claude/debug ~/.claude/plugins/cache
 
 # Managed policy (/etc/claude-code/CLAUDE.md) is pre-rendered at build time.
-# inject-claude-md.sh is a no-op unless RIOTBOX_PROMPT overrides the template
-# or the build-time render is missing (backward compat with older images).
+# The agent's setup hook (e.g. agents/claude/setup.sh) is a no-op unless
+# RIOTBOX_PROMPT overrides the template or the build-time render is missing
+# (backward compat with older images).
 RIOTBOX_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${RIOTBOX_SCRIPT_DIR}/session-branch.sh"
 source "${RIOTBOX_SCRIPT_DIR}/overlay-setup.sh"

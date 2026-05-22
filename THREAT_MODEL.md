@@ -1874,7 +1874,7 @@ checks.
 
 ---
 
-### 🟢 RIOTBOX-20260312-018: System prompt override via LLM-writable path in inject-claude-md.sh priority chain
+### 🟢 RIOTBOX-20260312-018: System prompt override via LLM-writable path in the system-prompt resolution chain
 
 **Severity:** Low &nbsp;|&nbsp; **Risk Score:** 6 (L2 × I3) &nbsp;|&nbsp;
 **Status:** Remediated
@@ -1882,7 +1882,8 @@ checks.
 #### System Context
 
 - **Service:** Container Runtime
-- **Affected components:** container/inject-claude-md.sh
+- **Affected components:** agents/claude/setup.sh (historically
+  container/inject-claude-md.sh, since removed)
 - **Attack surface:** Application
 
 #### Evidence
@@ -1891,10 +1892,13 @@ checks.
 - **Rule / Check ID:** N/A
 - **CVE ID:** N/A
 - **Locations:**
-  - `/workspace/container/inject-claude-md.sh:18` — `if [ -f
-    "${HOME}/.riotbox/CLAUDE.md" ]; then`
-  - `/workspace/container/inject-claude-md.sh:19` —
-    `RIOTBOX_PROMPT="${HOME}/.riotbox/CLAUDE.md"`
+  - Current resolution logic: `/workspace/agents/claude/setup.sh:28-41` —
+    renders the managed policy from the host-set `RIOTBOX_PROMPT` env var,
+    else from the root-owned `/etc/riotbox/AGENTS.md`; no LLM-writable path
+    is consulted.
+  - Historical (remediated): the removed `container/inject-claude-md.sh`
+    checked `${HOME}/.riotbox/CLAUDE.md` before the baked default and set
+    `RIOTBOX_PROMPT="${HOME}/.riotbox/CLAUDE.md"`.
 
 #### Asset & Security Criteria
 
@@ -1933,8 +1937,9 @@ checks.
 1. LLM is prompt-injected via a project file
 2. LLM writes a malicious CLAUDE.md to ~/.riotbox/CLAUDE.md removing security
    instructions
-3. On next entrypoint invocation (or if the container is reused),
-   inject-claude-md.sh resolves the user-writable path first
+3. On next entrypoint invocation (or if the container is reused), the
+   resolution chain (then in container/inject-claude-md.sh) resolved the
+   user-writable path first
 4. The system prompt now contains attacker-controlled instructions
 
 **Attack chaining:**
@@ -1949,7 +1954,7 @@ sequenceDiagram
   autonumber
   actor LLM as Prompt-Injected LLM
   participant FS as Container Filesystem
-  participant Inject as inject-claude-md.sh
+  participant Inject as system-prompt resolver
   participant Claude as Claude Code
 
   LLM->>FS: Write malicious ~/.riotbox/CLAUDE.md
@@ -1972,11 +1977,21 @@ the container is reused or if the inject script is re-sourced during a session.
 Also, the LLM already has full shell access, so overriding the system prompt
 provides limited additional capability beyond what it already has.
 
-**Technical:** inject-claude-md.sh checks ~/.riotbox/CLAUDE.md before
-/etc/riotbox/AGENTS.md. The LLM has write access to ~/.riotbox/ (it is under
-$HOME). However, the inject script runs during entrypoint.sh before the LLM
-starts, so the timing window is narrow. The RIOTBOX_PROMPT env var can also
-override, but it must be set before the entrypoint runs.
+**Technical (historical):** the removed container/inject-claude-md.sh checked
+~/.riotbox/CLAUDE.md before the baked default. The LLM has write access to
+~/.riotbox/ (it is under $HOME), but the script ran during entrypoint.sh
+before the LLM started, so the timing window was narrow.
+
+**Technical (current):** system-prompt resolution lives in
+agents/claude/setup.sh (invoked via the claude agent's container-setup hook).
+The default managed policy /etc/claude-code/CLAUDE.md is rendered at build time
+from the root-owned /etc/riotbox/AGENTS.md; at runtime claude_setup only
+re-renders when the host-set RIOTBOX_PROMPT env var is present (or as a
+fallback if the build-time render is missing). No LLM-writable path is in the
+resolution chain. The render target /etc/claude-code/CLAUDE.md is owned by the
+llm user so claude_setup can apply a host-set RIOTBOX_PROMPT at runtime, but
+the source-of-truth /etc/riotbox/AGENTS.md is root-owned and cannot be
+tampered with by the LLM.
 
 **Business:**
 - Financial: N/A -- limited additional impact beyond existing LLM capabilities
@@ -1991,11 +2006,10 @@ low due to timing constraints.
 #### Mitigations
 
 **Preventive controls:**
-- **Make system prompt path read-only or use only the /etc path** *(effort: S)*
-  → step 3: Remove the ~/.riotbox/CLAUDE.md check from inject-claude-md.sh and
-  only use /etc/riotbox/AGENTS.md (which is baked into the image and not
-  writable without sudo). Or create ~/.riotbox/ as root-owned and not writable
-  by the llm user.
+- **Remove the LLM-writable path from the resolution chain** *(effort: S, done)*
+  → The user-writable ~/.riotbox/CLAUDE.md check was removed; resolution now
+  uses only the root-owned /etc/riotbox/AGENTS.md (baked into the image) or a
+  host-set RIOTBOX_PROMPT env var, implemented in agents/claude/setup.sh.
 
 **Detective controls:**
 
@@ -2006,34 +2020,42 @@ low due to timing constraints.
 #### Risk Treatment
 
 - **Decision:** Mitigate
-- **Rationale:** Removed `~/.riotbox/CLAUDE.md` from the resolution
-  chain in `inject-claude-md.sh`. Only `/etc/riotbox/AGENTS.md`
-  (root-owned, baked into the image) is used as the default. Explicit
-  `RIOTBOX_PROMPT` env var override is still available for legitimate
-  use (set before container start, not writable by the LLM). Updated
-  Dockerfile comment and venom test to match new behavior.
-- **Residual risk score:** 1 (L1 × I1) — user-writable path eliminated;
-  RIOTBOX_PROMPT override requires host-level env var set before entrypoint
+- **Rationale:** The user-writable `~/.riotbox/CLAUDE.md` entry was removed
+  from the resolution chain. The injection logic was subsequently refactored
+  out of `container/inject-claude-md.sh` into the per-agent setup hook
+  `agents/claude/setup.sh`. Resolution now uses only the root-owned
+  `/etc/riotbox/AGENTS.md` (baked into the image) or an explicit
+  `RIOTBOX_PROMPT` env var (host-set before container start, not writable by
+  the LLM). The render target `/etc/claude-code/CLAUDE.md` is owned by the llm
+  user so the runtime override can be applied, but the source-of-truth is
+  root-owned. The regression test `tests/inject-claude-md.venom.yml`
+  ("Ignores user-writable ~/.riotbox/CLAUDE.md") guards the fix.
+- **Residual risk score:** 1 (L1 × I1) — no LLM-writable path in the
+  resolution chain; the RIOTBOX_PROMPT override requires a host-level env var
+  set before entrypoint, and the root-owned source cannot be tampered with
 - **Review date:** 2026-03-12
 
 #### Ticket
 
 **Remove user-writable path from system prompt resolution chain**
 
-inject-claude-md.sh checks ~/.riotbox/CLAUDE.md before /etc/riotbox/AGENTS.md.
-Since the LLM has write access to ~/,  it could theoretically create an
-override. Remove the user-writable path or make it root-owned.
+The historical container/inject-claude-md.sh checked ~/.riotbox/CLAUDE.md
+before /etc/riotbox/AGENTS.md. Since the LLM has write access to ~/, it could
+theoretically create an override. The user-writable path was removed and the
+logic now lives in agents/claude/setup.sh.
 
-**Steps to reproduce:**
+**Steps to reproduce (historical):**
 1. Inside the container: mkdir -p ~/.riotbox && echo 'malicious prompt' >
    ~/.riotbox/CLAUDE.md
-1. Re-run the inject script: source ~/.riotbox/inject-claude-md.sh
-1. Check ~/.claude/CLAUDE.md -- verify it contains the malicious prompt
+1. Trigger system-prompt resolution (historically by re-sourcing the inject
+   script; current behavior is exercised by tests/inject-claude-md.venom.yml)
+1. Check the managed policy /etc/claude-code/CLAUDE.md — verify it does NOT
+   contain the injected prompt (the user-writable path is ignored)
 
 **Acceptance criteria:**
-- [ ] System prompt is resolved only from /etc/riotbox/AGENTS.md or an explicit
+- [x] System prompt is resolved only from /etc/riotbox/AGENTS.md or an explicit
   RIOTBOX_PROMPT override
-- [ ] ~/.riotbox/CLAUDE.md is not in the resolution chain
+- [x] ~/.riotbox/CLAUDE.md is not in the resolution chain
 
 **Labels:** 
 **Assignee team:** 
