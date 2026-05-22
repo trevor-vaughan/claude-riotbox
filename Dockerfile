@@ -246,16 +246,16 @@ RUN (groupadd -g ${HOST_GID} llm && \
     mkdir -p /etc/riotbox /etc/claude-code && \
     chown llm:llm /etc/claude-code
 
-COPY container/CLAUDE.md /etc/riotbox/CLAUDE.md
+COPY container/AGENTS.md /etc/riotbox/AGENTS.md
 RUN . /etc/os-release && \
     awk -v os="${PRETTY_NAME:-Linux}" \
         '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
-        /etc/riotbox/CLAUDE.md > /etc/claude-code/CLAUDE.md && \
+        /etc/riotbox/AGENTS.md > /etc/claude-code/CLAUDE.md && \
     chown llm:llm /etc/claude-code/CLAUDE.md && \
     mkdir -p /home/llm/.riotbox && \
     awk -v os="${PRETTY_NAME:-Linux}" \
         '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
-        /etc/riotbox/CLAUDE.md > /home/llm/.riotbox/AGENTS.md.template && \
+        /etc/riotbox/AGENTS.md > /home/llm/.riotbox/AGENTS.md.template && \
     chown -R llm:llm /home/llm/.riotbox
 
 # ── Strip non-English locale data ────────────────────────────────────────────

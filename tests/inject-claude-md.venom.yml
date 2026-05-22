@@ -160,7 +160,7 @@ testcases:
           unset RIOTBOX_PROMPT
           export RIOTBOX_MANAGED_POLICY_DIR="${TEST_DIR}/managed-policy"
           # Temporarily hide the system default so no prompt is resolved
-          saved_etc="/etc/riotbox/CLAUDE.md"
+          saved_etc="/etc/riotbox/AGENTS.md"
           moved_etc=false
           if [ -f "${saved_etc}" ]; then
             sudo mv "${saved_etc}" "${saved_etc}.bak" 2>/dev/null && moved_etc=true
@@ -208,7 +208,7 @@ testcases:
           mkdir -p "${TEST_DIR}/managed-policy" "${TEST_DIR}/empty-home"
           unset RIOTBOX_PROMPT
           export RIOTBOX_MANAGED_POLICY_DIR="${TEST_DIR}/managed-policy"
-          saved_etc="/etc/riotbox/CLAUDE.md"
+          saved_etc="/etc/riotbox/AGENTS.md"
           moved_etc=false
           if [ -f "${saved_etc}" ]; then
             sudo mv "${saved_etc}" "${saved_etc}.bak" 2>/dev/null && moved_etc=true

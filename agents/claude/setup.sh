@@ -32,12 +32,12 @@ claude_setup() {
         _claude_setup_read_os_pretty
         awk -v os="${os_pretty}" '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
             "${RIOTBOX_PROMPT}" > "${managed_policy_dir}/CLAUDE.md"
-    elif [ ! -f "${managed_policy_dir}/CLAUDE.md" ] && [ -f /etc/riotbox/CLAUDE.md ]; then
+    elif [ ! -f "${managed_policy_dir}/CLAUDE.md" ] && [ -f /etc/riotbox/AGENTS.md ]; then
         # Fallback: build-time render missing (older image without the
         # Dockerfile RUN step). Render from the default template.
         _claude_setup_read_os_pretty
         awk -v os="${os_pretty}" '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
-            /etc/riotbox/CLAUDE.md > "${managed_policy_dir}/CLAUDE.md"
+            /etc/riotbox/AGENTS.md > "${managed_policy_dir}/CLAUDE.md"
     fi
 
     unset -f _claude_setup_read_os_pretty

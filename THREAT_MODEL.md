@@ -1973,7 +1973,7 @@ Also, the LLM already has full shell access, so overriding the system prompt
 provides limited additional capability beyond what it already has.
 
 **Technical:** inject-claude-md.sh checks ~/.riotbox/CLAUDE.md before
-/etc/riotbox/CLAUDE.md. The LLM has write access to ~/.riotbox/ (it is under
+/etc/riotbox/AGENTS.md. The LLM has write access to ~/.riotbox/ (it is under
 $HOME). However, the inject script runs during entrypoint.sh before the LLM
 starts, so the timing window is narrow. The RIOTBOX_PROMPT env var can also
 override, but it must be set before the entrypoint runs.
@@ -1993,7 +1993,7 @@ low due to timing constraints.
 **Preventive controls:**
 - **Make system prompt path read-only or use only the /etc path** *(effort: S)*
   → step 3: Remove the ~/.riotbox/CLAUDE.md check from inject-claude-md.sh and
-  only use /etc/riotbox/CLAUDE.md (which is baked into the image and not
+  only use /etc/riotbox/AGENTS.md (which is baked into the image and not
   writable without sudo). Or create ~/.riotbox/ as root-owned and not writable
   by the llm user.
 
@@ -2007,7 +2007,7 @@ low due to timing constraints.
 
 - **Decision:** Mitigate
 - **Rationale:** Removed `~/.riotbox/CLAUDE.md` from the resolution
-  chain in `inject-claude-md.sh`. Only `/etc/riotbox/CLAUDE.md`
+  chain in `inject-claude-md.sh`. Only `/etc/riotbox/AGENTS.md`
   (root-owned, baked into the image) is used as the default. Explicit
   `RIOTBOX_PROMPT` env var override is still available for legitimate
   use (set before container start, not writable by the LLM). Updated
@@ -2020,7 +2020,7 @@ low due to timing constraints.
 
 **Remove user-writable path from system prompt resolution chain**
 
-inject-claude-md.sh checks ~/.riotbox/CLAUDE.md before /etc/riotbox/CLAUDE.md.
+inject-claude-md.sh checks ~/.riotbox/CLAUDE.md before /etc/riotbox/AGENTS.md.
 Since the LLM has write access to ~/,  it could theoretically create an
 override. Remove the user-writable path or make it root-owned.
 
@@ -2031,7 +2031,7 @@ override. Remove the user-writable path or make it root-owned.
 1. Check ~/.claude/CLAUDE.md -- verify it contains the malicious prompt
 
 **Acceptance criteria:**
-- [ ] System prompt is resolved only from /etc/riotbox/CLAUDE.md or an explicit
+- [ ] System prompt is resolved only from /etc/riotbox/AGENTS.md or an explicit
   RIOTBOX_PROMPT override
 - [ ] ~/.riotbox/CLAUDE.md is not in the resolution chain
 
@@ -2060,7 +2060,7 @@ excluded from open findings._
 | CT-012 | API key exposed to all container processes via environment variable                  | .taskfiles/scripts/launch.sh                               | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Container is disposable (--rm) and single-purpose; API key only accessible within the container boundary; OAuth token alternative documented and supported; Container cannot access host network credentials                                                                                                                                                                                                            | code_review |
 | CT-013 | Reduced isolation in nested container mode                                           | .taskfiles/scripts/launch.sh, container/nested-podman-setup.sh | 🟠 High     | 🟡 Medium | ⚠️ Risk Accepted     | Opt-in only via explicit RIOTBOX_NESTED=1 or nested-run/nested-shell commands; README documents the privileged trust model; Rootless podman still enforces user namespace isolation; No --privileged flag, but the flag set is broad. Outer launch passes: `--userns=keep-id:uid=$(id -u),gid=$(id -g),size=65536` and `--user $(id -u):$(id -g)` (the userns flag widens keep-id's 1-uid mapping so the inner has subordinate uids to subdivide; bind-mounted host paths still keep their host ownership. Both knobs are required for accounts where host uid != gid: the userns flag sets the kernel id_map, and the `--user` flag bypasses podman's `/etc/passwd` rewrite that otherwise stamps `llm:x:host_uid:host_uid` and starts the process with egid=host_uid, which silently breaks nested mode), `--device /dev/fuse` (storage), `--device /dev/net/tun` (pasta networking — host /dev/net/tun perms still gate access), `--security-opt label=disable` (SELinux off — container_t-to-container_t transitions are denied by default policy), `--security-opt unmask=ALL` (removes every default OCI mask AND readonly path on /proc and /sys; verified that narrower targets like `unmask=/proc/sys` or `unmask=…ping_group_range` do NOT work — inner crun fails on EROFS or `mount proc to proc`), `--cap-add=SYS_ADMIN` (inner crun's sethostname/mount calls; bounded by the outer userns). Inside the container nested-podman-setup.sh: (1) writes v3 file caps on newuidmap/newgidmap via `setcap -n $(id -u)` — v2 caps silently no-op when the process is not root in the host userns, which is the keep-id case; (2) writes /etc/sub{u,g}id as ranges that cover the outer's mapped uids minus uid 0 (kernel restriction) and minus the user's own uid (newuidmap restriction); (3) overrides ~/.config/containers/storage.conf to vfs (nested overlay/fuse-overlayfs makes inner crun fail on `mkdir /run/secrets`)                                                                                                                                                            | code_review |
 | CT-014 | LLM can bypass git guardrails via local operations not covered by receive.deny*      | Dockerfile (git config), container/session-branch.sh       | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Local bare backup outside container mount tree (Claude cannot access it); Checkpoint tags survive history rewrites; README documents: "Claude can rewrite git history. Force-pushes, rebases, and git reset --hard are all available"; README documents: "the riotbox includes several layers of protection, but none are foolproof"                                                                                    | code_review |
-| CT-015 | Runtime package installation by LLM including potentially malicious packages         | container/CLAUDE.md (system prompt)                        | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Container isolation — packages cannot affect host; Container is disposable (--rm) — packages do not persist outside named cache volumes; System prompt: "You have FULL permission to install packages...Do not ask"; README: "Claude can install arbitrary packages...These run inside the container and can't affect the host"; Named cache volumes can be pruned (podman volume rm)                                   | code_review |
+| CT-015 | Runtime package installation by LLM including potentially malicious packages         | container/AGENTS.md (system prompt)                        | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Container isolation — packages cannot affect host; Container is disposable (--rm) — packages do not persist outside named cache volumes; System prompt: "You have FULL permission to install packages...Do not ask"; README: "Claude can install arbitrary packages...These run inside the container and can't affect the host"; Named cache volumes can be pruned (podman volume rm)                                   | code_review |
 | CT-016 | Taskfile dotenv injection via .env file overriding container launch parameters       | Taskfile.yml                                               | 🟠 High     | 🟢 Low    | 🚫 Not Applicable     | riotbox CLI uses --taskfile to pin Taskfile resolution to the installation directory; Taskfile dotenv resolves relative to Taskfile directory, not CWD — project .env files are never loaded; .dockerignore excludes configs/.env* patterns; dotenv is a standard Taskfile pattern for local development overrides                                                                                               | code_review |
 | CT-017 | Backup force-push overwrites previous known-good checkpoint state                    | .taskfiles/scripts/run.sh                                  | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Checkpoint tags (claude-checkpoint/<timestamp>) created before each run and survive force-push; Tags pushed separately via git push --tags (non-destructive, does not delete existing tags); Backup bare repo is outside container mount tree (Claude cannot access it); README documents recovery via: git fetch ~/.local/share/riotbox/backups/<project>.git --all --tags                                                  | code_review |
 | CT-018 | Container has effective root on host via bind-mounted podman socket                  | .taskfiles/scripts/launch.sh, .taskfiles/scripts/socket-vars.sh, .taskfiles/session.yml | 🔴 Critical | 🟠 High | ⚠️ Risk Accepted     | Opt-in only via explicit RIOTBOX_SOCKET=1 or socket-run/socket-shell commands; README "Container runtime modes" documents the host-root trust delegation explicitly and offers nested mode as a more-isolated alternative (cf. CT-013); Mutually exclusive with RIOTBOX_NESTED=1 (launch.sh refuses to start if both set — emits an actionable error); Socket detection requires the user to have explicitly enabled the user-level podman.socket on the host (`systemctl --user enable --now podman.socket`); no auto-start of the socket — failure to find it is loud, not silent; The bind-mount itself adds `-v <host_sock>:/run/podman/podman.sock` and `-e CONTAINER_HOST=unix:///run/podman/podman.sock` to the otherwise-default container; all other security defaults (keep-id userns, SELinux on, masked /proc/sys, no SYS_ADMIN cap) remain intact; The trust delegation is in the API surface, not the runtime profile: a client with socket access can request `podman run --privileged --pid=host -v /:/host` and exec into host root; This is the same delegation Docker Desktop ships by default and the same pattern CI runners use with `-v /var/run/docker.sock`; well-trodden, but a well-known attack vector; Mitigation in this codebase: documentation + explicit opt-in + naming the trust cost in the WARNING printed by socket-run/socket-shell recipes; `socket_check_alive` probe (5s timeout) means a wedged socket on the host fails the launch loudly rather than hanging mid-session; Residual is rated against likelihood-of-accidental-invocation (the opt-in gate + WARNING surface the trust cost at each entry point); impact-given-invocation remains Critical, which is why this rates strictly worse than CT-013's nested mode | code_review |
