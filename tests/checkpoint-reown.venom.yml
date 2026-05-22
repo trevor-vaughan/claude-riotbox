@@ -157,6 +157,42 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "tag_count=2"
 
+  - name: Checkpoint commit and tag are unsigned even when signing is enabled
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          # Force GPG signing on with a signing program that always fails.
+          # The container has no signing key, so without per-command signing
+          # overrides checkpoint.sh would abort here instead of committing.
+          git config commit.gpgsign true
+          git config tag.gpgsign true
+          git config user.signingkey BOGUSKEYID
+          git config gpg.program /bin/false
+          # Make the repo dirty so the checkpoint commit path runs.
+          echo "uncommitted" >> dirty.txt
+          ROOT_DIR="{{.riotbox_dir}}" \
+          RIOTBOX_PROJECTS="${REPO_DIR}" \
+          RIOTBOX_DATA_DIR="${TEST_DIR}/data" \
+              "{{.riotbox_dir}}/.taskfiles/scripts/checkpoint.sh"
+          # The checkpoint commit must exist and be unsigned (%G? = N).
+          sig="$(git log --grep='checkpoint: pre-claude-' -1 --format='%G?')"
+          echo "commit_sig=${sig}"
+          [ "${sig}" = "N" ]
+          # The tag must be lightweight: it resolves directly to a commit
+          # object, not a signed/annotated tag object.
+          tag="$(git tag -l 'claude-checkpoint/*' | head -1)"
+          echo "tag=${tag} type=$(git cat-file -t "${tag}")"
+          [ "$(git cat-file -t "${tag}")" = "commit" ]
+          echo "unsigned_checkpoint_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "commit_sig=N"
+          - result.systemout ShouldContainSubstring "unsigned_checkpoint_ok=true"
+
   # -- Full workflow: checkpoint -> LLM commits -> reown --
 
   - name: Reown rewrites llm commits after checkpoint with dirty state

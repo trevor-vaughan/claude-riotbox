@@ -24,15 +24,20 @@ for dir in "${PROJECT_DIRS[@]}"; do
 
     # Commit any uncommitted work so it's safely captured before Claude runs.
     # Includes untracked files — the goal is a complete snapshot.
+    #
+    # commit.gpgsign=false / tag.gpgsign=false: checkpoints are local-only
+    # safety snapshots that never reach a shared remote, and the container has
+    # no signing key. Inheriting a host commit.gpgsign=true would abort the
+    # commit. Signing happens later, on the host, via reown-commits.sh.
     if ! git -C "${dir}" diff --quiet || ! git -C "${dir}" diff --cached --quiet || \
        [ -n "$(git -C "${dir}" ls-files --others --exclude-standard)" ]; then
         git -C "${dir}" add -A
-        git -C "${dir}" commit -m "checkpoint: pre-claude-${timestamp}"
+        git -C "${dir}" -c commit.gpgsign=false commit -m "checkpoint: pre-claude-${timestamp}"
     fi
 
     # Tag the current HEAD
     tag_name="claude-checkpoint/${timestamp}"
-    git -C "${dir}" tag "${tag_name}"
+    git -C "${dir}" -c tag.gpgsign=false tag "${tag_name}"
 
     # Push everything to a local bare backup repo
     backup_dir="${RIOTBOX_DATA_DIR}/backups/${project_name}.git"
