@@ -136,8 +136,28 @@ else
     echo "⚠️  RVM not found — skipping Ruby in container"
 fi
 
+# ── Writable build context ───────────────────────────────────────────────────
+# build.sh must write configs/ into the Docker build context and pass that
+# context to `${CONTAINER_CMD} build`. When RiotBox is installed system-wide
+# (rpm/deb → /opt/riotbox, root-owned) the install tree is read-only for the
+# user, so we stage a throwaway copy of the app tree in a writable temp dir and
+# build from there. When PROJECT_DIR is writable (rootless install or the dev
+# repo) we build in place exactly as before.
+if [ -w "${PROJECT_DIR}" ]; then
+    BUILD_CONTEXT="${PROJECT_DIR}"
+else
+    BUILD_CONTEXT="$(mktemp -d "${TMPDIR:-/tmp}/riotbox-build.XXXXXX")"
+    trap 'chmod -R u+w "${BUILD_CONTEXT}" 2>/dev/null; rm -rf "${BUILD_CONTEXT}"' EXIT
+    cp -a "${PROJECT_DIR}/." "${BUILD_CONTEXT}/"
+    # cp -a propagates the (read-only) source mode onto the staging copy; force
+    # it writable so configs/ regeneration and cleanup work regardless of the
+    # install tree's permissions.
+    chmod -R u+w "${BUILD_CONTEXT}"
+    echo "→ Install tree is read-only; staging build context at ${BUILD_CONTEXT}"
+fi
+
 # ── 7. Collect tool configs into configs/ (never secrets) ─────────────────────
-CONFIGS_DIR="${PROJECT_DIR}/configs"
+CONFIGS_DIR="${BUILD_CONTEXT}/configs"
 rm -rf "${CONFIGS_DIR}"
 mkdir -p "${CONFIGS_DIR}"
 
@@ -209,11 +229,11 @@ ${CONTAINER_CMD} build \
     --build-arg "RUBY_DEFAULT=${RUBY_DEFAULT}" \
     --progress=plain \
     -t "${IMAGE_NAME}" \
-    "${PROJECT_DIR}"
+    "${BUILD_CONTEXT}"
 
 echo ""
 echo "✅  Done. Image '${IMAGE_NAME}' is ready."
 echo ""
 echo "Quick start:"
-echo "  task run -- \"implement the feature in SPEC.md\""
-echo "  task shell"
+echo "  riotbox run \"implement the feature in SPEC.md\""
+echo "  riotbox shell"
