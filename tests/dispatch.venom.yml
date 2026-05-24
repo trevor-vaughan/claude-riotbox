@@ -1,4 +1,8 @@
 name: bin/riotbox — dispatcher routing (no task runtime)
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  expected_version: ""
 testcases:
   - name: version prints VERSION file contents
     steps:
