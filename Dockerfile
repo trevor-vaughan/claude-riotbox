@@ -504,11 +504,13 @@ WORKDIR /workspace
 COPY --chown=llm:llm container/session-branch.sh /home/llm/.riotbox/session-branch.sh
 COPY --chown=llm:llm container/overlay-setup.sh /home/llm/.riotbox/overlay-setup.sh
 COPY --chown=llm:llm container/plugin-setup.sh /home/llm/.riotbox/plugin-setup.sh
+COPY --chown=llm:llm container/startup-scripts.sh /home/llm/.riotbox/startup-scripts.sh
 COPY --chown=llm:llm container/nested-podman-setup.sh /home/llm/.riotbox/nested-podman-setup.sh
 COPY --chown=llm:llm container/entrypoint.sh /home/llm/.riotbox/entrypoint.sh
 RUN chmod +x /home/llm/.riotbox/entrypoint.sh \
     /home/llm/.riotbox/session-branch.sh /home/llm/.riotbox/overlay-setup.sh \
-    /home/llm/.riotbox/plugin-setup.sh /home/llm/.riotbox/nested-podman-setup.sh
+    /home/llm/.riotbox/plugin-setup.sh /home/llm/.riotbox/startup-scripts.sh \
+    /home/llm/.riotbox/nested-podman-setup.sh
 ENTRYPOINT ["/home/llm/.riotbox/entrypoint.sh"]
 CMD ["bash"]
 

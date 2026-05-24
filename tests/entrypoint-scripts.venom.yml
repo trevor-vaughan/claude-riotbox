@@ -1,0 +1,59 @@
+name: entrypoint script shipping tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+testcases:
+  # Regression: container/startup-scripts.sh was sourced by entrypoint.sh but
+  # never COPYed in the Dockerfile, so the built image failed at runtime with
+  # "startup-scripts.sh: No such file or directory" and "startup_scripts_run:
+  # command not found". The unit tests sourced the script from the repo, so they
+  # never exercised the built-image integration. This suite is a static,
+  # runtime-independent guard that every script the entrypoint sources is
+  # actually shipped into the image.
+
+  - name: Every entrypoint-sourced script is shipped into the image
+    steps:
+      - type: exec
+        script: |
+          cd "{{.riotbox_dir}}"
+          fail=0
+          for rel in $(grep -oE 'source "\$\{RIOTBOX_SCRIPT_DIR\}/[^"]+"' container/entrypoint.sh | sed -E 's#.*RIOTBOX_SCRIPT_DIR\}/##; s#"$##'); do
+            case "${rel}" in
+              */*)
+                # Sourced from a subdirectory (e.g. agents/registry.sh): must be
+                # shipped by a bulk directory COPY of its top-level component.
+                top="${rel%%/*}"
+                if ! grep -qE "COPY .*${top}/ .*/\.riotbox/${top}/" Dockerfile; then
+                  echo "MISSING: entrypoint sources ${rel} but no dir COPY ships ${top}/"
+                  fail=1
+                fi
+                ;;
+              *)
+                # Top-level script: must have an explicit COPY into the riotbox dir.
+                if ! grep -qE "COPY .*container/${rel} .*/\.riotbox/${rel}" Dockerfile; then
+                  echo "MISSING: entrypoint sources ${rel} but Dockerfile has no COPY for it"
+                  fail=1
+                fi
+                ;;
+            esac
+          done
+          [ "${fail}" -eq 0 ] && echo "all_entrypoint_scripts_shipped=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "all_entrypoint_scripts_shipped=true"
+
+  - name: Dockerfile ships container/startup-scripts.sh (startup_scripts_run regression)
+    steps:
+      - type: exec
+        script: |
+          cd "{{.riotbox_dir}}"
+          if grep -qE "COPY .*container/startup-scripts.sh .*/\.riotbox/startup-scripts.sh" Dockerfile; then
+            echo "startup_scripts_shipped=true"
+          else
+            echo "FAIL: container/startup-scripts.sh is not COPYed into the image"
+            exit 1
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "startup_scripts_shipped=true"
