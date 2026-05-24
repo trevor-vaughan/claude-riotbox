@@ -16,23 +16,6 @@ vars:
 testcases:
   # ── Per-check happy paths (functions return 0 + emit [ok]) ───────────────
 
-  - name: preflight_check_task passes when task is on PATH
-    steps:
-      - type: exec
-        script: |
-          source "{{.riotbox_dir}}/scripts/preflight.sh"
-          out="$(preflight_check_task)"
-          rc=$?
-          echo "${out}"
-          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
-          case "${out}" in
-              *"[ok]"*"task runner available"*) echo "OK" ;;
-              *) echo "BAD output: ${out}" >&2; exit 1 ;;
-          esac
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "OK"
-
   - name: preflight_check_git passes when git is on PATH
     steps:
       - type: exec
@@ -169,26 +152,6 @@ testcases:
           case "${out}" in
               *"Install podman"*) echo "OK" ;;
               *) echo "BAD: missing install hint" >&2; exit 1 ;;
-          esac
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "OK"
-
-  - name: preflight_check_task fails with exit 14 when task is missing
-    steps:
-      - type: exec
-        script: |
-          source "{{.riotbox_dir}}/scripts/preflight.sh"
-          # PATH that has nothing but core utils, so `task` is absent.
-          out="$(PATH=/usr/bin:/bin preflight_check_task 2>&1 || echo "EXIT=$?")"
-          echo "${out}"
-          case "${out}" in
-              *"EXIT=14"*) ;;
-              *) echo "BAD: missing exit 14" >&2; exit 1 ;;
-          esac
-          case "${out}" in
-              *"https://taskfile.dev"*) echo "OK" ;;
-              *) echo "BAD: missing fix hint" >&2; exit 1 ;;
           esac
         assertions:
           - result.code ShouldEqual 0
@@ -393,9 +356,10 @@ testcases:
           out="$(RIOTBOX_DOCTOR_QUIET=1 preflight_check_jq)"
           [ -z "${out}" ] || { echo "BAD: QUIET emitted: ${out}" >&2; exit 1; }
           # QUIET on a failing check must still print the fail line + hint.
-          out_fail="$(PATH=/usr/bin:/bin RIOTBOX_DOCTOR_QUIET=1 preflight_check_task 2>&1 || true)"
+          # A synthetic image tag never exists, so this check reliably fails.
+          out_fail="$(IMAGE_NAME="no-such-tag-$(date +%s%N)" RIOTBOX_DOCTOR_QUIET=1 preflight_check_image 2>&1 || true)"
           case "${out_fail}" in
-              *"task runner available"*"taskfile.dev"*) echo "OK" ;;
+              *"riotbox image present"*"Run riotbox build"*) echo "OK" ;;
               *) echo "BAD: QUIET swallowed failure: ${out_fail}" >&2; exit 1 ;;
           esac
         assertions:
@@ -411,27 +375,6 @@ testcases:
   # so every line is still emitted and assert on the per-check label/hint.
   # The exit-code/return contract is covered by the sourced preflight_run
   # tests above, which stub podman to ok.
-
-  - name: preflight.sh reports task missing with hint (script invocation, ALL mode)
-    steps:
-      - type: exec
-        script: |
-          # PATH omits `task`. We DO NOT assert exit 14 here because the
-          # podman check fires first in this container — that's exactly
-          # what production users see when their host lacks podman, and
-          # the test rightly mirrors that. The contract under test: even
-          # under ALL mode, a downstream check that fails surfaces its
-          # own [code] prefix and fix hint.
-          out="$(PATH=/usr/bin:/bin RIOTBOX_DOCTOR_ALL=1 \
-              "{{.riotbox_dir}}/scripts/preflight.sh" 2>&1 || true)"
-          echo "${out}"
-          case "${out}" in
-              *"[14]"*"task runner available"*"https://taskfile.dev"*) echo "OK" ;;
-              *) echo "BAD: missing task fail line" >&2; exit 1 ;;
-          esac
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "OK"
 
   - name: preflight.sh reports image missing with build hint (script invocation, ALL mode)
     steps:

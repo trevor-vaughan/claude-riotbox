@@ -3,8 +3,8 @@
 # scripts/preflight.sh — host-environment preflight checks for riotbox.
 #
 # Verifies every prerequisite that has historically caused opaque mid-run
-# failures: container runtime, FUSE driver, task runner, image build, and
-# credential readability. Each check has a short label, an exit code, and a
+# failures: container runtime, FUSE driver, image build, and credential
+# readability. Each check has a short label, an exit code, and a
 # fix hint. The same helpers are reused by `riotbox doctor` (the
 # user-facing entry point), `setup.sh` (post-install verification), and
 # anywhere else the engine wants to fail-fast with a clear diagnosis.
@@ -34,7 +34,7 @@
 #   0   all checks pass
 #   12  podman missing or `podman info` failed
 #   13  fuse-overlayfs missing
-#   14  task missing
+#   14  (retired — was: task missing; task is maintainer-only, not a runtime dep)
 #   15  git missing
 #   16  jq missing
 #   17  RiotBox image not built
@@ -127,17 +127,6 @@ preflight_check_fuse_overlayfs() {
         return 13
     fi
     _preflight_report fuse_overlayfs ok "${label}"
-    return 0
-}
-
-preflight_check_task() {
-    local label="task runner available"
-    if ! command -v task >/dev/null 2>&1; then
-        _preflight_report task fail "${label}" 14 \
-            "Install task from https://taskfile.dev"
-        return 14
-    fi
-    _preflight_report task ok "${label}"
     return 0
 }
 
@@ -246,7 +235,6 @@ preflight_run() {
     local checks=(
         preflight_check_podman
         preflight_check_fuse_overlayfs
-        preflight_check_task
         preflight_check_git
         preflight_check_jq
         preflight_check_image
