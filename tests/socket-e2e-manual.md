@@ -22,13 +22,13 @@ the socket-related `launch.sh` wiring, or the `session:socket-*` recipes in
   systemctl --user enable --now podman.socket
   loginctl enable-linger "$USER"   # keeps it up across logouts
   ```
-- The RiotBox container image built. From a clone of this repo:
+- The RiotBox container image built:
   ```bash
-  task docker:build
+  riotbox build
   ```
   Confirm the image is present: `podman images | grep riotbox`.
 - The `riotbox` launcher on `PATH` (see README.md §Setup), or
-  invoke the equivalent `task socket-*` recipes from the repo root.
+  invoke the equivalent `./bin/riotbox socket-*` commands from a repo clone.
 
 ## Setup verification
 
@@ -50,7 +50,7 @@ Goal: confirm in-container `podman` is talking to the host engine.
 
 ```bash
 RIOTBOX_SOCKET=1 riotbox shell
-# (equivalently: RIOTBOX_SOCKET=1 task socket-shell)
+# (equivalently: RIOTBOX_SOCKET=1 riotbox socket-shell)
 ```
 
 On first launch inside a git repo, RiotBox prompts for a session-branch
@@ -110,7 +110,7 @@ for socket mode).
 Open two terminals on the host. In each:
 
 ```bash
-RIOTBOX_SOCKET=1 task socket-shell
+RIOTBOX_SOCKET=1 riotbox socket-shell
 ```
 
 In terminal A:
@@ -139,7 +139,7 @@ Goal: confirm `RIOTBOX_NESTED=1` and `RIOTBOX_SOCKET=1` cannot both be
 set. The guard must fire before any container is started.
 
 ```bash
-RIOTBOX_SOCKET=1 RIOTBOX_NESTED=1 task shell
+RIOTBOX_SOCKET=1 RIOTBOX_NESTED=1 riotbox shell
 echo "exit=$?"
 ```
 
@@ -161,7 +161,7 @@ systemctl --user stop podman.socket
 Then:
 
 ```bash
-RIOTBOX_SOCKET=1 task shell
+RIOTBOX_SOCKET=1 riotbox shell
 echo "exit=$?"
 ```
 

@@ -9,15 +9,14 @@ if [ $# -eq 0 ]; then
 Error: a prompt is required.
 
 Usage:
-  task audit -- "prompt" [project ...]
   riotbox audit "prompt" [project ...]
 
 A prompt describes what the agent should do. Projects default to the
 current directory if not specified.
 
 Examples:
-  task audit -- "review this code for security issues"
-  task audit -- "find SQL injection vulnerabilities" . ../shared-lib
+  riotbox audit "review this code for security issues"
+  riotbox audit "find SQL injection vulnerabilities" . ../shared-lib
   riotbox audit "check authentication logic" .
 EOF
     exit 1

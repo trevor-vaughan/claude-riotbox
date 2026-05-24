@@ -45,3 +45,12 @@ testcases:
         assertions:
           - result.code ShouldEqual 2
           - result.systemout ShouldContainSubstring "--agent must be one of"
+
+  - name: trailing bare --agent (no value) errors with exit 2, not a silent abort
+    steps:
+      - type: exec
+        script: |
+          "{{.riotbox_dir}}/bin/riotbox" --agent 2>&1
+        assertions:
+          - result.code ShouldEqual 2
+          - result.systemout ShouldContainSubstring "--agent must be one of"

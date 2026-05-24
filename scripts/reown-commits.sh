@@ -69,7 +69,7 @@ for arg in "$@"; do
         --force|-f) FORCE=true ;;
         -*)
             echo "ERROR: Unknown option '${arg}'." >&2
-            echo "Usage: task reown -- [<since-ref>] [--force]" >&2
+            echo "Usage: riotbox reown [<since-ref>] [--force]" >&2
             exit 1
             ;;
         *)  REF_ARG="${arg}" ;;
@@ -130,7 +130,7 @@ if [ -n "${REF_ARG}" ]; then
     # Validate that the ref exists (also prevents flag injection via --)
     if ! git rev-parse --verify "${REF_ARG}" &>/dev/null; then
         echo "ERROR: '${REF_ARG}' is not a valid git ref." >&2
-        echo "Usage: task reown -- [<since-ref>] [--force]" >&2
+        echo "Usage: riotbox reown [<since-ref>] [--force]" >&2
         exit 1
     fi
     RANGE_DESC="commits since ${REF_ARG}"

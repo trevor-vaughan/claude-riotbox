@@ -13,15 +13,15 @@ if [ $# -eq 0 ]; then
 Error: specify one or more sessions to remove, or --all.
 
 Usage:
-  task session-remove -- <session-key-or-path> [...]
-  task session-remove -- --all
+  riotbox session-remove <session-key-or-path> [...]
+  riotbox session-remove --all
 
 Arguments can be:
-  session key   The encoded key shown by 'task session-list'
+  session key   The encoded key shown by 'riotbox session-list'
   project path  A path to a project directory (e.g. . or /home/user/myapp)
   --all         Remove all sessions
 
-Run 'task session-list' to see available sessions.
+Run 'riotbox session-list' to see available sessions.
 EOF
     exit 1
 fi
@@ -57,12 +57,12 @@ else
                 continue
             else
                 echo "ERROR: no session found for project '${arg}'" >&2
-                echo "Run 'task session-list' to see available sessions." >&2
+                echo "Run 'riotbox session-list' to see available sessions." >&2
                 exit 1
             fi
         fi
         echo "ERROR: '${arg}' is not a session key or an existing path." >&2
-        echo "Run 'task session-list' to see available sessions." >&2
+        echo "Run 'riotbox session-list' to see available sessions." >&2
         exit 1
     done
 fi

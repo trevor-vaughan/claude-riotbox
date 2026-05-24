@@ -99,7 +99,11 @@ RIOTBOX_AGENT="${RIOTBOX_AGENT:-claude}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --agent=*) RIOTBOX_AGENT="${1#--agent=}"; shift ;;
-        --agent)   RIOTBOX_AGENT="${2:-}"; shift 2 ;;
+        # Shift the flag always, the value only if present, so a trailing bare
+        # `--agent` leaves RIOTBOX_AGENT empty and falls through to validation
+        # below (exit 2 with a message) instead of aborting under `set -e` on a
+        # failed `shift 2`.
+        --agent)   RIOTBOX_AGENT="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
         *)         break ;;
     esac
 done

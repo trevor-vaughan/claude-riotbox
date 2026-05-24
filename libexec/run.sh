@@ -9,7 +9,6 @@ if [ $# -eq 0 ]; then
 Error: a prompt is required.
 
 Usage:
-  task run -- "prompt" [project ...]
   riotbox run "prompt" [project ...]
 
 A prompt describes what the agent should do. Projects default to the
@@ -17,8 +16,8 @@ current directory if not specified. All project repos are checkpointed
 before the agent runs so you can restore them if something goes wrong.
 
 Examples:
-  task run -- "fix the failing tests"
-  task run -- "add error handling to the API" . ../shared-lib
+  riotbox run "fix the failing tests"
+  riotbox run "add error handling to the API" . ../shared-lib
   riotbox run "refactor the auth module" .
 EOF
     exit 1

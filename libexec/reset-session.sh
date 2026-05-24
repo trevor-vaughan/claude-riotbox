@@ -20,7 +20,7 @@ for flag in "$@"; do
     case "${flag}" in
         all)   all=true ;;
         force) force=true ;;
-        *)     echo "Unknown flag: ${flag}. Usage: task reset-session -- [all] [force]" >&2; exit 1 ;;
+        *)     echo "Unknown flag: ${flag}. Usage: riotbox session-reset [all] [force]" >&2; exit 1 ;;
     esac
 done
 
