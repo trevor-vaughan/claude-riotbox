@@ -14,6 +14,7 @@ tasks:
       shellcheck -x \
         -e SC1090 \
         -e SC1091 \
+        {{.ROOT_DIR}}/bin/riotbox \
         {{.ROOT_DIR}}/setup.sh \
         {{.ROOT_DIR}}/install.sh \
         {{.ROOT_DIR}}/libexec/*.sh \

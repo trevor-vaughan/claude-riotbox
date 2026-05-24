@@ -61,6 +61,7 @@ venom run \
     --output-dir=. \
     --var root="${ROOT_DIR}" \
     --var riotbox_dir="${ROOT_DIR}" \
+    --var expected_version="$(cat "${ROOT_DIR}/VERSION")" \
     --var helpers="${ROOT_DIR}/tests/lib/git-test-helpers.sh" \
     --var wrapper_helpers="${ROOT_DIR}/tests/lib/wrapper-test-helpers.sh" \
     --var overlay_helpers="${ROOT_DIR}/tests/lib/overlay-test-helpers.sh" \

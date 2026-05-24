@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# bin/riotbox — RiotBox CLI dispatcher.
+# Self-locates the install tree and routes verbs directly to libexec/ and
+# scripts/ helpers. No task runner is involved at runtime.
+set -euo pipefail
+
+# ── Self-location ─────────────────────────────────────────────────────────
+# readlink -f resolves the /usr/bin or ~/.local/bin symlink to the real file;
+# the grandparent of bin/riotbox is the install root (/opt/riotbox,
+# ~/.local/share/riotbox, or the repo when run as ./bin/riotbox).
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+RIOTBOX_DIR="$(cd "$(dirname "${SELF}")/.." && pwd)"
+export RIOTBOX_DIR
+# Helper scripts were written for the task era and read ${ROOT_DIR}; honor it.
+export ROOT_DIR="${RIOTBOX_DIR}"
+
+LIBEXEC="${RIOTBOX_DIR}/libexec"
+SCRIPTS="${RIOTBOX_DIR}/scripts"
+VERSION="$(cat "${RIOTBOX_DIR}/VERSION" 2>/dev/null || echo "unknown")"
+
+# ── Shared environment exported to every helper ───────────────────────────
+CONTAINER_CMD="$(command -v podman 2>/dev/null || echo docker)"
+export CONTAINER_CMD
+export IMAGE_NAME="${IMAGE_NAME:-riotbox}"
+
+# Agent registry: validates --agent and powers `agents`. Sourced at runtime so
+# newly added agents are picked up without reinstalling.
+# shellcheck disable=SC1091
+source "${RIOTBOX_DIR}/agents/registry.sh"
+
+ensure_image() { "${LIBEXEC}/ensure-image.sh"; }
+
+all_paths() {
+    [ $# -ge 1 ] || return 1
+    for arg in "$@"; do [ -e "${arg}" ] || return 1; done
+}
+
+nested_warning() {
+    echo "WARNING: Nested container mode disables SELinux confinement (--security-opt label=disable)." >&2
+    echo "         The container has reduced isolation from the host." >&2
+    echo "" >&2
+}
+
+socket_warning() {
+    echo "WARNING: Socket mode bind-mounts the host podman socket into the container." >&2
+    echo "         This grants the container effective root on the host. Use only" >&2
+    echo "         with trusted code — this is a broader trust delegation than nested" >&2
+    echo "         mode. See README \"Container runtime modes\" for alternatives." >&2
+    echo "" >&2
+}
+
+usage() {
+    cat <<EOF
+Usage: riotbox [--agent=<name>] <command> [args...]
+
+Global flags:
+  --agent=<claude|opencode>    Select the AI agent (default: claude).
+                               May also be set via RIOTBOX_AGENT env var.
+
+Session commands:
+  .                            Open a shell in the current directory
+  shell [projects...]          Open a shell (explicit)
+  run "prompt" [projects...]   Run the agent with a prompt
+  resume [projects...]         Resume the last session
+  audit [args...]              Audit an untrusted repo (read-only workspace)
+  reown [flags...]             Rewrite the agent's commits to your git identity
+
+Privileged session modes (reduced isolation — see README):
+  nested-run / nested-shell    Enable nested podman (disables SELinux confinement)
+  socket-run / socket-shell    Share the host podman socket (grants host root)
+
+Session management:
+  session-list                 List all RiotBox sessions
+  session-remove [key/path]    Remove a session (or --all)
+  session-reset [all] [force]  Reset session cache
+
+Overlay commands (podman-only):
+  overlays                     List sessions with pending overlay data
+  overlay-diff [project]       Show overlay changes vs host project
+  overlay-accept [project]     Apply overlay changes to host project
+  overlay-reject [project]     Discard overlay changes
+
+Setup / maintenance:
+  mounts                       Show what would be mounted from your home dir
+  install-hooks [flags...]     Install the git pre-push identity hook
+  build                        Build the RiotBox image
+  rebuild                      Rebuild the image from scratch (no cache)
+
+Info:
+  agents                       List registered agents (name + binary)
+  doctor                       Verify host setup (preflight checks)
+  version                      Show the current version
+  help                         Show this help
+EOF
+}
+
+# ── --agent parsing (consumed before dispatch) ────────────────────────────
+RIOTBOX_AGENT="${RIOTBOX_AGENT:-claude}"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --agent=*) RIOTBOX_AGENT="${1#--agent=}"; shift ;;
+        --agent)   RIOTBOX_AGENT="${2:-}"; shift 2 ;;
+        *)         break ;;
+    esac
+done
+if ! agent_is_registered "${RIOTBOX_AGENT}"; then
+    echo "Error: --agent must be one of: $(agent_registry_csv) (got: ${RIOTBOX_AGENT})" >&2
+    exit 2
+fi
+export RIOTBOX_AGENT
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+[ -z "${cmd}" ] && { usage; exit 0; }
+
+case "${cmd}" in
+    help|-h|--help)        usage ;;
+    version|--version|-V)  echo "riotbox ${VERSION}" ;;
+    doctor)                exec "${SCRIPTS}/preflight.sh" "$@" ;;
+    agents)
+        agents_max_width=0
+        for agent in "${AGENT_REGISTRY[@]}"; do
+            [ "${#agent}" -gt "${agents_max_width}" ] && agents_max_width="${#agent}"
+        done
+        for agent in "${AGENT_REGISTRY[@]}"; do
+            binary="$(agent_call "${agent}" real_binary)"
+            printf "%-${agents_max_width}s  %s\n" "${agent}" "${binary}"
+        done
+        ;;
+
+    build)    exec "${SCRIPTS}/build.sh" ;;
+    rebuild)  DOCKER_EXTRA_ARGS="--no-cache" exec "${SCRIPTS}/build.sh" ;;
+
+    run)
+        ensure_image
+        exec "${LIBEXEC}/run.sh" "$@"
+        ;;
+    shell)
+        ensure_image
+        export RIOTBOX_PROJECTS="${*:-.}"
+        "${LIBEXEC}/checkpoint.sh"
+        exec "${LIBEXEC}/launch.sh" bash
+        ;;
+    resume)
+        ensure_image
+        export RIOTBOX_PROJECTS="${*:-.}"
+        "${LIBEXEC}/checkpoint.sh"
+        exec "${LIBEXEC}/resume.sh"
+        ;;
+    audit)
+        ensure_image
+        exec "${LIBEXEC}/audit.sh" "$@"
+        ;;
+
+    nested-run)
+        ensure_image
+        export RIOTBOX_NESTED=1
+        nested_warning
+        exec "${LIBEXEC}/run.sh" "$@"
+        ;;
+    nested-shell)
+        ensure_image
+        export RIOTBOX_NESTED=1 RIOTBOX_PROJECTS="${*:-.}"
+        nested_warning
+        "${LIBEXEC}/checkpoint.sh"
+        exec "${LIBEXEC}/launch.sh" bash
+        ;;
+    socket-run)
+        ensure_image
+        export RIOTBOX_SOCKET=1
+        socket_warning
+        exec "${LIBEXEC}/run.sh" "$@"
+        ;;
+    socket-shell)
+        ensure_image
+        export RIOTBOX_SOCKET=1 RIOTBOX_PROJECTS="${*:-.}"
+        socket_warning
+        "${LIBEXEC}/checkpoint.sh"
+        exec "${LIBEXEC}/launch.sh" bash
+        ;;
+
+    session-list)    exec "${LIBEXEC}/list-sessions.sh" ;;
+    session-remove)  exec "${LIBEXEC}/remove-session.sh" "$@" ;;
+    session-reset)   exec "${LIBEXEC}/reset-session.sh" "$@" ;;
+
+    overlays)        exec "${SCRIPTS}/overlay.sh" list ;;
+    overlay-diff)    exec "${SCRIPTS}/overlay.sh" diff "$@" ;;
+    overlay-accept)  exec "${SCRIPTS}/overlay.sh" accept "$@" ;;
+    overlay-reject)  exec "${SCRIPTS}/overlay.sh" reject "$@" ;;
+
+    reown)           exec "${SCRIPTS}/reown-commits.sh" "$@" ;;
+    install-hooks)   exec "${LIBEXEC}/install-hooks.sh" "$@" ;;
+    mounts)
+        echo "Auto-detected mounts:"
+        "${SCRIPTS}/detect-mounts.sh" | while read -r _flag path; do echo "  ${path}"; done
+        ;;
+
+    *)
+        if all_paths "${cmd}" "$@"; then
+            ensure_image
+            set -- "${cmd}" "$@"
+            export RIOTBOX_PROJECTS="$*"
+            "${LIBEXEC}/checkpoint.sh"
+            exec "${LIBEXEC}/launch.sh" bash
+        else
+            echo "Error: unknown command '${cmd}'. Run 'riotbox help'." >&2
+            exit 2
+        fi
+        ;;
+esac

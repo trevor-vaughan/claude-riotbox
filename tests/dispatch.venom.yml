@@ -1,0 +1,43 @@
+name: bin/riotbox — dispatcher routing (no task runtime)
+testcases:
+  - name: version prints VERSION file contents
+    steps:
+      - type: exec
+        script: |
+          "{{.riotbox_dir}}/bin/riotbox" version
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "riotbox"
+          - result.systemout ShouldContainSubstring "{{.expected_version}}"
+
+  - name: help lists core verbs
+    steps:
+      - type: exec
+        script: |
+          "{{.riotbox_dir}}/bin/riotbox" help
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "run"
+          - result.systemout ShouldContainSubstring "nested-run"
+          - result.systemout ShouldContainSubstring "socket-run"
+          - result.systemout ShouldContainSubstring "audit"
+          - result.systemout ShouldContainSubstring "install-hooks"
+          - result.systemout ShouldContainSubstring "doctor"
+
+  - name: unknown non-path command errors with exit 2
+    steps:
+      - type: exec
+        script: |
+          "{{.riotbox_dir}}/bin/riotbox" definitely-not-a-verb 2>&1
+        assertions:
+          - result.code ShouldEqual 2
+          - result.systemout ShouldContainSubstring "unknown command"
+
+  - name: invalid agent rejected with exit 2
+    steps:
+      - type: exec
+        script: |
+          "{{.riotbox_dir}}/bin/riotbox" --agent=bogus version 2>&1
+        assertions:
+          - result.code ShouldEqual 2
+          - result.systemout ShouldContainSubstring "--agent must be one of"
