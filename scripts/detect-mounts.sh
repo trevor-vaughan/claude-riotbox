@@ -20,6 +20,10 @@ set -euo pipefail
 
 CONTAINER_HOME="/home/llm"
 RIOTBOX_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox"
+# System config dir (default /etc/riotbox); overridable for relocatable
+# installs and tests. mounts.conf entries from here are unioned with the
+# user's XDG file below.
+RIOTBOX_SYSCONF_DIR="${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}"
 
 # ── Output format ───────────────────────────────────────────────────────────
 OUTPUT_FORMAT="podman"
@@ -136,8 +140,11 @@ for entry in "${CACHE_MOUNTS[@]}"; do
 done
 
 # ── User-defined mounts from mounts.conf ─────────────────────────────────────
-# Users can specify additional files/directories to mount into the container
-# by listing them in ~/.config/riotbox/mounts.conf (one per line).
+# Additional files/directories to mount into the container, listed one per
+# line. Entries are read from BOTH the system file (/etc/riotbox/mounts.conf)
+# and the user file ($XDG_CONFIG_HOME/riotbox/mounts.conf) and unioned —
+# mounts are additive, so a system admin's defaults and the user's own
+# entries are all applied.
 #
 # Format:
 #   - Lines starting with # are comments; blank lines are ignored
@@ -154,8 +161,8 @@ done
 #   # Maven settings
 #   .m2/settings.xml
 #
-MOUNTS_CONF="${RIOTBOX_CONFIG_DIR}/mounts.conf"
-if [ -f "${MOUNTS_CONF}" ]; then
+for MOUNTS_CONF in "${RIOTBOX_SYSCONF_DIR}/mounts.conf" "${RIOTBOX_CONFIG_DIR}/mounts.conf"; do
+    [ -f "${MOUNTS_CONF}" ] || continue
     while IFS= read -r line || [ -n "${line}" ]; do
         # Skip comments and blank lines
         line="${line%%#*}"
@@ -185,4 +192,4 @@ if [ -f "${MOUNTS_CONF}" ]; then
             emit_mount "${src}" "${dst}" ro z
         fi
     done < "${MOUNTS_CONF}"
-fi
+done

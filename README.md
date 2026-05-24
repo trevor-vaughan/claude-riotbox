@@ -62,7 +62,7 @@ sudo apt install ./riotbox_<ver>_all.deb
 
 | | App tree | CLI symlink | Config dir |
 |---|---|---|---|
-| **rpm / deb** (system) | `/opt/riotbox` | `/usr/bin/riotbox` | `/etc/riotbox/{config,mounts.conf,plugins.conf}` |
+| **rpm / deb** (system) | `/opt/riotbox` | `/usr/bin/riotbox` | `/etc/riotbox/{config,mounts.conf}` |
 | **rootless** (`./install.sh`) | `$XDG_DATA_HOME/riotbox` (default `~/.local/share/riotbox`) | `~/.local/bin/riotbox` | `$XDG_CONFIG_HOME/riotbox` (default `~/.config/riotbox`) |
 
 The `riotbox` dispatcher is self-locating, so it works from either tree without
@@ -74,8 +74,13 @@ extra configuration.
 env  >  $XDG_CONFIG_HOME/riotbox  >  /etc/riotbox  >  built-in defaults
 ```
 
-A value set in your user config overrides the system `/etc/riotbox` defaults,
-and an explicit environment variable overrides both.
+This applies to the host-side settings the launcher reads: `config` (sourced by
+the launcher) and `mounts.conf` (read by mount detection). A value in your user
+config overrides the system `/etc/riotbox` default, and an explicit environment
+variable overrides both. Plugins are configured per-user only
+(`$XDG_CONFIG_HOME/riotbox/plugins.conf` or the `RIOTBOX_PLUGINS` env var) —
+they are applied inside the container, where host `/etc/riotbox` is not visible,
+so there is no system-wide plugin layer.
 
 **After installing**, build the image and verify your host:
 

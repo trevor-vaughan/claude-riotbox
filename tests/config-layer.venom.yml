@@ -1,0 +1,85 @@
+name: /etc system config layer (config + mounts.conf) is read by the host loaders
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Regression coverage for the system (/etc/riotbox) config layer. The package
+# ships /etc/riotbox/{config,mounts.conf} and the README documents precedence
+# env > XDG > /etc > built-in. These tests prove the host-side loaders actually
+# read /etc (previously they read XDG only, so the shipped files did nothing).
+# RIOTBOX_SYSCONF_DIR overrides the system dir so the tests need no root.
+
+testcases:
+
+  - name: launch.sh sources the system /etc config layer
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg"
+          # The system config sets BOTH privileged modes. launch.sh's
+          # mutual-exclusion guard fires only when both are set, so it is a
+          # reliable, container-free probe that the file was actually sourced.
+          printf ': "${RIOTBOX_NESTED:=1}"\n: "${RIOTBOX_SOCKET:=1}"\n' > "${TMP}/etc/config"
+          out="$(RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" \
+              ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD=podman IMAGE_NAME=riotbox \
+              bash "{{.riotbox_dir}}/libexec/launch.sh" bash 2>&1 || true)"
+          echo "${out}"
+          case "${out}" in
+            *"mutually exclusive"*) echo "OK" ;;
+            *) echo "BAD: /etc config was not sourced" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: env overrides the system /etc config (precedence)
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg"
+          # /etc would set both modes (→ guard). An explicit env RIOTBOX_SOCKET=0
+          # is already set, so the `:=` in /etc cannot override it; the guard
+          # must NOT fire, proving env > /etc.
+          printf ': "${RIOTBOX_NESTED:=1}"\n: "${RIOTBOX_SOCKET:=1}"\n' > "${TMP}/etc/config"
+          out="$(RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" \
+              RIOTBOX_SOCKET=0 \
+              ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD=/bin/false IMAGE_NAME=riotbox \
+              bash "{{.riotbox_dir}}/libexec/launch.sh" bash 2>&1 || true)"
+          echo "${out}"
+          case "${out}" in
+            *"mutually exclusive"*) echo "BAD: env did not override /etc" >&2; exit 1 ;;
+            *) echo "OK" ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: detect-mounts.sh unions system (/etc) and user (XDG) mounts.conf
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          unset XDG_CONFIG_HOME
+          mkdir -p "${HOME}/.config/riotbox" "${TMP}/etc" "${TMP}/sys.d" "${HOME}/usr.d"
+          # Absolute-path entry in the system file; relative (HOME) entry in the
+          # user file. Both source dirs exist, so both must be emitted.
+          echo "${TMP}/sys.d" > "${TMP}/etc/mounts.conf"
+          echo "usr.d" > "${HOME}/.config/riotbox/mounts.conf"
+          out="$(RIOTBOX_SYSCONF_DIR="${TMP}/etc" \
+              "{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
+          echo "OUT=${out}"
+          echo "${out}" | grep -q "/sys.d:" || { echo "BAD: system mount missing" >&2; exit 1; }
+          echo "${out}" | grep -q "/home/llm/usr.d:" || { echo "BAD: user mount missing" >&2; exit 1; }
+          echo "UNION_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "UNION_OK"

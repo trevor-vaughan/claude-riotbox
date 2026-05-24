@@ -5,11 +5,19 @@ set -euo pipefail
 # Optional env: RIOTBOX_PROJECTS, RIOTBOX_NETWORK, RIOTBOX_NESTED, RIOTBOX_SOCKET
 # Arguments: command and args to run inside the container
 
-# Source user config for persistent defaults (e.g. RIOTBOX_NETWORK=none).
-# Env vars set by the caller take precedence over the config file.
-RIOTBOX_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox/config"
+# Source config for persistent defaults (e.g. RIOTBOX_NETWORK=none). These
+# files use the `: "${VAR:=default}"` pattern, so sourcing the user (XDG) file
+# BEFORE the system (/etc) file yields the documented precedence:
+#   env  >  $XDG_CONFIG_HOME/riotbox  >  /etc/riotbox  >  built-in default
+# (env wins because := only assigns when unset; XDG wins over /etc because a
+# value it sets first survives the later /etc source). RIOTBOX_SYSCONF_DIR
+# overrides the system dir (default /etc/riotbox) for relocatable installs/tests.
+RIOTBOX_CONFIG_USER="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox/config"
+RIOTBOX_CONFIG_SYSTEM="${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}/config"
 # shellcheck disable=SC1090
-[ -f "${RIOTBOX_CONFIG}" ] && source "${RIOTBOX_CONFIG}"
+[ -f "${RIOTBOX_CONFIG_USER}" ] && source "${RIOTBOX_CONFIG_USER}"
+# shellcheck disable=SC1091
+[ -f "${RIOTBOX_CONFIG_SYSTEM}" ] && source "${RIOTBOX_CONFIG_SYSTEM}"
 
 # Mutual-exclusion guard for the two container-runtime delegation modes.
 # Fires before any side-effectful work (mount setup, image lookup, podman
