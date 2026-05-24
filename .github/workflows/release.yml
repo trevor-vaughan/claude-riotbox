@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Install task
+        run: |
+          sudo sh -c 'curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin'
+          task --version
+
+      - name: Install nfpm (pinned)
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.46.3
+          echo "${HOME}/go/bin" >> "${GITHUB_PATH}"
+
+      - name: Verify tag matches VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          file="$(cat VERSION)"
+          if [ "${tag}" != "${file}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match VERSION (${file})" >&2
+            exit 1
+          fi
+
+      - name: Build packages
+        run: task release:package
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/*.rpm dist/*.deb dist/SHA256SUMS \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
