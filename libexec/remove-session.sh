@@ -5,7 +5,7 @@ set -euo pipefail
 # Arguments: <session-key-or-path> [...] | --all
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
-source "${ROOT_DIR}/.taskfiles/scripts/session-summary.sh"
+source "${ROOT_DIR}/libexec/session-summary.sh"
 session_root="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
 
 if [ $# -eq 0 ]; then

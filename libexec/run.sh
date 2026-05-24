@@ -36,7 +36,7 @@ resolve_projects "${RIOTBOX_PROJECTS}"
 # Resolve the agent's argv via the registry. The previous implementation
 # had a per-agent case statement here; with the registry every agent
 # advertises its own argv shape and adding one is a manifest edit.
-# shellcheck source=../../agents/registry.sh
+# shellcheck source=../agents/registry.sh
 source "${ROOT_DIR}/agents/registry.sh"
 agent="${RIOTBOX_AGENT:-claude}"
 if ! agent_is_registered "${agent}"; then
@@ -54,10 +54,10 @@ echo "   Network : enabled (no host credentials mounted)"
 echo ""
 
 # Checkpoint all project repos before launching.
-"${ROOT_DIR}/.taskfiles/scripts/checkpoint.sh"
+"${ROOT_DIR}/libexec/checkpoint.sh"
 
 # Non-interactive runs should never prompt for a session branch.
 # Allow explicit override via SESSION_BRANCH=1 if the caller wants it.
 export SESSION_BRANCH="${SESSION_BRANCH:-0}"
 
-exec "${ROOT_DIR}/.taskfiles/scripts/launch.sh" "${agent_argv[@]}"
+exec "${ROOT_DIR}/libexec/launch.sh" "${agent_argv[@]}"

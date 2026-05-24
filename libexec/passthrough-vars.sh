@@ -38,9 +38,9 @@
 # of forwarded vars.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_PASSTHROUGH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+_PASSTHROUGH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# shellcheck source=../../agents/registry.sh
+# shellcheck source=../agents/registry.sh
 source "${_PASSTHROUGH_ROOT}/agents/registry.sh"
 
 # _passthrough_registry_vars
