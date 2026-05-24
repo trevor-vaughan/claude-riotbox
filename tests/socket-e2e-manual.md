@@ -9,7 +9,7 @@ guards, but it cannot exercise a real host socket. This walkthrough is the
 manual gate that has to pass on a real machine before the feature is
 declared healthy.
 
-Run these tests once after any change to `.taskfiles/scripts/socket-vars.sh`,
+Run these tests once after any change to `libexec/socket-vars.sh`,
 the socket-related `launch.sh` wiring, or the `session:socket-*` recipes in
 `Taskfile.yml`. They take about 10 minutes total on a warm machine.
 
@@ -216,7 +216,7 @@ podman rmi hello-world:latest
   once. Without it the user systemd manager (and the socket unit) shuts
   down at the last logout.
 - **`mutually exclusive` does not appear in Test 4.** The guard in
-  `.taskfiles/scripts/launch.sh` runs early; if it does not fire, the
+  `libexec/launch.sh` runs early; if it does not fire, the
   most likely cause is a stale shell sourcing an older copy of the
   script. Re-clone or `git status` to confirm the working tree matches
   `main`.

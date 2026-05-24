@@ -52,7 +52,7 @@ testcases:
 
           # Run printenv inside the container and capture stdout
           rc=0
-          out="$(bash .taskfiles/scripts/launch.sh \
+          out="$(bash libexec/launch.sh \
               sh -c 'printenv FOO; printenv GREETING; printenv DYNAMIC' 2>"${tmp}/err.log")" || rc=$?
 
           if [ "${rc}" != "0" ]; then
@@ -114,7 +114,7 @@ testcases:
           export RIOTBOX_PROJECTS="${tmp}"
 
           rc=0
-          bash .taskfiles/scripts/launch.sh true >"${tmp}/out.log" 2>"${tmp}/err.log" || rc=$?
+          bash libexec/launch.sh true >"${tmp}/out.log" 2>"${tmp}/err.log" || rc=$?
 
           if [ "${rc}" = "0" ]; then
             echo "BAD: launcher succeeded despite invalid KEY (expected non-zero exit)" >&2

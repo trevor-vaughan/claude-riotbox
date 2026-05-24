@@ -234,12 +234,12 @@ testcases:
           # tree must surface the new var in the union.
           tmp="$(mktemp -d)"
           trap 'rm -rf "${tmp}"' EXIT
-          mkdir -p "${tmp}/agents" "${tmp}/.taskfiles/scripts"
+          mkdir -p "${tmp}/agents" "${tmp}/libexec"
           cp "${RIOTBOX_DIR}/agents/registry.sh" "${tmp}/agents/"
           cp -r "${RIOTBOX_DIR}/agents/claude" "${tmp}/agents/"
           cp -r "${RIOTBOX_DIR}/agents/opencode" "${tmp}/agents/"
-          cp "${RIOTBOX_DIR}/.taskfiles/scripts/passthrough-vars.sh" \
-              "${tmp}/.taskfiles/scripts/"
+          cp "${RIOTBOX_DIR}/libexec/passthrough-vars.sh" \
+              "${tmp}/libexec/"
           mkdir -p "${tmp}/agents/zztest"
           cat > "${tmp}/agents/zztest/manifest.sh" <<'EOF'
           agent_zztest_real_binary()    { printf 'zztest\n'; }
@@ -254,7 +254,7 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS
           export ZZTEST_FRESH_VAR="present"
           # Source from the temp tree so the registry picks up zztest.
-          source "${tmp}/.taskfiles/scripts/passthrough-vars.sh"
+          source "${tmp}/libexec/passthrough-vars.sh"
           flags="$(passthrough_flags)"
           echo "FLAGS=${flags}"
         assertions:

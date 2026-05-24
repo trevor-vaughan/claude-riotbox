@@ -840,7 +840,7 @@ testcases:
           export CLOUD_ML_REGION="us-east5"
           export AWS_REGION="us-east-1"
           export AWS_ACCESS_KEY_ID="AKIA-should-not-pass"
-          source "${RIOTBOX_DIR}/.taskfiles/scripts/passthrough-vars.sh"
+          source "${RIOTBOX_DIR}/libexec/passthrough-vars.sh"
           flags="$(passthrough_flags)"
           echo "FLAGS=${flags}"
         assertions:
@@ -863,7 +863,7 @@ testcases:
           export FOO_TOKEN="abc"
           export ANTHROPIC_API_KEY="should-not-pass"
           export RIOTBOX_PASSTHROUGH_VARS="FOO_TOKEN"
-          source "${RIOTBOX_DIR}/.taskfiles/scripts/passthrough-vars.sh"
+          source "${RIOTBOX_DIR}/libexec/passthrough-vars.sh"
           flags="$(passthrough_flags)"
           echo "FLAGS=${flags}"
         assertions:
@@ -879,7 +879,7 @@ testcases:
           unset ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY
           unset GEMINI_API_KEY GROQ_API_KEY MISTRAL_API_KEY
           unset DEEPSEEK_API_KEY XAI_API_KEY RIOTBOX_PASSTHROUGH_VARS
-          source "${RIOTBOX_DIR}/.taskfiles/scripts/passthrough-vars.sh"
+          source "${RIOTBOX_DIR}/libexec/passthrough-vars.sh"
           flags="$(passthrough_flags)"
           echo "FLAGS=[${flags}]"
         assertions:
@@ -897,7 +897,7 @@ testcases:
           unset GOOGLE_APPLICATION_CREDENTIALS AWS_SHARED_CREDENTIALS_FILE
           unset AWS_CONFIG_FILE KUBECONFIG RIOTBOX_CREDFILE_VARS
           export GOOGLE_APPLICATION_CREDENTIALS="${tmp}/gcp.json"
-          source "${RIOTBOX_DIR}/.taskfiles/scripts/credfile-vars.sh"
+          source "${RIOTBOX_DIR}/libexec/credfile-vars.sh"
           flags="$(credfile_flags)"
           echo "FLAGS=${flags}"
         assertions:
@@ -914,7 +914,7 @@ testcases:
           unset GOOGLE_APPLICATION_CREDENTIALS AWS_SHARED_CREDENTIALS_FILE
           unset AWS_CONFIG_FILE KUBECONFIG RIOTBOX_CREDFILE_VARS
           export GOOGLE_APPLICATION_CREDENTIALS="/nonexistent/path.json"
-          source "${RIOTBOX_DIR}/.taskfiles/scripts/credfile-vars.sh"
+          source "${RIOTBOX_DIR}/libexec/credfile-vars.sh"
           flags="$(credfile_flags 2>/tmp/credfile-stderr)"
           echo "FLAGS=[${flags}]"
           echo "STDERR<<<"; cat /tmp/credfile-stderr; echo ">>>"
@@ -934,7 +934,7 @@ testcases:
           unset GOOGLE_APPLICATION_CREDENTIALS AWS_SHARED_CREDENTIALS_FILE
           unset AWS_CONFIG_FILE KUBECONFIG RIOTBOX_CREDFILE_VARS
           export AWS_SHARED_CREDENTIALS_FILE="${tmp}"
-          source "${RIOTBOX_DIR}/.taskfiles/scripts/credfile-vars.sh"
+          source "${RIOTBOX_DIR}/libexec/credfile-vars.sh"
           flags="$(credfile_flags 2>/tmp/credfile-stderr)"
           echo "FLAGS=[${flags}]"
           echo "STDERR<<<"; cat /tmp/credfile-stderr; echo ">>>"
@@ -956,7 +956,7 @@ testcases:
           export FOO_CREDFILE="${tmp}/foo"
           export GOOGLE_APPLICATION_CREDENTIALS="${tmp}/foo"
           export RIOTBOX_CREDFILE_VARS="FOO_CREDFILE:/run/secrets/foo"
-          source "${RIOTBOX_DIR}/.taskfiles/scripts/credfile-vars.sh"
+          source "${RIOTBOX_DIR}/libexec/credfile-vars.sh"
           flags="$(credfile_flags)"
           echo "FLAGS=${flags}"
         assertions:
@@ -970,7 +970,7 @@ testcases:
         script: |
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           unset CLAUDE_CODE_USE_VERTEX GOOGLE_APPLICATION_CREDENTIALS
-          source "${RIOTBOX_DIR}/.taskfiles/scripts/vertex-adc-prompt.sh"
+          source "${RIOTBOX_DIR}/libexec/vertex-adc-prompt.sh"
           vertex_adc_prompt 2>/tmp/adc-stderr
           echo "GAC=[${GOOGLE_APPLICATION_CREDENTIALS:-unset}]"
           echo "STDERR<<<"; cat /tmp/adc-stderr; echo ">>>"
@@ -986,7 +986,7 @@ testcases:
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           export CLAUDE_CODE_USE_VERTEX="1"
           export GOOGLE_APPLICATION_CREDENTIALS="/some/preexisting/path.json"
-          source "${RIOTBOX_DIR}/.taskfiles/scripts/vertex-adc-prompt.sh"
+          source "${RIOTBOX_DIR}/libexec/vertex-adc-prompt.sh"
           vertex_adc_prompt 2>/tmp/adc-stderr
           echo "GAC=[${GOOGLE_APPLICATION_CREDENTIALS}]"
           echo "STDERR<<<"; cat /tmp/adc-stderr; echo ">>>"
@@ -1006,7 +1006,7 @@ testcases:
           export HOME="${tmp}"
           export CLAUDE_CODE_USE_VERTEX="1"
           unset GOOGLE_APPLICATION_CREDENTIALS
-          source "${RIOTBOX_DIR}/.taskfiles/scripts/vertex-adc-prompt.sh"
+          source "${RIOTBOX_DIR}/libexec/vertex-adc-prompt.sh"
           vertex_adc_prompt 2>/tmp/adc-stderr
           echo "GAC=[${GOOGLE_APPLICATION_CREDENTIALS:-unset}]"
           echo "STDERR<<<"; cat /tmp/adc-stderr; echo ">>>"
@@ -1027,7 +1027,7 @@ testcases:
           printf '{}\n' > "${HOME}/.config/gcloud/application_default_credentials.json"
           export CLAUDE_CODE_USE_VERTEX="1"
           unset GOOGLE_APPLICATION_CREDENTIALS
-          source "${RIOTBOX_DIR}/.taskfiles/scripts/vertex-adc-prompt.sh"
+          source "${RIOTBOX_DIR}/libexec/vertex-adc-prompt.sh"
           # venom runs scripts without a TTY — vertex_adc_prompt should
           # detect that, print a notice, and leave GAC unset.
           vertex_adc_prompt 2>/tmp/adc-stderr
@@ -1071,7 +1071,7 @@ testcases:
               ROOT_DIR="${RIOTBOX_DIR}" \
               RIOTBOX_PROJECTS="${repo}" \
               SESSION_BRANCH=0 \
-              bash "${RIOTBOX_DIR}/.taskfiles/scripts/launch.sh" echo hi \
+              bash "${RIOTBOX_DIR}/libexec/launch.sh" echo hi \
               > "${tmp}/argv.txt" 2>&1
           cat "${tmp}/argv.txt"
         assertions:
@@ -1115,7 +1115,7 @@ testcases:
               ROOT_DIR="${RIOTBOX_DIR}" \
               RIOTBOX_PROJECTS="${repo}" \
               SESSION_BRANCH=0 \
-              bash "${RIOTBOX_DIR}/.taskfiles/scripts/launch.sh" echo hi \
+              bash "${RIOTBOX_DIR}/libexec/launch.sh" echo hi \
               > "${tmp}/argv.txt" 2>&1
           cat "${tmp}/argv.txt"
         assertions:

@@ -177,7 +177,7 @@ testcases:
           ROOT_DIR="{{.riotbox_dir}}" \
           RIOTBOX_PROJECTS="${REPO_DIR}" \
           RIOTBOX_DATA_DIR="${TEST_DIR}/data" \
-              "{{.riotbox_dir}}/.taskfiles/scripts/checkpoint.sh"
+              "{{.riotbox_dir}}/libexec/checkpoint.sh"
           # The checkpoint commit must exist and be unsigned (%G? = N).
           sig="$(git log --grep='checkpoint: pre-riotbox-' -1 --format='%G?')"
           echo "commit_sig=${sig}"

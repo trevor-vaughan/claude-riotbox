@@ -1,4 +1,4 @@
-name: .taskfiles/scripts/socket-vars.sh — RIOTBOX_SOCKET flag builder
+name: libexec/socket-vars.sh — RIOTBOX_SOCKET flag builder
 vars:
   root: "."
   riotbox_dir: "{{.root}}"
@@ -15,7 +15,7 @@ testcases:
     steps:
       - type: exec
         script: |
-          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          source "{{.riotbox_dir}}/libexec/socket-vars.sh"
           unset RIOTBOX_SOCKET
           out="$(socket_flags 2>/dev/null)"
           rc=$?
@@ -35,7 +35,7 @@ testcases:
           # no error, exit 0). Without this, a caller that does
           # `export RIOTBOX_SOCKET=""` could silently fall through to
           # the activation path.
-          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          source "{{.riotbox_dir}}/libexec/socket-vars.sh"
           export RIOTBOX_SOCKET=""
           out="$(socket_flags 2>/dev/null)"
           rc=$?
@@ -55,7 +55,7 @@ testcases:
           # helper must match — otherwise a value like "yes" or "true"
           # would activate socket mode here while being ignored by the
           # mutual-exclusion guard, breaking the invariant.
-          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          source "{{.riotbox_dir}}/libexec/socket-vars.sh"
           export RIOTBOX_SOCKET=yes
           out="$(socket_flags 2>/dev/null)"
           rc=$?
@@ -74,7 +74,7 @@ testcases:
           # exists on the runner, the helper must NOT consider it — the
           # ownership-mismatch failure mode that motivated this contract was
           # exactly the silent rootful-fallback case.
-          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          source "{{.riotbox_dir}}/libexec/socket-vars.sh"
           export RIOTBOX_SOCKET=1
           export XDG_RUNTIME_DIR="/tmp/empty-$RANDOM-$$"
           err="$(socket_flags 2>&1 1>/dev/null)"
@@ -92,7 +92,7 @@ testcases:
     steps:
       - type: exec
         script: |
-          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          source "{{.riotbox_dir}}/libexec/socket-vars.sh"
           tmp="$(mktemp -d)"
           pidfile="$tmp/listener.pid"
           cleanup() {
@@ -144,7 +144,7 @@ testcases:
     steps:
       - type: exec
         script: |
-          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          source "{{.riotbox_dir}}/libexec/socket-vars.sh"
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
           export XDG_RUNTIME_DIR="$tmp"
@@ -178,7 +178,7 @@ testcases:
           # SELinux-enforcing host. The probe also stubs CONTAINER_CMD so
           # socket_check_alive's `podman info` call against the dummy
           # socket succeeds without a real podman process.
-          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          source "{{.riotbox_dir}}/libexec/socket-vars.sh"
           tmp="$(mktemp -d)"
           bin="$tmp/bin"
           mkdir -p "$bin" "$tmp/podman"
@@ -218,7 +218,7 @@ testcases:
           # Pins the user-socket-only contract at the detector level.
           # Regardless of whether /run/podman/podman.sock exists on the
           # runner, an empty XDG path must produce no candidate.
-          source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+          source "{{.riotbox_dir}}/libexec/socket-vars.sh"
           export XDG_RUNTIME_DIR="/nonexistent-$RANDOM-$$"
           out="$(socket_detect_host_path)"
           rc=$?
@@ -242,7 +242,7 @@ testcases:
           bash -c '
             set +u
             set +o pipefail
-            source "{{.riotbox_dir}}/.taskfiles/scripts/socket-vars.sh"
+            source "{{.riotbox_dir}}/libexec/socket-vars.sh"
             case "$-" in *u*) echo "LEAK_U: set -u was enabled"; exit 1 ;; esac
             if shopt -qo pipefail 2>/dev/null; then
               echo "LEAK_PIPEFAIL: set -o pipefail was enabled"; exit 1
@@ -272,7 +272,7 @@ testcases:
                      IMAGE_NAME=fake \
                      ROOT_DIR="{{.riotbox_dir}}" \
                      XDG_DATA_HOME="$fake_xdg" \
-                     "{{.riotbox_dir}}/.taskfiles/scripts/launch.sh" bash 2>&1 1>/dev/null)"
+                     "{{.riotbox_dir}}/libexec/launch.sh" bash 2>&1 1>/dev/null)"
           rc=$?
           echo "rc=${rc}"
           echo "stderr: ${out_err}"
@@ -305,7 +305,7 @@ testcases:
                      IMAGE_NAME=fake \
                      ROOT_DIR="{{.riotbox_dir}}" \
                      XDG_DATA_HOME="$fake_xdg" \
-                     "{{.riotbox_dir}}/.taskfiles/scripts/launch.sh" bash 2>&1 1>/dev/null)"
+                     "{{.riotbox_dir}}/libexec/launch.sh" bash 2>&1 1>/dev/null)"
           rc=$?
           echo "rc=${rc}"
           echo "stderr: ${out_err}"

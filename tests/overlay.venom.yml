@@ -470,7 +470,7 @@ testcases:
           export IMAGE_NAME=test
           export ROOT_DIR="{{.riotbox_dir}}"
           export RIOTBOX_PROJECTS="."
-          "{{.riotbox_dir}}/.taskfiles/scripts/launch.sh" echo test 2>&1
+          "{{.riotbox_dir}}/libexec/launch.sh" echo test 2>&1
         assertions:
           - result.code ShouldEqual 1
           - result.systemout ShouldContainSubstring "Overlay mode requires podman"

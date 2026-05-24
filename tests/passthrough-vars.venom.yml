@@ -24,7 +24,7 @@ testcases:
           export FOO=fooval
           export BAR=barval
           export RIOTBOX_PASSTHROUGH_VARS="FOO BAR"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
         assertions:
@@ -41,7 +41,7 @@ testcases:
           export FOO=fooval
           export BAR=barval
           export RIOTBOX_PASSTHROUGH_VARS=$'FOO\nBAR'
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
         assertions:
@@ -57,7 +57,7 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS NOT_SET_ANYWHERE
           export FOO=fooval
           export RIOTBOX_PASSTHROUGH_VARS="FOO NOT_SET_ANYWHERE"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
         assertions:
@@ -73,7 +73,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS
           export ANTHROPIC_API_KEY=test-key
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
         assertions:
@@ -88,7 +88,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS FOO
           export RIOTBOX_PASSTHROUGH_VARS="FOO=hello"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -107,7 +107,7 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS FOO
           export BAR=world
           export RIOTBOX_PASSTHROUGH_VARS="FOO=$BAR"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -125,7 +125,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS FOO
           export RIOTBOX_PASSTHROUGH_VARS="FOO=$(echo hi)"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -143,7 +143,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS GREETING
           export RIOTBOX_PASSTHROUGH_VARS=$'GREETING=hello world'
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -162,7 +162,7 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS FOO TOKEN
           export FOO=fooval
           export RIOTBOX_PASSTHROUGH_VARS=$'FOO\nTOKEN=tok-123'
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -181,7 +181,7 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS FOO
           export FOO=fooval
           export RIOTBOX_PASSTHROUGH_VARS=$'# this is a comment\nFOO\n  # indented comment\n'
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -198,7 +198,7 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS FOO
           export FOO=fooval
           export RIOTBOX_PASSTHROUGH_VARS=$'\n\n   \nFOO\n\t\n'
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -214,7 +214,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS
           export RIOTBOX_PASSTHROUGH_VARS="1FOO=bar"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           err_log="$(mktemp)"
           trap 'rm -f "${err_log}"' EXIT
           rc=0
@@ -235,7 +235,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS
           export RIOTBOX_PASSTHROUGH_VARS="FOO BAR=baz"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           err_log="$(mktemp)"
           trap 'rm -f "${err_log}"' EXIT
           rc=0
@@ -256,7 +256,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS
           export RIOTBOX_PASSTHROUGH_VARS="FOO-BAR=baz"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           err_log="$(mktemp)"
           trap 'rm -f "${err_log}"' EXIT
           rc=0
@@ -277,7 +277,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS FOO
           export RIOTBOX_PASSTHROUGH_VARS="FOO="
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -299,7 +299,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS FOO
           export RIOTBOX_PASSTHROUGH_VARS=$'FOO=first\nFOO=second'
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -317,7 +317,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS URL
           export RIOTBOX_PASSTHROUGH_VARS="URL=https://x.example/path?q=1&r=2"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -336,7 +336,7 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS MOTTO
           export LANG=C.UTF-8 LC_ALL=C.UTF-8
           export RIOTBOX_PASSTHROUGH_VARS="MOTTO=日本語"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -355,7 +355,7 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS BIG
           big="$(head -c 4096 /dev/urandom | base64 | tr -d '\n' | head -c 4096)"
           export RIOTBOX_PASSTHROUGH_VARS="BIG=${big}"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -375,7 +375,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS COLS
           export RIOTBOX_PASSTHROUGH_VARS=$'COLS=a\tb\tc'
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -394,7 +394,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS FOO
           export RIOTBOX_PASSTHROUGH_VARS="FOO=-v /etc:/etc:ro"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -417,7 +417,7 @@ testcases:
           # NOT expanded at config-source time, so the var contains the
           # literal string FOO=$NOT_EXPANDED.
           export RIOTBOX_PASSTHROUGH_VARS='FOO=$NOT_EXPANDED'
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -438,7 +438,7 @@ testcases:
           # Line has leading and trailing spaces around the whole entry,
           # and a leading space INSIDE the value after the equals.
           export RIOTBOX_PASSTHROUGH_VARS=$'   FOO= hello   '
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -456,7 +456,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS LEAK
           export RIOTBOX_PASSTHROUGH_VARS="LEAK=should-not-leak"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           # Deliberately do NOT call passthrough_export. Then call
           # passthrough_flags via command substitution. The parent shell
           # MUST NOT see LEAK exported afterward.
@@ -522,7 +522,7 @@ testcases:
 
           # Run the launcher; ignore its exit code — stub podman exits 0 but
           # the -it TTY flags may make the real exit path non-zero.
-          bash .taskfiles/scripts/launch.sh true 2>"${stub_dir}/launch.err" || true
+          bash libexec/launch.sh true 2>"${stub_dir}/launch.err" || true
 
           echo "--- ARGV ---"
           cat "${STUB_ARGV_FILE}" 2>/dev/null || echo "(no argv captured)"
@@ -544,7 +544,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS
           export RIOTBOX_PASSTHROUGH_VARS="FOO-BAR"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           err_log="$(mktemp)"
           trap 'rm -f "${err_log}"' EXIT
           rc=0
@@ -573,7 +573,7 @@ testcases:
           export BAR=barval
           export RIOTBOX_PASSTHROUGH_VARS="FOO"
           export RIOTBOX_PASSTHROUGH_EXTRA_VARS="BAR"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
         assertions:
@@ -590,7 +590,7 @@ testcases:
           unset RIOTBOX_PASSTHROUGH_VARS RIOTBOX_PASSTHROUGH_EXTRA_VARS FOO
           export RIOTBOX_PASSTHROUGH_VARS="FOO=base"
           export RIOTBOX_PASSTHROUGH_EXTRA_VARS="FOO=extra"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -610,7 +610,7 @@ testcases:
           export FOO=host-value
           export RIOTBOX_PASSTHROUGH_VARS="FOO"
           export RIOTBOX_PASSTHROUGH_EXTRA_VARS="FOO=overridden"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           echo "FOO=[${FOO}]"
         assertions:
@@ -627,7 +627,7 @@ testcases:
           export ANTHROPIC_API_KEY=test-key
           export EDITOR=vim
           export RIOTBOX_PASSTHROUGH_EXTRA_VARS=$'EDITOR\nMY_TOKEN=secret'
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
@@ -647,7 +647,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS RIOTBOX_PASSTHROUGH_EXTRA_VARS
           export RIOTBOX_PASSTHROUGH_EXTRA_VARS="BAD-KEY=value"
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           err_log="$(mktemp)"
           trap 'rm -f "${err_log}"' EXIT
           rc=0
@@ -670,7 +670,7 @@ testcases:
           export FOO=fooval
           export RIOTBOX_PASSTHROUGH_VARS="FOO"
           export RIOTBOX_PASSTHROUGH_EXTRA_VARS=""
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
         assertions:
@@ -688,7 +688,7 @@ testcases:
           export BAR=barval
           export RIOTBOX_PASSTHROUGH_VARS="FOO"
           export RIOTBOX_PASSTHROUGH_EXTRA_VARS=$'# add bar\n\nBAR\n'
-          source .taskfiles/scripts/passthrough-vars.sh
+          source libexec/passthrough-vars.sh
           FLAGS="$(passthrough_flags)"
           echo "FLAGS=[${FLAGS}]"
         assertions:
