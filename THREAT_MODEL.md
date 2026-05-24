@@ -425,7 +425,7 @@ inject malicious code into the container image.
 #### System Context
 
 - **Service:** Session Management
-- **Affected components:** .taskfiles/session.yml, libexec/launch.sh,
+- **Affected components:** bin/riotbox, libexec/launch.sh,
   libexec/run.sh
 - **Attack surface:** Application
 
@@ -435,10 +435,10 @@ inject malicious code into the container image.
 - **Rule / Check ID:** N/A
 - **CVE ID:** N/A
 - **Locations:**
-  - `/workspace/.taskfiles/session.yml:86` — `cmd:
-    "{{.ROOT_DIR}}/libexec/launch.sh bash"`
-  - `/workspace/.taskfiles/session.yml:44` — `cmd:
-    "{{.ROOT_DIR}}/libexec/launch.sh claude --continue"`
+  - `/workspace/bin/riotbox:138` — the `shell` verb: runs
+    `${LIBEXEC}/checkpoint.sh` then `exec "${LIBEXEC}/launch.sh" bash`
+  - `/workspace/bin/riotbox:144` — the `resume` verb: runs
+    `${LIBEXEC}/checkpoint.sh` then `exec "${LIBEXEC}/resume.sh"`
   - `/workspace/libexec/run.sh:46` — `for dir in
     "${PROJECT_DIRS[@]}"; do`
 
@@ -470,16 +470,16 @@ inject malicious code into the container image.
 
 #### Preconditions (Vulnerabilities)
 
-- Developer uses 'task shell', 'task resume', or 'task audit' instead of 'task
-  run'
+- Developer uses 'riotbox shell', 'riotbox resume', or 'riotbox audit' instead
+  of 'riotbox run'
 - The LLM or manual session performs destructive operations on the project
 
 #### Attack Path
 
 **Primary:**
-1. Developer runs 'task shell' to open an interactive RiotBox session (or 'task
-   resume' to continue a previous session)
-2. session.yml invokes launch.sh directly, bypassing run.sh's backup logic
+1. Developer runs 'riotbox shell' to open an interactive RiotBox session (or
+   'riotbox resume' to continue a previous session)
+2. bin/riotbox invokes launch.sh directly, bypassing run.sh's backup logic
 3. No checkpoint commit, tag, or bare-clone backup is created
 4. LLM or user performs destructive git operations (force-push, reset --hard,
    branch deletion) or deletes project files
@@ -496,22 +496,22 @@ inject malicious code into the container image.
 sequenceDiagram
   autonumber
   actor Dev as Developer
-  participant Task as session.yml
+  participant CLI as bin/riotbox
   participant Run as run.sh
   participant Launch as launch.sh
   participant Backup as Backup Logic
   participant Container as Container
 
-  Note over Dev,Container: task run (protected path)
-  Dev->>Run: task run -- "prompt"
+  Note over Dev,Container: riotbox run (protected path)
+  Dev->>Run: riotbox run "prompt"
   Run->>Backup: checkpoint + tag + bare clone
   Run->>Launch: launch container
 
-  Note over Dev,Container: task shell (unprotected path)
-  Dev->>Task: task shell
+  Note over Dev,Container: riotbox shell (unprotected path)
+  Dev->>CLI: riotbox shell
   rect rgb(255, 80, 80)
-    Note over Task,Launch: No backup step
-    Task->>Launch: launch container directly
+    Note over CLI,Launch: No backup step
+    CLI->>Launch: launch container directly
   end
   Launch->>Container: RW mount, no checkpoint
 ```
@@ -537,7 +537,8 @@ destruction is not possible via audit.
 - Reputational: Tool claims backup safety but provides it inconsistently
 
 **If not remediated:** Interactive shell and resume sessions operate without
-backup protection. A destructive LLM session via 'task shell' has no safety net.
+backup protection. A destructive LLM session via 'riotbox shell' has no safety
+net.
 
 #### Mitigations
 
@@ -545,13 +546,14 @@ backup protection. A destructive LLM session via 'task shell' has no safety net.
 - **Extract backup logic into a shared function and call it from all entry
   points** *(effort: S)* → step 3: Move the checkpoint/backup logic from run.sh
   (lines 46-75) into a shared script (e.g. scripts/checkpoint.sh). Source it
-  from run.sh, and add calls in session.yml for shell and resume tasks (before
-  launch.sh is invoked). Skip backup for audit since it mounts read-only.
+  from run.sh, and add calls in bin/riotbox for the shell and resume verbs
+  (before launch.sh is invoked). Skip backup for audit since it mounts
+  read-only.
 
 **Detective controls:**
 - **Warn when launching without backup** *(effort: S)* → step 2: Add a check in
   launch.sh that prints a warning if no checkpoint tag exists for the current
-  session: 'echo "WARNING: No pre-session backup created. Run task run for
+  session: 'echo "WARNING: No pre-session backup created. Run riotbox run for
   backup protection." >&2'
 
 #### Compliance Mapping
@@ -562,8 +564,8 @@ backup protection. A destructive LLM session via 'task shell' has no safety net.
 
 - **Decision:** Mitigate
 - **Rationale:** Extracted checkpoint logic into shared
-  `libexec/checkpoint.sh`; wired into shell, resume, and
-  nested-shell tasks in `session.yml`. Audit is exempt (read-only mount).
+  `libexec/checkpoint.sh`; wired into the shell, resume, and
+  nested-shell verbs in `bin/riotbox`. Audit is exempt (read-only mount).
   Backup logic is now shared, not duplicated.
 - **Residual risk score:** 2 (L1 × I2) — all RW entry points now checkpoint
 - **Review date:** 2026-03-12
@@ -577,7 +579,7 @@ resume sessions mount projects read-write without creating a backup, leaving no
 recovery path for destructive LLM sessions.
 
 **Steps to reproduce:**
-1. Run 'task shell' on a project directory
+1. Run 'riotbox shell' on a project directory
 1. Inside the container, run: git reset --hard HEAD~5
 1. Exit the container
 1. Check ~/.local/share/riotbox/backups/ -- no backup exists for this session
@@ -2083,8 +2085,8 @@ excluded from open findings._
 | CT-013 | Reduced isolation in nested container mode                                           | libexec/launch.sh, container/nested-podman-setup.sh | 🟠 High     | 🟡 Medium | ⚠️ Risk Accepted     | Opt-in only via explicit RIOTBOX_NESTED=1 or nested-run/nested-shell commands; README documents the privileged trust model; Rootless podman still enforces user namespace isolation; No --privileged flag, but the flag set is broad. Outer launch passes: `--userns=keep-id:uid=$(id -u),gid=$(id -g),size=65536` and `--user $(id -u):$(id -g)` (the userns flag widens keep-id's 1-uid mapping so the inner has subordinate uids to subdivide; bind-mounted host paths still keep their host ownership. Both knobs are required for accounts where host uid != gid: the userns flag sets the kernel id_map, and the `--user` flag bypasses podman's `/etc/passwd` rewrite that otherwise stamps `llm:x:host_uid:host_uid` and starts the process with egid=host_uid, which silently breaks nested mode), `--device /dev/fuse` (storage), `--device /dev/net/tun` (pasta networking — host /dev/net/tun perms still gate access), `--security-opt label=disable` (SELinux off — container_t-to-container_t transitions are denied by default policy), `--security-opt unmask=ALL` (removes every default OCI mask AND readonly path on /proc and /sys; verified that narrower targets like `unmask=/proc/sys` or `unmask=…ping_group_range` do NOT work — inner crun fails on EROFS or `mount proc to proc`), `--cap-add=SYS_ADMIN` (inner crun's sethostname/mount calls; bounded by the outer userns). Inside the container nested-podman-setup.sh: (1) writes v3 file caps on newuidmap/newgidmap via `setcap -n $(id -u)` — v2 caps silently no-op when the process is not root in the host userns, which is the keep-id case; (2) writes /etc/sub{u,g}id as ranges that cover the outer's mapped uids minus uid 0 (kernel restriction) and minus the user's own uid (newuidmap restriction); (3) overrides ~/.config/containers/storage.conf to vfs (nested overlay/fuse-overlayfs makes inner crun fail on `mkdir /run/secrets`)                                                                                                                                                            | code_review |
 | CT-014 | LLM can bypass git guardrails via local operations not covered by receive.deny*      | Dockerfile (git config), container/session-branch.sh       | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Local bare backup outside container mount tree (the LLM cannot access it); Checkpoint tags survive history rewrites; README documents: "The agent can rewrite git history. Force-pushes, rebases, and git reset --hard are all available"; README documents: "RiotBox includes several layers of protection, but none are foolproof"                                                                                    | code_review |
 | CT-015 | Runtime package installation by LLM including potentially malicious packages         | container/AGENTS.md (system prompt)                        | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Container isolation — packages cannot affect host; Container is disposable (--rm) — packages do not persist outside named cache volumes; System prompt: "You have FULL permission to install packages...Do not ask"; README: "The agent can install arbitrary packages...These run inside the container and can't affect the host"; Named cache volumes can be pruned (podman volume rm)                                   | code_review |
-| CT-016 | Taskfile dotenv injection via .env file overriding container launch parameters       | Taskfile.yml                                               | 🟠 High     | 🟢 Low    | 🚫 Not Applicable     | RiotBox CLI uses --taskfile to pin Taskfile resolution to the installation directory; Taskfile dotenv resolves relative to Taskfile directory, not CWD — project .env files are never loaded; .dockerignore excludes configs/.env* patterns; dotenv is a standard Taskfile pattern for local development overrides                                                                                               | code_review |
+| CT-016 | Taskfile dotenv injection via .env file overriding container launch parameters       | Taskfile.yml                                               | 🟠 High     | 🟢 Low    | 🚫 Not Applicable     | The runtime CLI (bin/riotbox) does not invoke `task` at all — Taskfile/dotenv loading happens only in maintainer dev workflows (`task build`/`test`/`lint`/`release`), never in the user runtime path, so project .env files cannot influence container launch; .dockerignore excludes configs/.env* patterns; dotenv is a standard Taskfile pattern for local development overrides                                                                                               | code_review |
 | CT-017 | Backup force-push overwrites previous known-good checkpoint state                    | libexec/run.sh                                  | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Checkpoint tags (riotbox-checkpoint/<timestamp>) created before each run and survive force-push; Tags pushed separately via git push --tags (non-destructive, does not delete existing tags); Backup bare repo is outside container mount tree (the LLM cannot access it); README documents recovery via: git fetch ~/.local/share/riotbox/backups/<project>.git --all --tags                                                  | code_review |
-| CT-018 | Container has effective root on host via bind-mounted podman socket                  | libexec/launch.sh, libexec/socket-vars.sh, .taskfiles/session.yml | 🔴 Critical | 🟠 High | ⚠️ Risk Accepted     | Opt-in only via explicit RIOTBOX_SOCKET=1 or socket-run/socket-shell commands; README "Container runtime modes" documents the host-root trust delegation explicitly and offers nested mode as a more-isolated alternative (cf. CT-013); Mutually exclusive with RIOTBOX_NESTED=1 (launch.sh refuses to start if both set — emits an actionable error); Socket detection requires the user to have explicitly enabled the user-level podman.socket on the host (`systemctl --user enable --now podman.socket`); no auto-start of the socket — failure to find it is loud, not silent; The bind-mount itself adds `-v <host_sock>:/run/podman/podman.sock` and `-e CONTAINER_HOST=unix:///run/podman/podman.sock` to the otherwise-default container; all other security defaults (keep-id userns, SELinux on, masked /proc/sys, no SYS_ADMIN cap) remain intact; The trust delegation is in the API surface, not the runtime profile: a client with socket access can request `podman run --privileged --pid=host -v /:/host` and exec into host root; This is the same delegation Docker Desktop ships by default and the same pattern CI runners use with `-v /var/run/docker.sock`; well-trodden, but a well-known attack vector; Mitigation in this codebase: documentation + explicit opt-in + naming the trust cost in the WARNING printed by socket-run/socket-shell recipes; `socket_check_alive` probe (5s timeout) means a wedged socket on the host fails the launch loudly rather than hanging mid-session; Residual is rated against likelihood-of-accidental-invocation (the opt-in gate + WARNING surface the trust cost at each entry point); impact-given-invocation remains Critical, which is why this rates strictly worse than CT-013's nested mode | code_review |
+| CT-018 | Container has effective root on host via bind-mounted podman socket                  | libexec/launch.sh, libexec/socket-vars.sh, bin/riotbox | 🔴 Critical | 🟠 High | ⚠️ Risk Accepted     | Opt-in only via explicit RIOTBOX_SOCKET=1 or socket-run/socket-shell commands; README "Container runtime modes" documents the host-root trust delegation explicitly and offers nested mode as a more-isolated alternative (cf. CT-013); Mutually exclusive with RIOTBOX_NESTED=1 (launch.sh refuses to start if both set — emits an actionable error); Socket detection requires the user to have explicitly enabled the user-level podman.socket on the host (`systemctl --user enable --now podman.socket`); no auto-start of the socket — failure to find it is loud, not silent; The bind-mount itself adds `-v <host_sock>:/run/podman/podman.sock` and `-e CONTAINER_HOST=unix:///run/podman/podman.sock` to the otherwise-default container; all other security defaults (keep-id userns, SELinux on, masked /proc/sys, no SYS_ADMIN cap) remain intact; The trust delegation is in the API surface, not the runtime profile: a client with socket access can request `podman run --privileged --pid=host -v /:/host` and exec into host root; This is the same delegation Docker Desktop ships by default and the same pattern CI runners use with `-v /var/run/docker.sock`; well-trodden, but a well-known attack vector; Mitigation in this codebase: documentation + explicit opt-in + naming the trust cost in the WARNING printed by socket-run/socket-shell recipes; `socket_check_alive` probe (5s timeout) means a wedged socket on the host fails the launch loudly rather than hanging mid-session; Residual is rated against likelihood-of-accidental-invocation (the opt-in gate + WARNING surface the trust cost at each entry point); impact-given-invocation remains Critical, which is why this rates strictly worse than CT-013's nested mode | code_review |
 | CT-019 | Persistence loss surprise for unowned project directories (writes vanish on container exit)  | scripts/mount-projects.sh                                  | 🟢 Low      | 🟡 Medium | ⚠️ Risk Accepted     | Unowned project paths auto-switch to podman's `:O` overlay so the launcher succeeds without modifying host SELinux labels; the tradeoff is that writes to those paths live in an ephemeral upper layer and are discarded on container exit; A one-line warning under `RIOTBOX_OVERLAY=1` names the affected paths so the persistence delta is visible at launch; README "Unowned project directories" section documents the constraint; The alternative (refuse to start) would make the tool unusable for vendor trees and shared checkouts; The alternative (copy-in to a riotbox-owned dir) introduces drift between the source and the working copy and is poor UX for large trees; This is a chosen behavior, not an oversight — the user who points at code they don't own should not expect their edits to persist there | code_review |
 | CT-020 | opencode plugin code (user-configured npm/git) persists across sessions and projects in a named volume and auto-executes on opencode startup | scripts/detect-mounts.sh, agents/opencode/sync-settings.sh | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Plugins are declared by the user in their own `~/.config/opencode/opencode.jsonc` `plugin` array — the same trust the user already extends running opencode on the host; not LLM-installed and not riotbox-injected; opencode runs `bun install` and executes plugin code only inside the disposable container, so a malicious plugin cannot reach the host; The cache is a named volume (`riotbox-cache-opencode`, mounted at `~/.cache/opencode`) and is prunable via `podman volume rm riotbox-cache-opencode` — nothing persists on the host outside it; Integrity is bounded only by what the user pins in each plugin entry (version/git ref), the same supply-chain exposure they accept by listing the plugin (cf. the Claude Code plugin persistence concern); sync-settings.sh deliberately does NOT copy the host's generated `node_modules`/`package.json`/`package-lock.json`/`bun.lock`/`.gitignore` into the per-session config, so host-built native binaries never cross the host→container boundary — the install is rebuilt in-container against the container platform | code_review |
