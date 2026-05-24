@@ -22,3 +22,6 @@ venom.*.log
 
 # Scratch space for spikes / one-off experiments
 tmp/
+
+# Packaged artifacts produced by `task release:package`
+dist/

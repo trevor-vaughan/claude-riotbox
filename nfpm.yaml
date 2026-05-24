@@ -1,0 +1,52 @@
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+name: riotbox
+arch: all
+platform: linux
+version: "${RB_VERSION}"
+section: utils
+priority: optional
+maintainer: "RiotBox maintainers <noreply@users.noreply.github.com>"
+description: |
+  RiotBox — container-based isolation for running AI coding agents autonomously.
+  Installs the app tree to /opt/riotbox with the riotbox CLI on PATH.
+vendor: "RiotBox"
+homepage: "https://github.com/trevor-vaughan/claude-riotbox"
+license: "Apache-2.0"
+depends:
+  - git
+contents:
+  # App tree (read-only) under /opt/riotbox.
+  - src: ./bin
+    dst: /opt/riotbox/bin
+  - src: ./libexec
+    dst: /opt/riotbox/libexec
+  - src: ./scripts
+    dst: /opt/riotbox/scripts
+  - src: ./agents
+    dst: /opt/riotbox/agents
+  - src: ./container
+    dst: /opt/riotbox/container
+  - src: ./configs
+    dst: /opt/riotbox/configs
+  - src: ./Dockerfile
+    dst: /opt/riotbox/Dockerfile
+  - src: ./.dockerignore
+    dst: /opt/riotbox/.dockerignore
+  - src: ./VERSION
+    dst: /opt/riotbox/VERSION
+  # Entrypoint on PATH.
+  - src: /opt/riotbox/bin/riotbox
+    dst: /usr/bin/riotbox
+    type: symlink
+  # System-default config (XDG user config overrides these).
+  - src: ./scripts/configs/config
+    dst: /etc/riotbox/config
+    type: "config|noreplace"
+  - src: ./scripts/configs/mounts.conf
+    dst: /etc/riotbox/mounts.conf
+    type: "config|noreplace"
+  - src: ./scripts/configs/plugins.conf
+    dst: /etc/riotbox/plugins.conf
+    type: "config|noreplace"
+scripts:
+  postinstall: ./packaging/postinstall.sh
