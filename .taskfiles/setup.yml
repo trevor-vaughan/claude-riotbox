@@ -15,7 +15,7 @@ tasks:
       ARGS: "{{.ARGS | default .CLI_ARGS}}"
     env:
       ROOT_DIR: "{{.ROOT_DIR}}"
-    cmd: "{{.ROOT_DIR}}/.taskfiles/scripts/install-hooks.sh {{.ARGS}}"
+    cmd: "{{.ROOT_DIR}}/libexec/install-hooks.sh {{.ARGS}}"
 
   mounts:
     desc: Show what would be mounted from your home directory

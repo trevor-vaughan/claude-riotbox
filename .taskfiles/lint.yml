@@ -16,6 +16,7 @@ tasks:
         -e SC1091 \
         {{.ROOT_DIR}}/setup.sh \
         {{.ROOT_DIR}}/install.sh \
+        {{.ROOT_DIR}}/libexec/*.sh \
         {{.ROOT_DIR}}/scripts/*.sh \
         {{.ROOT_DIR}}/scripts/lib/*.sh \
         {{.ROOT_DIR}}/container/*.sh \
