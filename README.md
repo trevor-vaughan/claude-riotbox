@@ -34,7 +34,6 @@ Finally...it was fun!
 ## Prerequisites
 
 - [Podman](https://podman.io/) or Docker (podman preferred, auto-detected)
-- [task](https://taskfile.dev) command runner
 - [fuse-overlayfs](https://github.com/containers/fuse-overlayfs) (required for podman — see [Podman setup](#podman-setup))
 - One of:
   - `ANTHROPIC_API_KEY` environment variable, **or**
@@ -42,6 +41,52 @@ Finally...it was fun!
 
 - [git-filter-repo](https://github.com/newren/git-filter-repo) (required for `reown` — `pip install git-filter-repo`)
 - (Optional) nvm, uv, Go, rustup, RVM installed locally — the build mirrors whatever it finds
+
+## Install
+
+RiotBox installs as a normal application that puts a `riotbox` command on your
+PATH. Pick one of three paths:
+
+```sh
+# System package (rpm — Fedora/RHEL/CentOS)
+sudo dnf install ./riotbox-<ver>-1.noarch.rpm
+
+# System package (deb — Debian/Ubuntu)
+sudo apt install ./riotbox_<ver>_all.deb
+
+# Rootless (no sudo) — see ./setup.sh below for the guided variant
+./install.sh
+```
+
+**Layouts.** The two install models differ only in where files land:
+
+| | App tree | CLI symlink | Config dir |
+|---|---|---|---|
+| **rpm / deb** (system) | `/opt/riotbox` | `/usr/bin/riotbox` | `/etc/riotbox/{config,mounts.conf,plugins.conf}` |
+| **rootless** (`./install.sh`) | `$XDG_DATA_HOME/riotbox` (default `~/.local/share/riotbox`) | `~/.local/bin/riotbox` | `$XDG_CONFIG_HOME/riotbox` (default `~/.config/riotbox`) |
+
+The `riotbox` dispatcher is self-locating, so it works from either tree without
+extra configuration.
+
+**Config precedence** (highest to lowest):
+
+```
+env  >  $XDG_CONFIG_HOME/riotbox  >  /etc/riotbox  >  built-in defaults
+```
+
+A value set in your user config overrides the system `/etc/riotbox` defaults,
+and an explicit environment variable overrides both.
+
+**After installing**, build the image and verify your host:
+
+```sh
+riotbox build     # introspect the host and build the container image
+riotbox doctor    # run host preflight checks
+```
+
+`./setup.sh` is the guided rootless path (prerequisite checks + podman config +
+`install.sh` + `riotbox build` in one idempotent run). The rpm/deb packages are
+the system-wide path. Both leave you with the same `riotbox` command.
 
 ## Setup
 
@@ -295,7 +340,7 @@ Each line is a path relative to `$HOME` (or absolute with `/`). All user mounts 
 
 **Persistent defaults** (`~/.config/riotbox/config`):
 
-You can set default values for any `RIOTBOX_*` environment variable in the `config` file. Values use shell `:=` syntax so explicit env vars and task flags always take precedence:
+You can set default values for any `RIOTBOX_*` environment variable in the `config` file. Values use shell `:=` syntax so explicit env vars and command-line flags always take precedence:
 
 ```sh
 # ~/.config/riotbox/config
@@ -384,7 +429,7 @@ Then run a session with the shared socket:
 ```sh
 RIOTBOX_SOCKET=1 riotbox shell
 # or
-task socket-shell
+riotbox socket-shell
 ```
 
 The launcher only uses your **rootless** socket. It checks
@@ -630,6 +675,7 @@ Session branching is automatically disabled for `riotbox run` (non-interactive) 
 
 The following are only needed if you want to run the linters or tests locally (outside the container):
 
+- [task](https://taskfile.dev) — drives the maintainer build/test/lint/release targets
 - [shellcheck](https://www.shellcheck.net/) — shell script linter (`dnf install ShellCheck` or `brew install shellcheck`)
 - [hadolint](https://github.com/hadolint/hadolint) — Dockerfile linter (`brew install hadolint` or download from [releases](https://github.com/hadolint/hadolint/releases))
 - [venom](https://github.com/ovh/venom) — integration test runner (downloaded automatically inside the test container)
@@ -641,13 +687,29 @@ task check          # run all quality gates (lint + test + venom lint)
 task lint           # shellcheck + hadolint
 task test           # integration tests (builds test container, runs venom suites)
 task test:direct    # run venom directly on host (skip container build)
-task tests:lint     # structural lint of .venom.yml test suites
-task tests:list     # list available test suites
+task test:lint      # structural lint of .venom.yml test suites
+task test:list      # list available test suites
 ```
 
-The `check` task runs all three gates in parallel: `lint` (shellcheck and hadolint), `test` (venom integration suites in a container), and `tests:lint` (structural validation of venom test files).
+The `check` target executes all three gates in parallel: `lint` (shellcheck and hadolint), `test` (venom integration suites in a container), and `test:lint` (structural validation of venom test files).
 
 For quick iteration on a single suite — or when working in an agent sandbox without the test image built — use `task test:direct -- tests/<suite>.venom.yml` (or `scripts/venom-run.sh tests/<suite>.venom.yml` if you prefer to skip task). The wrapper runs venom directly on the host and routes all output (logs and result files) into `.test-output/`. Do **not** run `venom run` from the repo root yourself: venom writes `venom.log` to CWD on every invocation (and rotates earlier runs to `venom.N.log`) with no flag to redirect it, so a bare invocation litters the working tree.
+
+### Releasing
+
+Releases are tag-driven. Bump the version, push the tag, and CI builds and
+publishes the packages:
+
+```sh
+task release:bump -- <ver>   # writes VERSION, commits, tags v<ver>
+git push --follow-tags       # push the commit and the v<ver> tag together
+```
+
+Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml),
+which builds the rpm and deb with a pinned [`nfpm`](https://nfpm.goreleaser.com/)
+(v2.46.3) and publishes them alongside a `SHA256SUMS` checksum file via `gh`.
+The three artifacts (`riotbox-<ver>-1.noarch.rpm`, `riotbox_<ver>_all.deb`,
+`SHA256SUMS`) attach to the GitHub release for the tag.
 
 ## Podman setup
 
@@ -704,7 +766,7 @@ echo "options overlay metacopy=on" | sudo tee /etc/modprobe.d/overlay.conf
 
 ## Troubleshooting
 
-When something breaks, the first thing to try is `riotbox doctor` — it walks every host prerequisite (podman, fuse-overlayfs, task, image build, credentials, plugin/skill dirs) and prints a fix hint per failure. The same checks run at the end of `./setup.sh`, so a fresh install is self-verifying.
+When something breaks, the first thing to try is `riotbox doctor` — it walks every host prerequisite (podman, fuse-overlayfs, image build, credentials, plugin/skill dirs) and prints a fix hint per failure. The same checks run at the end of `./setup.sh`, so a fresh install is self-verifying.
 
 ### Container startup hangs
 

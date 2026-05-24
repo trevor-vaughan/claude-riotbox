@@ -710,114 +710,28 @@ RUN chmod +x /home/llm/.riotbox/entrypoint.sh /home/llm/.riotbox/inject-claude-m
 
 ---
 
-### Step 11: Modify `.taskfiles/session.yml`
+### Step 11: Add the overlay verbs to `bin/riotbox`
 
-Add four new tasks after `reset-session` (line 129):
-
-```yaml
-  overlays:
-    desc: List sessions with pending overlay data
-    dir: "{{.USER_WORKING_DIR}}"
-    env:
-      ROOT_DIR: "{{.ROOT_DIR}}"
-    cmd: "{{.ROOT_DIR}}/scripts/overlay-list.sh"
-
-  overlay-diff:
-    desc: Show changes in overlay (vs host project)
-    dir: "{{.USER_WORKING_DIR}}"
-    vars:
-      ARGS: "{{.ARGS | default .CLI_ARGS}}"
-    env:
-      ROOT_DIR: "{{.ROOT_DIR}}"
-    cmd: "{{.ROOT_DIR}}/scripts/overlay-diff.sh {{.ARGS}}"
-
-  overlay-accept:
-    desc: Apply overlay changes to host project
-    dir: "{{.USER_WORKING_DIR}}"
-    vars:
-      ARGS: "{{.ARGS | default .CLI_ARGS}}"
-    env:
-      ROOT_DIR: "{{.ROOT_DIR}}"
-    cmd: "{{.ROOT_DIR}}/scripts/overlay-accept.sh {{.ARGS}}"
-
-  overlay-reject:
-    desc: Discard overlay changes
-    dir: "{{.USER_WORKING_DIR}}"
-    vars:
-      ARGS: "{{.ARGS | default .CLI_ARGS}}"
-    env:
-      ROOT_DIR: "{{.ROOT_DIR}}"
-    cmd: "{{.ROOT_DIR}}/scripts/overlay-reject.sh {{.ARGS}}"
-```
-
----
-
-### Step 12: Modify `Taskfile.yml`
-
-Add four aliases after `session-reset` (line 142):
-
-```yaml
-  overlays:
-    desc: "Alias for session:overlays"
-    cmds:
-      - task: session:overlays
-
-  overlay-diff:
-    desc: "Alias for session:overlay-diff"
-    cmds:
-      - task: session:overlay-diff
-        vars:
-          ARGS: "{{.CLI_ARGS}}"
-
-  overlay-accept:
-    desc: "Alias for session:overlay-accept"
-    cmds:
-      - task: session:overlay-accept
-        vars:
-          ARGS: "{{.CLI_ARGS}}"
-
-  overlay-reject:
-    desc: "Alias for session:overlay-reject"
-    cmds:
-      - task: session:overlay-reject
-        vars:
-          ARGS: "{{.CLI_ARGS}}"
-```
-
----
-
-### Step 13: Modify `install.sh`
-
-**A. Add to usage text** — After line 38 (`session-reset`) in the usage
-heredoc, add:
-
-```
-  overlays                     List sessions with pending overlay data
-  overlay-diff [project]       Show overlay changes vs host project
-  overlay-accept [project]     Apply overlay changes to host project
-  overlay-reject [project]     Discard overlay changes
-```
-
-**B. Add to case statement** — After the `session-reset` case (line 85), add:
+Verb routing lives entirely in the self-locating `bin/riotbox` dispatcher —
+there is no longer a per-namespace task layer for session verbs. Add four
+`case` entries that `exec` the overlay subcommands, alongside the existing
+session-management cases:
 
 ```bash
-    overlays)
-        run_task overlays
-        ;;
-    overlay-diff)
-        run_task overlay-diff -- "$@"
-        ;;
-    overlay-accept)
-        run_task overlay-accept -- "$@"
-        ;;
-    overlay-reject)
-        run_task overlay-reject -- "$@"
-        ;;
+    overlays)        exec "${SCRIPTS}/overlay.sh" list ;;
+    overlay-diff)    exec "${SCRIPTS}/overlay.sh" diff "$@" ;;
+    overlay-accept)  exec "${SCRIPTS}/overlay.sh" accept "$@" ;;
+    overlay-reject)  exec "${SCRIPTS}/overlay.sh" reject "$@" ;;
 ```
+
+`overlays` takes no arguments (it lists every session with pending overlay
+data); the other three forward `"$@"` so the optional `[project]` argument
+reaches `overlay.sh`. Each case `exec`s, replacing the dispatcher process, so
+the subcommand's exit status is the user's exit status.
 
 ---
 
-### Step 14: Tests
+### Step 12: Tests
 
 Create `tests/overlay.venom.yml`. These tests mock the overlay directory
 structure on the host filesystem (no container needed). They test the
@@ -903,7 +817,7 @@ Example test structure for accept:
 
 ---
 
-### Step 15: Update `README.md`
+### Step 13: Update `README.md`
 
 Add a section under the existing session management docs:
 

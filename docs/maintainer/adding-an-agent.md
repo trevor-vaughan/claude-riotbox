@@ -355,7 +355,7 @@ That's the whole change. No edits to:
 | Symptom                                           | Where to look                       |
 |---------------------------------------------------|-------------------------------------|
 | `--agent=<new>` rejected with "must be one of"   | Does `agents/<new>/manifest.sh` exist? The host wrapper sources the registry at runtime, so no re-install is needed. |
-| `task run` exits with "unknown verb"             | Manifest is missing `agent_<name>_run_argv` |
+| `riotbox run` exits with "unknown verb"          | Manifest is missing `agent_<name>_run_argv` |
 | Wrapper invokes wrong binary                      | Check `agent_<name>_real_binary` and PATH order |
 | `--dangerously-skip-permissions` in wrong place   | Bug in `agent_<name>_wrapper_inject`; see opencode for subcommand-local injection |
 | Container fails to start with "no agents discovered" | The `COPY agents/` in the Dockerfile didn't run, or every subdirectory is missing `manifest.sh` |
