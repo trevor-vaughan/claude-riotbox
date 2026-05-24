@@ -575,7 +575,7 @@ stays unchanged.
 
 ---
 
-### Step 8: Modify `.taskfiles/scripts/launch.sh`
+### Step 8: Modify `libexec/launch.sh`
 
 Three additions, in this order within the file:
 

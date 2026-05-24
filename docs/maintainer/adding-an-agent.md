@@ -208,7 +208,7 @@ EOF
 ```
 
 Print the env var **names** this agent reads — one per line, no values.
-The launcher (`.taskfiles/scripts/passthrough-vars.sh`) sources the
+The launcher (`libexec/passthrough-vars.sh`) sources the
 registry, calls this verb on every registered agent, dedupes the union
 with `sort -u`, and emits `-e <NAME>` for each name whose value is set
 on the host. Adding a new provider key for an agent is a one-line edit
@@ -328,7 +328,7 @@ reject-unknown behaviour.
 That's the whole change. No edits to:
 
 - `install.sh` — the wrapper sources `agents/registry.sh` at runtime.
-- `.taskfiles/scripts/run.sh`, `resume.sh`, `audit.sh` — they call
+- `libexec/run.sh`, `resume.sh`, `audit.sh` — they call
   `agent_call "$RIOTBOX_AGENT" <verb>`.
 - `container/agent-wrapper.sh` — it dispatches by `basename($0)`.
 - `container/entrypoint.sh` — it loops over `AGENT_REGISTRY`.
