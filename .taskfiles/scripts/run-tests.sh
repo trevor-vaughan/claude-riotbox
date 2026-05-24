@@ -32,6 +32,7 @@ run_venom() {
             --output-dir "${CONTAINER_OUTPUT_DIR}" \
             --var root="${RIOTBOX_DIR}" \
             --var riotbox_dir="${RIOTBOX_DIR}" \
+            --var container_cmd="$(command -v podman 2>/dev/null || command -v docker 2>/dev/null || echo '')" \
             --var expected_version="$(cat "${ROOT_DIR}/VERSION")" \
             --var helpers="${RIOTBOX_DIR}/tests/lib/git-test-helpers.sh" \
             --var wrapper_helpers="${RIOTBOX_DIR}/tests/lib/wrapper-test-helpers.sh" \

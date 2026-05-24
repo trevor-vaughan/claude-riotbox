@@ -1,0 +1,97 @@
+name: package — rpm/deb install contract
+vars:
+  # Resolved by the runner to a host container runtime (podman or docker),
+  # or empty when none exists. When empty — or when the resolved runtime is
+  # not on PATH (e.g. inside the test container, which ships no podman) —
+  # every testcase below skips gracefully instead of failing.
+  container_cmd: ""
+  cc: "{{.container_cmd}}"
+
+# These tests build nothing themselves: they install the already-built
+# packages from dist/ (via `task release:package`) into clean OS containers
+# and assert the install contract. They need a real container runtime, so
+# they run under `task test:direct` (host podman) and skip under `task test`
+# (the test container has no nested runtime).
+#
+# Each testcase emits a shared, greppable token on BOTH paths — a success
+# token (RPM_OK / CONFIG_NOREPLACE_OK / DEB_OK) when it really runs, or
+# PACKAGE_TEST_SKIPPED when no runtime is available — and asserts with
+# ShouldMatchRegex so the same assertion passes either way.
+
+testcases:
+  - name: rpm installs into /opt and exposes the CLI (CentOS Stream 10)
+    steps:
+      - type: exec
+        script: |
+          set -e
+          cc="{{.cc}}"
+          if [ -z "${cc}" ] || ! command -v "${cc}" >/dev/null 2>&1; then
+            echo "PACKAGE_TEST_SKIPPED: no container runtime"
+            exit 0
+          fi
+          "${cc}" run --rm -v "{{.riotbox_dir}}/dist:/dist:ro,Z" \
+            quay.io/centos/centos:stream10 bash -c '
+              set -e
+              dnf -y install /dist/*.rpm >/dev/null 2>&1
+              test -d /opt/riotbox/libexec
+              test -d /opt/riotbox/scripts
+              test -f /opt/riotbox/Dockerfile
+              test -L /usr/bin/riotbox
+              test -f /etc/riotbox/config
+              riotbox version | grep -q riotbox
+              riotbox help | grep -q nested-run
+              echo RPM_OK
+            '
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "RPM_OK|PACKAGE_TEST_SKIPPED"
+
+  - name: rpm flags /etc config as config(noreplace) so edits survive upgrades
+    steps:
+      - type: exec
+        script: |
+          set -e
+          cc="{{.cc}}"
+          if [ -z "${cc}" ] || ! command -v "${cc}" >/dev/null 2>&1; then
+            echo "PACKAGE_TEST_SKIPPED: no container runtime"
+            exit 0
+          fi
+          "${cc}" run --rm -v "{{.riotbox_dir}}/dist:/dist:ro,Z" \
+            quay.io/centos/centos:stream10 bash -c '
+              set -e
+              dnf -y install /dist/*.rpm >/dev/null 2>&1
+              # %config registration (deterministic — proves config handling):
+              rpm -q --configfiles riotbox | grep -qx /etc/riotbox/config
+              # noreplace flag present (fflags renders config=c, noreplace=n):
+              rpm -q --queryformat "[%{filenames} %{fileflags:fflags}\n]" riotbox \
+                | grep -E "^/etc/riotbox/config .*n"
+              echo CONFIG_NOREPLACE_OK
+            '
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "CONFIG_NOREPLACE_OK|PACKAGE_TEST_SKIPPED"
+
+  - name: deb installs into /opt and exposes the CLI (Debian)
+    steps:
+      - type: exec
+        script: |
+          set -e
+          cc="{{.cc}}"
+          if [ -z "${cc}" ] || ! command -v "${cc}" >/dev/null 2>&1; then
+            echo "PACKAGE_TEST_SKIPPED: no container runtime"
+            exit 0
+          fi
+          "${cc}" run --rm -v "{{.riotbox_dir}}/dist:/dist:ro,Z" \
+            docker.io/library/debian:stable-slim bash -c '
+              set -e
+              apt-get update >/dev/null 2>&1
+              apt-get install -y /dist/*.deb >/dev/null 2>&1
+              test -d /opt/riotbox/libexec
+              test -L /usr/bin/riotbox
+              test -f /etc/riotbox/config
+              riotbox version | grep -q riotbox
+              echo DEB_OK
+            '
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "DEB_OK|PACKAGE_TEST_SKIPPED"
