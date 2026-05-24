@@ -1,0 +1,229 @@
+name: install.sh — rootless XDG install
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+testcases:
+  - name: install lays down app tree and working entrypoint
+    steps:
+      - type: exec
+        script: |
+          set -e
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          "{{.riotbox_dir}}/install.sh" >/dev/null
+          # app tree present
+          test -f "${XDG_DATA_HOME}/riotbox/bin/riotbox"
+          test -d "${XDG_DATA_HOME}/riotbox/libexec"
+          test -d "${XDG_DATA_HOME}/riotbox/scripts"
+          test -d "${XDG_DATA_HOME}/riotbox/agents"
+          test -f "${XDG_DATA_HOME}/riotbox/Dockerfile"
+          # entrypoint symlink resolves into the app tree
+          test -L "${HOME}/.local/bin/riotbox"
+          real="$(readlink -f "${HOME}/.local/bin/riotbox")"
+          test "${real}" = "${XDG_DATA_HOME}/riotbox/bin/riotbox"
+          # entrypoint self-locates and runs
+          ver="$("${HOME}/.local/bin/riotbox" version)"
+          echo "${ver}" | grep -q "riotbox"
+          # config stub seeded
+          test -f "${XDG_CONFIG_HOME}/riotbox/config"
+          echo "INSTALL_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "INSTALL_OK"
+
+  - name: Creates stub config files on fresh install
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          "{{.riotbox_dir}}/install.sh" >/dev/null
+          test -f "${XDG_CONFIG_HOME}/riotbox/config"
+          test -f "${XDG_CONFIG_HOME}/riotbox/mounts.conf"
+          test -f "${XDG_CONFIG_HOME}/riotbox/plugins.conf"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Stub configs contain version headers
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          "{{.riotbox_dir}}/install.sh" >/dev/null
+          grep -q '^# riotbox-config-version:' "${XDG_CONFIG_HOME}/riotbox/config"
+          grep -q '^# riotbox-config-version:' "${XDG_CONFIG_HOME}/riotbox/mounts.conf"
+          grep -q '^# riotbox-config-version:' "${XDG_CONFIG_HOME}/riotbox/plugins.conf"
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Does not overwrite existing config files
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${XDG_CONFIG_HOME}/riotbox"
+          echo "# custom config" > "${XDG_CONFIG_HOME}/riotbox/config"
+          "{{.riotbox_dir}}/install.sh" >/dev/null
+          content="$(cat "${XDG_CONFIG_HOME}/riotbox/config")"
+          [ "${content}" = "# custom config" ]
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: Warns when shipped config version is newer
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${XDG_CONFIG_HOME}/riotbox"
+          echo "# riotbox-config-version: 0" > "${XDG_CONFIG_HOME}/riotbox/config"
+          "{{.riotbox_dir}}/install.sh" 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "v0"
+          # Bumps each time scripts/configs/config gains a riotbox-config-version
+          # increment. Don't pin to a specific newer-version number; assert the
+          # general "newer version available" shape instead.
+          - result.systemout ShouldContainSubstring "available"
+
+  - name: Shows up-to-date when config versions match
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          "{{.riotbox_dir}}/install.sh" >/dev/null 2>&1
+          "{{.riotbox_dir}}/install.sh" 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "up to date"
+
+  - name: Idempotent install leaves a working entrypoint and app tree
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          "{{.riotbox_dir}}/install.sh" >/dev/null 2>&1
+          "{{.riotbox_dir}}/install.sh" >/dev/null 2>&1
+          test -L "${HOME}/.local/bin/riotbox"
+          real="$(readlink -f "${HOME}/.local/bin/riotbox")"
+          test "${real}" = "${XDG_DATA_HOME}/riotbox/bin/riotbox"
+          test -f "${XDG_DATA_HOME}/riotbox/bin/riotbox"
+          test -d "${XDG_DATA_HOME}/riotbox/libexec"
+          "${HOME}/.local/bin/riotbox" version | grep -q "riotbox"
+          echo "idempotent=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "idempotent=pass"
+
+  - name: Warns when ~/.local/bin is not in PATH
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          export PATH="/usr/bin:/bin"
+          "{{.riotbox_dir}}/install.sh" 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "not in your PATH"
+
+  - name: Does not warn when ~/.local/bin IS in PATH
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          export PATH="${HOME}/.local/bin:${PATH}"
+          "{{.riotbox_dir}}/install.sh" 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "not in your PATH"
+
+  - name: Handles a missing stubs dir gracefully
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          # Stage a full copy of the repo MINUS scripts/configs.
+          SRC="${root}/src"
+          cp -a "{{.riotbox_dir}}/." "${SRC}/"
+          rm -rf "${SRC}/scripts/configs"
+          "${SRC}/install.sh" >/dev/null
+          # App tree + entrypoint still installed.
+          test -f "${XDG_DATA_HOME}/riotbox/bin/riotbox"
+          test -L "${HOME}/.local/bin/riotbox"
+          # No config files seeded (no stubs to copy from).
+          [ ! -f "${XDG_CONFIG_HOME}/riotbox/config" ]
+          [ ! -f "${XDG_CONFIG_HOME}/riotbox/mounts.conf" ]
+          [ ! -f "${XDG_CONFIG_HOME}/riotbox/plugins.conf" ]
+          echo "missing_stubs=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "missing_stubs=pass"
+
+  - name: Falls back to unknown version gracefully when VERSION is absent
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          # Stage a full copy of the repo without a VERSION file.
+          SRC="${root}/src"
+          cp -a "{{.riotbox_dir}}/." "${SRC}/"
+          rm -f "${SRC}/VERSION"
+          "${SRC}/install.sh" >/dev/null
+          # Installed entrypoint still runs; dispatcher falls back to "unknown".
+          out="$("${HOME}/.local/bin/riotbox" version)"
+          echo "${out}" | grep -q "riotbox"
+          echo "version_fallback=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "version_fallback=pass"

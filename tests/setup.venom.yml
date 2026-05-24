@@ -171,29 +171,33 @@ testcases:
 
   # -- Install tests --
 
-  - name: Installs the CLI wrapper
+  - name: Installs the CLI entrypoint
     steps:
       - type: exec
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
-          mkdir -p "${FAKE_HOME}/bin"
+          export XDG_DATA_HOME="${FAKE_HOME}/.local/share"
+          export XDG_CONFIG_HOME="${FAKE_HOME}/.config"
           unset ANTHROPIC_API_KEY
           HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
-          test -x "${FAKE_HOME}/bin/riotbox"
+          test -L "${FAKE_HOME}/.local/bin/riotbox"
         assertions:
           - result.code ShouldEqual 0
 
-  - name: Wrapper references correct riotbox directory
+  - name: Entrypoint symlink resolves into the app tree and runs
     steps:
       - type: exec
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
-          mkdir -p "${FAKE_HOME}/bin"
+          export XDG_DATA_HOME="${FAKE_HOME}/.local/share"
+          export XDG_CONFIG_HOME="${FAKE_HOME}/.config"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" RIOTBOX_DIR="{{.riotbox_dir}}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
-          grep -q 'RIOTBOX_DIR=' "${FAKE_HOME}/bin/riotbox"
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          real="$(readlink -f "${FAKE_HOME}/.local/bin/riotbox")"
+          test "${real}" = "${XDG_DATA_HOME}/riotbox/bin/riotbox"
+          "${FAKE_HOME}/.local/bin/riotbox" version | grep -q "riotbox"
         assertions:
           - result.code ShouldEqual 0
 
@@ -203,10 +207,11 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
-          mkdir -p "${FAKE_HOME}/bin"
+          export XDG_DATA_HOME="${FAKE_HOME}/.local/share"
+          export XDG_CONFIG_HOME="${FAKE_HOME}/.config"
           unset ANTHROPIC_API_KEY
           HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build >/dev/null 2>&1
-          test -x "${FAKE_HOME}/bin/riotbox"
+          test -L "${FAKE_HOME}/.local/bin/riotbox"
           HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
         assertions:
           - result.code ShouldEqual 0

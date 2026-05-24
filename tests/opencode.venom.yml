@@ -1151,8 +1151,7 @@ testcases:
             exit 0
           fi
           REPO="$(mktemp -d)"
-          BIN_DIR="$(mktemp -d)"
-          trap 'rm -rf "${REPO}" "${BIN_DIR}"' EXIT
+          trap 'rm -rf "${REPO}"' EXIT
           ( cd "${REPO}" && git init -q && \
               git config user.email "test@example.com" && \
               git config user.name "test" && \
@@ -1162,11 +1161,8 @@ testcases:
           # Build is a no-op when the image is already current.
           ( cd "{{.riotbox_dir}}" && task build >/dev/null 2>&1 )
 
-          # Install the wrapper into a tmp bin dir
-          "{{.riotbox_dir}}/install.sh" "${BIN_DIR}" >/dev/null
-
-          # Run a trivial prompt with --agent=opencode
-          ( cd "${REPO}" && "${BIN_DIR}/riotbox" --agent=opencode \
+          # Run a trivial prompt with --agent=opencode via the repo dispatcher.
+          ( cd "${REPO}" && "{{.riotbox_dir}}/bin/riotbox" --agent=opencode \
               run "respond with 'ok' and exit" )
 
           # Locate the session dir (matches mangle in mount-projects.sh)

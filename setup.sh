@@ -313,32 +313,22 @@ else
     WARNINGS=$((WARNINGS + 1))
 fi
 
-# ── 5. Install CLI wrapper ──────────────────────────────────────────────────
+# ── 5. Install CLI ──────────────────────────────────────────────────────────
 step "5. Install CLI"
 
-INSTALL_DIR="${HOME}/bin"
-WRAPPER="${INSTALL_DIR}/riotbox"
+# The installer lays the app tree into $XDG_DATA_HOME/riotbox and symlinks the
+# entrypoint into ~/.local/bin. It always targets XDG (no custom dir).
+BIN_DIR="${HOME}/.local/bin"
+ENTRYPOINT="${BIN_DIR}/riotbox"
+DATA_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/riotbox"
 
-if [ -x "${WRAPPER}" ]; then
-    # Check if the wrapper points to this repo
-    if grep -q "${SCRIPT_DIR}" "${WRAPPER}" 2>/dev/null; then
-        ok "riotbox already installed (${WRAPPER})"
-    else
-        warn "riotbox exists but points to a different location."
-        if ask_yn "Reinstall from ${SCRIPT_DIR}?"; then
-            "${SCRIPT_DIR}/install.sh" "${INSTALL_DIR}"
-            ok "riotbox reinstalled"
-        fi
-    fi
+if [ -L "${ENTRYPOINT}" ] && [ "$(readlink -f "${ENTRYPOINT}")" = "${DATA_DIR}/bin/riotbox" ]; then
+    ok "riotbox already installed (${ENTRYPOINT} -> ${DATA_DIR}/bin/riotbox)"
 else
-    echo "  This installs the 'riotbox' command to ${INSTALL_DIR}/."
+    echo "  This installs the app tree to ${DATA_DIR} and the 'riotbox' command to ${BIN_DIR}/."
     if ask_yn "Install?" "y"; then
-        if [ -z "${AUTO_YES}" ]; then
-            read -rp "  Install directory [${INSTALL_DIR}]: " custom_dir
-            INSTALL_DIR="${custom_dir:-${INSTALL_DIR}}"
-        fi
-        "${SCRIPT_DIR}/install.sh" "${INSTALL_DIR}"
-        ok "riotbox installed to ${INSTALL_DIR}"
+        "${SCRIPT_DIR}/install.sh"
+        ok "riotbox installed (${ENTRYPOINT} -> ${DATA_DIR}/bin/riotbox)"
     else
         warn "Skipped. Run ./install.sh manually when ready."
         WARNINGS=$((WARNINGS + 1))
