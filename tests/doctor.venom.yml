@@ -527,20 +527,19 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
-  # ── CLI integration: install.sh wires `doctor` into the wrapper ──────────
+  # ── CLI integration: the dispatcher wires `doctor` into the CLI ──────────
 
-  - name: riotbox wrapper exposes the doctor subcommand
+  - name: riotbox CLI exposes the doctor subcommand
     steps:
       - type: exec
         script: |
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          "{{.riotbox_dir}}/install.sh" "${TEST_DIR}" >/dev/null
-          # Wrapper must list `doctor` in its usage and dispatch to
-          # scripts/preflight.sh.
-          grep -q '^  doctor ' "${TEST_DIR}/riotbox" \
-              || { echo "BAD: usage missing doctor" >&2; exit 1; }
-          grep -q 'scripts/preflight.sh' "${TEST_DIR}/riotbox" \
+          # The committed dispatcher must advertise `doctor` in its help and
+          # route it to scripts/preflight.sh. The help check confirms the verb
+          # is user-discoverable; the static grep confirms the dispatch target
+          # without launching a real preflight (which probes the host).
+          "{{.riotbox_dir}}/bin/riotbox" help | grep -q '^  doctor ' \
+              || { echo "BAD: help missing doctor" >&2; exit 1; }
+          grep -Eq 'doctor\).*preflight\.sh' "{{.riotbox_dir}}/bin/riotbox" \
               || { echo "BAD: dispatch missing preflight.sh" >&2; exit 1; }
           echo "OK"
         assertions:

@@ -1,4 +1,4 @@
-name: CLI wrapper argument routing tests
+name: riotbox dispatcher — argument routing
 vars:
   root: "."
   riotbox_dir: "{{.root}}"
@@ -16,14 +16,14 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" 2>&1
+          "${TEST_DIR}/app/bin/riotbox" 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "Usage:"
 
-  # -- Path arguments -> shell with projects --
+  # -- Path arguments -> shell with projects (via the *) default branch) --
 
-  - name: Single path routes to shell with that path
+  - name: Single path routes to a shell with that project
     steps:
       - type: exec
         script: |
@@ -32,14 +32,16 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" "${TEST_DIR}/projects/foo"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" "${TEST_DIR}/projects/foo"
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "shell"
+          - result.systemout ShouldContainSubstring "CALL checkpoint.sh"
+          - result.systemout ShouldContainSubstring "CALL launch.sh bash"
+          - result.systemout ShouldContainSubstring "PROJECTS=/"
           - result.systemout ShouldContainSubstring "/projects/foo"
 
-  - name: Multiple paths routes to shell with all paths
+  - name: Multiple paths route to a shell with all projects
     steps:
       - type: exec
         script: |
@@ -48,15 +50,15 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" "${TEST_DIR}/projects/foo" "${TEST_DIR}/projects/bar"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" "${TEST_DIR}/projects/foo" "${TEST_DIR}/projects/bar"
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "shell"
+          - result.systemout ShouldContainSubstring "CALL launch.sh bash"
           - result.systemout ShouldContainSubstring "/projects/foo"
           - result.systemout ShouldContainSubstring "/projects/bar"
 
-  - name: Dot path routes to shell with dot
+  - name: Dot path routes to a shell with the current directory
     steps:
       - type: exec
         script: |
@@ -65,16 +67,16 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" .
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" .
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "shell"
-          - result.systemout ShouldContainSubstring "."
+          - result.systemout ShouldContainSubstring "CALL launch.sh bash"
+          - result.systemout ShouldContainSubstring "PROJECTS=."
 
   # -- Explicit shell command --
 
-  - name: Shell with no projects routes to shell in CWD
+  - name: Shell with no projects defaults RIOTBOX_PROJECTS to the current directory
     steps:
       - type: exec
         script: |
@@ -83,14 +85,15 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" shell
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" shell
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "shell"
-          - result.systemout ShouldContainSubstring "."
+          - result.systemout ShouldContainSubstring "CALL checkpoint.sh"
+          - result.systemout ShouldContainSubstring "CALL launch.sh bash"
+          - result.systemout ShouldContainSubstring "PROJECTS=."
 
-  - name: Shell with project routes to shell with that project
+  - name: Shell with a project exports it via RIOTBOX_PROJECTS
     steps:
       - type: exec
         script: |
@@ -99,16 +102,17 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" shell "${TEST_DIR}/projects/foo"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" shell "${TEST_DIR}/projects/foo"
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "shell"
+          - result.systemout ShouldContainSubstring "CALL launch.sh bash"
+          - result.systemout ShouldContainSubstring "PROJECTS=/"
           - result.systemout ShouldContainSubstring "/projects/foo"
 
   # -- run command --
 
-  - name: Run routes prompt and projects
+  - name: Run routes prompt and projects to run.sh
     steps:
       - type: exec
         script: |
@@ -117,15 +121,14 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" run "implement the feature" "${TEST_DIR}/projects/foo"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" run "implement the feature" "${TEST_DIR}/projects/foo"
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "run"
-          - result.systemout ShouldContainSubstring "implement the feature"
+          - result.systemout ShouldContainSubstring "CALL run.sh implement the feature"
           - result.systemout ShouldContainSubstring "/projects/foo"
 
-  - name: Run with prompt only (no projects)
+  - name: Run with prompt only routes to run.sh
     steps:
       - type: exec
         script: |
@@ -134,16 +137,15 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" run "do something"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" run "do something"
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "run"
-          - result.systemout ShouldContainSubstring "do something"
+          - result.systemout ShouldContainSubstring "CALL run.sh do something"
 
   # -- resume command --
 
-  - name: Resume with no projects routes to resume in CWD
+  - name: Resume with no projects defaults RIOTBOX_PROJECTS to the current directory
     steps:
       - type: exec
         script: |
@@ -152,14 +154,15 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" resume
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" resume
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "resume"
-          - result.systemout ShouldContainSubstring "."
+          - result.systemout ShouldContainSubstring "CALL checkpoint.sh"
+          - result.systemout ShouldContainSubstring "CALL resume.sh"
+          - result.systemout ShouldContainSubstring "PROJECTS=."
 
-  - name: Resume with project
+  - name: Resume with a project exports it via RIOTBOX_PROJECTS
     steps:
       - type: exec
         script: |
@@ -168,16 +171,16 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" resume "${TEST_DIR}/projects/foo"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" resume "${TEST_DIR}/projects/foo"
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "resume"
+          - result.systemout ShouldContainSubstring "CALL resume.sh"
           - result.systemout ShouldContainSubstring "/projects/foo"
 
   # -- session-list command --
 
-  - name: Session-list routes to task
+  - name: Session-list routes to list-sessions.sh
     steps:
       - type: exec
         script: |
@@ -186,15 +189,15 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" session-list
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" session-list
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "session-list"
+          - result.systemout ShouldContainSubstring "CALL list-sessions.sh"
 
   # -- session-remove command --
 
-  - name: Session-remove routes to task
+  - name: Session-remove routes to remove-session.sh
     steps:
       - type: exec
         script: |
@@ -203,13 +206,13 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" session-remove
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" session-remove
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "session-remove"
+          - result.systemout ShouldContainSubstring "CALL remove-session.sh"
 
-  - name: Session-remove --all routes correctly
+  - name: Session-remove --all routes the flag through
     steps:
       - type: exec
         script: |
@@ -218,14 +221,13 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" session-remove --all
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" session-remove --all
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "session-remove"
-          - result.systemout ShouldContainSubstring "--all"
+          - result.systemout ShouldContainSubstring "CALL remove-session.sh --all"
 
-  - name: Session-remove with path routes correctly
+  - name: Session-remove with a path routes the path through
     steps:
       - type: exec
         script: |
@@ -234,16 +236,16 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" session-remove "${TEST_DIR}/projects/foo"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" session-remove "${TEST_DIR}/projects/foo"
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "session-remove"
+          - result.systemout ShouldContainSubstring "CALL remove-session.sh /"
           - result.systemout ShouldContainSubstring "/projects/foo"
 
   # -- session-reset command --
 
-  - name: Session-reset routes to task
+  - name: Session-reset routes to reset-session.sh
     steps:
       - type: exec
         script: |
@@ -252,13 +254,13 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" session-reset
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" session-reset
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "session-reset"
+          - result.systemout ShouldContainSubstring "CALL reset-session.sh"
 
-  - name: Session-reset all force routes correctly
+  - name: Session-reset all force routes the args through
     steps:
       - type: exec
         script: |
@@ -267,17 +269,15 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" session-reset all force
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" session-reset all force
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "session-reset"
-          - result.systemout ShouldContainSubstring "all"
-          - result.systemout ShouldContainSubstring "force"
+          - result.systemout ShouldContainSubstring "CALL reset-session.sh all force"
 
   # -- reown command --
 
-  - name: Reown with no flags
+  - name: Reown with no flags routes to reown-commits.sh
     steps:
       - type: exec
         script: |
@@ -286,13 +286,13 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" reown
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" reown
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "reown"
+          - result.systemout ShouldContainSubstring "CALL reown-commits.sh"
 
-  - name: Reown with --force flag
+  - name: Reown --force routes the flag through
     steps:
       - type: exec
         script: |
@@ -301,16 +301,15 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" reown --force
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" reown --force
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "reown"
-          - result.systemout ShouldContainSubstring "--force"
+          - result.systemout ShouldContainSubstring "CALL reown-commits.sh --force"
 
-  # -- Pass-through commands --
+  # -- build command --
 
-  - name: Build passes through to task
+  - name: Build routes to build.sh
     steps:
       - type: exec
         script: |
@@ -319,13 +318,15 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" build
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" build
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "build"
+          - result.systemout ShouldContainSubstring "CALL build.sh"
 
-  - name: Test passes through to task
+  # -- Privileged session modes (nested / socket) --
+
+  - name: Nested-run enables RIOTBOX_NESTED and warns on stderr
     steps:
       - type: exec
         script: |
@@ -334,13 +335,18 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" test
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" nested-run "do work" 2>"${TEST_DIR}/stderr"
+          echo "--- capture ---"
+          print_capture
+          echo "--- stderr ---"
+          cat "${TEST_DIR}/stderr"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "test"
+          - result.systemout ShouldContainSubstring "CALL run.sh do work"
+          - result.systemout ShouldContainSubstring "NESTED=1"
+          - result.systemout ShouldContainSubstring "Nested container mode disables SELinux confinement"
 
-  - name: Clean passes through to task
+  - name: Nested-shell enables RIOTBOX_NESTED and opens a shell
     steps:
       - type: exec
         script: |
@@ -349,13 +355,14 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" clean
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" nested-shell 2>/dev/null
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "clean"
+          - result.systemout ShouldContainSubstring "CALL launch.sh bash"
+          - result.systemout ShouldContainSubstring "NESTED=1"
 
-  - name: Namespaced task passes through
+  - name: Socket-run enables RIOTBOX_SOCKET and warns on stderr
     steps:
       - type: exec
         script: |
@@ -364,15 +371,136 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" "session:audit" -- "review this"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" socket-run "do work" 2>"${TEST_DIR}/stderr"
+          echo "--- capture ---"
+          print_capture
+          echo "--- stderr ---"
+          cat "${TEST_DIR}/stderr"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "session:audit"
+          - result.systemout ShouldContainSubstring "CALL run.sh do work"
+          - result.systemout ShouldContainSubstring "SOCKET=1"
+          - result.systemout ShouldContainSubstring "bind-mounts the host podman socket"
+
+  - name: Socket-shell enables RIOTBOX_SOCKET and opens a shell
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          "${TEST_DIR}/app/bin/riotbox" socket-shell 2>/dev/null
+          print_capture
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CALL launch.sh bash"
+          - result.systemout ShouldContainSubstring "SOCKET=1"
+
+  # -- Overlay commands --
+
+  - name: Overlays routes to overlay.sh list
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          "${TEST_DIR}/app/bin/riotbox" overlays
+          print_capture
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CALL overlay.sh list"
+
+  - name: Overlay-diff routes to overlay.sh diff with the project
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          "${TEST_DIR}/app/bin/riotbox" overlay-diff "${TEST_DIR}/projects/foo"
+          print_capture
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CALL overlay.sh diff /"
+          - result.systemout ShouldContainSubstring "/projects/foo"
+
+  - name: Overlay-accept routes to overlay.sh accept with the project
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          "${TEST_DIR}/app/bin/riotbox" overlay-accept "${TEST_DIR}/projects/foo"
+          print_capture
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CALL overlay.sh accept /"
+          - result.systemout ShouldContainSubstring "/projects/foo"
+
+  - name: Overlay-reject routes to overlay.sh reject with the project
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          "${TEST_DIR}/app/bin/riotbox" overlay-reject "${TEST_DIR}/projects/foo"
+          print_capture
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CALL overlay.sh reject /"
+          - result.systemout ShouldContainSubstring "/projects/foo"
+
+  # -- mounts command --
+
+  - name: Mounts lists the auto-detected paths
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          "${TEST_DIR}/app/bin/riotbox" mounts
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Auto-detected mounts:"
+          - result.systemout ShouldContainSubstring "/home/llm/.config"
+          - result.systemout ShouldContainSubstring "/home/llm/.cache"
+
+  # -- install-hooks command --
+
+  - name: Install-hooks routes flags to install-hooks.sh
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          "${TEST_DIR}/app/bin/riotbox" install-hooks --some-flag
+          print_capture
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CALL install-hooks.sh --some-flag"
 
   # -- Edge cases --
 
-  - name: Non-existent path is not treated as a project
+  - name: Non-existent path is rejected as an unknown command
     steps:
       - type: exec
         script: |
@@ -381,14 +509,12 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" "/nonexistent/path"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" "/nonexistent/path" 2>&1 || echo "EXIT=$?"
         assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldNotContainSubstring "shell"
-          - result.systemout ShouldContainSubstring "/nonexistent/path"
+          - result.systemout ShouldContainSubstring "unknown command"
+          - result.systemout ShouldContainSubstring "EXIT=2"
 
-  - name: Mix of path and non-path is not treated as all-paths
+  - name: Mix of path and non-path is rejected as an unknown command
     steps:
       - type: exec
         script: |
@@ -397,13 +523,12 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" "${TEST_DIR}/projects/foo" "not-a-path"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" "${TEST_DIR}/projects/foo" "not-a-path" 2>&1 || echo "EXIT=$?"
         assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldNotContainSubstring "shell"
+          - result.systemout ShouldContainSubstring "unknown command"
+          - result.systemout ShouldContainSubstring "EXIT=2"
 
-  - name: Separator is passed through for advanced usage
+  - name: Separator and following args reach the routed script
     steps:
       - type: exec
         script: |
@@ -412,17 +537,16 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" "session:nested-run" -- "do something" "${TEST_DIR}/projects/foo"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" run -- "do something" "${TEST_DIR}/projects/foo"
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "session:nested-run"
-          - result.systemout ShouldContainSubstring "--"
-          - result.systemout ShouldContainSubstring "do something"
+          - result.systemout ShouldContainSubstring "CALL run.sh -- do something"
+          - result.systemout ShouldContainSubstring "/projects/foo"
 
   # -- Agent flag --
 
-  - name: Agent flag opencode is parsed and exported
+  - name: Agent flag opencode is parsed and exported to the routed script
     steps:
       - type: exec
         script: |
@@ -430,22 +554,15 @@ testcases:
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          cat > "${TEST_DIR}/bin/task" <<MOCK
-          #!/usr/bin/env bash
-          printf '%s\n' "\$@" > "${MOCK_TASK_ARGS}"
-          echo "RIOTBOX_AGENT=\${RIOTBOX_AGENT:-unset}" >> "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" --agent=opencode run "do work"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" --agent=opencode run "do work"
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "RIOTBOX_AGENT=opencode"
-          - result.systemout ShouldContainSubstring "run"
-          - result.systemout ShouldContainSubstring "do work"
+          - result.systemout ShouldContainSubstring "CALL run.sh do work"
+          - result.systemout ShouldContainSubstring "AGENT=opencode"
 
-  - name: Agent flag claude is the default behavior
+  - name: Agent defaults to claude when neither flag nor env is set
     steps:
       - type: exec
         script: |
@@ -453,21 +570,15 @@ testcases:
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          cat > "${TEST_DIR}/bin/task" <<MOCK
-          #!/usr/bin/env bash
-          printf '%s\n' "\$@" > "${MOCK_TASK_ARGS}"
-          echo "RIOTBOX_AGENT=\${RIOTBOX_AGENT:-unset}" >> "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
           cd "${TEST_DIR}/projects"
           unset RIOTBOX_AGENT
-          "${TEST_DIR}/bin/riotbox" run "do work"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" run "do work"
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "RIOTBOX_AGENT=claude"
+          - result.systemout ShouldContainSubstring "AGENT=claude"
 
-  - name: Agent flag is validated and rejects unknown values
+  - name: Agent flag rejects unknown values with exit 2
     steps:
       - type: exec
         script: |
@@ -476,7 +587,7 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" --agent=garbage run "x" 2>&1 || echo "EXIT=$?"
+          "${TEST_DIR}/app/bin/riotbox" --agent=garbage run "x" 2>&1 || echo "EXIT=$?"
         assertions:
           - result.systemout ShouldContainSubstring "must be one of"
           - result.systemout ShouldContainSubstring "EXIT=2"
@@ -489,19 +600,13 @@ testcases:
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          cat > "${TEST_DIR}/bin/task" <<MOCK
-          #!/usr/bin/env bash
-          printf '%s\n' "\$@" > "${MOCK_TASK_ARGS}"
-          echo "RIOTBOX_AGENT=\${RIOTBOX_AGENT:-unset}" >> "${MOCK_TASK_ARGS}"
-          MOCK
-          chmod +x "${TEST_DIR}/bin/task"
           cd "${TEST_DIR}/projects"
           export RIOTBOX_AGENT=opencode
-          "${TEST_DIR}/bin/riotbox" run "x"
-          print_task_args
+          "${TEST_DIR}/app/bin/riotbox" run "x"
+          print_capture
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "RIOTBOX_AGENT=opencode"
+          - result.systemout ShouldContainSubstring "AGENT=opencode"
 
   # -- agents verb --
 
@@ -514,7 +619,7 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" agents
+          "${TEST_DIR}/app/bin/riotbox" agents
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "claude"
@@ -533,7 +638,7 @@ testcases:
           # (riotbox name and real binary name). Print 'OK' iff at least
           # one line is present and every line satisfies that, else
           # 'BAD: <line>' so the assertion below catches the first offender.
-          "${TEST_DIR}/bin/riotbox" agents | awk '
+          "${TEST_DIR}/app/bin/riotbox" agents | awk '
               NF != 2 { print "BAD: " $0; bad=1; exit 0 }
               END { if (NR == 0) print "BAD: empty"; else if (!bad) print "OK" }
           '
@@ -550,7 +655,7 @@ testcases:
           setup_wrapper_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           cd "${TEST_DIR}/projects"
-          "${TEST_DIR}/bin/riotbox" help
+          "${TEST_DIR}/app/bin/riotbox" help
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "agents"
@@ -568,7 +673,7 @@ testcases:
           # agent-agnostic `agents` verb. Pin this so a future refactor
           # that moves validation past dispatch (which would silently
           # accept --agent=garbage for info-only verbs) regresses loudly.
-          "${TEST_DIR}/bin/riotbox" --agent=garbage agents 2>&1 || echo "EXIT=$?"
+          "${TEST_DIR}/app/bin/riotbox" --agent=garbage agents 2>&1 || echo "EXIT=$?"
         assertions:
           - result.systemout ShouldContainSubstring "must be one of"
           - result.systemout ShouldContainSubstring "EXIT=2"
