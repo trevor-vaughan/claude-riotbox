@@ -52,6 +52,12 @@ echo "   Workdir : /workspace"
 echo "   Network : enabled (no host credentials mounted)"
 echo ""
 
+# Non-interactive runs should never prompt to create a git repo, even when a
+# terminal is attached. Default to "warn and continue" for non-git project dirs
+# (the historical behaviour); opt in with RIOTBOX_GIT_INIT=1 to auto-initialise.
+# Must be set before checkpoint.sh, which performs the (otherwise interactive) check.
+export RIOTBOX_GIT_INIT="${RIOTBOX_GIT_INIT:-0}"
+
 # Checkpoint all project repos before launching.
 "${ROOT_DIR}/libexec/checkpoint.sh"
 

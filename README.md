@@ -202,7 +202,7 @@ Plugins listed in your `opencode.jsonc` `plugin` array (npm packages or git URLs
 | `riotbox socket-shell [dir]` | Shell with shared host podman socket (WARNING: grants host root) |
 | `riotbox session-list` | List all RiotBox sessions |
 | `riotbox session-remove [key/path]` | Remove a session by key or project path (or `--all`) |
-| `riotbox session-reset` | Reset session cache (forces fresh skill/config copy) |
+| `riotbox session-reset [all] [force]` | Reset session cache (forces fresh skill/config copy); `all` resets every session, `force` skips the confirmation prompt |
 | `riotbox overlays` | List sessions with pending overlay data (podman-only) |
 | `riotbox overlay-diff [project]` | Show overlay changes vs host project |
 | `riotbox overlay-accept [project]` | Apply overlay changes to host project |
@@ -561,7 +561,7 @@ RiotBox includes several layers of protection, but none are foolproof:
 - **Local bare backup**: Before every `run`, all refs and tags are pushed to a bare clone at `~/.local/share/riotbox/backups/<project>.git`. This backup lives outside the container's mount tree — the agent cannot access or modify it. Even if the agent deletes every file and rewrites all history, the backup is intact.
 - **Checkpoint tags**: A git tag (`riotbox-checkpoint/<timestamp>`) is created on the current HEAD before each run. Tags survive history rewrites inside the container.
 - **Session branches**: On `shell` sessions, the container offers to create a `riotbox/<id>` branch. The agent works there; on exit the branch is fast-forward merged back so the full commit history lands seamlessly on your branch. See [Session branches](#session-branches).
-- **Non-git-repo warning**: If a project directory isn't a git repo, RiotBox warns you that there's no checkpoint protection.
+- **Git repo bootstrapping**: If a project directory isn't a git repo, RiotBox offers to create one so the checkpoint mechanism has something to protect. Empty repos (no commits yet) are handled gracefully — see [Initializing a git repo](#initializing-a-git-repo).
 - **Git guardrails**: Inside the container, `receive.denyNonFastForwards` and `receive.denyDeletes` are enabled to prevent the most destructive git operations.
 - **Container isolation**: The agent can't access your SSH keys, cloud credentials, or anything outside the mounted directories.
 
@@ -619,6 +619,35 @@ SESSION_BRANCH=0 riotbox shell   # never create one
 ```
 
 Session branching is automatically disabled for `riotbox run` (non-interactive) since those runs are scripted and already checkpoint before starting.
+
+### Initializing a git repo
+
+Checkpoint protection needs a git repo. RiotBox handles the two "missing repo" cases so a session never errors out:
+
+- **Empty repo (no commits yet):** Starting in a freshly `git init`'d directory is fine. There's nothing to back up until the first commit, so the checkpoint step prints `empty git repo (no commits yet) — nothing to checkpoint` and the session continues. (If the directory has uncommitted files, the checkpoint commits them and tags that first commit as usual.)
+- **Not a git repo:** In an interactive session (`shell`, `resume`), RiotBox asks before creating one:
+
+  ```
+    /path/to/project is not a git repository.
+    Create one so your work can be checkpointed? [Y/n]
+  ```
+
+  Answer yes (the default) and the directory is initialized, any existing files are committed, and a checkpoint tag is created. Answer no and the session continues without checkpoint protection (you'll see the no-protection warning).
+
+**Controlling repo creation** via environment variable:
+
+| Value | Behavior |
+|---|---|
+| *(unset)* | Prompt on an interactive terminal (default Yes); skip without creating on non-interactive runs |
+| `RIOTBOX_GIT_INIT=1` | Always create the repo, no prompt |
+| `RIOTBOX_GIT_INIT=0` | Never create; warn that there's no checkpoint protection |
+
+```sh
+RIOTBOX_GIT_INIT=1 riotbox run "scaffold a new project" ./new-dir   # init non-interactively
+RIOTBOX_GIT_INIT=0 riotbox shell ./scratch                          # never touch the dir
+```
+
+Non-interactive callers (`riotbox run`, CI, scripts) never block on the prompt: with `RIOTBOX_GIT_INIT` unset they skip creation rather than create a repo in your directory without consent.
 
 ### Recommendations
 

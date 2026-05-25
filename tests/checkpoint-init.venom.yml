@@ -1,0 +1,287 @@
+name: Checkpoint handling of empty and non-git project directories
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  helpers: "{{.root}}/tests/lib/git-test-helpers.sh"
+
+testcases:
+  # -- Empty repository (unborn HEAD) --
+
+  - name: Empty git repo (no commits) does not crash checkpoint
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo            # creates repo with NO commits (unborn HEAD)
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # Nothing to back up yet: no checkpoint tag should be created.
+          [ -z "$(git -C "${REPO_DIR}" tag -l 'riotbox-checkpoint/*')" ]
+          echo "empty_repo_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "nothing to checkpoint"
+          - result.systemout ShouldContainSubstring "empty_repo_ok=true"
+
+  - name: Empty git repo with untracked files gets its first checkpoint
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo            # unborn HEAD
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "fresh work" > "${REPO_DIR}/app.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # A root checkpoint commit and a tag must now exist.
+          git -C "${REPO_DIR}" log --format='%s' | grep -q '^checkpoint: pre-riotbox-'
+          [ -n "$(git -C "${REPO_DIR}" tag -l 'riotbox-checkpoint/*')" ]
+          git -C "${REPO_DIR}" show HEAD -- app.txt | grep -q 'fresh work'
+          echo "first_checkpoint_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "first_checkpoint_ok=true"
+
+  # -- Non-git directory: create on request --
+
+  - name: Non-git dir with RIOTBOX_GIT_INIT=1 is initialized and checkpointed
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir         # plain dir, NOT a git repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "code" > "${WORK_DIR}/main.go"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${WORK_DIR}" \
+                 RIOTBOX_GIT_INIT=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # The directory is now a git repo with a checkpoint commit + tag.
+          [ -d "${WORK_DIR}/.git" ]
+          git -C "${WORK_DIR}" log --format='%s' | grep -q '^checkpoint: pre-riotbox-'
+          [ -n "$(git -C "${WORK_DIR}" tag -l 'riotbox-checkpoint/*')" ]
+          echo "init_and_checkpoint_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "git-init"
+          - result.systemout ShouldContainSubstring "init_and_checkpoint_ok=true"
+
+  - name: Non-git empty dir with RIOTBOX_GIT_INIT=1 is initialized but has nothing to checkpoint
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir         # empty, NOT a git repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${WORK_DIR}" \
+                 RIOTBOX_GIT_INIT=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -d "${WORK_DIR}/.git" ]
+          [ -z "$(git -C "${WORK_DIR}" tag -l 'riotbox-checkpoint/*')" ]
+          echo "empty_init_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "git-init"
+          - result.systemout ShouldContainSubstring "nothing to checkpoint"
+          - result.systemout ShouldContainSubstring "empty_init_ok=true"
+
+  # -- Non-git directory: decline / behave well --
+
+  - name: Non-git dir with RIOTBOX_GIT_INIT=0 warns and leaves dir untouched
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "code" > "${WORK_DIR}/main.go"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${WORK_DIR}" \
+                 RIOTBOX_GIT_INIT=0 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # No repo was created.
+          [ ! -e "${WORK_DIR}/.git" ]
+          echo "declined_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "is not a git repo"
+          - result.systemout ShouldContainSubstring "declined_ok=true"
+
+  - name: Non-git dir non-interactive default does not prompt and does not create a repo
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "code" > "${WORK_DIR}/main.go"
+          # No RIOTBOX_GIT_INIT set; stdin is not a TTY under venom, so the
+          # prompt must be skipped (no hang) and the dir left as-is.
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${WORK_DIR}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" </dev/null 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ ! -e "${WORK_DIR}/.git" ]
+          echo "noninteractive_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "is not a git repo"
+          - result.systemout ShouldContainSubstring "noninteractive_ok=true"
+
+  # -- Signing safety on the init path (test profile) --
+
+  - name: Initialized repo's first checkpoint stays unsigned when signing is forced on
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # Force signing on in the isolated profile with a key/program that
+          # would fail; checkpoint.sh must override per-command to stay unsigned.
+          git config --global commit.gpgsign true
+          git config --global tag.gpgsign true
+          git config --global user.signingkey BOGUSKEYID
+          git config --global gpg.program /bin/false
+          echo "code" > "${WORK_DIR}/main.go"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${WORK_DIR}" \
+                 RIOTBOX_GIT_INIT=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          sig="$(git -C "${WORK_DIR}" log --grep='checkpoint: pre-riotbox-' -1 --format='%G?')"
+          echo "commit_sig=${sig}"
+          [ "${sig}" = "N" ]
+          tag="$(git -C "${WORK_DIR}" tag -l 'riotbox-checkpoint/*' | head -1)"
+          [ "$(git -C "${WORK_DIR}" cat-file -t "${tag}")" = "commit" ]
+          echo "unsigned_init_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "commit_sig=N"
+          - result.systemout ShouldContainSubstring "unsigned_init_ok=true"
+
+  # -- Interactive prompt (driven under a pseudo-terminal) --
+
+  - name: Interactive prompt with default (Enter) creates the repo
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "code" > "${WORK_DIR}/main.go"
+          export ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${WORK_DIR}"
+          unset RIOTBOX_GIT_INIT       # unset => prompt on a tty
+          # Empty input == a bare Enter, which must take the [Y/n] default (Yes).
+          out="$(run_under_pty "" bash "{{.riotbox_dir}}/libexec/checkpoint.sh")" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          echo "${out}" | grep -q "Create one"        # the prompt was shown
+          [ -d "${WORK_DIR}/.git" ]                    # default Yes created the repo
+          git -C "${WORK_DIR}" log --format='%s' | grep -q '^checkpoint: pre-riotbox-'
+          echo "prompt_default_yes_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Create one"
+          - result.systemout ShouldContainSubstring "prompt_default_yes_ok=true"
+
+  - name: Interactive prompt answered n leaves the directory untouched
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "code" > "${WORK_DIR}/main.go"
+          export ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${WORK_DIR}"
+          unset RIOTBOX_GIT_INIT
+          out="$(run_under_pty "n" bash "{{.riotbox_dir}}/libexec/checkpoint.sh")" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          echo "${out}" | grep -q "Create one"        # prompt shown
+          echo "${out}" | grep -q "is not a git repo" # then warned after decline
+          [ ! -e "${WORK_DIR}/.git" ]                  # no repo created
+          echo "prompt_decline_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "prompt_decline_ok=true"
+
+  - name: RIOTBOX_GIT_INIT=0 suppresses the prompt even with a tty attached
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "code" > "${WORK_DIR}/main.go"
+          export ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${WORK_DIR}"
+          export RIOTBOX_GIT_INIT=0      # explicit "never" must beat the tty
+          out="$(run_under_pty "n" bash "{{.riotbox_dir}}/libexec/checkpoint.sh")" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # No prompt despite the tty, and the dir is left untouched. (Use an
+          # explicit guard, not "! ... | grep": a !-negated pipeline is exempt
+          # from set -e, so it would not fail the test on a regression.)
+          if echo "${out}" | grep -q "Create one"; then echo "FAIL: prompt appeared"; exit 1; fi
+          echo "${out}" | grep -q "is not a git repo"
+          [ ! -e "${WORK_DIR}/.git" ]
+          echo "init0_no_prompt_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "Create one"
+          - result.systemout ShouldContainSubstring "is not a git repo"
+          - result.systemout ShouldContainSubstring "init0_no_prompt_ok=true"
+
+  # -- run.sh wiring: non-interactive even when a tty is present --
+
+  - name: riotbox run does not prompt for git init when launched from a tty
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "code" > "${WORK_DIR}/main.go"
+          # Real scripts, stubbed launch.sh — exercises run.sh end-to-end with
+          # no container. run.sh must default RIOTBOX_GIT_INIT=0 *before*
+          # checkpointing, so the prompt never fires even on a tty.
+          FAKE_ROOT="$(make_fake_root "{{.riotbox_dir}}" "${TEST_DIR}")"
+          export ROOT_DIR="${FAKE_ROOT}" RIOTBOX_AGENT=claude
+          unset RIOTBOX_GIT_INIT RIOTBOX_PROJECTS
+          # Feed "n" as a safety net: if run.sh ever regresses to prompting, the
+          # decline keeps the dir clean while the "Create one" assertion fails
+          # the test instead of hanging.
+          out="$(run_under_pty "n" bash "${FAKE_ROOT}/libexec/run.sh" "do work" "${WORK_DIR}")" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # Explicit guard (not "! ... | grep", which set -e would not enforce).
+          if echo "${out}" | grep -q "Create one"; then echo "FAIL: run prompted for git init"; exit 1; fi
+          echo "${out}" | grep -q "is not a git repo"     # warned instead
+          echo "${out}" | grep -q "STUB-LAUNCH reached"   # proceeded to launch
+          [ ! -e "${WORK_DIR}/.git" ]                      # dir left untouched
+          echo "run_no_prompt_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "Create one"
+          - result.systemout ShouldContainSubstring "STUB-LAUNCH reached"
+          - result.systemout ShouldContainSubstring "run_no_prompt_ok=true"

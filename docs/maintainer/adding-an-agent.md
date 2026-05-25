@@ -159,12 +159,12 @@ agent_<name>_container_setup() {
 
 Called by `container/entrypoint.sh` on every container start. Use this for
 agents that need runtime config placement (e.g. opencode's
-`opencode-setup.sh` writes `AGENTS.md` and `opencode.json`). For agents
+`agents/opencode/setup.sh` writes `AGENTS.md` and `opencode.json`). For agents
 whose config is fully baked at build time (e.g. claude's managed-policy
 `/etc/claude-code/CLAUDE.md`), this is a no-op.
 
 If your agent has runtime setup, place its body in
-`container/<name>-setup.sh` and have `agent_<name>_container_setup` source
+`agents/<name>/setup.sh` and have `agent_<name>_container_setup` source
 it and call its main function — that keeps long setup bodies out of the
 manifest.
 
@@ -346,9 +346,9 @@ That's the whole change. No edits to:
   and put the logic in the manifest. The whole point of the refactor is
   that there is one place to look up agent behaviour.
 - **Don't overload the manifest with unrelated logic.** Keep it focused
-  on the contract. Long setup bodies belong in `container/<name>-setup.sh`
+  on the contract. Long setup bodies belong in `agents/<name>/setup.sh`
   (sourced by `container_setup`); long sync logic in
-  `scripts/sync-<name>-settings.sh` (called by `host_sync`).
+  `agents/<name>/sync-settings.sh` (called by `host_sync`).
 
 ## Where to look when something breaks
 

@@ -7,20 +7,62 @@ set -euo pipefail
 # under $XDG_DATA_HOME/riotbox/backups/. The backup is outside the
 # container mount tree so Claude cannot access or modify it.
 #
+# A directory that is not yet a git repo can be initialized on the spot (see
+# RIOTBOX_GIT_INIT below); an empty repo with no commits is skipped gracefully.
+#
 # Required env: ROOT_DIR
 # Optional env: RIOTBOX_PROJECTS (space-separated project paths; defaults to CWD)
+#               RIOTBOX_GIT_INIT (1=init non-git dirs, 0=never, unset=prompt on
+#                                 an interactive terminal, default Yes)
 # ─────────────────────────────────────────────────────────────────────────────
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
 resolve_projects "${RIOTBOX_PROJECTS:-}"
 
+# Decide whether to create a git repo in a directory that has none, so the
+# project still gets checkpoint protection. Behaviour is driven by
+# RIOTBOX_GIT_INIT to keep automation predictable:
+#   1     → always create
+#   0     → never create
+#   unset → ask on an interactive terminal (default Yes). Non-interactive
+#           callers (riotbox run, CI, tests) fall through to "no" so a repo is
+#           never created in the user's directory without consent and the
+#           launcher never blocks on a prompt that nobody can answer.
+# Returns 0 if a repo was created, 1 otherwise.
+maybe_init_git_repo() {
+    local dir="$1"
+    local create=false
+    case "${RIOTBOX_GIT_INIT:-}" in
+        1) create=true ;;
+        0) create=false ;;
+        *)
+            if [ -t 0 ]; then
+                local answer
+                printf "  %s is not a git repository.\n" "${dir}" >&2
+                printf "  Create one so your work can be checkpointed? [Y/n] " >&2
+                read -r answer || answer=""
+                [[ "${answer}" =~ ^[Nn] ]] || create=true
+            fi
+            ;;
+    esac
+
+    if [ "${create}" = true ] && git -C "${dir}" init >/dev/null 2>&1; then
+        echo "  [git-init] Created git repository in ${dir}"
+        return 0
+    fi
+    return 1
+}
+
 timestamp="$(date +%Y%m%d-%H%M%S)"
 for dir in "${PROJECT_DIRS[@]}"; do
-    if ! git -C "${dir}" rev-parse --git-dir &>/dev/null; then
-        echo "  WARNING: ${dir} is not a git repo — no checkpoint protection!" >&2
-        continue
-    fi
     project_name="$(basename "${dir}")"
+
+    if ! git -C "${dir}" rev-parse --git-dir &>/dev/null; then
+        if ! maybe_init_git_repo "${dir}"; then
+            echo "  WARNING: ${dir} is not a git repo — no checkpoint protection!" >&2
+            continue
+        fi
+    fi
 
     # Commit any uncommitted work so it's safely captured before Claude runs.
     # Includes untracked files — the goal is a complete snapshot.
@@ -33,6 +75,15 @@ for dir in "${PROJECT_DIRS[@]}"; do
        [ -n "$(git -C "${dir}" ls-files --others --exclude-standard)" ]; then
         git -C "${dir}" add -A
         git -C "${dir}" -c commit.gpgsign=false commit -m "checkpoint: pre-riotbox-${timestamp}"
+    fi
+
+    # A repo with no commits yet (unborn HEAD) has nothing to tag or back up.
+    # This is reached for a freshly-initialised or empty repo with no
+    # committable files; skip it gracefully instead of letting `git tag` abort
+    # on the missing HEAD (which would take the whole launch down).
+    if ! git -C "${dir}" rev-parse --verify HEAD &>/dev/null; then
+        echo "  ${project_name}: empty git repo (no commits yet) — nothing to checkpoint."
+        continue
     fi
 
     # Tag the current HEAD
