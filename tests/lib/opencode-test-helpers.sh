@@ -4,7 +4,7 @@
 #
 # After the agent-registry refactor, the in-container wrapper is generic
 # (container/agent-wrapper.sh). Tests install it as `opencode` via the same
-# symlink-or-copy pattern the Dockerfile uses, plus the agents/ manifests
+# symlink-or-copy pattern the Containerfile uses, plus the agents/ manifests
 # and find-real-bin.sh, so the wrapper's runtime dependencies resolve.
 set -euo pipefail
 

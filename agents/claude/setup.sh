@@ -4,7 +4,7 @@
 #
 # Sourced by the claude manifest's agent_claude_container_setup function.
 # The default managed policy at /etc/claude-code/CLAUDE.md is pre-rendered
-# at build time in the Dockerfile, so this is a no-op in the common case.
+# at build time in the Containerfile, so this is a no-op in the common case.
 # It only does work when RIOTBOX_PROMPT is set (runtime override) or when
 # the build-time render is missing (older image fallback).
 #
@@ -34,7 +34,7 @@ claude_setup() {
 			"${RIOTBOX_PROMPT}" >"${managed_policy_dir}/CLAUDE.md"
 	elif [[ ! -f "${managed_policy_dir}/CLAUDE.md" ]] && [[ -f /etc/riotbox/AGENTS.md ]]; then
 		# Fallback: build-time render missing (older image without the
-		# Dockerfile RUN step). Render from the default template.
+		# Containerfile RUN step). Render from the default template.
 		_claude_setup_read_os_pretty
 		awk -v os="${os_pretty}" '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
 			/etc/riotbox/AGENTS.md >"${managed_policy_dir}/CLAUDE.md"

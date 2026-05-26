@@ -6,7 +6,7 @@ set -euo pipefail
 HUMAN_NAME="Test Human"
 HUMAN_EMAIL="human@example.com"
 
-# Current container identity — matches the Dockerfile's git config.
+# Current container identity — matches the Containerfile's git config.
 LLM_NAME="LLM"
 LLM_EMAIL="llm@riotbox"
 

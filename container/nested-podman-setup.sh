@@ -132,13 +132,13 @@ write_subid_file /etc/subuid /proc/self/uid_map "${_host_uid}" UID
 write_subid_file /etc/subgid /proc/self/gid_map "${_host_gid}" GID
 
 # --- 3. inner storage driver: vfs ---------------------------------------------
-# The Dockerfile pre-installs overlay+fuse-overlayfs in
+# The Containerfile pre-installs overlay+fuse-overlayfs in
 # ~/.config/containers/storage.conf for the outer's storage of inner images,
 # but inner crun fails on `mkdir /run/secrets` when its rootfs is on nested
 # overlay. Switching to vfs is the only working option — confirmed empirically
 # across alpine and ubi10 inner images, with and without -t.
 #
-# Done at runtime (not in the Dockerfile) so non-nested mode keeps the
+# Done at runtime (not in the Containerfile) so non-nested mode keeps the
 # faster overlay storage when the user is using podman host-side caches.
 mkdir -p "${HOME}/.config/containers"
 cat >"${HOME}/.config/containers/storage.conf" <<'EOF'

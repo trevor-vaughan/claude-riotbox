@@ -92,7 +92,7 @@ SESSION_ID="${_session_ts}-${_session_rand}"
 # both knobs set, inner podman fails with `newgidmap: write to gid_map
 # failed: Operation not permitted` on the first `podman run`. With
 # host uid == host gid both are no-ops; with mismatched uid/gid both are
-# load-bearing. The Dockerfile builds llm with the host user's UID *and*
+# load-bearing. The Containerfile builds llm with the host user's UID *and*
 # GID (build.sh threads both as build-args), so an image built for the
 # running user has its USER entry already aligned and these flags become
 # no-ops; they remain in place as defense for images built without

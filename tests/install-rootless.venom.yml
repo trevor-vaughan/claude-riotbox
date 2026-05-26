@@ -21,7 +21,7 @@ testcases:
           test -d "${XDG_DATA_HOME}/riotbox/libexec"
           test -d "${XDG_DATA_HOME}/riotbox/scripts"
           test -d "${XDG_DATA_HOME}/riotbox/agents"
-          test -f "${XDG_DATA_HOME}/riotbox/Dockerfile"
+          test -f "${XDG_DATA_HOME}/riotbox/Containerfile"
           # entrypoint symlink resolves into the app tree
           test -L "${HOME}/.local/bin/riotbox"
           real="$(readlink -f "${HOME}/.local/bin/riotbox")"

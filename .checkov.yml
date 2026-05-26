@@ -6,7 +6,7 @@
 #   Suppressed globally: this is a developer-environment image that
 #   intentionally provisions NOPASSWD sudo for the `llm` user via
 #   /etc/sudoers.d/llm. Removing sudo would break the dev workflow.
-#   The same rationale is documented in-source at Dockerfile:127, but
+#   The same rationale is documented in-source at Containerfile:127, but
 #   inline #checkov:skip directives are honored only in SARIF
 #   `suppressions[]` — MegaLinter's markdown reporter does not filter
 #   on that field, so we suppress at the rule level to keep reports

@@ -6,12 +6,12 @@ fifth) CLI agent alongside `claude` and `opencode` — for example
 [cursor-agent](https://docs.cursor.com/cli), or [codex](https://github.com/openai/codex).
 
 Adding an agent is a **single-directory operation**. You drop a new manifest
-under `agents/`, register the name, install the binary in the Dockerfile,
+under `agents/`, register the name, install the binary in the Containerfile,
 and you're done — no edits to dispatch sites, wrappers, or test fixtures.
 
 ## TL;DR — the three steps
 
-1. **Install the binary** in the Dockerfile (one `RUN` line).
+1. **Install the binary** in the Containerfile (one `RUN` line).
 2. **Create `agents/<name>/`** with at minimum a `manifest.sh` that
    defines the contract functions (eight of them, each a handful of
    lines). Add `setup.sh` for container-side runtime setup and
@@ -237,7 +237,7 @@ that want a curated list, or add to it without restating the base via
 Suppose [aider](https://aider.chat/) is your third agent. Here's the
 complete diff:
 
-### 1. Install in Dockerfile
+### 1. Install in Containerfile
 
 ```dockerfile
 # Aider — Python-based pair-programming agent
@@ -333,7 +333,7 @@ That's the whole change. No edits to:
 - `container/agent-wrapper.sh` — it dispatches by `basename($0)`.
 - `container/entrypoint.sh` — it loops over `AGENT_REGISTRY`.
 - `scripts/mount-projects.sh` — it loops over `AGENT_REGISTRY`.
-- `Dockerfile` (apart from the install step) — the symlink loop reads
+- `Containerfile` (apart from the install step) — the symlink loop reads
   `AGENT_REGISTRY` directly.
 
 ## Things to avoid
@@ -358,7 +358,7 @@ That's the whole change. No edits to:
 | `riotbox run` exits with "unknown verb"              | Manifest is missing `agent_<name>_run_argv`                                                                          |
 | Wrapper invokes wrong binary                         | Check `agent_<name>_real_binary` and PATH order                                                                      |
 | `--dangerously-skip-permissions` in wrong place      | Bug in `agent_<name>_wrapper_inject`; see opencode for subcommand-local injection                                    |
-| Container fails to start with "no agents discovered" | The `COPY agents/` in the Dockerfile didn't run, or every subdirectory is missing `manifest.sh`                      |
+| Container fails to start with "no agents discovered" | The `COPY agents/` in the Containerfile didn't run, or every subdirectory is missing `manifest.sh`                      |
 | Host config not synced                               | `agent_<name>_host_sync` is a no-op or its sync script is missing                                                    |
 
 Run `task test ARGS=agents` to re-exercise the contract suite at any

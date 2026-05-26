@@ -23,7 +23,7 @@
 #     Extra fields are not rendered by log_fmt; consumers that want them
 #     should use jq directly.
 #
-# Both helpers depend on `jq` (already a base-image package — see Dockerfile).
+# Both helpers depend on `jq` (already a base-image package — see Containerfile).
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Internal: emit current UTC timestamp in ISO 8601 (second resolution).

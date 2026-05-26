@@ -19,7 +19,7 @@ tasks:
         {{.CONTAINER_CMD}} build \
             --build-arg "HOST_UID=$(id -u)" \
             --build-arg "HOST_GID=$(id -g)" \
-            -f "{{.ROOT_DIR}}/tests/Dockerfile.test" \
+            -f "{{.ROOT_DIR}}/tests/Containerfile.test" \
             -t "{{.TEST_IMAGE}}" \
             "{{.ROOT_DIR}}"
 

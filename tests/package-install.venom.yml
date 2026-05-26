@@ -35,7 +35,7 @@ testcases:
               dnf -y install /dist/*.rpm >/dev/null 2>&1
               test -d /opt/riotbox/libexec
               test -d /opt/riotbox/scripts
-              test -f /opt/riotbox/Dockerfile
+              test -f /opt/riotbox/Containerfile
               test -L /usr/bin/riotbox
               test -f /etc/riotbox/config
               riotbox version | grep -q riotbox

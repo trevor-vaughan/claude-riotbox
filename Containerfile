@@ -507,10 +507,10 @@ RUN npm install -g @mermaid-js/mermaid-cli && mmdc --version
 
 # ── RiotBox scripts: agent registry + generic wrapper ───────────────────────
 # The agent registry (agents/<name>.sh + agents/registry.sh) is the single
-# source of truth for which CLI agents this image supports. The Dockerfile
+# source of truth for which CLI agents this image supports. The Containerfile
 # stays agent-agnostic: agent-wrapper.sh is installed once, and per-agent
 # entries in /home/llm/.riotbox/bin/ are symlinks created from the
-# registry. Adding a new agent is a manifest edit, not a Dockerfile edit.
+# registry. Adding a new agent is a manifest edit, not a Containerfile edit.
 COPY --chown=llm:llm agents/ /home/llm/.riotbox/agents/
 COPY --chown=llm:llm container/find-real-bin.sh /home/llm/.riotbox/find-real-bin.sh
 COPY --chown=llm:llm container/agent-wrapper.sh /home/llm/.riotbox/agent-wrapper.sh
@@ -518,7 +518,7 @@ RUN chmod +x /home/llm/.riotbox/agent-wrapper.sh \
               /home/llm/.riotbox/find-real-bin.sh && \
     # Install one symlink per registered agent. The wrapper detects the
     # agent from basename($0), so the symlink name doubles as the agent
-    # name. Reading AGENT_REGISTRY directly keeps the Dockerfile in sync
+    # name. Reading AGENT_REGISTRY directly keeps the Containerfile in sync
     # with agents/registry.sh — no second list to update.
     bash -c '\
         set -euo pipefail; \

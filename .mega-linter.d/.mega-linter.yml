@@ -15,7 +15,7 @@ EXTENDS: .mega-linter.yml
 #   CKV2_DOCKER_1: this is a developer-environment image that
 #   intentionally provisions NOPASSWD sudo for the `llm` user via
 #   /etc/sudoers.d/llm. The same intent is documented inline at
-#   Dockerfile:127 (kept as in-source documentation), but MegaLinter's
+#   Containerfile:127 (kept as in-source documentation), but MegaLinter's
 #   SARIF→markdown reporter does not honor `suppressions[]`, so the
 #   inline directive does not silence the markdown finding list.
 REPOSITORY_CHECKOV_ARGUMENTS: "--skip-check CKV2_DOCKER_1"

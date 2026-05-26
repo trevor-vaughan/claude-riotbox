@@ -25,7 +25,7 @@ Finally...it was fun!
 ## How it works
 
 1. **`scripts/build.sh`** introspects your local environment (nvm, uv, Go, Rust/rustup, Ruby/RVM, UID, tool configs) and passes them as build args.
-1. The **Dockerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. The agent CLIs are installed last — opencode via its [installer](https://opencode.ai/install), then Claude Code via the [official installer](https://claude.ai/install.sh) — for
+1. The **Containerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. The agent CLIs are installed last — opencode via its [installer](https://opencode.ai/install), then Claude Code via the [official installer](https://claude.ai/install.sh) — for
    optimal layer caching.
 1. At runtime your project directory is bind-mounted into the container. Auth credentials are synced into an isolated session directory: `~/.claude/.credentials.json` is bind-mounted read-write (so token refreshes write back to the host), and `~/.claude.json` is copied so each container gets a writable snapshot without host contention.
 1. **A single generic wrapper** (`container/agent-wrapper.sh`) shadows the real agent binaries via per-agent symlinks under `~/.riotbox/bin/`. The wrapper detects which agent it's running as from its own filename, looks up that agent's manifest at `agents/<name>/manifest.sh`, and applies the manifest's flag-injection rules. The RiotBox autonomy prompt lives at `/etc/claude-code/CLAUDE.md`
@@ -152,7 +152,7 @@ riotbox shell
 
 Default is `claude` if `--agent` is omitted. You can persist a default in `~/.config/riotbox/config` by uncommenting the `RIOTBOX_AGENT` line.
 
-> Want to add a third agent (aider, goose, cursor-agent, codex, …)? See [`docs/maintainer/adding-an-agent.md`](docs/maintainer/adding-an-agent.md). The agent registry at `agents/registry.sh` is the single source of truth — adding an agent is a manifest plus a Dockerfile install line, no edits to dispatch sites or wrappers.
+> Want to add a third agent (aider, goose, cursor-agent, codex, …)? See [`docs/maintainer/adding-an-agent.md`](docs/maintainer/adding-an-agent.md). The agent registry at `agents/registry.sh` is the single source of truth — adding an agent is a manifest plus a Containerfile install line, no edits to dispatch sites or wrappers.
 
 ### Opencode auth
 
@@ -240,7 +240,7 @@ The image comes with a broad set of tools pre-installed so the agent can start w
 
 Claude Code [plugins](https://docs.anthropic.com/en/docs/claude-code/plugins) are managed by `container/plugin-setup.sh`, which runs at every container startup. Plugins are loaded in order of precedence (lowest to highest):
 
-1. **Pre-staged defaults** — baked into the image at build time (defined in the `Dockerfile`). Copied into the session on first run.
+1. **Pre-staged defaults** — baked into the image at build time (defined in the `Containerfile`). Copied into the session on first run.
 1. **Marketplace plugins** — installed from `~/.config/riotbox/plugins.conf` (one plugin name per line) or the `RIOTBOX_PLUGINS` environment variable (comma-separated). Already-installed plugins are skipped to avoid spawning Node.js on every startup.
 1. **Host plugins** — your host `~/.claude/plugins/` directory is bind-mounted read-only at `~/.host-plugins` and merged into the session with highest precedence. Host plugin paths are rewritten to the container's filesystem automatically.
 
@@ -832,7 +832,7 @@ sudo chown -R $(id -u):$(id -g) ~/.local/share/riotbox/
 
 **Symptom**: `mkdir: cannot create directory '/home/llm/.cache/...': Permission denied` during build.
 
-**Cause**: the multi-stage Dockerfile copies security tools and installs semgrep as root, which creates directories under `/home/llm/` with root ownership. The Dockerfile includes a `chown -R llm:llm /home/llm` step after these installs. If you modify the Dockerfile and add root-stage installs after this chown, you'll hit this error. Always ensure the chown runs after all root-stage operations.
+**Cause**: the multi-stage Containerfile copies security tools and installs semgrep as root, which creates directories under `/home/llm/` with root ownership. The Containerfile includes a `chown -R llm:llm /home/llm` step after these installs. If you modify the Containerfile and add root-stage installs after this chown, you'll hit this error. Always ensure the chown runs after all root-stage operations.
 
 ### IPv6 warnings in system journal
 

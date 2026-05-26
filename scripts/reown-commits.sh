@@ -3,12 +3,12 @@
 # reown-commits.sh — Rewrite container-authored commits to use your identity.
 #
 # After a riotbox run, the container's commits will have its generic LLM
-# identity (currently "LLM (riotbox)" <llm@riotbox>; see Dockerfile). This
+# identity (currently "LLM (riotbox)" <llm@riotbox>; see Containerfile). This
 # script rewrites the author/committer on those commits so the history looks
 # like yours, while preserving the Co-Authored-By trailer.
 #
 # Container identities recognised:
-#   llm@riotbox     — current primary (matches the Dockerfile)
+#   llm@riotbox     — current primary (matches the Containerfile)
 #   claude@riotbox  — legacy: pre-rename, when the identity was Claude-specific
 #   llm@localhost   — legacy: pre-domain-rename
 #   riotbox@local   — legacy: oldest squash-merge identity (pre-ff-only fix)
@@ -32,10 +32,10 @@
 set -euo pipefail
 
 # Container identities that get rewritten. The first entry is the current
-# primary (matches the Dockerfile); the rest are legacy identities still
+# primary (matches the Containerfile); the rest are legacy identities still
 # present in older history. To recognise a new identity, append it here.
 CONTAINER_EMAILS=(
-	"llm@riotbox"    # current primary — matches Dockerfile
+	"llm@riotbox"    # current primary — matches Containerfile
 	"claude@riotbox" # legacy: pre-rename, Claude-specific identity
 	"llm@localhost"  # legacy: pre-domain-rename
 	"riotbox@local"  # legacy: oldest squash-merge identity (pre-ff-only fix)

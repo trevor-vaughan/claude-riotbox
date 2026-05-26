@@ -203,7 +203,7 @@ if [[ -f "${HOME}/.config/uv/uv.toml" ]]; then
 	echo "  ✓ ~/.config/uv/uv.toml → configs/.config/uv/uv.toml"
 fi
 
-# Ensure COPY in Dockerfile never fails on an empty dir
+# Ensure COPY in Containerfile never fails on an empty dir
 touch "${CONFIGS_DIR}/.keep"
 
 # ── 8. Docker build ───────────────────────────────────────────────────────────
@@ -229,6 +229,7 @@ ${CONTAINER_CMD} build \
 	--build-arg "RUBY_DEFAULT=${RUBY_DEFAULT}" \
 	--progress=plain \
 	-t "${IMAGE_NAME}" \
+	-f "${BUILD_CONTEXT}/Containerfile" \
 	"${BUILD_CONTEXT}"
 
 echo ""

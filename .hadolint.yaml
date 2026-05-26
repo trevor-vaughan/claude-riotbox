@@ -8,7 +8,7 @@
 # DL3016 — npm version pinning: mermaid-cli kept at latest for diagram syntax.
 # DL3041 — dnf version pinning: Stream 10 is a rolling distribution; exact
 #           package EVRs shift between composes. The FROM image digest (pinned
-#           at the top of each Dockerfile) is the supply-chain anchor.
+#           at the top of each Containerfile) is the supply-chain anchor.
 # DL3062 — go install version pinning: gopls tracks the active Go toolchain;
 #           pinning a specific semver diverges from the installed Go version.
 # DL4006 — SHELL pipefail: SHELL directives are added after each FROM stage;

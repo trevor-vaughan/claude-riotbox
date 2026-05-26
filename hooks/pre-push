@@ -3,7 +3,7 @@
 # Block pushes containing commits authored by any riotbox container identity.
 #
 # Recognised identities (must match scripts/reown-commits.sh CONTAINER_EMAILS):
-#   llm@riotbox     — current primary (Dockerfile)
+#   llm@riotbox     — current primary (Containerfile)
 #   claude@riotbox  — legacy: pre-rename Claude-specific identity
 #   llm@localhost   — legacy: pre-domain-rename
 #   riotbox@local   — legacy: oldest squash-merge identity

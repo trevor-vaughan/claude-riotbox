@@ -23,7 +23,7 @@ agent="$(basename "$0")"
 
 # Source the registry so we have agent_call and AGENT_REGISTRY available.
 # Inside the container, the agents directory lives at ${HOME}/.riotbox/agents/
-# (placed by the Dockerfile COPY).
+# (placed by the Containerfile COPY).
 # shellcheck source=/dev/null
 source "${HOME}/.riotbox/agents/registry.sh"
 
