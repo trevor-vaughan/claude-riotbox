@@ -9,49 +9,61 @@ source "${ROOT_DIR}/libexec/session-summary.sh"
 session_root="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
 
 confirm() {
-    [ "${force}" = true ] && return 0
-    read -rp "$1 [y/N] " a
-    [[ "$a" =~ ^[Yy]$ ]]
+	[[ "${force}" = true ]] && return 0
+	read -rp "$1 [y/N] " a
+	[[ "$a" =~ ^[Yy]$ ]]
 }
 
 all=false
 force=false
 for flag in "$@"; do
-    case "${flag}" in
-        all)   all=true ;;
-        force) force=true ;;
-        *)     echo "Unknown flag: ${flag}. Usage: riotbox session-reset [all] [force]" >&2; exit 1 ;;
-    esac
+	case "${flag}" in
+	all) all=true ;;
+	force) force=true ;;
+	*)
+		echo "Unknown flag: ${flag}. Usage: riotbox session-reset [all] [force]" >&2
+		exit 1
+		;;
+	esac
 done
 
-if [ "${all}" = true ]; then
-    dirs=()
-    if [ -d "${session_root}" ]; then
-        for d in "${session_root}"/*/; do
-            [ "$(basename "${d}")" = "backups" ] && continue
-            dirs+=("${d}")
-        done
-    fi
-    if [ ${#dirs[@]} -eq 0 ]; then
-        echo "No session dirs found."
-        exit 0
-    fi
-    echo "Sessions to remove:"
-    for d in "${dirs[@]}"; do session_summary "${d}"; done
-    echo ""
-    confirm "Remove ${#dirs[@]} session(s)?" || { echo "Aborted."; exit 0; }
-    for d in "${dirs[@]}"; do rm -rf "${d}"; done
-    echo "Removed ${#dirs[@]} session(s). Next run will create fresh copies."
+if [[ "${all}" = true ]]; then
+	dirs=()
+	if [[ -d "${session_root}" ]]; then
+		for d in "${session_root}"/*/; do
+			[[ "$(basename "${d}")" = "backups" ]] && continue
+			dirs+=("${d}")
+		done
+	fi
+	if [[ ${#dirs[@]} -eq 0 ]]; then
+		echo "No session dirs found."
+		exit 0
+	fi
+	echo "Sessions to remove:"
+	for d in "${dirs[@]}"; do session_summary "${d}"; done
+	echo ""
+	# shellcheck disable=SC2310  # confirm uses || for flow control — set -e suppression is intentional
+	confirm "Remove ${#dirs[@]} session(s)?" || {
+		echo "Aborted."
+		exit 0
+	}
+	for d in "${dirs[@]}"; do rm -rf "${d}"; done
+	echo "Removed ${#dirs[@]} session(s). Next run will create fresh copies."
 else
-    resolve_projects ""
-    if [ ! -d "${RIOTBOX_SESSION_DIR}" ]; then
-        echo "No session dir found for $(pwd)."
-        exit 0
-    fi
-    echo "Session to remove:"
-    session_summary "${RIOTBOX_SESSION_DIR}"
-    echo ""
-    confirm "Remove this session?" || { echo "Aborted."; exit 0; }
-    rm -rf "${RIOTBOX_SESSION_DIR}"
-    echo "Removed. Next run will create a fresh copy."
+	resolve_projects ""
+	if [[ ! -d "${RIOTBOX_SESSION_DIR}" ]]; then
+		# shellcheck disable=SC2312  # pwd never fails in a sane invocation
+		echo "No session dir found for $(pwd)."
+		exit 0
+	fi
+	echo "Session to remove:"
+	session_summary "${RIOTBOX_SESSION_DIR}"
+	echo ""
+	# shellcheck disable=SC2310  # confirm uses || for flow control — set -e suppression is intentional
+	confirm "Remove this session?" || {
+		echo "Aborted."
+		exit 0
+	}
+	rm -rf "${RIOTBOX_SESSION_DIR}"
+	echo "Removed. Next run will create a fresh copy."
 fi

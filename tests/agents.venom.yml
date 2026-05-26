@@ -9,7 +9,6 @@ vars:
 # extends coverage automatically — no test edits required.
 
 testcases:
-
   - name: registry declares a non-empty AGENT_REGISTRY array
     steps:
       - type: exec

@@ -16,8 +16,8 @@
 # to stdout. Handles "//" and "/* ... */" comments outside double-quoted
 # strings. Exits non-zero with a diagnostic if Python is unavailable.
 _opencode_strip_jsonc() {
-    local infile="$1"
-    python3 - "${infile}" <<'PY'
+	local infile="$1"
+	python3 - "${infile}" <<'PY'
 import sys
 src = open(sys.argv[1], encoding="utf-8").read()
 out = []
@@ -61,65 +61,65 @@ PY
 }
 
 opencode_setup() {
-    local opencode_dir="${HOME}/.config/opencode"
-    local agents_md="${opencode_dir}/AGENTS.md"
-    local opencode_json="${opencode_dir}/opencode.json"
-    local opencode_jsonc="${opencode_dir}/opencode.jsonc"
-    local template="${HOME}/.riotbox/AGENTS.md.template"
+	local opencode_dir="${HOME}/.config/opencode"
+	local agents_md="${opencode_dir}/AGENTS.md"
+	local opencode_json="${opencode_dir}/opencode.json"
+	local opencode_jsonc="${opencode_dir}/opencode.jsonc"
+	local template="${HOME}/.riotbox/AGENTS.md.template"
 
-    mkdir -p "${opencode_dir}"
+	mkdir -p "${opencode_dir}"
 
-    # ── AGENTS.md: render from RIOTBOX_PROMPT override, or copy from template
-    if [ -n "${RIOTBOX_PROMPT:-}" ] && [ -f "${RIOTBOX_PROMPT}" ]; then
-        local os_pretty="Linux"
-        if [ -f /etc/os-release ]; then
-            # shellcheck disable=SC1091
-            os_pretty="$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-Linux}")"
-        fi
-        awk -v os="${os_pretty}" '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
-            "${RIOTBOX_PROMPT}" > "${agents_md}"
-    elif [ ! -f "${agents_md}" ] && [ -f "${template}" ]; then
-        cp "${template}" "${agents_md}"
-    fi
+	# ── AGENTS.md: render from RIOTBOX_PROMPT override, or copy from template
+	if [[ -n "${RIOTBOX_PROMPT:-}" ]] && [[ -f "${RIOTBOX_PROMPT}" ]]; then
+		local os_pretty="Linux"
+		if [[ -f /etc/os-release ]]; then
+			# shellcheck disable=SC1091
+			os_pretty="$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-Linux}")"
+		fi
+		awk -v os="${os_pretty}" '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
+			"${RIOTBOX_PROMPT}" >"${agents_md}"
+	elif [[ ! -f "${agents_md}" ]] && [[ -f "${template}" ]]; then
+		cp "${template}" "${agents_md}"
+	fi
 
-    # ── opencode.jsonc: merge host JSON + JSONC, then force RiotBox overrides
-    local json_obj='{}'
-    local jsonc_obj='{}'
+	# ── opencode.jsonc: merge host JSON + JSONC, then force RiotBox overrides
+	local json_obj='{}'
+	local jsonc_obj='{}'
 
-    if [ -f "${opencode_json}" ]; then
-        if ! json_obj="$(jq -c 'if type == "object" then . else error("root must be an object") end' "${opencode_json}" 2>/dev/null)" \
-           || [ -z "${json_obj}" ]; then
-            echo "  [opencode] WARN: ${opencode_json} is not a valid JSON object — ignoring." >&2
-            json_obj='{}'
-        fi
-    fi
+	if [[ -f "${opencode_json}" ]]; then
+		if ! json_obj="$(jq -c 'if type == "object" then . else error("root must be an object") end' "${opencode_json}" 2>/dev/null)" ||
+			[[ -z "${json_obj}" ]]; then
+			echo "  [opencode] WARN: ${opencode_json} is not a valid JSON object — ignoring." >&2
+			json_obj='{}'
+		fi
+	fi
 
-    if [ -f "${opencode_jsonc}" ]; then
-        local stripped
-        if stripped="$(_opencode_strip_jsonc "${opencode_jsonc}" 2>/dev/null)" \
-           && jsonc_obj="$(printf '%s' "${stripped}" | jq -c 'if type == "object" then . else error("root must be an object") end' 2>/dev/null)" \
-           && [ -n "${jsonc_obj}" ]; then
-            :
-        else
-            echo "  [opencode] WARN: ${opencode_jsonc} is not a valid JSONC object — ignoring." >&2
-            jsonc_obj='{}'
-        fi
-    fi
+	if [[ -f "${opencode_jsonc}" ]]; then
+		local stripped
+		if stripped="$(_opencode_strip_jsonc "${opencode_jsonc}" 2>/dev/null)" &&
+			jsonc_obj="$(printf '%s' "${stripped}" | jq -c 'if type == "object" then . else error("root must be an object") end' 2>/dev/null)" &&
+			[[ -n "${jsonc_obj}" ]]; then
+			:
+		else
+			echo "  [opencode] WARN: ${opencode_jsonc} is not a valid JSONC object — ignoring." >&2
+			jsonc_obj='{}'
+		fi
+	fi
 
-    # Merge (recursive, jsonc wins), then force riotbox-mandatory keys.
-    # instructions handling: if not an array, replace with the single-element
-    # default; if already an array, append AGENTS.md only when missing.
-    local merged
-    # The tilde in agents_path is a literal — opencode expands ~ itself when
-    # reading the instructions array. shellcheck SC2088 wants us to use $HOME,
-    # but that would defeat the purpose.
-    # shellcheck disable=SC2088
-    merged="$(jq -n \
-        --argjson j "${json_obj}" \
-        --argjson jc "${jsonc_obj}" \
-        --arg agents_path '~/.config/opencode/AGENTS.md' \
-        --arg schema 'https://opencode.ai/config.json' \
-        '
+	# Merge (recursive, jsonc wins), then force riotbox-mandatory keys.
+	# instructions handling: if not an array, replace with the single-element
+	# default; if already an array, append AGENTS.md only when missing.
+	local merged
+	# The tilde in agents_path is a literal — opencode expands ~ itself when
+	# reading the instructions array. shellcheck SC2088 wants us to use $HOME,
+	# but that would defeat the purpose.
+	# shellcheck disable=SC2088
+	merged="$(jq -n \
+		--argjson j "${json_obj}" \
+		--argjson jc "${jsonc_obj}" \
+		--arg agents_path '~/.config/opencode/AGENTS.md' \
+		--arg schema 'https://opencode.ai/config.json' \
+		'
         ($j * $jc)
         | .permission = "allow"
         | .share = "disabled"
@@ -134,11 +134,11 @@ opencode_setup() {
         | (if has("$schema") then . else .["$schema"] = $schema end)
         ')"
 
-    # Write banner + merged JSON to opencode.jsonc. The banner explains the
-    # forced keys; the JSON body is generated by jq and is plain JSON (a
-    # valid subset of JSONC), so no comments inside the body.
-    {
-        cat <<'BANNER'
+	# Write banner + merged JSON to opencode.jsonc. The banner explains the
+	# forced keys; the JSON body is generated by jq and is plain JSON (a
+	# valid subset of JSONC), so no comments inside the body.
+	{
+		cat <<'BANNER'
 // This file is generated by riotbox at session start.
 // It merges your host ~/.config/opencode/{opencode.json,opencode.jsonc}
 // and then forces these keys for the disposable-container threat model:
@@ -148,12 +148,12 @@ opencode_setup() {
 //   instructions = [AGENTS.md] (riotbox autonomy prompt always loaded)
 // Edit your host opencode.json/opencode.jsonc to change anything else.
 BANNER
-        printf '%s\n' "${merged}"
-    } > "${opencode_jsonc}"
+		printf '%s\n' "${merged}"
+	} >"${opencode_jsonc}"
 
-    # The legacy opencode.json is no longer the source of truth — remove it
-    # so opencode loads only the merged jsonc.
-    if [ -f "${opencode_json}" ]; then
-        rm -f "${opencode_json}"
-    fi
+	# The legacy opencode.json is no longer the source of truth — remove it
+	# so opencode loads only the merged jsonc.
+	if [[ -f "${opencode_json}" ]]; then
+		rm -f "${opencode_json}"
+	fi
 }

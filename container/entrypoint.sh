@@ -6,14 +6,15 @@
 #
 # Static config (git identity, gpgsign, dnf assumeyes, git guardrails, etc.)
 # is baked into the image. Only runtime-dependent setup belongs here.
+# shellcheck source=/dev/null
 source ~/.bashrc 2>/dev/null
 
 # Easy environment reference for the underlying host
-if [ -f /etc/hosts ]; then
-  PARENT_HOST=$( sed -n '/host\..*\.internal/{s/[[:space:]]\+/ /g; s/^ //; s/[^ ]* \([^ ]*\).*/\1/p; q}' /etc/hosts 2>/dev/null )
-  if [ -n "$PARENT_HOST" ]; then
-    export PARENT_HOST
-  fi
+if [[ -f /etc/hosts ]]; then
+	PARENT_HOST=$(sed -n '/host\..*\.internal/{s/[[:space:]]\+/ /g; s/^ //; s/[^ ]* \([^ ]*\).*/\1/p; q}' /etc/hosts 2>/dev/null)
+	if [[ -n "$PARENT_HOST" ]]; then
+		export PARENT_HOST
+	fi
 fi
 
 # Disable all non-essential network traffic — the container runs a fixed
@@ -51,7 +52,7 @@ export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
 
 # Mark multi-project mount subdirectories as safe for git
 for d in /workspace/*/; do
-    [ -d "${d}.git" ] && git config --global --add safe.directory "${d%/}"
+	[[ -d "${d}.git" ]] && git config --global --add safe.directory "${d%/}"
 done
 
 # Ensure Claude Code directories exist
@@ -62,9 +63,13 @@ mkdir -p ~/.claude/debug ~/.claude/plugins/cache
 # RIOTBOX_PROMPT overrides the template or the build-time render is missing
 # (backward compat with older images).
 RIOTBOX_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./session-branch.sh disable=SC1091  # source path resolves only from container/; safe to skip follow
 source "${RIOTBOX_SCRIPT_DIR}/session-branch.sh"
+# shellcheck source=./overlay-setup.sh disable=SC1091
 source "${RIOTBOX_SCRIPT_DIR}/overlay-setup.sh"
+# shellcheck source=./plugin-setup.sh disable=SC1091
 source "${RIOTBOX_SCRIPT_DIR}/plugin-setup.sh"
+# shellcheck source=./startup-scripts.sh disable=SC1091
 source "${RIOTBOX_SCRIPT_DIR}/startup-scripts.sh"
 
 # Nested podman setup: file caps on newuidmap/newgidmap and /etc/sub{u,g}id
@@ -78,9 +83,9 @@ source "${RIOTBOX_SCRIPT_DIR}/startup-scripts.sh"
 # RVM's `cd` override (loaded by ~/.bashrc above) on a later `cd` in
 # plugin_setup — RVM's environment script references rvm_bash_nounset
 # without a default and dies under set -u, breaking the plugin copy pipeline.
-if [ "${RIOTBOX_NESTED:-}" = "1" ] && \
-   [ -x "${RIOTBOX_SCRIPT_DIR}/nested-podman-setup.sh" ]; then
-    "${RIOTBOX_SCRIPT_DIR}/nested-podman-setup.sh"
+if [[ "${RIOTBOX_NESTED:-}" = "1" ]] &&
+	[[ -x "${RIOTBOX_SCRIPT_DIR}/nested-podman-setup.sh" ]]; then
+	"${RIOTBOX_SCRIPT_DIR}/nested-podman-setup.sh"
 fi
 
 # Plugin setup: seed settings, copy staged + host plugins, install marketplace
@@ -95,7 +100,7 @@ plugin_setup
 # shellcheck source=./agents/registry.sh
 source "${RIOTBOX_SCRIPT_DIR}/agents/registry.sh"
 for _agent in "${AGENT_REGISTRY[@]}"; do
-    agent_call "${_agent}" container_setup
+	agent_call "${_agent}" container_setup
 done
 unset _agent
 
@@ -115,10 +120,10 @@ startup_scripts_run
 # Run the main command without exec so this shell survives to run teardown.
 # exec was originally used to avoid bash -lc semantics — sourcing .bashrc above
 # already handles that. Foreground child processes inherit the TTY regardless.
-if [ $# -eq 0 ]; then
-    bash
+if [[ $# -eq 0 ]]; then
+	bash
 else
-    "$@"
+	"$@"
 fi
 _exit_code=$?
 
@@ -130,4 +135,4 @@ overlay_teardown
 # and can be merged manually.
 session_branch_teardown
 
-exit $_exit_code
+exit "${_exit_code}"

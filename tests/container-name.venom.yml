@@ -11,7 +11,6 @@ vars:
 # existing parent-disambiguation behavior.
 
 testcases:
-
   - name: multi-project name fits within 64 chars
     steps:
       - type: exec

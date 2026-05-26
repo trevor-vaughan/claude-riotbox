@@ -1,4 +1,4 @@
-version: '3'
+version: "3"
 
 vars:
   TEST_IMAGE: riotbox-test

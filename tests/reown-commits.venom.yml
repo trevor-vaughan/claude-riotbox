@@ -605,15 +605,16 @@ testcases:
           human_commit "initial"
           # Create a small binary file
           printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR' > image.png
-          md5_before="$(md5sum image.png | awk '{print $1}')"
+          # md5sum is used here for file integrity comparison only, not as a security primitive. DevSkim: ignore DS126858
+          md5_before="$(md5sum image.png | awk '{print $1}')" # DevSkim: ignore DS126858
           git add -A
           GIT_AUTHOR_NAME="${LLM_NAME}" GIT_AUTHOR_EMAIL="${LLM_EMAIL}" \
           GIT_COMMITTER_NAME="${LLM_NAME}" GIT_COMMITTER_EMAIL="${LLM_EMAIL}" \
               git commit -m "add binary file" >/dev/null
           "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
-          md5_after="$(md5sum image.png | awk '{print $1}')"
-          echo "before=${md5_before} after=${md5_after}"
-          [ "${md5_before}" = "${md5_after}" ]
+          md5_after="$(md5sum image.png | awk '{print $1}')" # DevSkim: ignore DS126858
+          echo "before=${md5_before} after=${md5_after}" # DevSkim: ignore DS126858
+          [ "${md5_before}" = "${md5_after}" ] # DevSkim: ignore DS126858
         assertions:
           - result.code ShouldEqual 0
 

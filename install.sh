@@ -21,8 +21,8 @@ echo "Installing RiotBox ${VERSION} → ${DATA_DIR}"
 rm -rf "${DATA_DIR}"
 mkdir -p "${DATA_DIR}" "${BIN_DIR}" "${CONFIG_DIR}"
 for p in "${APP_PATHS[@]}"; do
-    [ -e "${SRC_DIR}/${p}" ] || continue
-    cp -a "${SRC_DIR}/${p}" "${DATA_DIR}/"
+	[[ -e "${SRC_DIR}/${p}" ]] || continue
+	cp -a "${SRC_DIR}/${p}" "${DATA_DIR}/"
 done
 chmod +x "${DATA_DIR}/bin/riotbox"
 
@@ -34,25 +34,25 @@ echo "  Entrypoint: ${BIN_DIR}/riotbox -> ${DATA_DIR}/bin/riotbox"
 # files. Warn if a newer riotbox-config-version ships than is installed.
 STUBS_DIR="${SRC_DIR}/scripts/configs"
 for stub in config mounts.conf plugins.conf; do
-    src="${STUBS_DIR}/${stub}"
-    dst="${CONFIG_DIR}/${stub}"
-    [ -f "${src}" ] || continue
-    if [ ! -f "${dst}" ]; then
-        cp "${src}" "${dst}"
-        echo "  Config: ${dst} (created)"
-    else
-        shipped_ver="$(grep -m1 '^# riotbox-config-version:' "${src}" 2>/dev/null | awk '{print $NF}' || true)"
-        installed_ver="$(grep -m1 '^# riotbox-config-version:' "${dst}" 2>/dev/null | awk '{print $NF}' || true)"
-        if [ -n "${shipped_ver}" ] && [ -n "${installed_ver}" ] \
-                && [ "${shipped_ver}" -gt "${installed_ver}" ] 2>/dev/null; then
-            echo "  Config: ${dst} (exists, v${installed_ver} — v${shipped_ver} available; review ${src})"
-        else
-            echo "  Config: ${dst} (exists, up to date)"
-        fi
-    fi
+	src="${STUBS_DIR}/${stub}"
+	dst="${CONFIG_DIR}/${stub}"
+	[[ -f "${src}" ]] || continue
+	if [[ ! -f "${dst}" ]]; then
+		cp "${src}" "${dst}"
+		echo "  Config: ${dst} (created)"
+	else
+		shipped_ver="$(grep -m1 '^# riotbox-config-version:' "${src}" 2>/dev/null | awk '{print $NF}' || true)"
+		installed_ver="$(grep -m1 '^# riotbox-config-version:' "${dst}" 2>/dev/null | awk '{print $NF}' || true)"
+		if [[ -n "${shipped_ver}" ]] && [[ -n "${installed_ver}" ]] &&
+			[[ "${shipped_ver}" -gt "${installed_ver}" ]] 2>/dev/null; then
+			echo "  Config: ${dst} (exists, v${installed_ver} — v${shipped_ver} available; review ${src})"
+		else
+			echo "  Config: ${dst} (exists, up to date)"
+		fi
+	fi
 done
 
 if ! echo "${PATH}" | tr ':' '\n' | grep -qx "${BIN_DIR}"; then
-    echo "Note: ${BIN_DIR} is not in your PATH. Add it:"
-    echo "  export PATH=\"${BIN_DIR}:\${PATH}\""
+	echo "Note: ${BIN_DIR} is not in your PATH. Add it:"
+	echo "  export PATH=\"${BIN_DIR}:\${PATH}\""
 fi

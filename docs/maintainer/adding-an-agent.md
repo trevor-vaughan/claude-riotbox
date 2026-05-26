@@ -77,10 +77,10 @@ agent_<name>_run_argv() {
 Print the argv (one NUL-terminated token per write) for non-interactive
 "run with prompt" mode. Examples:
 
-| Agent      | argv tokens                              |
-|------------|------------------------------------------|
-| `claude`   | `claude`, `-p`, `<prompt>`               |
-| `opencode` | `opencode`, `run`, `<prompt>`            |
+| Agent      | argv tokens                   |
+|------------|-------------------------------|
+| `claude`   | `claude`, `-p`, `<prompt>`    |
+| `opencode` | `opencode`, `run`, `<prompt>` |
 
 The caller does `mapfile -d '' -t argv < <(agent_call <name> run_argv
 "$prompt")` and `exec` from there. NUL framing keeps multi-line argv
@@ -352,14 +352,14 @@ That's the whole change. No edits to:
 
 ## Where to look when something breaks
 
-| Symptom                                           | Where to look                       |
-|---------------------------------------------------|-------------------------------------|
-| `--agent=<new>` rejected with "must be one of"   | Does `agents/<new>/manifest.sh` exist? The host wrapper sources the registry at runtime, so no re-install is needed. |
-| `riotbox run` exits with "unknown verb"          | Manifest is missing `agent_<name>_run_argv` |
-| Wrapper invokes wrong binary                      | Check `agent_<name>_real_binary` and PATH order |
-| `--dangerously-skip-permissions` in wrong place   | Bug in `agent_<name>_wrapper_inject`; see opencode for subcommand-local injection |
-| Container fails to start with "no agents discovered" | The `COPY agents/` in the Dockerfile didn't run, or every subdirectory is missing `manifest.sh` |
-| Host config not synced                            | `agent_<name>_host_sync` is a no-op or its sync script is missing |
+| Symptom                                              | Where to look                                                                                                        |
+|------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
+| `--agent=<new>` rejected with "must be one of"       | Does `agents/<new>/manifest.sh` exist? The host wrapper sources the registry at runtime, so no re-install is needed. |
+| `riotbox run` exits with "unknown verb"              | Manifest is missing `agent_<name>_run_argv`                                                                          |
+| Wrapper invokes wrong binary                         | Check `agent_<name>_real_binary` and PATH order                                                                      |
+| `--dangerously-skip-permissions` in wrong place      | Bug in `agent_<name>_wrapper_inject`; see opencode for subcommand-local injection                                    |
+| Container fails to start with "no agents discovered" | The `COPY agents/` in the Dockerfile didn't run, or every subdirectory is missing `manifest.sh`                      |
+| Host config not synced                               | `agent_<name>_host_sync` is a no-op or its sync script is missing                                                    |
 
 Run `task test ARGS=agents` to re-exercise the contract suite at any
 time — it's the fastest signal that a manifest is well-formed.

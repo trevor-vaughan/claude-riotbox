@@ -38,3 +38,8 @@ RUN useradd -l -m -u ${HOST_UID} -s /bin/bash testuser 2>/dev/null || \
 
 USER testuser
 WORKDIR /home/testuser/riotbox
+
+# This is a test-only image used only in CI; no daemon is running. The check
+# verifies the core test tooling (venom) is present and executable.
+HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
+    CMD command -v venom >/dev/null 2>&1

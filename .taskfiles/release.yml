@@ -1,4 +1,4 @@
-version: '3'
+version: "3"
 
 tasks:
   default:
@@ -14,7 +14,7 @@ tasks:
         msg: "Usage: task release:bump -- <version>  (e.g. 0.2.0)"
       - sh: 'echo "{{.NEW_VERSION}}" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$"'
         msg: "Version must be semver (e.g. 1.2.3)"
-      - sh: 'git diff --quiet && git diff --cached --quiet'
+      - sh: "git diff --quiet && git diff --cached --quiet"
         msg: "Working tree must be clean before releasing"
     cmds:
       - echo "{{.NEW_VERSION}}" > "{{.ROOT_DIR}}/VERSION"
@@ -31,7 +31,7 @@ tasks:
   package:
     desc: "Build rpm + deb into dist/ (requires nfpm)"
     vars:
-      DIST: '{{.ROOT_DIR}}/dist'
+      DIST: "{{.ROOT_DIR}}/dist"
     cmds:
       - rm -rf "{{.DIST}}"
       - mkdir -p "{{.DIST}}"

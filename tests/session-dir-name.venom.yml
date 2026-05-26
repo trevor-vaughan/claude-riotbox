@@ -14,7 +14,6 @@ vars:
 # `s|/|-|g` mangling.
 
 testcases:
-
   - name: multi-project session dir fits within NAME_MAX and mkdir succeeds
     steps:
       - type: exec

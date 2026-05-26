@@ -5,12 +5,12 @@
 `setup_projects` calls `_mount_path_is_unowned` once per resolved
 project path. Each path is independently routed to one of:
 
-| Ownership | Mode | Suffix |
-|---|---|---|
-| owned | default | `:z` |
-| owned | `RIOTBOX_READONLY=1` | `:ro,z` |
-| owned | `RIOTBOX_OVERLAY=1` | `:ro,z` lower + session-dir `:z` upper |
-| not owned | (any) | `:O` (podman overlay, ephemeral writes) |
+| Ownership | Mode                 | Suffix                                  |
+|-----------|----------------------|-----------------------------------------|
+| owned     | default              | `:z`                                    |
+| owned     | `RIOTBOX_READONLY=1` | `:ro,z`                                 |
+| owned     | `RIOTBOX_OVERLAY=1`  | `:ro,z` lower + session-dir `:z` upper  |
+| not owned | (any)                | `:O` (podman overlay, ephemeral writes) |
 
 **Do not** reintroduce a function-level `mount_suffix` variable
 that's computed once before the per-path loop. The branch must

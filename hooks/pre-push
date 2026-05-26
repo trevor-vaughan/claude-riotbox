@@ -15,36 +15,37 @@ set -euo pipefail
 # Keep this list in sync with scripts/reown-commits.sh CONTAINER_EMAILS.
 CONTAINER_EMAIL_REGEX='llm@riotbox|claude@riotbox|llm@localhost|riotbox@local'
 
-remote="$1"
-url="$2"
+_remote="$1"
+_url="$2"
 
-while read -r local_ref local_oid remote_ref remote_oid; do
-    # Skip delete pushes
-    if [ "${local_oid}" = "0000000000000000000000000000000000000000" ]; then
-        continue
-    fi
+while read -r _local_ref local_oid _remote_ref _remote_oid; do
+	# Skip delete pushes
+	if [[ "${local_oid}" = "0000000000000000000000000000000000000000" ]]; then
+		continue
+	fi
 
-    # Determine the range to check
-    if [ "${remote_oid}" = "0000000000000000000000000000000000000000" ]; then
-        # New branch — check all commits
-        range="${local_oid}"
-    else
-        range="${remote_oid}..${local_oid}"
-    fi
+	# Determine the range to check
+	if [[ "${_remote_oid}" = "0000000000000000000000000000000000000000" ]]; then
+		# New branch — check all commits
+		range="${local_oid}"
+	else
+		range="${_remote_oid}..${local_oid}"
+	fi
 
-    # Look for commits authored by any riotbox container identity.
-    bad_commits="$(git log --format='%h %ae %s' "${range}" -- 2>/dev/null \
-        | grep -E "${CONTAINER_EMAIL_REGEX}" || true)"
-    if [ -n "${bad_commits}" ]; then
-        echo "ERROR: Push blocked — found commits authored by a riotbox container identity:" >&2
-        echo "" >&2
-        echo "${bad_commits}" | sed 's/^/  /' >&2
-        echo "" >&2
-        echo "Rewrite these commits to use your identity before pushing:" >&2
-        echo "  riotbox reown --all" >&2
-        echo "" >&2
-        exit 1
-    fi
+	# Look for commits authored by any riotbox container identity.
+	bad_commits="$(git log --format='%h %ae %s' "${range}" -- 2>/dev/null |
+		grep -E "${CONTAINER_EMAIL_REGEX}" || true)"
+	if [[ -n "${bad_commits}" ]]; then
+		echo "ERROR: Push blocked — found commits authored by a riotbox container identity:" >&2
+		echo "" >&2
+		# shellcheck disable=SC2001  # sed prepends indent to multi-line output; not replaceable with ${//}
+		echo "${bad_commits}" | sed 's/^/  /' >&2
+		echo "" >&2
+		echo "Rewrite these commits to use your identity before pushing:" >&2
+		echo "  riotbox reown --all" >&2
+		echo "" >&2
+		exit 1
+	fi
 done
 
 exit 0

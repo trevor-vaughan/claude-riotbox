@@ -1,0 +1,21 @@
+# MegaLinter configuration
+# https://megalinter.io/configuration/
+#
+# Following extends pattern from https://github.com/trevor-vaughan/megalint-config
+#
+# This is dropped in by the upstream runner/job
+EXTENDS: .mega-linter.yml
+
+# REPOSITORY_CHECKOV_ARGUMENTS — append --skip-check to checkov's
+#   invocation. We need this because MegaLinter passes its own
+#   --config-file /action/lib/.automation/.checkov.yml, which overrides
+#   any repo-local .checkov.yml. Passing --skip-check on the command
+#   line takes effect regardless of the config-file resolution.
+#
+#   CKV2_DOCKER_1: this is a developer-environment image that
+#   intentionally provisions NOPASSWD sudo for the `llm` user via
+#   /etc/sudoers.d/llm. The same intent is documented inline at
+#   Dockerfile:127 (kept as in-source documentation), but MegaLinter's
+#   SARIF→markdown reporter does not honor `suppressions[]`, so the
+#   inline directive does not silence the markdown finding list.
+REPOSITORY_CHECKOV_ARGUMENTS: "--skip-check CKV2_DOCKER_1"

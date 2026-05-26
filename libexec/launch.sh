@@ -15,15 +15,15 @@ set -euo pipefail
 RIOTBOX_CONFIG_USER="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox/config"
 RIOTBOX_CONFIG_SYSTEM="${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}/config"
 # shellcheck disable=SC1090
-[ -f "${RIOTBOX_CONFIG_USER}" ] && source "${RIOTBOX_CONFIG_USER}"
-# shellcheck disable=SC1091
-[ -f "${RIOTBOX_CONFIG_SYSTEM}" ] && source "${RIOTBOX_CONFIG_SYSTEM}"
+[[ -f "${RIOTBOX_CONFIG_USER}" ]] && source "${RIOTBOX_CONFIG_USER}"
+# shellcheck disable=SC1090,SC1091
+[[ -f "${RIOTBOX_CONFIG_SYSTEM}" ]] && source "${RIOTBOX_CONFIG_SYSTEM}"
 
 # Mutual-exclusion guard for the two container-runtime delegation modes.
 # Fires before any side-effectful work (mount setup, image lookup, podman
 # invocation) so an obviously-broken env never reaches the run command.
-if [ "${RIOTBOX_NESTED:-}" = "1" ] && [ "${RIOTBOX_SOCKET:-}" = "1" ]; then
-    cat >&2 <<'EOF'
+if [[ "${RIOTBOX_NESTED:-}" = "1" ]] && [[ "${RIOTBOX_SOCKET:-}" = "1" ]]; then
+	cat >&2 <<'EOF'
 ERROR: RIOTBOX_NESTED=1 and RIOTBOX_SOCKET=1 are mutually exclusive.
 
   RIOTBOX_NESTED=1   Run a podman engine inside the container. Isolated,
@@ -34,7 +34,7 @@ ERROR: RIOTBOX_NESTED=1 and RIOTBOX_SOCKET=1 are mutually exclusive.
 
 Pick one. See README "Container runtime modes" for trade-offs.
 EOF
-    exit 1
+	exit 1
 fi
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
@@ -42,33 +42,36 @@ setup_projects "${RIOTBOX_PROJECTS:-}"
 MOUNTS="$("${ROOT_DIR}/scripts/detect-mounts.sh")"
 
 # RIOTBOX_OVERLAY=1 requires podman (Docker has no equivalent)
-if [ "${RIOTBOX_OVERLAY:-}" = "1" ]; then
-    if [ "$(basename "${CONTAINER_CMD}")" != "podman" ]; then
-        echo "ERROR: Overlay mode requires podman. Docker is not supported." >&2
-        exit 1
-    fi
+if [[ "${RIOTBOX_OVERLAY:-}" = "1" ]]; then
+	if [[ "$(basename "${CONTAINER_CMD}")" != "podman" ]]; then
+		echo "ERROR: Overlay mode requires podman. Docker is not supported." >&2
+		exit 1
+	fi
 fi
 
 # Overlay guard: block launch if pending overlay data exists
-if [ "${RIOTBOX_OVERLAY:-}" = "1" ]; then
-    overlay_base="${RIOTBOX_SESSION_DIR}/overlay"
-    if [ -d "${overlay_base}" ]; then
-        for overlay_subdir in "${overlay_base}"/*/; do
-            [ -d "${overlay_subdir}/upper" ] || continue
-            if [ -n "$(ls -A "${overlay_subdir}/upper" 2>/dev/null)" ]; then
-                echo "ERROR: Pending overlay data exists. Accept or reject before starting a new session." >&2
-                echo "  riotbox overlay-diff      Review changes" >&2
-                echo "  riotbox overlay-accept     Apply to project" >&2
-                echo "  riotbox overlay-reject     Discard changes" >&2
-                exit 1
-            fi
-        done
-    fi
+if [[ "${RIOTBOX_OVERLAY:-}" = "1" ]]; then
+	overlay_base="${RIOTBOX_SESSION_DIR}/overlay"
+	if [[ -d "${overlay_base}" ]]; then
+		for overlay_subdir in "${overlay_base}"/*/; do
+			[[ -d "${overlay_subdir}/upper" ]] || continue
+			overlay_upper_contents="$(ls -A "${overlay_subdir}/upper" 2>/dev/null)"
+			if [[ -n "${overlay_upper_contents}" ]]; then
+				echo "ERROR: Pending overlay data exists. Accept or reject before starting a new session." >&2
+				echo "  riotbox overlay-diff      Review changes" >&2
+				echo "  riotbox overlay-accept     Apply to project" >&2
+				echo "  riotbox overlay-reject     Discard changes" >&2
+				exit 1
+			fi
+		done
+	fi
 fi
 
 # Generate a unique session identifier for this container run.
 # Passed into the container so the entrypoint can name the session branch.
-SESSION_ID="$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+_session_ts="$(date +%Y%m%d-%H%M%S)"
+_session_rand="$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+SESSION_ID="${_session_ts}-${_session_rand}"
 
 # Podman rootless --userns=keep-id preserves the host user's UID/GID inside
 # the container. Both uid= and gid= are passed explicitly: podman's default
@@ -103,21 +106,23 @@ SESSION_ID="$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d
 USERNS_FLAG=""
 INIT_FLAG=""
 USER_FLAG=""
-if [ "$(basename "${CONTAINER_CMD}")" = "podman" ]; then
-    if [ "${RIOTBOX_NESTED:-}" = "1" ]; then
-        USERNS_FLAG="--userns=keep-id:uid=$(id -u),gid=$(id -g),size=65536"
-    else
-        USERNS_FLAG="--userns=keep-id:uid=$(id -u),gid=$(id -g)"
-    fi
-    USER_FLAG="--user $(id -u):$(id -g)"
-    # catatonit (podman's --init) segfaults on EL10; not needed anyway
-    INIT_FLAG="--init=false"
+if [[ "$(basename "${CONTAINER_CMD}")" = "podman" ]]; then
+	_uid="$(id -u)"
+	_gid="$(id -g)"
+	if [[ "${RIOTBOX_NESTED:-}" = "1" ]]; then
+		USERNS_FLAG="--userns=keep-id:uid=${_uid},gid=${_gid},size=65536"
+	else
+		USERNS_FLAG="--userns=keep-id:uid=${_uid},gid=${_gid}"
+	fi
+	USER_FLAG="--user ${_uid}:${_gid}"
+	# catatonit (podman's --init) segfaults on EL10; not needed anyway
+	INIT_FLAG="--init=false"
 fi
 
 # RIOTBOX_NETWORK=none disables outbound network (prevents exfiltration)
 NET_FLAG=""
-if [ "${RIOTBOX_NETWORK:-}" = "none" ]; then
-    NET_FLAG="--network=none"
+if [[ "${RIOTBOX_NETWORK:-}" = "none" ]]; then
+	NET_FLAG="--network=none"
 fi
 
 # RIOTBOX_NESTED=1 enables podman-in-podman. This is intentionally a much
@@ -153,8 +158,8 @@ fi
 # caps don't apply when the running process isn't root in its userns) are
 # handled at runtime by container/nested-podman-setup.sh.
 NESTED_FLAGS=""
-if [ "${RIOTBOX_NESTED:-}" = "1" ]; then
-    NESTED_FLAGS="--device /dev/fuse \
+if [[ "${RIOTBOX_NESTED:-}" = "1" ]]; then
+	NESTED_FLAGS="--device /dev/fuse \
         --device /dev/net/tun \
         --security-opt label=disable \
         --security-opt unmask=ALL \
@@ -163,8 +168,8 @@ fi
 
 # RIOTBOX_OVERLAY=1 needs FUSE device access for fuse-overlayfs
 OVERLAY_FLAGS=""
-if [ "${RIOTBOX_OVERLAY:-}" = "1" ]; then
-    OVERLAY_FLAGS="--device /dev/fuse"
+if [[ "${RIOTBOX_OVERLAY:-}" = "1" ]]; then
+	OVERLAY_FLAGS="--device /dev/fuse"
 fi
 
 # RIOTBOX_SOCKET=1 bind-mounts the host's podman socket and sets
@@ -172,10 +177,10 @@ fi
 # engine. Detection and the failure path live in socket-vars.sh — a missing
 # or non-responsive socket fails loud here, not silently at runtime.
 SOCKET_FLAGS=""
-if [ "${RIOTBOX_SOCKET:-}" = "1" ]; then
-    # shellcheck source=./socket-vars.sh
-    source "$(dirname "${BASH_SOURCE[0]}")/socket-vars.sh"
-    SOCKET_FLAGS="$(socket_flags)" || exit 1
+if [[ "${RIOTBOX_SOCKET:-}" = "1" ]]; then
+	# shellcheck source=./socket-vars.sh disable=SC1091  # source path resolves only from libexec/; safe to skip follow
+	source "$(dirname "${BASH_SOURCE[0]}")/socket-vars.sh"
+	SOCKET_FLAGS="$(socket_flags)" || exit 1
 fi
 
 # ── SELinux pre-labeling ─────────────────────────────────────────────────────
@@ -191,10 +196,10 @@ fi
 # have SELinux in the kernel without the getenforce binary installed, but if
 # chcon is missing there is nothing we can do regardless.
 if command -v chcon &>/dev/null; then
-    chcon -R -t container_file_t "${RIOTBOX_SESSION_DIR}" 2>/dev/null || true
+	chcon -R -t container_file_t "${RIOTBOX_SESSION_DIR}" 2>/dev/null || true
 fi
 
-# shellcheck source=./passthrough-vars.sh
+# shellcheck source=./passthrough-vars.sh disable=SC1091
 source "$(dirname "${BASH_SOURCE[0]}")/passthrough-vars.sh"
 # Must run before passthrough_flags: KEY=VALUE entries are exported into
 # this shell's env so the podman child process (which receives `-e KEY`
@@ -210,30 +215,31 @@ PASSTHROUGH_FLAGS="$(passthrough_flags)"
 # Must run before credfile_flags(): if the user accepts, this exports
 # GOOGLE_APPLICATION_CREDENTIALS, which credfile-vars.sh then picks up and
 # turns into the bind-mount + env-rewrite pair.
-# shellcheck source=./vertex-adc-prompt.sh
+# shellcheck source=./vertex-adc-prompt.sh disable=SC1091
 source "$(dirname "${BASH_SOURCE[0]}")/vertex-adc-prompt.sh"
 vertex_adc_prompt
 
-# shellcheck source=./credfile-vars.sh
+# shellcheck source=./credfile-vars.sh disable=SC1091
 source "$(dirname "${BASH_SOURCE[0]}")/credfile-vars.sh"
 CREDFILE_FLAGS="$(credfile_flags)"
 
-# shellcheck disable=SC2086  # intentional word splitting for multi-flag vars
+# shellcheck disable=SC2086,SC2248  # intentional word splitting for multi-flag vars
+# shellcheck disable=SC2154  # IMAGE_NAME is required env — set by the caller (riotbox CLI)
 ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${USER_FLAG} ${INIT_FLAG} \
-    --name "${CONTAINER_NAME}" \
-    ${NET_FLAG} \
-    ${NESTED_FLAGS} \
-    ${OVERLAY_FLAGS} \
-    ${SOCKET_FLAGS} \
-    ${PROJECT_VOLUME_FLAGS} \
-    ${MOUNTS} \
-    ${PASSTHROUGH_FLAGS} \
-    ${CREDFILE_FLAGS} \
-    -e SESSION_ID="${SESSION_ID}" \
-    ${SESSION_BRANCH:+-e SESSION_BRANCH="${SESSION_BRANCH}"} \
-    ${RIOTBOX_PLUGINS:+-e RIOTBOX_PLUGINS="${RIOTBOX_PLUGINS}"} \
-    ${RIOTBOX_AGENT:+-e RIOTBOX_AGENT="${RIOTBOX_AGENT}"} \
-    ${RIOTBOX_NESTED:+-e RIOTBOX_NESTED="${RIOTBOX_NESTED}"} \
-    -w "${WORKDIR}" \
-    "${IMAGE_NAME}" \
-    "$@"
+	--name "${CONTAINER_NAME}" \
+	${NET_FLAG} \
+	${NESTED_FLAGS} \
+	${OVERLAY_FLAGS} \
+	${SOCKET_FLAGS} \
+	${PROJECT_VOLUME_FLAGS} \
+	${MOUNTS} \
+	${PASSTHROUGH_FLAGS} \
+	${CREDFILE_FLAGS} \
+	-e SESSION_ID="${SESSION_ID}" \
+	${SESSION_BRANCH:+-e SESSION_BRANCH="${SESSION_BRANCH}"} \
+	${RIOTBOX_PLUGINS:+-e RIOTBOX_PLUGINS="${RIOTBOX_PLUGINS}"} \
+	${RIOTBOX_AGENT:+-e RIOTBOX_AGENT="${RIOTBOX_AGENT}"} \
+	${RIOTBOX_NESTED:+-e RIOTBOX_NESTED="${RIOTBOX_NESTED}"} \
+	-w "${WORKDIR}" \
+	"${IMAGE_NAME}" \
+	"$@"

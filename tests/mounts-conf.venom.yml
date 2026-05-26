@@ -11,7 +11,6 @@ vars:
 # files are silently skipped (existing behaviour we want to preserve).
 
 testcases:
-
   - name: mounts.conf tilde-prefixed entry resolves to HOME on host and /home/llm in container
     steps:
       - type: exec

@@ -31,25 +31,25 @@
 _log_iso_now() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
 
 log_emit() {
-    local level="${1:?log_emit: level required}"
-    local step="${2:?log_emit: step required}"
-    local msg="${3:?log_emit: msg required}"
-    local extras="${4:-{\}}"
-    local ts
-    ts="$(_log_iso_now)"
-    # --argjson rejects malformed JSON — that's the desired failure mode.
-    # Fields from $extras win on key collision; this is intentional so
-    # callers can override step/msg per-call when needed.
-    jq -cn \
-        --arg ts "${ts}" \
-        --arg level "${level}" \
-        --arg step "${step}" \
-        --arg msg "${msg}" \
-        --argjson extras "${extras}" \
-        '{ts:$ts, level:$level, step:$step, msg:$msg} + $extras'
+	local level="${1:?log_emit: level required}"
+	local step="${2:?log_emit: step required}"
+	local msg="${3:?log_emit: msg required}"
+	local extras="${4:-{\}}"
+	local ts
+	ts="$(_log_iso_now)"
+	# --argjson rejects malformed JSON — that's the desired failure mode.
+	# Fields from $extras win on key collision; this is intentional so
+	# callers can override step/msg per-call when needed.
+	jq -cn \
+		--arg ts "${ts}" \
+		--arg level "${level}" \
+		--arg step "${step}" \
+		--arg msg "${msg}" \
+		--argjson extras "${extras}" \
+		'{ts:$ts, level:$level, step:$step, msg:$msg} + $extras'
 }
 
 log_fmt() {
-    local line="${1:?log_fmt: line required}"
-    jq -r '"\(.ts) [\(.level | ascii_upcase)] \(.step): \(.msg)"' <<<"${line}"
+	local line="${1:?log_fmt: line required}"
+	jq -r '"\(.ts) [\(.level | ascii_upcase)] \(.step): \(.msg)"' <<<"${line}"
 }

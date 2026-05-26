@@ -27,10 +27,11 @@ agent="$(basename "$0")"
 # shellcheck source=/dev/null
 source "${HOME}/.riotbox/agents/registry.sh"
 
+# shellcheck disable=SC2154  # AGENT_REGISTRY is set by agents/registry.sh (sourced above)
 if ! agent_is_registered "${agent}"; then
-    echo "ERROR: agent-wrapper.sh invoked as '${agent}' but no such agent is registered." >&2
-    echo "       Registered agents: ${AGENT_REGISTRY[*]}" >&2
-    exit 1
+	echo "ERROR: agent-wrapper.sh invoked as '${agent}' but no such agent is registered." >&2
+	echo "       Registered agents: ${AGENT_REGISTRY[*]}" >&2
+	exit 1
 fi
 
 # Resolve the agent's real binary on PATH (skipping ${HOME}/.riotbox/bin).
@@ -38,9 +39,9 @@ fi
 real_bin_name="$(agent_call "${agent}" real_binary)"
 # shellcheck source=/dev/null
 source "${HOME}/.riotbox/find-real-bin.sh" "${real_bin_name}"
-if [ -z "${REAL_BIN}" ]; then
-    echo "ERROR: could not find the real ${real_bin_name} binary on PATH" >&2
-    exit 1
+if [[ -z "${REAL_BIN}" ]]; then
+	echo "ERROR: could not find the real ${real_bin_name} binary on PATH" >&2
+	exit 1
 fi
 
 # Apply the agent's injection rules. wrapper_inject prints the rewritten argv
@@ -56,18 +57,19 @@ fi
 RIOTBOX_INJECT_ENV_FILE="$(mktemp)"
 export RIOTBOX_INJECT_ENV_FILE
 trap 'rm -f "${RIOTBOX_INJECT_ENV_FILE}"' EXIT
+# shellcheck disable=SC2312  # agent_call exit code is not masked; mapfile reads its stdout via process substitution
 mapfile -d '' -t new_args < <(agent_call "${agent}" wrapper_inject "$@")
 
 # Read each KEY=VAL line and export it. Lines that don't look like a valid
 # `KEY=VAL` env assignment are skipped — manifests own this file and the
 # format is strict on purpose.
-if [ -s "${RIOTBOX_INJECT_ENV_FILE}" ]; then
-    while IFS= read -r _line || [ -n "${_line}" ]; do
-        # Match KEY=VAL where KEY is [A-Za-z_][A-Za-z0-9_]*
-        if [[ "${_line}" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
-            export "${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
-        fi
-    done < "${RIOTBOX_INJECT_ENV_FILE}"
+if [[ -s "${RIOTBOX_INJECT_ENV_FILE}" ]]; then
+	while IFS= read -r _line || [[ -n "${_line}" ]]; do
+		# Match KEY=VAL where KEY is [A-Za-z_][A-Za-z0-9_]*
+		if [[ "${_line}" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+			export "${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
+		fi
+	done <"${RIOTBOX_INJECT_ENV_FILE}"
 fi
 rm -f "${RIOTBOX_INJECT_ENV_FILE}"
 trap - EXIT

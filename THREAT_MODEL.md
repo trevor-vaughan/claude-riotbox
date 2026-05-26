@@ -48,13 +48,13 @@
 
 ## Assessment Metadata
 
-| Field               | Value          |
-| ------------------- | -------------- |
-| **Repository**      | riotbox |
-| **Commit**          | `4e4962b`      |
-| **Assessment Date** | 2026-03-12     |
-| **Analyst**         |                |
-| **Confidence**      | High           |
+| Field               | Value      |
+|---------------------|------------|
+| **Repository**      | riotbox    |
+| **Commit**          | `4e4962b`  |
+| **Assessment Date** | 2026-03-12 |
+| **Analyst**         |            |
+| **Confidence**      | High       |
 
 ## Scope
 
@@ -68,7 +68,7 @@ _No tool data recorded_
 ## Not Assessed
 
 | Area                                                                     | Reason                                                                                                                                                                                                                                                                                                                                                                                  | Gap Type | Recommended Action |
-| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------ |
+|--------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|--------------------|
 | Runtime and dynamic behaviour                                            | Static analysis only -- cannot assess runtime container escape, memory corruption, or dynamic network behaviour                                                                                                                                                                                                                                                                         |          |                    |
 | Social engineering and physical vectors                                  | Out of scope for static code-level threat modelling                                                                                                                                                                                                                                                                                                                                     |          |                    |
 | Third-party and vendor code not in the repository                        | Claude Code npm package internals, podman/docker runtime, and CentOS base image vulnerabilities are not assessed                                                                                                                                                                                                                                                                        |          |                    |
@@ -81,17 +81,17 @@ _No tool data recorded_
 _The following methodologies were evaluated and determined not applicable to
 this system._
 
-- **LINDDUN**: 
+- **LINDDUN**:
 
 ## Finding Summary
 
-| Severity   | Open | Remediated | Total |
-| ---------- | ---- | ---------- | ----- |
-| 🔴 Critical | 0    | 0          | 0     |
-| 🟠 High     | 1    | 0          | 1     |
-| 🟡 Medium   | 3    | 3          | 6     |
-| 🟢 Low      | 2    | 2          | 4     |
-| **Total**  | **6** | **5**     | **11** |
+| Severity    | Open  | Remediated | Total  |
+|-------------|-------|------------|--------|
+| 🔴 Critical | 0     | 0          | 0      |
+| 🟠 High     | 1     | 0          | 1      |
+| 🟡 Medium   | 3     | 3          | 6      |
+| 🟢 Low      | 2     | 2          | 4      |
+| **Total**   | **6** | **5**      | **11** |
 
 ## Risk Matrix
 
@@ -348,43 +348,43 @@ and exfiltrate credentials.
 
 **Preventive controls:**
 - **Pin base image to digest and all install scripts to commit SHA or versioned
-  URL with checksum verification** *(effort: M)* → step 3: Replace each curl|sh
+  URL with checksum verification** _(effort: M)_ → step 3: Replace each curl|sh
   with a two-step download-then-verify pattern: (1) Download to a temp file, (2)
   verify SHA256 against a pinned hash, (3) execute only if hash matches. For the
   base image, use FROM quay.io/centos/centos:stream10@sha256:<digest>. For tools
   with published checksums (trivy, grype, syft), verify them. For venom (no
   published checksums), compute and pin a self-managed SHA256. Example for
   trivy: RUN curl -sfL -o /tmp/install-trivy.sh
-  https://raw.githubusercontent.com/aquasecurity/trivy/v0.58.2/contrib/install.sh
+  <https://raw.githubusercontent.com/aquasecurity/trivy/v0.58.2/contrib/install.sh>
   && \
     echo "<expected-sha256>  /tmp/install-trivy.sh" | sha256sum -c && \
     sh /tmp/install-trivy.sh -b /tools/bin
 - **Use multi-stage build with COPY --from=tools to isolate download stage**
-  *(effort: L)* → step 4: Already partially implemented (tools stage exists).
+  _(effort: L)_ → step 4: Already partially implemented (tools stage exists).
   Ensure no curl|sh commands run in the runtime stage. Move nvm, uv, rustup, and
   rvm installations to a dedicated builder stage or use pre-built binaries with
   checksum verification.
 
 **Detective controls:**
-- **Image SBOM generation and vulnerability scan on every build** *(effort: S)*
+- **Image SBOM generation and vulnerability scan on every build** _(effort: S)_
   → step 4: Add a post-build step that runs syft and grype against the built
   image: syft riotbox:latest -o spdx-json | grype --fail-on high.
   Integrate into the Taskfile build task.
-- **Reproducible build verification** *(effort: M)* → step 3: Log SHA256 of
+- **Reproducible build verification** _(effort: M)_ → step 3: Log SHA256 of
   every downloaded artifact during build (add sha256sum after each curl
   download). Compare against known-good hashes in CI.
 
 #### Compliance Mapping
 
-- OWASP Top 10 A06:2021 - Vulnerable and Outdated Components — 
+- OWASP Top 10 A06:2021 - Vulnerable and Outdated Components —
 
 #### Risk Treatment
 
-- **Decision:** 
-- **Rationale:** 
-- **Authority:** 
-- **Residual risk score:** 
-- **Review date:** 
+- **Decision:**
+- **Rationale:**
+- **Authority:**
+- **Residual risk score:**
+- **Review date:**
 
 #### Ticket
 
@@ -412,8 +412,8 @@ inject malicious code into the container image.
 - [ ] A CHECKSUMS file or equivalent is maintained in the repository for all
   pinned versions
 
-**Labels:** 
-**Assignee team:** 
+**Labels:**
+**Assignee team:**
 
 ---
 
@@ -544,21 +544,21 @@ net.
 
 **Preventive controls:**
 - **Extract backup logic into a shared function and call it from all entry
-  points** *(effort: S)* → step 3: Move the checkpoint/backup logic from run.sh
+  points** _(effort: S)_ → step 3: Move the checkpoint/backup logic from run.sh
   (lines 46-75) into a shared script (e.g. scripts/checkpoint.sh). Source it
   from run.sh, and add calls in bin/riotbox for the shell and resume verbs
   (before launch.sh is invoked). Skip backup for audit since it mounts
   read-only.
 
 **Detective controls:**
-- **Warn when launching without backup** *(effort: S)* → step 2: Add a check in
+- **Warn when launching without backup** _(effort: S)_ → step 2: Add a check in
   launch.sh that prints a warning if no checkpoint tag exists for the current
   session: 'echo "WARNING: No pre-session backup created. Run riotbox run for
   backup protection." >&2'
 
 #### Compliance Mapping
 
-- OWASP Top 10 A05:2021 - Security Misconfiguration — 
+- OWASP Top 10 A05:2021 - Security Misconfiguration —
 
 #### Risk Treatment
 
@@ -589,8 +589,8 @@ recovery path for destructive LLM sessions.
 - [ ] Audit entry point is exempt (read-only mount)
 - [ ] Backup logic is shared, not duplicated
 
-**Labels:** 
-**Assignee team:** 
+**Labels:**
+**Assignee team:**
 
 ---
 
@@ -713,23 +713,23 @@ bakes auth tokens into a permanent image layer.
 #### Mitigations
 
 **Preventive controls:**
-- **Strip auth tokens from .npmrc before copying into build context** *(effort:
-  S)* → step 1: In build.sh, filter .npmrc before copying: grep -v '_authToken'
+- **Strip auth tokens from .npmrc before copying into build context** _(effort:
+  S)_ → step 1: In build.sh, filter .npmrc before copying: grep -v '_authToken'
   ~/.npmrc > configs/.npmrc. Or only copy registry URL lines. Alternatively, add
   configs/.npmrc to .dockerignore and mount .npmrc at runtime instead.
-- **Add .npmrc to .dockerignore** *(effort: S)* → step 2: Add 'configs/.npmrc'
+- **Add .npmrc to .dockerignore** _(effort: S)_ → step 2: Add 'configs/.npmrc'
   to .dockerignore. This prevents the token from being baked into the image.
   Mount the .npmrc at runtime via a read-only bind mount if registry access is
   needed in the container.
 
 **Detective controls:**
-- **Scan built images for embedded credentials** *(effort: S)* → step 2: Run
+- **Scan built images for embedded credentials** _(effort: S)_ → step 2: Run
   'trivy config' or a custom check against the built image to detect _authToken
   patterns in image layers.
 
 #### Compliance Mapping
 
-- OWASP Top 10 A07:2021 - Identification and Authentication Failures — 
+- OWASP Top 10 A07:2021 - Identification and Authentication Failures —
 
 #### Risk Treatment
 
@@ -762,8 +762,8 @@ _authToken lines before copying.
 - [ ] Either .npmrc is excluded from build context or tokens are stripped
 - [ ] Registry access (if needed) uses runtime mount instead
 
-**Labels:** 
-**Assignee team:** 
+**Labels:**
+**Assignee team:**
 
 ---
 
@@ -885,30 +885,30 @@ packages and executes their postinstall hooks without integrity verification.
 #### Mitigations
 
 **Preventive controls:**
-- **Pin npm packages to exact versions** *(effort: S)* → step 2: Pin to exact
+- **Pin npm packages to exact versions** _(effort: S)_ → step 2: Pin to exact
   versions: 'npm install -g @anthropic-ai/claude-code@X.Y.Z' and 'npm install -g
   @mermaid-js/mermaid-cli@X.Y.Z'. Use --ignore-scripts during install and
   explicitly run only known-safe postinstall steps.
-- **Use npm lockfile or shrinkwrap for reproducible installs** *(effort: M)* →
+- **Use npm lockfile or shrinkwrap for reproducible installs** _(effort: M)_ →
   step 3: Generate a package-lock.json for global installs and use 'npm ci
   --global' to install from the lockfile with exact versions.
 
 **Detective controls:**
-- **Audit npm packages after install** *(effort: S)* → step 3: Add 'npm audit
+- **Audit npm packages after install** _(effort: S)_ → step 3: Add 'npm audit
   --audit-level=high' after each global install in the Dockerfile. Fail the
   build if high-severity vulnerabilities are detected.
 
 #### Compliance Mapping
 
-- OWASP Top 10 A06:2021 - Vulnerable and Outdated Components — 
+- OWASP Top 10 A06:2021 - Vulnerable and Outdated Components —
 
 #### Risk Treatment
 
-- **Decision:** 
-- **Rationale:** 
-- **Authority:** 
-- **Residual risk score:** 
-- **Review date:** 
+- **Decision:**
+- **Rationale:**
+- **Authority:**
+- **Residual risk score:**
+- **Review date:**
 
 #### Ticket
 
@@ -927,8 +927,8 @@ execute arbitrary code during build. Pin to exact versions.
 - [ ] Both npm install -g commands specify exact versions
 - [ ] A Renovate/Dependabot config tracks npm version updates
 
-**Labels:** 
-**Assignee team:** 
+**Labels:**
+**Assignee team:**
 
 ---
 
@@ -1046,28 +1046,28 @@ cargo, and Go packages without integrity verification.
 #### Mitigations
 
 **Preventive controls:**
-- **Pin all packages to exact versions with hash verification** *(effort: S)* →
+- **Pin all packages to exact versions with hash verification** _(effort: S)_ →
   step 2: Pin pip packages: 'pip3 install semgrep==X.Y.Z pyyaml==X.Y.Z'. Use
   pip's --require-hashes with a requirements file for integrity. Pin ast-grep:
-  'cargo binstall ast-grep@X.Y.Z'. Pin gopls: 'go install
+  'cargo binstall <ast-grep@X.Y.Z>'. Pin gopls: 'go install
   golang.org/x/tools/gopls@vX.Y.Z'.
 
 **Detective controls:**
-- **Log installed versions and compare against known-good** *(effort: S)* → step
+- **Log installed versions and compare against known-good** _(effort: S)_ → step
   3: After each install, log the exact version and hash. Compare against a
   known-good manifest maintained in the repository.
 
 #### Compliance Mapping
 
-- OWASP Top 10 A06:2021 - Vulnerable and Outdated Components — 
+- OWASP Top 10 A06:2021 - Vulnerable and Outdated Components —
 
 #### Risk Treatment
 
-- **Decision:** 
-- **Rationale:** 
-- **Authority:** 
-- **Residual risk score:** 
-- **Review date:** 
+- **Decision:**
+- **Rationale:**
+- **Authority:**
+- **Residual risk score:**
+- **Review date:**
 
 #### Ticket
 
@@ -1084,8 +1084,8 @@ pins or hash verification. Pin all to exact versions.
 - [ ] All pip, cargo, and go installs specify exact versions
 - [ ] pip installs use --require-hashes where possible
 
-**Labels:** 
-**Assignee team:** 
+**Labels:**
+**Assignee team:**
 
 ---
 
@@ -1206,27 +1206,27 @@ integrity verification. A compromised plugin persists across all sessions.
 #### Mitigations
 
 **Preventive controls:**
-- **Pin plugin installations to specific commit SHAs or versions** *(effort: M)*
+- **Pin plugin installations to specific commit SHAs or versions** _(effort: M)_
   → step 2: Pin the marketplace add to a specific commit: clone at a specific
   SHA rather than HEAD. For each plugin install, verify the installed code
   against a known-good hash maintained in the repository.
 
 **Detective controls:**
-- **Verify plugin integrity at container startup** *(effort: M)* → step 4: In
+- **Verify plugin integrity at container startup** _(effort: M)_ → step 4: In
   entrypoint.sh, compute SHA256 of installed plugin files and compare against a
   manifest baked into the image.
 
 #### Compliance Mapping
 
-- OWASP Top 10 A08:2021 - Software and Data Integrity Failures — 
+- OWASP Top 10 A08:2021 - Software and Data Integrity Failures —
 
 #### Risk Treatment
 
-- **Decision:** 
-- **Rationale:** 
-- **Authority:** 
-- **Residual risk score:** 
-- **Review date:** 
+- **Decision:**
+- **Rationale:**
+- **Authority:**
+- **Residual risk score:**
+- **Review date:**
 
 #### Ticket
 
@@ -1246,8 +1246,8 @@ integrity verification. Pin to specific commits and verify checksums.
 - [ ] Each plugin install verifies integrity
 - [ ] Installation failures are not silently suppressed
 
-**Labels:** 
-**Assignee team:** 
+**Labels:**
+**Assignee team:**
 
 ---
 
@@ -1367,21 +1367,21 @@ potentially including custom registry URLs and credentials.
 #### Mitigations
 
 **Preventive controls:**
-- **Strip credentials from copied config files** *(effort: S)* → step 2: In
+- **Strip credentials from copied config files** _(effort: S)_ → step 2: In
   build.sh, strip credential-related fields from pip.conf and cargo/config.toml
   before copying. For pip.conf, remove lines containing 'password' or 'cert'.
   For cargo/config.toml, remove [registries.*.token] fields.
-- **Document the config copy behaviour and allow opt-out** *(effort: S)* → step
+- **Document the config copy behaviour and allow opt-out** _(effort: S)_ → step
   1: Add documentation explaining which configs are copied and why. Add a
   RIOTBOX_SKIP_HOST_CONFIGS=1 flag to skip the copy.
 
 **Detective controls:**
-- **Log which configs were copied during build** *(effort: S)* → step 2: Already
+- **Log which configs were copied during build** _(effort: S)_ → step 2: Already
   implemented -- build.sh prints each copied config file.
 
 #### Compliance Mapping
 
-- OWASP Top 10 A08:2021 - Software and Data Integrity Failures — 
+- OWASP Top 10 A08:2021 - Software and Data Integrity Failures —
 
 #### Risk Treatment
 
@@ -1412,8 +1412,8 @@ document the behaviour.
 - [ ] Documentation explains which configs are copied
 - [ ] RIOTBOX_SKIP_HOST_CONFIGS=1 opt-out is available
 
-**Labels:** 
-**Assignee team:** 
+**Labels:**
+**Assignee team:**
 
 ---
 
@@ -1534,31 +1534,31 @@ publishing steps.
 #### Mitigations
 
 **Preventive controls:**
-- **Pin GitHub Actions to full commit SHA** *(effort: S)* → step 3: Replace
+- **Pin GitHub Actions to full commit SHA** _(effort: S)_ → step 3: Replace
   actions/checkout@v4 with actions/checkout@<full-sha>. Determine the current
   SHA: gh api repos/actions/checkout/commits/v4 --jq .sha. Add a comment with
   the tag for readability: uses: actions/checkout@<sha> # v4
-- **Pin CI tool downloads to versioned URLs with checksums** *(effort: S)* →
+- **Pin CI tool downloads to versioned URLs with checksums** _(effort: S)_ →
   step 4: For hadolint: download a specific version and verify SHA256. For task:
   pin the install script URL to a versioned release.
 
 **Detective controls:**
-- **GitHub Dependabot or Renovate for action version monitoring** *(effort: S)*
+- **GitHub Dependabot or Renovate for action version monitoring** _(effort: S)_
   → step 1: Enable Dependabot alerts for GitHub Actions (dependabot.yml with
   package-ecosystem: github-actions) to detect when pinned SHAs have newer
   versions available.
 
 #### Compliance Mapping
 
-- OWASP Top 10 A06:2021 - Vulnerable and Outdated Components — 
+- OWASP Top 10 A06:2021 - Vulnerable and Outdated Components —
 
 #### Risk Treatment
 
-- **Decision:** 
-- **Rationale:** 
-- **Authority:** 
-- **Residual risk score:** 
-- **Review date:** 
+- **Decision:**
+- **Rationale:**
+- **Authority:**
+- **Residual risk score:**
+- **Review date:**
 
 #### Ticket
 
@@ -1579,8 +1579,8 @@ URLs with checksum verification.
 - [ ] All CI tool downloads use versioned URLs with SHA256 verification
 - [ ] Dependabot or Renovate is configured for github-actions ecosystem
 
-**Labels:** 
-**Assignee team:** 
+**Labels:**
+**Assignee team:**
 
 ---
 
@@ -1690,7 +1690,7 @@ needed.
 #### Mitigations
 
 **Preventive controls:**
-- **Add explicit permissions key with least-privilege scopes** *(effort: S)* →
+- **Add explicit permissions key with least-privilege scopes** _(effort: S)_ →
   step 3: Add to test.yml at the top level: permissions:
   contents: read
 This restricts the GITHUB_TOKEN to read-only regardless of org defaults.
@@ -1699,7 +1699,7 @@ This restricts the GITHUB_TOKEN to read-only regardless of org defaults.
 
 #### Compliance Mapping
 
-- OWASP Top 10 A01:2021 - Broken Access Control — 
+- OWASP Top 10 A01:2021 - Broken Access Control —
 
 #### Risk Treatment
 
@@ -1726,8 +1726,8 @@ privilege.
 **Acceptance criteria:**
 - [ ] All workflow files include explicit permissions: contents: read
 
-**Labels:** 
-**Assignee team:** 
+**Labels:**
+**Assignee team:**
 
 ---
 
@@ -1837,7 +1837,7 @@ content.
 #### Mitigations
 
 **Preventive controls:**
-- **Pin downloads to tagged releases with checksum verification** *(effort: S)*
+- **Pin downloads to tagged releases with checksum verification** _(effort: S)_
   → step 2: Pin git-filter-repo to a tagged release URL and verify SHA256. Pin
   venom to a specific version (not /latest/).
 
@@ -1845,15 +1845,15 @@ content.
 
 #### Compliance Mapping
 
-- OWASP Top 10 A06:2021 - Vulnerable and Outdated Components — 
+- OWASP Top 10 A06:2021 - Vulnerable and Outdated Components —
 
 #### Risk Treatment
 
-- **Decision:** 
-- **Rationale:** 
-- **Authority:** 
-- **Residual risk score:** 
-- **Review date:** 
+- **Decision:**
+- **Rationale:**
+- **Authority:**
+- **Residual risk score:**
+- **Review date:**
 
 #### Ticket
 
@@ -1871,8 +1871,8 @@ checks.
 - [ ] git-filter-repo is pinned to a tagged release with SHA256 verification
 - [ ] venom is pinned to a specific version with SHA256 verification
 
-**Labels:** 
-**Assignee team:** 
+**Labels:**
+**Assignee team:**
 
 ---
 
@@ -2008,7 +2008,7 @@ low due to timing constraints.
 #### Mitigations
 
 **Preventive controls:**
-- **Remove the LLM-writable path from the resolution chain** *(effort: S, done)*
+- **Remove the LLM-writable path from the resolution chain** _(effort: S, done)_
   → The user-writable ~/.riotbox/CLAUDE.md check was removed; resolution now
   uses only the root-owned /etc/riotbox/AGENTS.md (baked into the image) or a
   host-set RIOTBOX_PROMPT env var, implemented in agents/claude/setup.sh.
@@ -2017,7 +2017,7 @@ low due to timing constraints.
 
 #### Compliance Mapping
 
-- OWASP Top 10 A01:2021 - Broken Access Control — 
+- OWASP Top 10 A01:2021 - Broken Access Control —
 
 #### Risk Treatment
 
@@ -2059,8 +2059,8 @@ logic now lives in agents/claude/setup.sh.
   RIOTBOX_PROMPT override
 - [x] ~/.riotbox/CLAUDE.md is not in the resolution chain
 
-**Labels:** 
-**Assignee team:** 
+**Labels:**
+**Assignee team:**
 
 ## Controlled Threats
 
@@ -2068,25 +2068,25 @@ _Threats assessed and found adequately mitigated by existing controls._
 _Not Applicable entries are blocked by enforced architectural controls and
 excluded from open findings._
 
-| ID     | Threat                                                                               | Component                                                  | Inherent   | Residual | Status               | Controls in Place                                                                                                                                                                                                                                                                                                                                                                                                       | Verified By |
-| ------ | ------------------------------------------------------------------------------------ | ---------------------------------------------------------- | ---------- | -------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| CT-001 | Secrets baked into container image during build                                      | Dockerfile, .dockerignore                                  | 🔴 Critical | 🟢 Low    | ✅ Controlled         | .dockerignore excludes .env, *.pem, *.key, *.token, credentials*, secrets*, .gitconfig; Dockerfile does not COPY any credential files; secrets are mounted at runtime only; Comment in Dockerfile line 4 explicitly states secrets are never baked in                                                                                                                                                                   | code_review |
-| CT-002 | Host SSH keys, GPG keys, cloud credentials, or Kubernetes config stolen by container | scripts/detect-mounts.sh                                   | 🔴 Critical | 🟢 Low    | ✅ Controlled         | detect-mounts.sh uses an allowlist approach -- only explicitly listed directories are mounted; Sensitive directories (.ssh, .gnupg, .kube, .aws, .config/gcloud, .docker/config.json, .azure, .oci, .vault-token, .netrc) are documented as never mounted; Functional mounts are limited to ~/bin (read-only)                                                                                                           | code_review |
-| CT-003 | Telemetry or tracking data exfiltrated from container sessions                       | container/entrypoint.sh                                    | 🟡 Medium   | N/A      | 🚫 Not Applicable     | entrypoint.sh lines 12-14: DISABLE_TELEMETRY=1, CLAUDE_CODE_DISABLE_TELEMETRY=1, DO_NOT_TRACK=1; CLAUDE_CODE_SKIP_UPDATE_CHECK=1 prevents update-check network calls                                                                                                                                                                                                                                                    | code_review |
-| CT-004 | Container git identity (llm@riotbox) commits pushed to remote repositories           | hooks/pre-push                                             | 🟡 Medium   | 🟢 Low    | ✅ Controlled         | hooks/pre-push blocks pushes containing commits authored by any recognised container identity (llm@riotbox current; claude@riotbox, llm@localhost, riotbox@local legacy); scripts/reown-commits.sh provides a workflow to rewrite commit authorship before pushing; install-hooks task automates hook installation                                                                                                       | code_review |
-| CT-005 | Cross-session conversation history or credential leakage between projects            | scripts/mount-projects.sh, scripts/sync-claude-settings.sh | 🟠 High     | 🟢 Low    | ✅ Controlled         | mount-projects.sh creates per-project session directories under ~/.local/share/riotbox/ with 700 permissions; The real ~/.claude directory is never mounted; each session gets its own isolated directory; CLAUDE_CONFIG_DIR is set in entrypoint.sh to point to the session directory; .credentials.json is the only file bind-mounted RW from the host; all other config is copied                                         | code_review |
-| CT-006 | Container modifies host directories in audit/read-only mode                          | scripts/mount-projects.sh                                  | 🟠 High     | 🟢 Low    | ✅ Controlled         | RIOTBOX_READONLY=1 changes mount suffix to :ro,z (mount-projects.sh line 147); Read-only mount is enforced at the container runtime level; Unowned project directories auto-switch to podman's `:O` overlay (no host SELinux relabel; ephemeral writes); the host source is never modified regardless of any `RIOTBOX_READONLY` setting                                                                                 | code_review |
-| CT-007 | Destructive git operations (force push, delete branches) from within container       | Dockerfile (git config)                                    | 🟡 Medium   | 🟡 Medium | Partially Controlled | receive.denyNonFastForwards=true prevents non-fast-forward pushes (Dockerfile line 290); receive.denyDeletes=true prevents branch deletion via push (Dockerfile line 291); Session branch mechanism uses --ff-only merge (session-branch.sh line 105)                                                                                                                                                                   | code_review |
-| CT-008 | Shell variable word-splitting in launch.sh enables argument injection                | libexec/launch.sh                               | 🟡 Medium   | 🟢 Low    | ✅ Controlled         | All word-split variables (PROJECT_VOLUME_FLAGS, MOUNTS, NESTED_FLAGS, NET_FLAG) are populated by trusted scripts (mount-projects.sh, detect-mounts.sh); mount-projects.sh documents the space limitation and uses sanitized project paths (line 17-21); shellcheck disable=SC2086 comment acknowledges intentional word splitting; DOCKER_EXTRA_ARGS only used in build.sh (not launch.sh) and defaults to empty        | code_review |
-| CT-009 | Non-git-tracked files not covered by git-based backup mechanism                      | libexec/run.sh                                  | 🟡 Medium   | 🟡 Medium | ⚠️ Risk Accepted     | Backup mechanism creates checkpoint commits that include all tracked files; git add -A before checkpoint captures staged and unstaged changes to tracked files; The container is disposable (--rm); untracked artifacts can be regenerated                                                                                                                                                                              | code_review |
-| CT-010 | Predictable session directory key enables pre-population attack                      | scripts/mount-projects.sh                                  | 🟢 Low      | 🟢 Low    | 🚫 Not Applicable     | Session directory (~/.local/share/riotbox/<key>) is on the host filesystem, outside the container; mkdir -p + chmod 700 ensures correct ownership and permissions (mount-projects.sh lines 163-164); The session key is deterministic from project paths but pre-population requires host-level write access to ~/.local/share/riotbox/; A malicious project file inside the container cannot write to the host session directory | code_review |
-| CT-011 | LLM modifies or deletes host project files via read-write bind mount                 | scripts/mount-projects.sh, container/agent-wrapper.sh     | 🟠 High     | 🟡 Medium | ⚠️ Risk Accepted     | Local bare backup (git push --force to ~/.local/share/riotbox/backups/) before every run; Checkpoint tags (riotbox-checkpoint/<timestamp>) on current HEAD before run; Session branches offered for interactive shell sessions; Container isolation from host credentials (.ssh, .gnupg, .kube, .aws); Non-git-repo warning when checkpoint protection is unavailable; RIOTBOX_READONLY=1 option for audit/read-only sessions | code_review |
-| CT-012 | API key exposed to all container processes via environment variable                  | libexec/launch.sh                               | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Container is disposable (--rm) and single-purpose; API key only accessible within the container boundary; OAuth token alternative documented and supported; Container cannot access host network credentials                                                                                                                                                                                                            | code_review |
-| CT-013 | Reduced isolation in nested container mode                                           | libexec/launch.sh, container/nested-podman-setup.sh | 🟠 High     | 🟡 Medium | ⚠️ Risk Accepted     | Opt-in only via explicit RIOTBOX_NESTED=1 or nested-run/nested-shell commands; README documents the privileged trust model; Rootless podman still enforces user namespace isolation; No --privileged flag, but the flag set is broad. Outer launch passes: `--userns=keep-id:uid=$(id -u),gid=$(id -g),size=65536` and `--user $(id -u):$(id -g)` (the userns flag widens keep-id's 1-uid mapping so the inner has subordinate uids to subdivide; bind-mounted host paths still keep their host ownership. Both knobs are required for accounts where host uid != gid: the userns flag sets the kernel id_map, and the `--user` flag bypasses podman's `/etc/passwd` rewrite that otherwise stamps `llm:x:host_uid:host_uid` and starts the process with egid=host_uid, which silently breaks nested mode), `--device /dev/fuse` (storage), `--device /dev/net/tun` (pasta networking — host /dev/net/tun perms still gate access), `--security-opt label=disable` (SELinux off — container_t-to-container_t transitions are denied by default policy), `--security-opt unmask=ALL` (removes every default OCI mask AND readonly path on /proc and /sys; verified that narrower targets like `unmask=/proc/sys` or `unmask=…ping_group_range` do NOT work — inner crun fails on EROFS or `mount proc to proc`), `--cap-add=SYS_ADMIN` (inner crun's sethostname/mount calls; bounded by the outer userns). Inside the container nested-podman-setup.sh: (1) writes v3 file caps on newuidmap/newgidmap via `setcap -n $(id -u)` — v2 caps silently no-op when the process is not root in the host userns, which is the keep-id case; (2) writes /etc/sub{u,g}id as ranges that cover the outer's mapped uids minus uid 0 (kernel restriction) and minus the user's own uid (newuidmap restriction); (3) overrides ~/.config/containers/storage.conf to vfs (nested overlay/fuse-overlayfs makes inner crun fail on `mkdir /run/secrets`)                                                                                                                                                            | code_review |
-| CT-014 | LLM can bypass git guardrails via local operations not covered by receive.deny*      | Dockerfile (git config), container/session-branch.sh       | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Local bare backup outside container mount tree (the LLM cannot access it); Checkpoint tags survive history rewrites; README documents: "The agent can rewrite git history. Force-pushes, rebases, and git reset --hard are all available"; README documents: "RiotBox includes several layers of protection, but none are foolproof"                                                                                    | code_review |
-| CT-015 | Runtime package installation by LLM including potentially malicious packages         | container/AGENTS.md (system prompt)                        | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Container isolation — packages cannot affect host; Container is disposable (--rm) — packages do not persist outside named cache volumes; System prompt: "You have FULL permission to install packages...Do not ask"; README: "The agent can install arbitrary packages...These run inside the container and can't affect the host"; Named cache volumes can be pruned (podman volume rm)                                   | code_review |
-| CT-016 | Taskfile dotenv injection via .env file overriding container launch parameters       | Taskfile.yml                                               | 🟠 High     | 🟢 Low    | 🚫 Not Applicable     | The runtime CLI (bin/riotbox) does not invoke `task` at all — Taskfile/dotenv loading happens only in maintainer dev workflows (`task build`/`test`/`lint`/`release`), never in the user runtime path, so project .env files cannot influence container launch; .dockerignore excludes configs/.env* patterns; dotenv is a standard Taskfile pattern for local development overrides                                                                                               | code_review |
-| CT-017 | Backup force-push overwrites previous known-good checkpoint state                    | libexec/run.sh                                  | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Checkpoint tags (riotbox-checkpoint/<timestamp>) created before each run and survive force-push; Tags pushed separately via git push --tags (non-destructive, does not delete existing tags); Backup bare repo is outside container mount tree (the LLM cannot access it); README documents recovery via: git fetch ~/.local/share/riotbox/backups/<project>.git --all --tags                                                  | code_review |
-| CT-018 | Container has effective root on host via bind-mounted podman socket                  | libexec/launch.sh, libexec/socket-vars.sh, bin/riotbox | 🔴 Critical | 🟠 High | ⚠️ Risk Accepted     | Opt-in only via explicit RIOTBOX_SOCKET=1 or socket-run/socket-shell commands; README "Container runtime modes" documents the host-root trust delegation explicitly and offers nested mode as a more-isolated alternative (cf. CT-013); Mutually exclusive with RIOTBOX_NESTED=1 (launch.sh refuses to start if both set — emits an actionable error); Socket detection requires the user to have explicitly enabled the user-level podman.socket on the host (`systemctl --user enable --now podman.socket`); no auto-start of the socket — failure to find it is loud, not silent; The bind-mount itself adds `-v <host_sock>:/run/podman/podman.sock` and `-e CONTAINER_HOST=unix:///run/podman/podman.sock` to the otherwise-default container; all other security defaults (keep-id userns, SELinux on, masked /proc/sys, no SYS_ADMIN cap) remain intact; The trust delegation is in the API surface, not the runtime profile: a client with socket access can request `podman run --privileged --pid=host -v /:/host` and exec into host root; This is the same delegation Docker Desktop ships by default and the same pattern CI runners use with `-v /var/run/docker.sock`; well-trodden, but a well-known attack vector; Mitigation in this codebase: documentation + explicit opt-in + naming the trust cost in the WARNING printed by socket-run/socket-shell recipes; `socket_check_alive` probe (5s timeout) means a wedged socket on the host fails the launch loudly rather than hanging mid-session; Residual is rated against likelihood-of-accidental-invocation (the opt-in gate + WARNING surface the trust cost at each entry point); impact-given-invocation remains Critical, which is why this rates strictly worse than CT-013's nested mode | code_review |
-| CT-019 | Persistence loss surprise for unowned project directories (writes vanish on container exit)  | scripts/mount-projects.sh                                  | 🟢 Low      | 🟡 Medium | ⚠️ Risk Accepted     | Unowned project paths auto-switch to podman's `:O` overlay so the launcher succeeds without modifying host SELinux labels; the tradeoff is that writes to those paths live in an ephemeral upper layer and are discarded on container exit; A one-line warning under `RIOTBOX_OVERLAY=1` names the affected paths so the persistence delta is visible at launch; README "Unowned project directories" section documents the constraint; The alternative (refuse to start) would make the tool unusable for vendor trees and shared checkouts; The alternative (copy-in to a riotbox-owned dir) introduces drift between the source and the working copy and is poor UX for large trees; This is a chosen behavior, not an oversight — the user who points at code they don't own should not expect their edits to persist there | code_review |
-| CT-020 | opencode plugin code (user-configured npm/git) persists across sessions and projects in a named volume and auto-executes on opencode startup | scripts/detect-mounts.sh, agents/opencode/sync-settings.sh | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Plugins are declared by the user in their own `~/.config/opencode/opencode.jsonc` `plugin` array — the same trust the user already extends running opencode on the host; not LLM-installed and not riotbox-injected; opencode runs `bun install` and executes plugin code only inside the disposable container, so a malicious plugin cannot reach the host; The cache is a named volume (`riotbox-cache-opencode`, mounted at `~/.cache/opencode`) and is prunable via `podman volume rm riotbox-cache-opencode` — nothing persists on the host outside it; Integrity is bounded only by what the user pins in each plugin entry (version/git ref), the same supply-chain exposure they accept by listing the plugin (cf. the Claude Code plugin persistence concern); sync-settings.sh deliberately does NOT copy the host's generated `node_modules`/`package.json`/`package-lock.json`/`bun.lock`/`.gitignore` into the per-session config, so host-built native binaries never cross the host→container boundary — the install is rebuilt in-container against the container platform | code_review |
+| ID     | Threat                                                                                                                                       | Component                                                  | Inherent    | Residual  | Status               | Controls in Place                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Verified By |
+|--------|----------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------|-------------|-----------|----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------|
+| CT-001 | Secrets baked into container image during build                                                                                              | Dockerfile, .dockerignore                                  | 🔴 Critical | 🟢 Low    | ✅ Controlled         | .dockerignore excludes .env, *.pem, _.key, _.token, credentials_, secrets_, .gitconfig; Dockerfile does not COPY any credential files; secrets are mounted at runtime only; Comment in Dockerfile line 4 explicitly states secrets are never baked in                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | code_review |
+| CT-002 | Host SSH keys, GPG keys, cloud credentials, or Kubernetes config stolen by container                                                         | scripts/detect-mounts.sh                                   | 🔴 Critical | 🟢 Low    | ✅ Controlled         | detect-mounts.sh uses an allowlist approach -- only explicitly listed directories are mounted; Sensitive directories (.ssh, .gnupg, .kube, .aws, .config/gcloud, .docker/config.json, .azure, .oci, .vault-token, .netrc) are documented as never mounted; Functional mounts are limited to ~/bin (read-only)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | code_review |
+| CT-003 | Telemetry or tracking data exfiltrated from container sessions                                                                               | container/entrypoint.sh                                    | 🟡 Medium   | N/A       | 🚫 Not Applicable    | entrypoint.sh lines 12-14: DISABLE_TELEMETRY=1, CLAUDE_CODE_DISABLE_TELEMETRY=1, DO_NOT_TRACK=1; CLAUDE_CODE_SKIP_UPDATE_CHECK=1 prevents update-check network calls                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | code_review |
+| CT-004 | Container git identity (llm@riotbox) commits pushed to remote repositories                                                                   | hooks/pre-push                                             | 🟡 Medium   | 🟢 Low    | ✅ Controlled         | hooks/pre-push blocks pushes containing commits authored by any recognised container identity (llm@riotbox current; claude@riotbox, llm@localhost, riotbox@local legacy); scripts/reown-commits.sh provides a workflow to rewrite commit authorship before pushing; install-hooks task automates hook installation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | code_review |
+| CT-005 | Cross-session conversation history or credential leakage between projects                                                                    | scripts/mount-projects.sh, scripts/sync-claude-settings.sh | 🟠 High     | 🟢 Low    | ✅ Controlled         | mount-projects.sh creates per-project session directories under ~/.local/share/riotbox/ with 700 permissions; The real ~/.claude directory is never mounted; each session gets its own isolated directory; CLAUDE_CONFIG_DIR is set in entrypoint.sh to point to the session directory; .credentials.json is the only file bind-mounted RW from the host; all other config is copied                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | code_review |
+| CT-006 | Container modifies host directories in audit/read-only mode                                                                                  | scripts/mount-projects.sh                                  | 🟠 High     | 🟢 Low    | ✅ Controlled         | RIOTBOX_READONLY=1 changes mount suffix to :ro,z (mount-projects.sh line 147); Read-only mount is enforced at the container runtime level; Unowned project directories auto-switch to podman's `:O` overlay (no host SELinux relabel; ephemeral writes); the host source is never modified regardless of any `RIOTBOX_READONLY` setting                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | code_review |
+| CT-007 | Destructive git operations (force push, delete branches) from within container                                                               | Dockerfile (git config)                                    | 🟡 Medium   | 🟡 Medium | Partially Controlled | receive.denyNonFastForwards=true prevents non-fast-forward pushes (Dockerfile line 290); receive.denyDeletes=true prevents branch deletion via push (Dockerfile line 291); Session branch mechanism uses --ff-only merge (session-branch.sh line 105)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | code_review |
+| CT-008 | Shell variable word-splitting in launch.sh enables argument injection                                                                        | libexec/launch.sh                                          | 🟡 Medium   | 🟢 Low    | ✅ Controlled         | All word-split variables (PROJECT_VOLUME_FLAGS, MOUNTS, NESTED_FLAGS, NET_FLAG) are populated by trusted scripts (mount-projects.sh, detect-mounts.sh); mount-projects.sh documents the space limitation and uses sanitized project paths (line 17-21); shellcheck disable=SC2086 comment acknowledges intentional word splitting; DOCKER_EXTRA_ARGS only used in build.sh (not launch.sh) and defaults to empty                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | code_review |
+| CT-009 | Non-git-tracked files not covered by git-based backup mechanism                                                                              | libexec/run.sh                                             | 🟡 Medium   | 🟡 Medium | ⚠️ Risk Accepted     | Backup mechanism creates checkpoint commits that include all tracked files; git add -A before checkpoint captures staged and unstaged changes to tracked files; The container is disposable (--rm); untracked artifacts can be regenerated                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | code_review |
+| CT-010 | Predictable session directory key enables pre-population attack                                                                              | scripts/mount-projects.sh                                  | 🟢 Low      | 🟢 Low    | 🚫 Not Applicable    | Session directory (~/.local/share/riotbox/<key>) is on the host filesystem, outside the container; mkdir -p + chmod 700 ensures correct ownership and permissions (mount-projects.sh lines 163-164); The session key is deterministic from project paths but pre-population requires host-level write access to ~/.local/share/riotbox/; A malicious project file inside the container cannot write to the host session directory                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | code_review |
+| CT-011 | LLM modifies or deletes host project files via read-write bind mount                                                                         | scripts/mount-projects.sh, container/agent-wrapper.sh      | 🟠 High     | 🟡 Medium | ⚠️ Risk Accepted     | Local bare backup (git push --force to ~/.local/share/riotbox/backups/) before every run; Checkpoint tags (riotbox-checkpoint/<timestamp>) on current HEAD before run; Session branches offered for interactive shell sessions; Container isolation from host credentials (.ssh, .gnupg, .kube, .aws); Non-git-repo warning when checkpoint protection is unavailable; RIOTBOX_READONLY=1 option for audit/read-only sessions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | code_review |
+| CT-012 | API key exposed to all container processes via environment variable                                                                          | libexec/launch.sh                                          | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Container is disposable (--rm) and single-purpose; API key only accessible within the container boundary; OAuth token alternative documented and supported; Container cannot access host network credentials                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | code_review |
+| CT-013 | Reduced isolation in nested container mode                                                                                                   | libexec/launch.sh, container/nested-podman-setup.sh        | 🟠 High     | 🟡 Medium | ⚠️ Risk Accepted     | Opt-in only via explicit RIOTBOX_NESTED=1 or nested-run/nested-shell commands; README documents the privileged trust model; Rootless podman still enforces user namespace isolation; No --privileged flag, but the flag set is broad. Outer launch passes: `--userns=keep-id:uid=$(id -u),gid=$(id -g),size=65536` and `--user $(id -u):$(id -g)` (the userns flag widens keep-id's 1-uid mapping so the inner has subordinate uids to subdivide; bind-mounted host paths still keep their host ownership. Both knobs are required for accounts where host uid != gid: the userns flag sets the kernel id_map, and the `--user` flag bypasses podman's `/etc/passwd` rewrite that otherwise stamps `llm:x:host_uid:host_uid` and starts the process with egid=host_uid, which silently breaks nested mode), `--device /dev/fuse` (storage), `--device /dev/net/tun` (pasta networking — host /dev/net/tun perms still gate access), `--security-opt label=disable` (SELinux off — container_t-to-container_t transitions are denied by default policy), `--security-opt unmask=ALL` (removes every default OCI mask AND readonly path on /proc and /sys; verified that narrower targets like `unmask=/proc/sys` or `unmask=…ping_group_range` do NOT work — inner crun fails on EROFS or `mount proc to proc`), `--cap-add=SYS_ADMIN` (inner crun's sethostname/mount calls; bounded by the outer userns). Inside the container nested-podman-setup.sh: (1) writes v3 file caps on newuidmap/newgidmap via `setcap -n $(id -u)` — v2 caps silently no-op when the process is not root in the host userns, which is the keep-id case; (2) writes /etc/sub{u,g}id as ranges that cover the outer's mapped uids minus uid 0 (kernel restriction) and minus the user's own uid (newuidmap restriction); (3) overrides ~/.config/containers/storage.conf to vfs (nested overlay/fuse-overlayfs makes inner crun fail on `mkdir /run/secrets`) | code_review |
+| CT-014 | LLM can bypass git guardrails via local operations not covered by receive.deny*                                                              | Dockerfile (git config), container/session-branch.sh       | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Local bare backup outside container mount tree (the LLM cannot access it); Checkpoint tags survive history rewrites; README documents: "The agent can rewrite git history. Force-pushes, rebases, and git reset --hard are all available"; README documents: "RiotBox includes several layers of protection, but none are foolproof"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | code_review |
+| CT-015 | Runtime package installation by LLM including potentially malicious packages                                                                 | container/AGENTS.md (system prompt)                        | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Container isolation — packages cannot affect host; Container is disposable (--rm) — packages do not persist outside named cache volumes; System prompt: "You have FULL permission to install packages...Do not ask"; README: "The agent can install arbitrary packages...These run inside the container and can't affect the host"; Named cache volumes can be pruned (podman volume rm)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | code_review |
+| CT-016 | Taskfile dotenv injection via .env file overriding container launch parameters                                                               | Taskfile.yml                                               | 🟠 High     | 🟢 Low    | 🚫 Not Applicable    | The runtime CLI (bin/riotbox) does not invoke `task` at all — Taskfile/dotenv loading happens only in maintainer dev workflows (`task build`/`test`/`lint`/`release`), never in the user runtime path, so project .env files cannot influence container launch; .dockerignore excludes configs/.env* patterns; dotenv is a standard Taskfile pattern for local development overrides                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | code_review |
+| CT-017 | Backup force-push overwrites previous known-good checkpoint state                                                                            | libexec/run.sh                                             | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Checkpoint tags (riotbox-checkpoint/<timestamp>) created before each run and survive force-push; Tags pushed separately via git push --tags (non-destructive, does not delete existing tags); Backup bare repo is outside container mount tree (the LLM cannot access it); README documents recovery via: git fetch ~/.local/share/riotbox/backups/<project>.git --all --tags                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | code_review |
+| CT-018 | Container has effective root on host via bind-mounted podman socket                                                                          | libexec/launch.sh, libexec/socket-vars.sh, bin/riotbox     | 🔴 Critical | 🟠 High   | ⚠️ Risk Accepted     | Opt-in only via explicit RIOTBOX_SOCKET=1 or socket-run/socket-shell commands; README "Container runtime modes" documents the host-root trust delegation explicitly and offers nested mode as a more-isolated alternative (cf. CT-013); Mutually exclusive with RIOTBOX_NESTED=1 (launch.sh refuses to start if both set — emits an actionable error); Socket detection requires the user to have explicitly enabled the user-level podman.socket on the host (`systemctl --user enable --now podman.socket`); no auto-start of the socket — failure to find it is loud, not silent; The bind-mount itself adds `-v <host_sock>:/run/podman/podman.sock` and `-e CONTAINER_HOST=unix:///run/podman/podman.sock` to the otherwise-default container; all other security defaults (keep-id userns, SELinux on, masked /proc/sys, no SYS_ADMIN cap) remain intact; The trust delegation is in the API surface, not the runtime profile: a client with socket access can request `podman run --privileged --pid=host -v /:/host` and exec into host root; This is the same delegation Docker Desktop ships by default and the same pattern CI runners use with `-v /var/run/docker.sock`; well-trodden, but a well-known attack vector; Mitigation in this codebase: documentation + explicit opt-in + naming the trust cost in the WARNING printed by socket-run/socket-shell recipes; `socket_check_alive` probe (5s timeout) means a wedged socket on the host fails the launch loudly rather than hanging mid-session; Residual is rated against likelihood-of-accidental-invocation (the opt-in gate + WARNING surface the trust cost at each entry point); impact-given-invocation remains Critical, which is why this rates strictly worse than CT-013's nested mode                                                                                                                                                                  | code_review |
+| CT-019 | Persistence loss surprise for unowned project directories (writes vanish on container exit)                                                  | scripts/mount-projects.sh                                  | 🟢 Low      | 🟡 Medium | ⚠️ Risk Accepted     | Unowned project paths auto-switch to podman's `:O` overlay so the launcher succeeds without modifying host SELinux labels; the tradeoff is that writes to those paths live in an ephemeral upper layer and are discarded on container exit; A one-line warning under `RIOTBOX_OVERLAY=1` names the affected paths so the persistence delta is visible at launch; README "Unowned project directories" section documents the constraint; The alternative (refuse to start) would make the tool unusable for vendor trees and shared checkouts; The alternative (copy-in to a riotbox-owned dir) introduces drift between the source and the working copy and is poor UX for large trees; This is a chosen behavior, not an oversight — the user who points at code they don't own should not expect their edits to persist there                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | code_review |
+| CT-020 | opencode plugin code (user-configured npm/git) persists across sessions and projects in a named volume and auto-executes on opencode startup | scripts/detect-mounts.sh, agents/opencode/sync-settings.sh | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Plugins are declared by the user in their own `~/.config/opencode/opencode.jsonc` `plugin` array — the same trust the user already extends running opencode on the host; not LLM-installed and not riotbox-injected; opencode runs `bun install` and executes plugin code only inside the disposable container, so a malicious plugin cannot reach the host; The cache is a named volume (`riotbox-cache-opencode`, mounted at `~/.cache/opencode`) and is prunable via `podman volume rm riotbox-cache-opencode` — nothing persists on the host outside it; Integrity is bounded only by what the user pins in each plugin entry (version/git ref), the same supply-chain exposure they accept by listing the plugin (cf. the Claude Code plugin persistence concern); sync-settings.sh deliberately does NOT copy the host's generated `node_modules`/`package.json`/`package-lock.json`/`bun.lock`/`.gitignore` into the per-session config, so host-built native binaries never cross the host→container boundary — the install is rebuilt in-container against the container platform                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | code_review |

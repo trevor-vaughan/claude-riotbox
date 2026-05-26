@@ -31,26 +31,26 @@ source "${RIOTBOX_DIR}/agents/registry.sh"
 ensure_image() { "${LIBEXEC}/ensure-image.sh"; }
 
 all_paths() {
-    [ $# -ge 1 ] || return 1
-    for arg in "$@"; do [ -e "${arg}" ] || return 1; done
+	[[ $# -ge 1 ]] || return 1
+	for arg in "$@"; do [[ -e "${arg}" ]] || return 1; done
 }
 
 nested_warning() {
-    echo "WARNING: Nested container mode disables SELinux confinement (--security-opt label=disable)." >&2
-    echo "         The container has reduced isolation from the host." >&2
-    echo "" >&2
+	echo "WARNING: Nested container mode disables SELinux confinement (--security-opt label=disable)." >&2
+	echo "         The container has reduced isolation from the host." >&2
+	echo "" >&2
 }
 
 socket_warning() {
-    echo "WARNING: Socket mode bind-mounts the host podman socket into the container." >&2
-    echo "         This grants the container effective root on the host. Use only" >&2
-    echo "         with trusted code — this is a broader trust delegation than nested" >&2
-    echo "         mode. See README \"Container runtime modes\" for alternatives." >&2
-    echo "" >&2
+	echo "WARNING: Socket mode bind-mounts the host podman socket into the container." >&2
+	echo "         This grants the container effective root on the host. Use only" >&2
+	echo "         with trusted code — this is a broader trust delegation than nested" >&2
+	echo "         mode. See README \"Container runtime modes\" for alternatives." >&2
+	echo "" >&2
 }
 
 usage() {
-    cat <<EOF
+	cat <<EOF
 Usage: riotbox [--agent=<name>] <command> [args...]
 
 Global flags:
@@ -97,118 +97,131 @@ EOF
 # ── --agent parsing (consumed before dispatch) ────────────────────────────
 RIOTBOX_AGENT="${RIOTBOX_AGENT:-claude}"
 while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --agent=*) RIOTBOX_AGENT="${1#--agent=}"; shift ;;
-        # Shift the flag always, the value only if present, so a trailing bare
-        # `--agent` leaves RIOTBOX_AGENT empty and falls through to validation
-        # below (exit 2 with a message) instead of aborting under `set -e` on a
-        # failed `shift 2`.
-        --agent)   RIOTBOX_AGENT="${2:-}"; shift; [ $# -gt 0 ] && shift ;;
-        *)         break ;;
-    esac
+	case "$1" in
+	--agent=*)
+		RIOTBOX_AGENT="${1#--agent=}"
+		shift
+		;;
+	# Shift the flag always, the value only if present, so a trailing bare
+	# `--agent` leaves RIOTBOX_AGENT empty and falls through to validation
+	# below (exit 2 with a message) instead of aborting under `set -e` on a
+	# failed `shift 2`.
+	--agent)
+		RIOTBOX_AGENT="${2:-}"
+		shift
+		[[ $# -gt 0 ]] && shift
+		;;
+	*) break ;;
+	esac
 done
+# shellcheck disable=SC2310  # agent_is_registered returns non-zero; set -e is suppressed in if-condition intentionally
 if ! agent_is_registered "${RIOTBOX_AGENT}"; then
-    echo "Error: --agent must be one of: $(agent_registry_csv) (got: ${RIOTBOX_AGENT})" >&2
-    exit 2
+	_registry_csv="$(agent_registry_csv)"
+	echo "Error: --agent must be one of: ${_registry_csv} (got: ${RIOTBOX_AGENT})" >&2
+	exit 2
 fi
 export RIOTBOX_AGENT
 
 cmd="${1:-}"
-[ $# -gt 0 ] && shift
-[ -z "${cmd}" ] && { usage; exit 0; }
+[[ $# -gt 0 ]] && shift
+[[ -z "${cmd}" ]] && {
+	usage
+	exit 0
+}
 
 case "${cmd}" in
-    help|-h|--help)        usage ;;
-    version|--version|-V)  echo "riotbox ${VERSION}" ;;
-    doctor)                exec "${SCRIPTS}/preflight.sh" "$@" ;;
-    agents)
-        agents_max_width=0
-        for agent in "${AGENT_REGISTRY[@]}"; do
-            [ "${#agent}" -gt "${agents_max_width}" ] && agents_max_width="${#agent}"
-        done
-        for agent in "${AGENT_REGISTRY[@]}"; do
-            binary="$(agent_call "${agent}" real_binary)"
-            printf "%-${agents_max_width}s  %s\n" "${agent}" "${binary}"
-        done
-        ;;
+help | -h | --help) usage ;;
+version | --version | -V) echo "riotbox ${VERSION}" ;;
+doctor) exec "${SCRIPTS}/preflight.sh" "$@" ;;
+agents)
+	agents_max_width=0
+	for agent in "${AGENT_REGISTRY[@]}"; do
+		[[ "${#agent}" -gt "${agents_max_width}" ]] && agents_max_width="${#agent}"
+	done
+	for agent in "${AGENT_REGISTRY[@]}"; do
+		binary="$(agent_call "${agent}" real_binary)"
+		printf "%-${agents_max_width}s  %s\n" "${agent}" "${binary}"
+	done
+	;;
 
-    build)    exec "${SCRIPTS}/build.sh" ;;
-    rebuild)  DOCKER_EXTRA_ARGS="--no-cache" exec "${SCRIPTS}/build.sh" ;;
+build) exec "${SCRIPTS}/build.sh" ;;
+rebuild) DOCKER_EXTRA_ARGS="--no-cache" exec "${SCRIPTS}/build.sh" ;;
 
-    run)
-        ensure_image
-        exec "${LIBEXEC}/run.sh" "$@"
-        ;;
-    shell)
-        ensure_image
-        export RIOTBOX_PROJECTS="${*:-.}"
-        "${LIBEXEC}/checkpoint.sh"
-        exec "${LIBEXEC}/launch.sh" bash
-        ;;
-    resume)
-        ensure_image
-        export RIOTBOX_PROJECTS="${*:-.}"
-        "${LIBEXEC}/checkpoint.sh"
-        exec "${LIBEXEC}/resume.sh"
-        ;;
-    audit)
-        ensure_image
-        exec "${LIBEXEC}/audit.sh" "$@"
-        ;;
+run)
+	ensure_image
+	exec "${LIBEXEC}/run.sh" "$@"
+	;;
+shell)
+	ensure_image
+	export RIOTBOX_PROJECTS="${*:-.}"
+	"${LIBEXEC}/checkpoint.sh"
+	exec "${LIBEXEC}/launch.sh" bash
+	;;
+resume)
+	ensure_image
+	export RIOTBOX_PROJECTS="${*:-.}"
+	"${LIBEXEC}/checkpoint.sh"
+	exec "${LIBEXEC}/resume.sh"
+	;;
+audit)
+	ensure_image
+	exec "${LIBEXEC}/audit.sh" "$@"
+	;;
 
-    nested-run)
-        ensure_image
-        export RIOTBOX_NESTED=1
-        nested_warning
-        exec "${LIBEXEC}/run.sh" "$@"
-        ;;
-    nested-shell)
-        ensure_image
-        export RIOTBOX_NESTED=1 RIOTBOX_PROJECTS="${*:-.}"
-        nested_warning
-        "${LIBEXEC}/checkpoint.sh"
-        exec "${LIBEXEC}/launch.sh" bash
-        ;;
-    socket-run)
-        ensure_image
-        export RIOTBOX_SOCKET=1
-        socket_warning
-        exec "${LIBEXEC}/run.sh" "$@"
-        ;;
-    socket-shell)
-        ensure_image
-        export RIOTBOX_SOCKET=1 RIOTBOX_PROJECTS="${*:-.}"
-        socket_warning
-        "${LIBEXEC}/checkpoint.sh"
-        exec "${LIBEXEC}/launch.sh" bash
-        ;;
+nested-run)
+	ensure_image
+	export RIOTBOX_NESTED=1
+	nested_warning
+	exec "${LIBEXEC}/run.sh" "$@"
+	;;
+nested-shell)
+	ensure_image
+	export RIOTBOX_NESTED=1 RIOTBOX_PROJECTS="${*:-.}"
+	nested_warning
+	"${LIBEXEC}/checkpoint.sh"
+	exec "${LIBEXEC}/launch.sh" bash
+	;;
+socket-run)
+	ensure_image
+	export RIOTBOX_SOCKET=1
+	socket_warning
+	exec "${LIBEXEC}/run.sh" "$@"
+	;;
+socket-shell)
+	ensure_image
+	export RIOTBOX_SOCKET=1 RIOTBOX_PROJECTS="${*:-.}"
+	socket_warning
+	"${LIBEXEC}/checkpoint.sh"
+	exec "${LIBEXEC}/launch.sh" bash
+	;;
 
-    session-list)    exec "${LIBEXEC}/list-sessions.sh" ;;
-    session-remove)  exec "${LIBEXEC}/remove-session.sh" "$@" ;;
-    session-reset)   exec "${LIBEXEC}/reset-session.sh" "$@" ;;
+session-list) exec "${LIBEXEC}/list-sessions.sh" ;;
+session-remove) exec "${LIBEXEC}/remove-session.sh" "$@" ;;
+session-reset) exec "${LIBEXEC}/reset-session.sh" "$@" ;;
 
-    overlays)        exec "${SCRIPTS}/overlay.sh" list ;;
-    overlay-diff)    exec "${SCRIPTS}/overlay.sh" diff "$@" ;;
-    overlay-accept)  exec "${SCRIPTS}/overlay.sh" accept "$@" ;;
-    overlay-reject)  exec "${SCRIPTS}/overlay.sh" reject "$@" ;;
+overlays) exec "${SCRIPTS}/overlay.sh" list ;;
+overlay-diff) exec "${SCRIPTS}/overlay.sh" diff "$@" ;;
+overlay-accept) exec "${SCRIPTS}/overlay.sh" accept "$@" ;;
+overlay-reject) exec "${SCRIPTS}/overlay.sh" reject "$@" ;;
 
-    reown)           exec "${SCRIPTS}/reown-commits.sh" "$@" ;;
-    install-hooks)   exec "${LIBEXEC}/install-hooks.sh" "$@" ;;
-    mounts)
-        echo "Auto-detected mounts:"
-        "${SCRIPTS}/detect-mounts.sh" | while read -r _flag path; do echo "  ${path}"; done
-        ;;
+reown) exec "${SCRIPTS}/reown-commits.sh" "$@" ;;
+install-hooks) exec "${LIBEXEC}/install-hooks.sh" "$@" ;;
+mounts)
+	echo "Auto-detected mounts:"
+	"${SCRIPTS}/detect-mounts.sh" | while read -r _flag path; do echo "  ${path}"; done
+	;;
 
-    *)
-        if all_paths "${cmd}" "$@"; then
-            ensure_image
-            set -- "${cmd}" "$@"
-            export RIOTBOX_PROJECTS="$*"
-            "${LIBEXEC}/checkpoint.sh"
-            exec "${LIBEXEC}/launch.sh" bash
-        else
-            echo "Error: unknown command '${cmd}'. Run 'riotbox help'." >&2
-            exit 2
-        fi
-        ;;
+*)
+	# shellcheck disable=SC2310  # all_paths uses return codes for control flow; set -e suppression is intentional
+	if all_paths "${cmd}" "$@"; then
+		ensure_image
+		set -- "${cmd}" "$@"
+		export RIOTBOX_PROJECTS="$*"
+		"${LIBEXEC}/checkpoint.sh"
+		exec "${LIBEXEC}/launch.sh" bash
+	else
+		echo "Error: unknown command '${cmd}'. Run 'riotbox help'." >&2
+		exit 2
+	fi
+	;;
 esac

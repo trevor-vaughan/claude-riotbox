@@ -18,12 +18,12 @@
 # shellcheck disable=SC2034  # REAL_BIN is consumed by the caller after sourcing.
 REAL_BIN=""
 _target="${1:?find-real-bin.sh requires a binary name argument}"
-IFS=: read -ra _path_entries <<< "${PATH}"
+IFS=: read -ra _path_entries <<<"${PATH}"
 for _dir in "${_path_entries[@]}"; do
-    [[ "${_dir}" == */.riotbox/bin ]] && continue
-    if [ -x "${_dir}/${_target}" ]; then
-        REAL_BIN="${_dir}/${_target}"
-        break
-    fi
+	[[ "${_dir}" == */.riotbox/bin ]] && continue
+	if [[ -x "${_dir}/${_target}" ]]; then
+		REAL_BIN="${_dir}/${_target}"
+		break
+	fi
 done
 unset _path_entries _dir _target

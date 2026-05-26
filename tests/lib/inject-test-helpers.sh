@@ -9,24 +9,25 @@ set -euo pipefail
 # Sets: TEST_DIR, PROMPT_FILE, MANAGED_POLICY_MD
 # Exports: RIOTBOX_PROMPT, RIOTBOX_MANAGED_POLICY_DIR, HOME
 setup_inject_test() {
-    local prompt_content="${1:-You are in a riotbox.}"
-    TEST_DIR="$(mktemp -d)"
-    mkdir -p "${TEST_DIR}/managed-policy"
-    PROMPT_FILE="${TEST_DIR}/prompt.md"
-    echo "${prompt_content}" > "${PROMPT_FILE}"
-    # Used by templates
-    # shellcheck disable=SC2034
-    MANAGED_POLICY_MD="${TEST_DIR}/managed-policy/CLAUDE.md"
-    export RIOTBOX_PROMPT="${PROMPT_FILE}"
-    export RIOTBOX_MANAGED_POLICY_DIR="${TEST_DIR}/managed-policy"
-    export HOME="${TEST_DIR}"
+	local prompt_content="${1:-You are in a riotbox.}"
+	TEST_DIR="$(mktemp -d)"
+	mkdir -p "${TEST_DIR}/managed-policy"
+	PROMPT_FILE="${TEST_DIR}/prompt.md"
+	echo "${prompt_content}" >"${PROMPT_FILE}"
+	# Used by templates
+	# shellcheck disable=SC2034
+	MANAGED_POLICY_MD="${TEST_DIR}/managed-policy/CLAUDE.md"
+	export RIOTBOX_PROMPT="${PROMPT_FILE}"
+	export RIOTBOX_MANAGED_POLICY_DIR="${TEST_DIR}/managed-policy"
+	export HOME="${TEST_DIR}"
 }
 
 # Run the claude container_setup (which renders the system prompt).
 # After the agent-registry refactor, the body lives at agents/claude/setup.sh
 # as a function; sourcing alone is no-op until claude_setup is called.
 run_inject() {
-    # shellcheck source=/dev/null
-    source "${RIOTBOX_DIR}/agents/claude/setup.sh"
-    claude_setup
+	# shellcheck source=/dev/null
+	# shellcheck disable=SC2154  # RIOTBOX_DIR is set by the Venom test runner that sources this file
+	source "${RIOTBOX_DIR}/agents/claude/setup.sh"
+	claude_setup
 }

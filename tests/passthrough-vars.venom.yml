@@ -13,7 +13,6 @@ vars:
 # argv.
 
 testcases:
-
   - name: U1 single-line whitespace-separated bare names emit -e for each set var
     steps:
       - type: exec
@@ -161,7 +160,7 @@ testcases:
           cd "{{.riotbox_dir}}"
           unset RIOTBOX_PASSTHROUGH_VARS FOO TOKEN
           export FOO=fooval
-          export RIOTBOX_PASSTHROUGH_VARS=$'FOO\nTOKEN=tok-123'
+          export RIOTBOX_PASSTHROUGH_VARS=$'FOO\nTOKEN=tok-123' # checkov:skip=CKV_SECRET_6:synthetic test fixture - not a real token
           source libexec/passthrough-vars.sh
           passthrough_export
           FLAGS="$(passthrough_flags)"

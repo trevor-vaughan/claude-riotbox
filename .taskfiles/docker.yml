@@ -1,4 +1,4 @@
-version: '3'
+version: "3"
 
 vars:
   IMAGE_NAME: '{{.IMAGE_NAME | default "riotbox"}}'

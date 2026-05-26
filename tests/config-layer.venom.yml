@@ -10,7 +10,6 @@ vars:
 # RIOTBOX_SYSCONF_DIR overrides the system dir so the tests need no root.
 
 testcases:
-
   - name: launch.sh sources the system /etc config layer
     steps:
       - type: exec

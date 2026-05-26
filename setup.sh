@@ -15,41 +15,42 @@ AUTO_YES="${RIOTBOX_SETUP_YES:-}"
 SKIP_BUILD="${RIOTBOX_SETUP_NO_BUILD:-}"
 
 for arg in "$@"; do
-    case "${arg}" in
-        --yes)      AUTO_YES=1 ;;
-        --no-build) SKIP_BUILD=1 ;;
-    esac
+	case "${arg}" in
+	--yes) AUTO_YES=1 ;;
+	--no-build) SKIP_BUILD=1 ;;
+	*) ;;
+	esac
 done
 
 # ── Colors and symbols ───────────────────────────────────────────────────────
-if [ -t 1 ] && [ -z "${AUTO_YES}" ]; then
-    GREEN='\033[0;32m'
-    YELLOW='\033[0;33m'
-    RED='\033[0;31m'
-    BOLD='\033[1m'
-    RESET='\033[0m'
+if [[ -t 1 ]] && [[ -z "${AUTO_YES}" ]]; then
+	GREEN='\033[0;32m'
+	YELLOW='\033[0;33m'
+	RED='\033[0;31m'
+	BOLD='\033[1m'
+	RESET='\033[0m'
 else
-    GREEN='' YELLOW='' RED='' BOLD='' RESET=''
+	GREEN='' YELLOW='' RED='' BOLD='' RESET=''
 fi
 
-ok()   { echo -e "  ${GREEN}[ok]${RESET}  $*"; }
+ok() { echo -e "  ${GREEN}[ok]${RESET}  $*"; }
 warn() { echo -e "  ${YELLOW}[!!]${RESET}  $*"; }
 fail() { echo -e "  ${RED}[XX]${RESET}  $*"; }
 step() { echo -e "\n${BOLD}$*${RESET}"; }
 
 ask_yn() {
-    local prompt="$1" default="${2:-n}"
-    if [ -n "${AUTO_YES}" ]; then
-        return 0
-    fi
-    if [ "${default}" = "y" ]; then
-        printf "  %s [Y/n] " "${prompt}"
-    else
-        printf "  %s [y/N] " "${prompt}"
-    fi
-    read -r answer
-    answer="${answer:-${default}}"
-    [[ "${answer}" =~ ^[Yy] ]]
+	local prompt="$1" default="${2:-n}"
+	if [[ -n "${AUTO_YES}" ]]; then
+		return 0
+	fi
+	if [[ "${default}" = "y" ]]; then
+		printf "  %s [Y/n] " "${prompt}"
+	else
+		printf "  %s [y/N] " "${prompt}"
+	fi
+	read -r answer
+	answer="${answer:-${default}}"
+	[[ "${answer}" =~ ^[Yy] ]]
 }
 
 ERRORS=0
@@ -65,109 +66,118 @@ step "1. Container runtime"
 
 CONTAINER_CMD=""
 if command -v podman &>/dev/null; then
-    CONTAINER_CMD="podman"
-    ok "podman $(podman --version | awk '{print $NF}')"
+	CONTAINER_CMD="podman"
+	# shellcheck disable=SC2312 # version display; failure just shows empty string
+	ok "podman $(podman --version | awk '{print $NF}')"
 elif command -v docker &>/dev/null; then
-    CONTAINER_CMD="docker"
-    ok "docker $(docker --version | awk '{print $3}' | tr -d ',')"
-    warn "Docker detected. Podman is recommended for rootless operation."
-    WARNINGS=$((WARNINGS + 1))
+	CONTAINER_CMD="docker"
+	# shellcheck disable=SC2312 # version display; failure just shows empty string
+	ok "docker $(docker --version | awk '{print $3}' | tr -d ',')"
+	warn "Docker detected. Podman is recommended for rootless operation."
+	WARNINGS=$((WARNINGS + 1))
 else
-    fail "Neither podman nor docker found."
-    if command -v dnf &>/dev/null; then
-        if ask_yn "Install podman via dnf?"; then
-            sudo dnf install -y podman
-            CONTAINER_CMD="podman"
-            ok "podman installed"
-        else
-            fail "A container runtime is required. Install podman or docker and re-run."
-            ERRORS=$((ERRORS + 1))
-        fi
-    elif command -v apt-get &>/dev/null; then
-        if ask_yn "Install podman via apt?"; then
-            sudo apt-get update && sudo apt-get install -y podman
-            CONTAINER_CMD="podman"
-            ok "podman installed"
-        else
-            fail "A container runtime is required. Install podman or docker and re-run."
-            ERRORS=$((ERRORS + 1))
-        fi
-    else
-        fail "A container runtime is required. Install podman or docker and re-run."
-        ERRORS=$((ERRORS + 1))
-    fi
+	fail "Neither podman nor docker found."
+	if command -v dnf &>/dev/null; then
+		# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+		if ask_yn "Install podman via dnf?"; then
+			sudo dnf install -y podman
+			CONTAINER_CMD="podman"
+			ok "podman installed"
+		else
+			fail "A container runtime is required. Install podman or docker and re-run."
+			ERRORS=$((ERRORS + 1))
+		fi
+	elif command -v apt-get &>/dev/null; then
+		# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+		if ask_yn "Install podman via apt?"; then
+			sudo apt-get update && sudo apt-get install -y podman
+			CONTAINER_CMD="podman"
+			ok "podman installed"
+		else
+			fail "A container runtime is required. Install podman or docker and re-run."
+			ERRORS=$((ERRORS + 1))
+		fi
+	else
+		fail "A container runtime is required. Install podman or docker and re-run."
+		ERRORS=$((ERRORS + 1))
+	fi
 fi
 
 # ── 2. task ──────────────────────────────────────────────────────────────────
 step "2. Command runner (task)"
 
 if command -v task &>/dev/null; then
-    ok "task $(task --version | awk '{print $NF}')"
+	# shellcheck disable=SC2312 # version display; failure just shows empty string
+	ok "task $(task --version | awk '{print $NF}')"
 else
-    fail "task not found."
-    echo "  Install from: https://taskfile.dev/installation/"
-    # TODO(security): curl-to-shell with sudo. The install script verifies
-    #   SHA256 checksums internally, but a MITM could replace the script itself.
-    #   Consider pinning to a known-good hash or requiring manual install.
-    if ask_yn "Install task via install script?"; then
-        sudo sh -c 'curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin'
-        ok "task installed"
-    else
-        ERRORS=$((ERRORS + 1))
-    fi
+	fail "task not found."
+	echo "  Install from: https://taskfile.dev/installation/"
+	# NOTE(security): curl-to-shell with sudo. The install script verifies
+	#   SHA256 checksums internally, but a MITM could replace the script itself.
+	#   Consider pinning to a known-good hash or requiring manual install.
+	# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+	if ask_yn "Install task via install script?"; then
+		sudo sh -c 'curl -sL https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin'
+		ok "task installed"
+	else
+		ERRORS=$((ERRORS + 1))
+	fi
 fi
 
 # ── 3. Podman-specific setup ────────────────────────────────────────────────
-if [ "${CONTAINER_CMD}" = "podman" ]; then
-    step "3. Podman configuration"
+if [[ "${CONTAINER_CMD}" = "podman" ]]; then
+	step "3. Podman configuration"
 
-    # ── 3a. fuse-overlayfs ───────────────────────────────────────────────────
-    if command -v fuse-overlayfs &>/dev/null; then
-        ok "fuse-overlayfs found"
-    else
-        fail "fuse-overlayfs not found (required for --userns=keep-id without hangs)."
-        if command -v dnf &>/dev/null; then
-            if ask_yn "Install fuse-overlayfs via dnf?"; then
-                sudo dnf install -y fuse-overlayfs
-                ok "fuse-overlayfs installed"
-            else
-                ERRORS=$((ERRORS + 1))
-            fi
-        elif command -v apt-get &>/dev/null; then
-            if ask_yn "Install fuse-overlayfs via apt?"; then
-                sudo apt-get update && sudo apt-get install -y fuse-overlayfs
-                ok "fuse-overlayfs installed"
-            else
-                ERRORS=$((ERRORS + 1))
-            fi
-        else
-            echo "  Install fuse-overlayfs for your distribution and re-run."
-            ERRORS=$((ERRORS + 1))
-        fi
-    fi
+	# ── 3a. fuse-overlayfs ───────────────────────────────────────────────────
+	if command -v fuse-overlayfs &>/dev/null; then
+		ok "fuse-overlayfs found"
+	else
+		fail "fuse-overlayfs not found (required for --userns=keep-id without hangs)."
+		if command -v dnf &>/dev/null; then
+			# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+			if ask_yn "Install fuse-overlayfs via dnf?"; then
+				sudo dnf install -y fuse-overlayfs
+				ok "fuse-overlayfs installed"
+			else
+				ERRORS=$((ERRORS + 1))
+			fi
+		elif command -v apt-get &>/dev/null; then
+			# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+			if ask_yn "Install fuse-overlayfs via apt?"; then
+				sudo apt-get update && sudo apt-get install -y fuse-overlayfs
+				ok "fuse-overlayfs installed"
+			else
+				ERRORS=$((ERRORS + 1))
+			fi
+		else
+			echo "  Install fuse-overlayfs for your distribution and re-run."
+			ERRORS=$((ERRORS + 1))
+		fi
+	fi
 
-    # ── 3b. storage.conf ─────────────────────────────────────────────────────
-    STORAGE_CONF="${HOME}/.config/containers/storage.conf"
-    STORAGE_OK=false
+	# ── 3b. storage.conf ─────────────────────────────────────────────────────
+	STORAGE_CONF="${HOME}/.config/containers/storage.conf"
+	STORAGE_OK=false
 
-    if [ -f "${STORAGE_CONF}" ]; then
-        if grep -q 'fuse-overlayfs' "${STORAGE_CONF}" 2>/dev/null; then
-            ok "storage.conf already configured for fuse-overlayfs"
-            STORAGE_OK=true
-        else
-            warn "storage.conf exists but doesn't reference fuse-overlayfs."
-            echo "  Current contents of ${STORAGE_CONF}:"
-            sed 's/^/    /' "${STORAGE_CONF}"
-            echo ""
-            echo "  Recommended contents:"
-            echo '    [storage]'
-            echo '    driver = "overlay"'
-            echo '    [storage.options.overlay]'
-            echo '    mount_program = "/usr/bin/fuse-overlayfs"'
-            echo '    mountopt = "metacopy=on"'
-            echo ""
-            if ask_yn "Overwrite with recommended config?"; then
-                cat > "${STORAGE_CONF}" <<'TOML'
+	if [[ -f "${STORAGE_CONF}" ]]; then
+		if grep -q 'fuse-overlayfs' "${STORAGE_CONF}" 2>/dev/null; then
+			ok "storage.conf already configured for fuse-overlayfs"
+			STORAGE_OK=true
+		else
+			warn "storage.conf exists but doesn't reference fuse-overlayfs."
+			echo "  Current contents of ${STORAGE_CONF}:"
+			sed 's/^/    /' "${STORAGE_CONF}"
+			echo ""
+			echo "  Recommended contents:"
+			echo '    [storage]'
+			echo '    driver = "overlay"'
+			echo '    [storage.options.overlay]'
+			echo '    mount_program = "/usr/bin/fuse-overlayfs"'
+			echo '    mountopt = "metacopy=on"'
+			echo ""
+			# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+			if ask_yn "Overwrite with recommended config?"; then
+				cat >"${STORAGE_CONF}" <<'TOML'
 [storage]
 driver = "overlay"
 
@@ -175,18 +185,19 @@ driver = "overlay"
 mount_program = "/usr/bin/fuse-overlayfs"
 mountopt = "metacopy=on"
 TOML
-                ok "storage.conf updated"
-                STORAGE_OK=true
-            else
-                warn "Skipped. You may need to configure this manually."
-                WARNINGS=$((WARNINGS + 1))
-            fi
-        fi
-    else
-        echo "  No storage.conf found. This file tells podman to use fuse-overlayfs."
-        if ask_yn "Create ${STORAGE_CONF}?" "y"; then
-            mkdir -p "$(dirname "${STORAGE_CONF}")"
-            cat > "${STORAGE_CONF}" <<'TOML'
+				ok "storage.conf updated"
+				STORAGE_OK=true
+			else
+				warn "Skipped. You may need to configure this manually."
+				WARNINGS=$((WARNINGS + 1))
+			fi
+		fi
+	else
+		echo "  No storage.conf found. This file tells podman to use fuse-overlayfs."
+		# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+		if ask_yn "Create ${STORAGE_CONF}?" "y"; then
+			mkdir -p "$(dirname "${STORAGE_CONF}")"
+			cat >"${STORAGE_CONF}" <<'TOML'
 [storage]
 driver = "overlay"
 
@@ -194,123 +205,128 @@ driver = "overlay"
 mount_program = "/usr/bin/fuse-overlayfs"
 mountopt = "metacopy=on"
 TOML
-            ok "storage.conf created"
-            STORAGE_OK=true
-        else
-            warn "Skipped. Without this, container startup will hang."
-            WARNINGS=$((WARNINGS + 1))
-        fi
-    fi
+			ok "storage.conf created"
+			STORAGE_OK=true
+		else
+			warn "Skipped. Without this, container startup will hang."
+			WARNINGS=$((WARNINGS + 1))
+		fi
+	fi
 
-    # ── 3c. containers.conf ──────────────────────────────────────────────────
-    CONTAINERS_CONF="${HOME}/.config/containers/containers.conf"
+	# ── 3c. containers.conf ──────────────────────────────────────────────────
+	CONTAINERS_CONF="${HOME}/.config/containers/containers.conf"
 
-    if [ -f "${CONTAINERS_CONF}" ]; then
-        if grep -q 'init = false' "${CONTAINERS_CONF}" 2>/dev/null; then
-            ok "containers.conf already disables catatonit"
-        else
-            warn "containers.conf exists but doesn't disable catatonit."
-            echo "  On EL10, catatonit segfaults. Recommended: add 'init = false'."
-            echo ""
-            if ask_yn "Append [containers] init = false?"; then
-                if ! grep -q '^\[containers\]' "${CONTAINERS_CONF}" 2>/dev/null; then
-                    printf '\n[containers]\ninit = false\n' >> "${CONTAINERS_CONF}"
-                else
-                    sed -i '/^\[containers\]/a init = false' "${CONTAINERS_CONF}"
-                fi
-                ok "containers.conf updated"
-            else
-                warn "Skipped. If you see catatonit crashes, add this manually."
-                WARNINGS=$((WARNINGS + 1))
-            fi
-        fi
-    else
-        echo "  No containers.conf found. On EL10, catatonit (podman's init) segfaults."
-        if ask_yn "Create ${CONTAINERS_CONF}?" "y"; then
-            mkdir -p "$(dirname "${CONTAINERS_CONF}")"
-            cat > "${CONTAINERS_CONF}" <<'TOML'
+	if [[ -f "${CONTAINERS_CONF}" ]]; then
+		if grep -q 'init = false' "${CONTAINERS_CONF}" 2>/dev/null; then
+			ok "containers.conf already disables catatonit"
+		else
+			warn "containers.conf exists but doesn't disable catatonit."
+			echo "  On EL10, catatonit segfaults. Recommended: add 'init = false'."
+			echo ""
+			# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+			if ask_yn "Append [containers] init = false?"; then
+				if ! grep -q '^\[containers\]' "${CONTAINERS_CONF}" 2>/dev/null; then
+					printf '\n[containers]\ninit = false\n' >>"${CONTAINERS_CONF}"
+				else
+					sed -i '/^\[containers\]/a init = false' "${CONTAINERS_CONF}"
+				fi
+				ok "containers.conf updated"
+			else
+				warn "Skipped. If you see catatonit crashes, add this manually."
+				WARNINGS=$((WARNINGS + 1))
+			fi
+		fi
+	else
+		echo "  No containers.conf found. On EL10, catatonit (podman's init) segfaults."
+		# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+		if ask_yn "Create ${CONTAINERS_CONF}?" "y"; then
+			mkdir -p "$(dirname "${CONTAINERS_CONF}")"
+			cat >"${CONTAINERS_CONF}" <<'TOML'
 [containers]
 init = false
 TOML
-            ok "containers.conf created"
-        else
-            warn "Skipped. If you see catatonit crashes, create this manually."
-            WARNINGS=$((WARNINGS + 1))
-        fi
-    fi
+			ok "containers.conf created"
+		else
+			warn "Skipped. If you see catatonit crashes, create this manually."
+			WARNINGS=$((WARNINGS + 1))
+		fi
+	fi
 
-    # ── 3d. podman system reset (if storage config changed) ──────────────────
-    if [ "${STORAGE_OK}" = true ]; then
-        # Check if the current storage driver matches the config
-        CURRENT_DRIVER="$(podman info --format '{{.Store.GraphDriverName}}' 2>/dev/null || echo "")"
-        if [ -z "${CURRENT_DRIVER}" ]; then
-            warn "Could not query podman storage driver (podman not fully functional)."
-            echo "  After setup completes, verify with: podman info --format '{{.Store.GraphDriverName}}'"
-            WARNINGS=$((WARNINGS + 1))
-        elif [ "${CURRENT_DRIVER}" != "overlay" ]; then
-            warn "Podman storage driver is '${CURRENT_DRIVER}', but config says 'overlay'."
-            echo "  A storage reset is needed for the new config to take effect."
-            echo "  This will remove all local podman images, containers, and volumes."
-            echo ""
-            if [ -n "${AUTO_YES}" ]; then
-                warn "Skipped (--yes does not auto-approve destructive operations)."
-                echo "  Run manually: podman system reset --force"
-                WARNINGS=$((WARNINGS + 1))
-            elif ask_yn "Run 'podman system reset --force'?"; then
-                podman system reset --force
-                ok "Podman storage reset complete"
-            else
-                warn "Skipped. You may need to run 'podman system reset --force' manually."
-                WARNINGS=$((WARNINGS + 1))
-            fi
-        else
-            ok "Podman storage driver is already 'overlay'"
-        fi
-    fi
+	# ── 3d. podman system reset (if storage config changed) ──────────────────
+	if [[ "${STORAGE_OK}" = true ]]; then
+		# Check if the current storage driver matches the config
+		CURRENT_DRIVER="$(podman info --format '{{.Store.GraphDriverName}}' 2>/dev/null || echo "")"
+		if [[ -z "${CURRENT_DRIVER}" ]]; then
+			warn "Could not query podman storage driver (podman not fully functional)."
+			echo "  After setup completes, verify with: podman info --format '{{.Store.GraphDriverName}}'"
+			WARNINGS=$((WARNINGS + 1))
+		elif [[ "${CURRENT_DRIVER}" != "overlay" ]]; then
+			warn "Podman storage driver is '${CURRENT_DRIVER}', but config says 'overlay'."
+			echo "  A storage reset is needed for the new config to take effect."
+			echo "  This will remove all local podman images, containers, and volumes."
+			echo ""
+			# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+			if [[ -n "${AUTO_YES}" ]]; then
+				warn "Skipped (--yes does not auto-approve destructive operations)."
+				echo "  Run manually: podman system reset --force"
+				WARNINGS=$((WARNINGS + 1))
+			elif ask_yn "Run 'podman system reset --force'?"; then
+				podman system reset --force
+				ok "Podman storage reset complete"
+			else
+				warn "Skipped. You may need to run 'podman system reset --force' manually."
+				WARNINGS=$((WARNINGS + 1))
+			fi
+		else
+			ok "Podman storage driver is already 'overlay'"
+		fi
+	fi
 
-    # ── 3e. Kernel metacopy (optional) ───────────────────────────────────────
-    METACOPY_PATH="/sys/module/overlay/parameters/metacopy"
-    if [ -f "${METACOPY_PATH}" ]; then
-        METACOPY_CURRENT="$(cat "${METACOPY_PATH}" 2>/dev/null || echo "N")"
-        if [ "${METACOPY_CURRENT}" = "Y" ]; then
-            ok "Kernel overlay metacopy is enabled"
-        else
-            echo "  Kernel overlay metacopy is disabled. Enabling it improves overlay performance."
-            if [ -n "${AUTO_YES}" ]; then
-                ok "Skipped (--yes does not auto-approve sudo operations)"
-            elif ask_yn "Enable kernel metacopy (requires sudo)?"; then
-                echo "Y" | sudo tee "${METACOPY_PATH}" >/dev/null
-                ok "Kernel metacopy enabled for this session"
-                # Persist
-                MODPROBE_CONF="/etc/modprobe.d/overlay.conf"
-                if [ ! -f "${MODPROBE_CONF}" ] || ! grep -q 'metacopy=on' "${MODPROBE_CONF}" 2>/dev/null; then
-                    if ask_yn "Persist across reboots (writes to ${MODPROBE_CONF})?"; then
-                        echo "options overlay metacopy=on" | sudo tee "${MODPROBE_CONF}" >/dev/null
-                        ok "Kernel metacopy persisted"
-                    fi
-                fi
-            else
-                ok "Skipped (optional optimization)"
-            fi
-        fi
-    fi
+	# ── 3e. Kernel metacopy (optional) ───────────────────────────────────────
+	METACOPY_PATH="/sys/module/overlay/parameters/metacopy"
+	if [[ -f "${METACOPY_PATH}" ]]; then
+		METACOPY_CURRENT="$(cat "${METACOPY_PATH}" 2>/dev/null || echo "N")"
+		if [[ "${METACOPY_CURRENT}" = "Y" ]]; then
+			ok "Kernel overlay metacopy is enabled"
+		else
+			echo "  Kernel overlay metacopy is disabled. Enabling it improves overlay performance."
+			# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+			if [[ -n "${AUTO_YES}" ]]; then
+				ok "Skipped (--yes does not auto-approve sudo operations)"
+			elif ask_yn "Enable kernel metacopy (requires sudo)?"; then
+				echo "Y" | sudo tee "${METACOPY_PATH}" >/dev/null
+				ok "Kernel metacopy enabled for this session"
+				# Persist
+				MODPROBE_CONF="/etc/modprobe.d/overlay.conf"
+				if [[ ! -f "${MODPROBE_CONF}" ]] || ! grep -q 'metacopy=on' "${MODPROBE_CONF}" 2>/dev/null; then
+					# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+					if ask_yn "Persist across reboots (writes to ${MODPROBE_CONF})?"; then
+						echo "options overlay metacopy=on" | sudo tee "${MODPROBE_CONF}" >/dev/null
+						ok "Kernel metacopy persisted"
+					fi
+				fi
+			else
+				ok "Skipped (optional optimization)"
+			fi
+		fi
+	fi
 else
-    step "3. Podman configuration"
-    ok "Skipped (using ${CONTAINER_CMD:-docker})"
+	step "3. Podman configuration"
+	ok "Skipped (using ${CONTAINER_CMD:-docker})"
 fi
 
 # ── 4. Authentication ───────────────────────────────────────────────────────
 step "4. Claude authentication"
 
-if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
-    ok "ANTHROPIC_API_KEY is set"
-elif [ -f "${HOME}/.claude.json" ]; then
-    ok "OAuth tokens found (~/.claude.json)"
+if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+	ok "ANTHROPIC_API_KEY is set"
+elif [[ -f "${HOME}/.claude.json" ]]; then
+	ok "OAuth tokens found (~/.claude.json)"
 else
-    warn "No authentication found."
-    echo "  Either set ANTHROPIC_API_KEY in your environment, or run 'claude' on the"
-    echo "  host to complete the OAuth flow (creates ~/.claude.json)."
-    WARNINGS=$((WARNINGS + 1))
+	warn "No authentication found."
+	echo "  Either set ANTHROPIC_API_KEY in your environment, or run 'claude' on the"
+	echo "  host to complete the OAuth flow (creates ~/.claude.json)."
+	WARNINGS=$((WARNINGS + 1))
 fi
 
 # ── 5. Install CLI ──────────────────────────────────────────────────────────
@@ -322,17 +338,19 @@ BIN_DIR="${HOME}/.local/bin"
 ENTRYPOINT="${BIN_DIR}/riotbox"
 DATA_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/riotbox"
 
-if [ -L "${ENTRYPOINT}" ] && [ "$(readlink -f "${ENTRYPOINT}")" = "${DATA_DIR}/bin/riotbox" ]; then
-    ok "riotbox already installed (${ENTRYPOINT} -> ${DATA_DIR}/bin/riotbox)"
+# shellcheck disable=SC2312 # readlink failure means the symlink is missing; handled by the else branch
+if [[ -L "${ENTRYPOINT}" ]] && [[ "$(readlink -f "${ENTRYPOINT}")" = "${DATA_DIR}/bin/riotbox" ]]; then
+	ok "riotbox already installed (${ENTRYPOINT} -> ${DATA_DIR}/bin/riotbox)"
 else
-    echo "  This installs the app tree to ${DATA_DIR} and the 'riotbox' command to ${BIN_DIR}/."
-    if ask_yn "Install?" "y"; then
-        "${SCRIPT_DIR}/install.sh"
-        ok "riotbox installed (${ENTRYPOINT} -> ${DATA_DIR}/bin/riotbox)"
-    else
-        warn "Skipped. Run ./install.sh manually when ready."
-        WARNINGS=$((WARNINGS + 1))
-    fi
+	echo "  This installs the app tree to ${DATA_DIR} and the 'riotbox' command to ${BIN_DIR}/."
+	# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+	if ask_yn "Install?" "y"; then
+		"${SCRIPT_DIR}/install.sh"
+		ok "riotbox installed (${ENTRYPOINT} -> ${DATA_DIR}/bin/riotbox)"
+	else
+		warn "Skipped. Run ./install.sh manually when ready."
+		WARNINGS=$((WARNINGS + 1))
+	fi
 fi
 
 # ── 6. Build image ──────────────────────────────────────────────────────────
@@ -340,26 +358,28 @@ step "6. Build container image"
 
 IMAGE_NAME="${IMAGE_NAME:-riotbox}"
 
-if [ -n "${SKIP_BUILD}" ]; then
-    ok "Skipped (--no-build)"
-elif [ -n "${CONTAINER_CMD}" ] && ${CONTAINER_CMD} inspect "${IMAGE_NAME}" &>/dev/null; then
-    ok "Image '${IMAGE_NAME}' already exists"
-    if ask_yn "Rebuild anyway?"; then
-        "${SCRIPT_DIR}/scripts/build.sh"
-    fi
+if [[ -n "${SKIP_BUILD}" ]]; then
+	ok "Skipped (--no-build)"
+elif [[ -n "${CONTAINER_CMD}" ]] && ${CONTAINER_CMD} inspect "${IMAGE_NAME}" &>/dev/null; then
+	ok "Image '${IMAGE_NAME}' already exists"
+	# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+	if ask_yn "Rebuild anyway?"; then
+		"${SCRIPT_DIR}/scripts/build.sh"
+	fi
 else
-    if [ ${ERRORS} -gt 0 ]; then
-        fail "Skipping build due to ${ERRORS} error(s) above. Fix them and re-run."
-    elif [ -n "${CONTAINER_CMD}" ]; then
-        echo "  The image build takes a while (installs toolchains, security tools, etc.)."
-        if ask_yn "Build now?" "y"; then
-            "${SCRIPT_DIR}/scripts/build.sh"
-        else
-            ok "Skipped. Run 'riotbox build' when ready."
-        fi
-    else
-        fail "No container runtime available. Cannot build."
-    fi
+	if [[ "${ERRORS}" -gt 0 ]]; then
+		fail "Skipping build due to ${ERRORS} error(s) above. Fix them and re-run."
+	elif [[ -n "${CONTAINER_CMD}" ]]; then
+		echo "  The image build takes a while (installs toolchains, security tools, etc.)."
+		# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
+		if ask_yn "Build now?" "y"; then
+			"${SCRIPT_DIR}/scripts/build.sh"
+		else
+			ok "Skipped. Run 'riotbox build' when ready."
+		fi
+	else
+		fail "No container runtime available. Cannot build."
+	fi
 fi
 
 # ── 7. Final verification ───────────────────────────────────────────────────
@@ -376,28 +396,28 @@ step "7. Final verification"
 # cases the summary block below surfaces what to do next, so re-checking
 # via preflight would be noise. After fixing the warnings, the user can
 # re-run setup.sh or call `riotbox doctor` directly.
-if [ ${ERRORS} -gt 0 ]; then
-    warn "Skipping preflight: ${ERRORS} error(s) above must be resolved first."
-elif [ ${WARNINGS} -gt 0 ]; then
-    warn "Skipping preflight: ${WARNINGS} warning(s) above. Re-run setup.sh or \`riotbox doctor\` after addressing them."
+if [[ "${ERRORS}" -gt 0 ]]; then
+	warn "Skipping preflight: ${ERRORS} error(s) above must be resolved first."
+elif [[ "${WARNINGS}" -gt 0 ]]; then
+	warn "Skipping preflight: ${WARNINGS} warning(s) above. Re-run setup.sh or \`riotbox doctor\` after addressing them."
 elif "${SCRIPT_DIR}/scripts/preflight.sh"; then
-    ok "All checks pass — riotbox is ready"
+	ok "All checks pass — riotbox is ready"
 else
-    rc=$?
-    fail "Some checks failed (exit code ${rc}). Run \`riotbox doctor\` for detail or to re-check after fixing."
-    exit "${rc}"
+	rc=$?
+	fail "Some checks failed (exit code ${rc}). Run \`riotbox doctor\` for detail or to re-check after fixing."
+	exit "${rc}"
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 step "Setup complete"
 
-if [ ${ERRORS} -gt 0 ]; then
-    fail "${ERRORS} error(s) need to be resolved. Fix them and re-run ./setup.sh."
-    exit 1
-elif [ ${WARNINGS} -gt 0 ]; then
-    warn "${WARNINGS} warning(s). Things may work, but review the notes above."
+if [[ "${ERRORS}" -gt 0 ]]; then
+	fail "${ERRORS} error(s) need to be resolved. Fix them and re-run ./setup.sh."
+	exit 1
+elif [[ "${WARNINGS}" -gt 0 ]]; then
+	warn "${WARNINGS} warning(s). Things may work, but review the notes above."
 else
-    ok "Everything looks good!"
+	ok "Everything looks good!"
 fi
 
 echo ""

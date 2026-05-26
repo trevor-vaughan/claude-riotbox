@@ -30,76 +30,78 @@ resolve_projects "${RIOTBOX_PROJECTS:-}"
 #           launcher never blocks on a prompt that nobody can answer.
 # Returns 0 if a repo was created, 1 otherwise.
 maybe_init_git_repo() {
-    local dir="$1"
-    local create=false
-    case "${RIOTBOX_GIT_INIT:-}" in
-        1) create=true ;;
-        0) create=false ;;
-        *)
-            if [ -t 0 ]; then
-                local answer
-                printf "  %s is not a git repository.\n" "${dir}" >&2
-                printf "  Create one so your work can be checkpointed? [Y/n] " >&2
-                read -r answer || answer=""
-                [[ "${answer}" =~ ^[Nn] ]] || create=true
-            fi
-            ;;
-    esac
+	local dir="$1"
+	local create=false
+	case "${RIOTBOX_GIT_INIT:-}" in
+	1) create=true ;;
+	0) create=false ;;
+	*)
+		if [[ -t 0 ]]; then
+			local answer
+			printf "  %s is not a git repository.\n" "${dir}" >&2
+			printf "  Create one so your work can be checkpointed? [Y/n] " >&2
+			read -r answer || answer=""
+			[[ "${answer}" =~ ^[Nn] ]] || create=true
+		fi
+		;;
+	esac
 
-    if [ "${create}" = true ] && git -C "${dir}" init >/dev/null 2>&1; then
-        echo "  [git-init] Created git repository in ${dir}"
-        return 0
-    fi
-    return 1
+	if [[ "${create}" = true ]] && git -C "${dir}" init >/dev/null 2>&1; then
+		echo "  [git-init] Created git repository in ${dir}"
+		return 0
+	fi
+	return 1
 }
 
 timestamp="$(date +%Y%m%d-%H%M%S)"
 for dir in "${PROJECT_DIRS[@]}"; do
-    project_name="$(basename "${dir}")"
+	project_name="$(basename "${dir}")"
 
-    if ! git -C "${dir}" rev-parse --git-dir &>/dev/null; then
-        if ! maybe_init_git_repo "${dir}"; then
-            echo "  WARNING: ${dir} is not a git repo — no checkpoint protection!" >&2
-            continue
-        fi
-    fi
+	if ! git -C "${dir}" rev-parse --git-dir &>/dev/null; then
+		# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+		if ! maybe_init_git_repo "${dir}"; then
+			echo "  WARNING: ${dir} is not a git repo — no checkpoint protection!" >&2
+			continue
+		fi
+	fi
 
-    # Commit any uncommitted work so it's safely captured before Claude runs.
-    # Includes untracked files — the goal is a complete snapshot.
-    #
-    # commit.gpgsign=false / tag.gpgsign=false: checkpoints are local-only
-    # safety snapshots that never reach a shared remote, and the container has
-    # no signing key. Inheriting a host commit.gpgsign=true would abort the
-    # commit. Signing happens later, on the host, via reown-commits.sh.
-    if ! git -C "${dir}" diff --quiet || ! git -C "${dir}" diff --cached --quiet || \
-       [ -n "$(git -C "${dir}" ls-files --others --exclude-standard)" ]; then
-        git -C "${dir}" add -A
-        git -C "${dir}" -c commit.gpgsign=false commit -m "checkpoint: pre-riotbox-${timestamp}"
-    fi
+	# Commit any uncommitted work so it's safely captured before Claude runs.
+	# Includes untracked files — the goal is a complete snapshot.
+	#
+	# commit.gpgsign=false / tag.gpgsign=false: checkpoints are local-only
+	# safety snapshots that never reach a shared remote, and the container has
+	# no signing key. Inheriting a host commit.gpgsign=true would abort the
+	# commit. Signing happens later, on the host, via reown-commits.sh.
+	_untracked="$(git -C "${dir}" ls-files --others --exclude-standard)"
+	if ! git -C "${dir}" diff --quiet || ! git -C "${dir}" diff --cached --quiet ||
+		[[ -n "${_untracked}" ]]; then
+		git -C "${dir}" add -A
+		git -C "${dir}" -c commit.gpgsign=false commit -m "checkpoint: pre-riotbox-${timestamp}"
+	fi
 
-    # A repo with no commits yet (unborn HEAD) has nothing to tag or back up.
-    # This is reached for a freshly-initialised or empty repo with no
-    # committable files; skip it gracefully instead of letting `git tag` abort
-    # on the missing HEAD (which would take the whole launch down).
-    if ! git -C "${dir}" rev-parse --verify HEAD &>/dev/null; then
-        echo "  ${project_name}: empty git repo (no commits yet) — nothing to checkpoint."
-        continue
-    fi
+	# A repo with no commits yet (unborn HEAD) has nothing to tag or back up.
+	# This is reached for a freshly-initialised or empty repo with no
+	# committable files; skip it gracefully instead of letting `git tag` abort
+	# on the missing HEAD (which would take the whole launch down).
+	if ! git -C "${dir}" rev-parse --verify HEAD &>/dev/null; then
+		echo "  ${project_name}: empty git repo (no commits yet) — nothing to checkpoint."
+		continue
+	fi
 
-    # Tag the current HEAD
-    tag_name="riotbox-checkpoint/${timestamp}"
-    git -C "${dir}" -c tag.gpgsign=false tag "${tag_name}"
+	# Tag the current HEAD
+	tag_name="riotbox-checkpoint/${timestamp}"
+	git -C "${dir}" -c tag.gpgsign=false tag "${tag_name}"
 
-    # Push everything to a local bare backup repo
-    backup_dir="${RIOTBOX_DATA_DIR}/backups/${project_name}.git"
-    if [ ! -d "${backup_dir}" ]; then
-        git clone --bare "${dir}" "${backup_dir}" 2>/dev/null
-    else
-        # --no-verify: skip the pre-push hook (which blocks container-identity commits)
-        # The backup is a local bare repo, not a shared remote, so the hook
-        # intent (prevent publishing unowned commits) does not apply here.
-        git -C "${dir}" push --no-verify --force "${backup_dir}" --all 2>/dev/null
-        git -C "${dir}" push --no-verify --force "${backup_dir}" --tags 2>/dev/null
-    fi
-    echo "  checkpoint: ${project_name} → ${tag_name} (backed up)"
+	# Push everything to a local bare backup repo
+	backup_dir="${RIOTBOX_DATA_DIR}/backups/${project_name}.git"
+	if [[ ! -d "${backup_dir}" ]]; then
+		git clone --bare "${dir}" "${backup_dir}" 2>/dev/null
+	else
+		# --no-verify: skip the pre-push hook (which blocks container-identity commits)
+		# The backup is a local bare repo, not a shared remote, so the hook
+		# intent (prevent publishing unowned commits) does not apply here.
+		git -C "${dir}" push --no-verify --force "${backup_dir}" --all 2>/dev/null
+		git -C "${dir}" push --no-verify --force "${backup_dir}" --tags 2>/dev/null
+	fi
+	echo "  checkpoint: ${project_name} → ${tag_name} (backed up)"
 done

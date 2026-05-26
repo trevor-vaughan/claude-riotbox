@@ -4,16 +4,18 @@
 # Usage: session_summary <session_dir>
 
 session_summary() {
-    local session_dir="$1"
-    local last_used size
-    last_used="$(stat -c '%y' "${session_dir}" 2>/dev/null | cut -d. -f1)"
-    size="$(du -sh "${session_dir}" 2>/dev/null | cut -f1)"
+	local session_dir="$1"
+	local last_used size
+	# shellcheck disable=SC2312  # stat|cut and du|cut are informational; non-zero is acceptable
+	last_used="$(stat -c '%y' "${session_dir}" 2>/dev/null | cut -d. -f1)"
+	# shellcheck disable=SC2312
+	size="$(du -sh "${session_dir}" 2>/dev/null | cut -f1)"
 
-    if [ -f "${session_dir}/.projects" ]; then
-        mapfile -t paths < "${session_dir}/.projects"
-        for p in "${paths[@]}"; do echo "  ${p}"; done
-        echo "    last used: ${last_used}, ${size}"
-    else
-        echo "  $(basename "${session_dir}")  (last used: ${last_used}, ${size})"
-    fi
+	if [[ -f "${session_dir}/.projects" ]]; then
+		mapfile -t paths <"${session_dir}/.projects"
+		for p in "${paths[@]}"; do echo "  ${p}"; done
+		echo "    last used: ${last_used}, ${size}"
+	else
+		echo "  $(basename "${session_dir}")  (last used: ${last_used}, ${size})"
+	fi
 }

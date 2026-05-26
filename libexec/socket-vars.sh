@@ -56,52 +56,52 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 socket_detect_host_path() {
-    local candidate
-    if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
-        candidate="${XDG_RUNTIME_DIR}/podman/podman.sock"
-        if [ -S "${candidate}" ]; then
-            printf '%s' "${candidate}"
-            return 0
-        fi
-    fi
-    candidate="/run/user/$(id -u)/podman/podman.sock"
-    if [ -S "${candidate}" ]; then
-        printf '%s' "${candidate}"
-        return 0
-    fi
-    return 1
+	local candidate
+	if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+		candidate="${XDG_RUNTIME_DIR}/podman/podman.sock"
+		if [[ -S "${candidate}" ]]; then
+			printf '%s' "${candidate}"
+			return 0
+		fi
+	fi
+	candidate="/run/user/$(id -u)/podman/podman.sock"
+	if [[ -S "${candidate}" ]]; then
+		printf '%s' "${candidate}"
+		return 0
+	fi
+	return 1
 }
 
 socket_check_alive() {
-    local path="${1:-}"
-    if [ -z "${path}" ]; then
-        return 1
-    fi
-    local cmd="${CONTAINER_CMD:-podman}"
-    # 5s timeout: a working podman socket responds to `info` in well under
-    # a second; anything slower indicates a stuck or wrong-protocol socket.
-    if timeout 5 "${cmd}" --url "unix://${path}" info >/dev/null 2>&1; then
-        return 0
-    fi
-    return 1
+	local path="${1:-}"
+	if [[ -z "${path}" ]]; then
+		return 1
+	fi
+	local cmd="${CONTAINER_CMD:-podman}"
+	# 5s timeout: a working podman socket responds to `info` in well under
+	# a second; anything slower indicates a stuck or wrong-protocol socket.
+	if timeout 5 "${cmd}" --url "unix://${path}" info >/dev/null 2>&1; then
+		return 0
+	fi
+	return 1
 }
 
 socket_flags() {
-    if [ "${RIOTBOX_SOCKET:-}" != "1" ]; then
-        return 0
-    fi
-    local host_sock
-    host_sock="$(socket_detect_host_path)" || host_sock=""
-    if [ -n "${host_sock}" ] && socket_check_alive "${host_sock}"; then
-        # `:z` triggers SELinux relabel to container_file_t:s0 (shared) —
-        # without it the in-container `container_t` process is denied
-        # connect(2) on the host socket's `user_runtime_t` label even when
-        # Unix permissions match. Safe no-op on hosts without SELinux.
-        printf -- '-v %s:/run/podman/podman.sock:z -e CONTAINER_HOST=unix:///run/podman/podman.sock' \
-            "${host_sock}"
-        return 0
-    fi
-    cat >&2 <<'EOF'
+	if [[ "${RIOTBOX_SOCKET:-}" != "1" ]]; then
+		return 0
+	fi
+	local host_sock
+	host_sock="$(socket_detect_host_path)" || host_sock=""
+	if [[ -n "${host_sock}" ]] && socket_check_alive "${host_sock}"; then
+		# `:z` triggers SELinux relabel to container_file_t:s0 (shared) —
+		# without it the in-container `container_t` process is denied
+		# connect(2) on the host socket's `user_runtime_t` label even when
+		# Unix permissions match. Safe no-op on hosts without SELinux.
+		printf -- '-v %s:/run/podman/podman.sock:z -e CONTAINER_HOST=unix:///run/podman/podman.sock' \
+			"${host_sock}"
+		return 0
+	fi
+	cat >&2 <<'EOF'
 ERROR: RIOTBOX_SOCKET=1 set but no working user podman socket on host.
 
 Socket mode bind-mounts your USER (rootless) podman socket into the
@@ -124,5 +124,5 @@ Alternatives:
     but vfs storage and per-session re-pulls).
   - Default mode — no container engine; for non-podman workloads.
 EOF
-    return 1
+	return 1
 }

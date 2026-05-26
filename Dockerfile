@@ -20,6 +20,13 @@
 # in runtime.
 FROM quay.io/centos/centos:stream10 AS tools
 
+# Enable pipefail so any failed command in a pipe fails the RUN step.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# DL3041: Stream 10 is a rolling distribution — exact package versions shift
+# between releases. Pinning every rpm to a specific EVR would break on the next
+# compose. The FROM digest (set at the top of this file) pins the base layer.
+# hadolint ignore=DL3041
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         curl tar gzip && \
     dnf clean all && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc
@@ -78,6 +85,9 @@ RUN ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/') && \
 # top of the tools stage; both `FROM` lines must move together.
 FROM quay.io/centos/centos:stream10 AS runtime
 
+# Enable pipefail so any failed command in a pipe fails the RUN step.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # ── Build args (populated by build.sh from host introspection) ────────────────
 ARG NVM_INSTALLER_VERSION=0.39.7
 ARG NODE_VERSIONS="20"
@@ -111,6 +121,13 @@ ARG HOST_GID=${HOST_UID}
 # `dnf -y update` is deliberately omitted — stream10 is a rolling base, so the
 # image digest is already current. Running update on top just shadows files
 # from the base layer with newer copies, ballooning the image.
+#
+# DL3041: Stream 10 is a rolling distribution — exact package versions shift
+# between releases; pinning every rpm EVR would break on each compose.
+# CKV2_DOCKER_1: sudo is intentional — this is a developer-environment image;
+# the llm user is granted NOPASSWD sudo for dev workflows (see sudoers.d/llm).
+#checkov:skip=CKV2_DOCKER_1:intentional: dev-environment image provisions NOPASSWD sudo for the llm developer user
+# hadolint ignore=DL3041
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         bash \
         curl \
@@ -155,6 +172,7 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
 
 # ── Common dev libraries (pre-installed to save Claude from installing them) ──
 # Separated from base system packages for cache clarity.
+# hadolint ignore=DL3041
 RUN /usr/bin/crb enable && \
     dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         autoconf \
@@ -175,6 +193,7 @@ RUN /usr/bin/crb enable && \
     && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc /usr/share/info
 
 # ── Ruby build dependencies (needed by RVM to compile Ruby from source) ──────
+# hadolint ignore=DL3041
 RUN if [ -n "${RUBY_VERSIONS}" ]; then \
         dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
             libyaml-devel ruby \
@@ -183,6 +202,7 @@ RUN if [ -n "${RUBY_VERSIONS}" ]; then \
     fi
 
 # ── Go (system package, if version specified) ────────────────────────────────
+# hadolint ignore=DL3041
 RUN if [ -n "${GO_VERSION}" ]; then \
         dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
             golang \
@@ -194,12 +214,17 @@ RUN if [ -n "${GO_VERSION}" ]; then \
 # ── Podman-in-podman (nested containers) ──────────────────────────────────────
 # Pre-installed so RIOTBOX_NESTED=1 works without rebuilding the image.
 # slirp4netns provides rootless networking; fuse-overlayfs for storage.
+# hadolint ignore=DL3041
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         podman fuse-overlayfs slirp4netns \
     && dnf clean all \
     && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc /usr/share/info
 
 # ── semgrep (Python package — must be installed in the runtime stage) ─────────
+# DL3013: semgrep has a large dependency graph; pinning every transitive dep
+# is impractical here. The image digest pins the base, and semgrep itself is
+# tested at build time (semgrep --version). Use a requirements file for prod.
+# hadolint ignore=DL3013
 RUN pip3 install --no-cache-dir --break-system-packages semgrep pyyaml && \
     semgrep --version && \
     rm -rf /root/.cache/pip
@@ -212,6 +237,7 @@ RUN pip3 install --no-cache-dir --break-system-packages semgrep pyyaml && \
 # supply-chain integrity; refresh by bumping LOLA_VERSION below after picking
 # a new release at https://github.com/LobsterTrap/lola/releases.
 ARG LOLA_VERSION=0.4.4
+# hadolint ignore=DL3041
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         python3.13 python3.13-pip \
     && dnf clean all \
@@ -354,6 +380,10 @@ RUN if [ -n "${RUBY_VERSIONS}" ]; then \
     fi
 
 # ── Go tools (installed after user is set up) ───────────────────────────────
+# DL3062: gopls is the official Go language server — @latest tracks the active
+# Go toolchain version installed in the same build. Pinning a specific gopls
+# semver here would diverge from the Go version and cause compatibility issues.
+# hadolint ignore=DL3062
 RUN if command -v go >/dev/null 2>&1; then \
         mkdir -p /home/llm/go /home/llm/.cache/go-build && \
         go install golang.org/x/tools/gopls@latest; \
@@ -470,6 +500,9 @@ COPY --chown=llm:llm configs/ /home/llm/
 # Skip puppeteer's bundled Chromium (~580 MB) — use the system package instead.
 ENV PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+# DL3016: @mermaid-js/mermaid-cli is kept at latest to support current Mermaid
+# diagram syntax; pinning a specific version risks stale diagram rendering.
+# hadolint ignore=DL3016
 RUN npm install -g @mermaid-js/mermaid-cli && mmdc --version
 
 # ── RiotBox scripts: agent registry + generic wrapper ───────────────────────
@@ -513,6 +546,13 @@ RUN chmod +x /home/llm/.riotbox/entrypoint.sh \
     /home/llm/.riotbox/nested-podman-setup.sh
 ENTRYPOINT ["/home/llm/.riotbox/entrypoint.sh"]
 CMD ["bash"]
+
+# ── Health check ──────────────────────────────────────────────────────────────
+# This is a developer-shell image with no long-running daemon to probe. The
+# check verifies that the core toolchain is intact (task is always present)
+# without starting any service or network connection.
+HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
+    CMD command -v task >/dev/null 2>&1
 
 # ── opencode (installed alongside Claude Code) ───────────────────────────────
 # The official installer hardcodes the install target at $HOME/.opencode/bin

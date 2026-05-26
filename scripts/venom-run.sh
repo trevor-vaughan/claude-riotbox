@@ -39,37 +39,39 @@ mkdir -p "${OUTPUT_DIR}"
 # `--key=value` arguments are passed through untouched.
 resolved_args=()
 for arg in "$@"; do
-    case "${arg}" in
-        -*)
-            resolved_args+=("${arg}")
-            ;;
-        *)
-            if [ -e "${arg}" ]; then
-                resolved_args+=("$(cd "$(dirname "${arg}")" && pwd)/$(basename "${arg}")")
-            elif [ -e "${ROOT_DIR}/${arg}" ]; then
-                resolved_args+=("${ROOT_DIR}/${arg}")
-            else
-                resolved_args+=("${arg}")
-            fi
-            ;;
-    esac
+	case "${arg}" in
+	-*)
+		resolved_args+=("${arg}")
+		;;
+	*)
+		if [[ -e "${arg}" ]]; then
+			# shellcheck disable=SC2312  # cd/dirname/basename failures on a verified existing path are unreachable
+			resolved_args+=("$(cd "$(dirname "${arg}")" && pwd)/$(basename "${arg}")")
+		elif [[ -e "${ROOT_DIR}/${arg}" ]]; then
+			resolved_args+=("${ROOT_DIR}/${arg}")
+		else
+			resolved_args+=("${arg}")
+		fi
+		;;
+	esac
 done
 
 cd "${OUTPUT_DIR}"
 
+# shellcheck disable=SC2312  # var assembly — command -v/cat fallbacks are intentional
 venom run \
-    --output-dir=. \
-    --var root="${ROOT_DIR}" \
-    --var riotbox_dir="${ROOT_DIR}" \
-    --var container_cmd="$(command -v podman 2>/dev/null || command -v docker 2>/dev/null || echo '')" \
-    --var expected_version="$(cat "${ROOT_DIR}/VERSION")" \
-    --var helpers="${ROOT_DIR}/tests/lib/git-test-helpers.sh" \
-    --var wrapper_helpers="${ROOT_DIR}/tests/lib/wrapper-test-helpers.sh" \
-    --var overlay_helpers="${ROOT_DIR}/tests/lib/overlay-test-helpers.sh" \
-    --var inject_helpers="${ROOT_DIR}/tests/lib/inject-test-helpers.sh" \
-    --var opencode_helpers="${ROOT_DIR}/tests/lib/opencode-test-helpers.sh" \
-    --var agent_helpers="${ROOT_DIR}/tests/lib/agent-test-helpers.sh" \
-    --var shared_helpers="${ROOT_DIR}/tests/lib/wrapper-shared.sh" \
-    --var sync_helpers="${ROOT_DIR}/tests/lib/sync-settings-test-helpers.sh" \
-    --var startup_helpers="${ROOT_DIR}/tests/lib/startup-scripts-test-helpers.sh" \
-    "${resolved_args[@]}"
+	--output-dir=. \
+	--var root="${ROOT_DIR}" \
+	--var riotbox_dir="${ROOT_DIR}" \
+	--var container_cmd="$(command -v podman 2>/dev/null || command -v docker 2>/dev/null || echo '')" \
+	--var expected_version="$(cat "${ROOT_DIR}/VERSION")" \
+	--var helpers="${ROOT_DIR}/tests/lib/git-test-helpers.sh" \
+	--var wrapper_helpers="${ROOT_DIR}/tests/lib/wrapper-test-helpers.sh" \
+	--var overlay_helpers="${ROOT_DIR}/tests/lib/overlay-test-helpers.sh" \
+	--var inject_helpers="${ROOT_DIR}/tests/lib/inject-test-helpers.sh" \
+	--var opencode_helpers="${ROOT_DIR}/tests/lib/opencode-test-helpers.sh" \
+	--var agent_helpers="${ROOT_DIR}/tests/lib/agent-test-helpers.sh" \
+	--var shared_helpers="${ROOT_DIR}/tests/lib/wrapper-shared.sh" \
+	--var sync_helpers="${ROOT_DIR}/tests/lib/sync-settings-test-helpers.sh" \
+	--var startup_helpers="${ROOT_DIR}/tests/lib/startup-scripts-test-helpers.sh" \
+	"${resolved_args[@]}"

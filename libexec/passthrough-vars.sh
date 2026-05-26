@@ -40,17 +40,19 @@
 
 _PASSTHROUGH_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# shellcheck source=../agents/registry.sh
+# shellcheck source=../agents/registry.sh disable=SC1091  # source path resolves only from libexec/; safe to skip follow
 source "${_PASSTHROUGH_ROOT}/agents/registry.sh"
 
 # _passthrough_registry_vars
 #   Print the deduped union of every registered agent's env_vars,
 #   one name per line.
 _passthrough_registry_vars() {
-    local _agent
-    for _agent in "${AGENT_REGISTRY[@]}"; do
-        agent_call "${_agent}" env_vars
-    done | sort -u
+	local _agent
+	# shellcheck disable=SC2154  # AGENT_REGISTRY is exported by the sourced registry.sh
+	for _agent in "${AGENT_REGISTRY[@]}"; do
+		# shellcheck disable=SC2312  # pipeline context — agent_call failures are non-fatal
+		agent_call "${_agent}" env_vars
+	done | sort -u
 }
 
 # _passthrough_source
@@ -59,29 +61,29 @@ _passthrough_registry_vars() {
 #   line. Late-binding placement lets extras win KEY=VALUE conflicts via
 #   passthrough_export's line-by-line overwrite semantics.
 _passthrough_source() {
-    if [ -n "${RIOTBOX_PASSTHROUGH_VARS:-}" ]; then
-        printf '%s' "${RIOTBOX_PASSTHROUGH_VARS}"
-    else
-        _passthrough_registry_vars
-    fi
-    if [ -n "${RIOTBOX_PASSTHROUGH_EXTRA_VARS:-}" ]; then
-        printf '\n%s' "${RIOTBOX_PASSTHROUGH_EXTRA_VARS}"
-    fi
+	if [[ -n "${RIOTBOX_PASSTHROUGH_VARS:-}" ]]; then
+		printf '%s' "${RIOTBOX_PASSTHROUGH_VARS}"
+	else
+		_passthrough_registry_vars
+	fi
+	if [[ -n "${RIOTBOX_PASSTHROUGH_EXTRA_VARS:-}" ]]; then
+		printf '\n%s' "${RIOTBOX_PASSTHROUGH_EXTRA_VARS}"
+	fi
 }
 
 # _passthrough_valid_key NAME
 #   Return 0 iff NAME is a POSIX identifier ([A-Za-z_][A-Za-z0-9_]*).
 _passthrough_valid_key() {
-    [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
+	[[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
 }
 
 # _passthrough_trim VAR_NAME
 #   Trim leading and trailing whitespace from the named variable in place.
 _passthrough_trim() {
-    local __v="${!1}"
-    __v="${__v#"${__v%%[![:space:]]*}"}"
-    __v="${__v%"${__v##*[![:space:]]}"}"
-    printf -v "$1" '%s' "${__v}"
+	local __v="${!1}"
+	__v="${__v#"${__v%%[![:space:]]*}"}"
+	__v="${__v%"${__v##*[![:space:]]}"}"
+	printf -v "$1" '%s' "${__v}"
 }
 
 # passthrough_export
@@ -90,21 +92,24 @@ _passthrough_trim() {
 #   (handled by passthrough_flags). Returns 1 (and prints to stderr) on
 #   invalid KEY — caller's `set -e` will abort the launch.
 passthrough_export() {
-    local raw line key value
-    raw="$(_passthrough_source)"
-    while IFS= read -r line; do
-        _passthrough_trim line
-        [ -z "${line}" ] && continue
-        case "${line}" in \#*) continue ;; esac
-        [[ "${line}" == *=* ]] || continue
-        key="${line%%=*}"
-        value="${line#*=}"
-        if ! _passthrough_valid_key "${key}"; then
-            printf 'passthrough-vars: invalid KEY in entry: %s\n' "${line}" >&2
-            return 1
-        fi
-        export "${key}=${value}"
-    done <<< "${raw}"
+	local raw line key value
+	raw="$(_passthrough_source)"
+	while IFS= read -r line; do
+		_passthrough_trim line
+		[[ -z "${line}" ]] && continue
+		case "${line}" in
+		\#*) continue ;;
+		*) ;;
+		esac
+		[[ "${line}" == *=* ]] || continue
+		key="${line%%=*}"
+		value="${line#*=}"
+		if ! _passthrough_valid_key "${key}"; then
+			printf 'passthrough-vars: invalid KEY in entry: %s\n' "${line}" >&2
+			return 1
+		fi
+		export "${key}=${value}"
+	done <<<"${raw}"
 }
 
 # passthrough_flags
@@ -113,33 +118,36 @@ passthrough_export() {
 #   non-empty in env; KEY=VALUE entries are always emitted (user-explicit).
 #   Returns 1 (and prints to stderr) on invalid KEY/NAME.
 passthrough_flags() {
-    local raw line key name flags=""
-    raw="$(_passthrough_source)"
-    while IFS= read -r line; do
-        _passthrough_trim line
-        [ -z "${line}" ] && continue
-        case "${line}" in \#*) continue ;; esac
-        if [[ "${line}" == *=* ]]; then
-            key="${line%%=*}"
-            if ! _passthrough_valid_key "${key}"; then
-                printf 'passthrough-vars: invalid KEY in entry: %s\n' "${line}" >&2
-                return 1
-            fi
-            flags="${flags:+${flags} }-e ${key}"
-        else
-            # shellcheck disable=SC2086
-            # Intentional word-splitting: bare-name lines may carry multiple
-            # space-separated names (backwards-compatible single-line idiom).
-            for name in ${line}; do
-                if ! _passthrough_valid_key "${name}"; then
-                    printf 'passthrough-vars: invalid NAME in entry: %s\n' "${name}" >&2
-                    return 1
-                fi
-                if [ -n "${!name:-}" ]; then
-                    flags="${flags:+${flags} }-e ${name}"
-                fi
-            done
-        fi
-    done <<< "${raw}"
-    printf '%s' "${flags}"
+	local raw line key name flags=""
+	raw="$(_passthrough_source)"
+	while IFS= read -r line; do
+		_passthrough_trim line
+		[[ -z "${line}" ]] && continue
+		case "${line}" in
+		\#*) continue ;;
+		*) ;;
+		esac
+		if [[ "${line}" == *=* ]]; then
+			key="${line%%=*}"
+			if ! _passthrough_valid_key "${key}"; then
+				printf 'passthrough-vars: invalid KEY in entry: %s\n' "${line}" >&2
+				return 1
+			fi
+			flags="${flags:+${flags} }-e ${key}"
+		else
+			# shellcheck disable=SC2086
+			# Intentional word-splitting: bare-name lines may carry multiple
+			# space-separated names (backwards-compatible single-line idiom).
+			for name in ${line}; do
+				if ! _passthrough_valid_key "${name}"; then
+					printf 'passthrough-vars: invalid NAME in entry: %s\n' "${name}" >&2
+					return 1
+				fi
+				if [[ -n "${!name:-}" ]]; then
+					flags="${flags:+${flags} }-e ${name}"
+				fi
+			done
+		fi
+	done <<<"${raw}"
+	printf '%s' "${flags}"
 }

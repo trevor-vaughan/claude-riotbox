@@ -20,11 +20,11 @@
 # it more than once during a single invocation (e.g. install.sh chained into
 # Taskfile dispatch). Make the load idempotent so we do not pay for redundant
 # disk reads or accidentally clobber state set by a caller.
-if [ "${_AGENT_REGISTRY_LOADED:-0}" = "1" ]; then
-    # shellcheck disable=SC2317  # `true` runs only when this file is *executed*
-    # (rare — it is meant to be sourced); `return` outside a function fails
-    # in that case, so the `|| true` swallows the error.
-    return 0 2>/dev/null || true
+if [[ "${_AGENT_REGISTRY_LOADED:-0}" = "1" ]]; then
+	# shellcheck disable=SC2317  # `true` runs only when this file is *executed*
+	# (rare — it is meant to be sourced); `return` outside a function fails
+	# in that case, so the `|| true` swallows the error.
+	return 0 2>/dev/null || true
 fi
 _AGENT_REGISTRY_LOADED=1
 
@@ -47,26 +47,27 @@ _agent_registry_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Manifests are pure function declarations — no side effects on source.
 AGENT_REGISTRY=()
 for _agent_manifest in "${_agent_registry_dir}"/*/manifest.sh; do
-    # Glob with no matches expands to the literal pattern; guard against it.
-    [ -f "${_agent_manifest}" ] || continue
-    _agent_dir="$(dirname "${_agent_manifest}")"
-    _agent="$(basename "${_agent_dir}")"
-    # Skip template / hidden directories.
-    case "${_agent}" in
-        _*|.*) continue ;;
-    esac
-    AGENT_REGISTRY+=("${_agent}")
-    # shellcheck source=/dev/null
-    source "${_agent_manifest}"
+	# Glob with no matches expands to the literal pattern; guard against it.
+	[[ -f "${_agent_manifest}" ]] || continue
+	_agent_dir="$(dirname "${_agent_manifest}")"
+	_agent="$(basename "${_agent_dir}")"
+	# Skip template / hidden directories.
+	case "${_agent}" in
+	_* | .*) continue ;;
+	*) ;;
+	esac
+	AGENT_REGISTRY+=("${_agent}")
+	# shellcheck source=/dev/null
+	source "${_agent_manifest}"
 done
 unset _agent _agent_dir _agent_manifest
 
-if [ "${#AGENT_REGISTRY[@]}" -eq 0 ]; then
-    echo "ERROR: no agents discovered under ${_agent_registry_dir}/*/manifest.sh" >&2
-    # shellcheck disable=SC2317  # `exit` runs only when this file is
-    # *executed* directly; `return` outside a function then fails and
-    # the fallback fires.
-    return 1 2>/dev/null || exit 1
+if [[ "${#AGENT_REGISTRY[@]}" -eq 0 ]]; then
+	echo "ERROR: no agents discovered under ${_agent_registry_dir}/*/manifest.sh" >&2
+	# shellcheck disable=SC2317  # `exit` runs only when this file is
+	# *executed* directly; `return` outside a function then fails and
+	# the fallback fires.
+	return 1 2>/dev/null || exit 1
 fi
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -74,14 +75,14 @@ fi
 # agent_is_registered <name>
 #   Exit 0 if <name> is in AGENT_REGISTRY, 1 otherwise. Quiet — no output.
 agent_is_registered() {
-    local needle="${1:-}"
-    local a
-    for a in "${AGENT_REGISTRY[@]}"; do
-        if [ "${a}" = "${needle}" ]; then
-            return 0
-        fi
-    done
-    return 1
+	local needle="${1:-}"
+	local a
+	for a in "${AGENT_REGISTRY[@]}"; do
+		if [[ "${a}" = "${needle}" ]]; then
+			return 0
+		fi
+	done
+	return 1
 }
 
 # agent_call <agent> <verb> [args...]
@@ -89,22 +90,22 @@ agent_is_registered() {
 #   both the agent and the verb up front so callers get a clear error rather
 #   than the nondescript "command not found" bash would otherwise emit.
 agent_call() {
-    local agent="${1:-}"
-    local verb="${2:-}"
-    shift 2 || true
+	local agent="${1:-}"
+	local verb="${2:-}"
+	shift 2 || true
 
-    if ! agent_is_registered "${agent}"; then
-        echo "ERROR: unknown agent: '${agent}'. Registered agents: ${AGENT_REGISTRY[*]}" >&2
-        return 2
-    fi
+	if ! agent_is_registered "${agent}"; then
+		echo "ERROR: unknown agent: '${agent}'. Registered agents: ${AGENT_REGISTRY[*]}" >&2
+		return 2
+	fi
 
-    local fn="agent_${agent}_${verb}"
-    if ! declare -F "${fn}" >/dev/null; then
-        echo "ERROR: agent '${agent}' does not implement verb '${verb}' (missing function ${fn})" >&2
-        return 2
-    fi
+	local fn="agent_${agent}_${verb}"
+	if ! declare -F "${fn}" >/dev/null; then
+		echo "ERROR: agent '${agent}' does not implement verb '${verb}' (missing function ${fn})" >&2
+		return 2
+	fi
 
-    "${fn}" "$@"
+	"${fn}" "$@"
 }
 
 # agent_registry_csv
@@ -112,6 +113,6 @@ agent_call() {
 #   messages to show "must be one of: claude, opencode" without the caller
 #   having to re-stringify the array.
 agent_registry_csv() {
-    local IFS=,
-    printf '%s' "${AGENT_REGISTRY[*]}"
+	local IFS=,
+	printf '%s' "${AGENT_REGISTRY[*]}"
 }

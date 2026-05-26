@@ -9,7 +9,6 @@ vars:
 # refactor of the mount-suffix logic could silently degrade either mode.
 
 testcases:
-
   - name: RIOTBOX_READONLY=1 produces :ro,z mount suffixes for a single project
     steps:
       - type: exec

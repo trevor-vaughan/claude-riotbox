@@ -17,21 +17,22 @@
 #     with 10-, 20-, etc. to control ordering.
 
 startup_scripts_run() {
-    local dir="${HOME}/.config/riotbox/startup_scripts"
-    [ -d "${dir}" ] || return 0
+	local dir="${HOME}/.config/riotbox/startup_scripts"
+	[[ -d "${dir}" ]] || return 0
 
-    local script
-    while IFS= read -r -d '' script; do
-        if [ ! -x "${script}" ]; then
-            echo "  [startup_scripts] Skipping ${script##*/}: not executable" >&2
-            continue
-        fi
-        echo "  [startup_scripts] Running ${script##*/}..."
-        local rc=0
-        "${script}" || rc=$?
-        if [ "${rc}" -ne 0 ]; then
-            echo "  [startup_scripts] WARN: ${script##*/} exited with status ${rc}" >&2
-        fi
-    done < <(find "${dir}" -maxdepth 1 -name '*.sh' -print0 | sort -z)
-    return 0
+	local script
+	# shellcheck disable=SC2312  # find return codes are informational; sort/done handle EOF correctly
+	while IFS= read -r -d '' script; do
+		if [[ ! -x "${script}" ]]; then
+			echo "  [startup_scripts] Skipping ${script##*/}: not executable" >&2
+			continue
+		fi
+		echo "  [startup_scripts] Running ${script##*/}..."
+		local rc=0
+		"${script}" || rc=$?
+		if [[ "${rc}" -ne 0 ]]; then
+			echo "  [startup_scripts] WARN: ${script##*/} exited with status ${rc}" >&2
+		fi
+	done < <(find "${dir}" -maxdepth 1 -name '*.sh' -print0 | sort -z)
+	return 0
 }

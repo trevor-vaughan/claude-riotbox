@@ -30,47 +30,47 @@ LLM_EMAIL_LEGACY_RIOTBOX="riotbox@local"
 # profile. Call this BEFORE any `git init` so even repo creation is isolated.
 # Sets/exports: GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM.
 setup_git_test_profile() {
-    local base="${1}"
-    export GIT_CONFIG_GLOBAL="${base}/isolated.gitconfig"
-    export GIT_CONFIG_NOSYSTEM=1
-    # checkpoint.sh derives its backup root from XDG_DATA_HOME (via
-    # resolve_projects); sandbox it so checkpoint backups land under the
-    # test dir instead of the developer's real ~/.local/share/riotbox.
-    export XDG_DATA_HOME="${base}/xdg"
-    git config --global user.name "${HUMAN_NAME}"
-    git config --global user.email "${HUMAN_EMAIL}"
-    git config --global init.defaultBranch main
-    git config --global commit.gpgsign false
-    git config --global tag.gpgsign false
+	local base="${1}"
+	export GIT_CONFIG_GLOBAL="${base}/isolated.gitconfig"
+	export GIT_CONFIG_NOSYSTEM=1
+	# checkpoint.sh derives its backup root from XDG_DATA_HOME (via
+	# resolve_projects); sandbox it so checkpoint backups land under the
+	# test dir instead of the developer's real ~/.local/share/riotbox.
+	export XDG_DATA_HOME="${base}/xdg"
+	git config --global user.name "${HUMAN_NAME}"
+	git config --global user.email "${HUMAN_EMAIL}"
+	git config --global init.defaultBranch main
+	git config --global commit.gpgsign false
+	git config --global tag.gpgsign false
 }
 
 # Create a test directory with a git repo and optional bare remote.
 # Sets: TEST_DIR, REPO_DIR, BARE_DIR, GIT_CONFIG_GLOBAL
 init_test_repo() {
-    TEST_DIR="$(mktemp -d)"
-    REPO_DIR="${TEST_DIR}/project"
-    BARE_DIR="${TEST_DIR}/remote.git"
+	TEST_DIR="$(mktemp -d)"
+	REPO_DIR="${TEST_DIR}/project"
+	BARE_DIR="${TEST_DIR}/remote.git"
 
-    # Isolate from host git config before creating any repo.
-    setup_git_test_profile "${TEST_DIR}"
+	# Isolate from host git config before creating any repo.
+	setup_git_test_profile "${TEST_DIR}"
 
-    git init --bare --initial-branch=main "${BARE_DIR}" >/dev/null 2>&1
-    git init --initial-branch=main "${REPO_DIR}" >/dev/null 2>&1
-    cd "${REPO_DIR}"
-    git config user.name "${HUMAN_NAME}"
-    git config user.email "${HUMAN_EMAIL}"
-    git config init.defaultBranch main
-    git remote add origin "${BARE_DIR}"
+	git init --bare --initial-branch=main "${BARE_DIR}" >/dev/null 2>&1
+	git init --initial-branch=main "${REPO_DIR}" >/dev/null 2>&1
+	cd "${REPO_DIR}"
+	git config user.name "${HUMAN_NAME}"
+	git config user.email "${HUMAN_EMAIL}"
+	git config init.defaultBranch main
+	git remote add origin "${BARE_DIR}"
 }
 
 # Create a plain working directory that is NOT a git repo, under the isolated
 # signing-disabled profile. Used to exercise checkpoint.sh's non-git path.
 # Sets: TEST_DIR, WORK_DIR (and exports the test git profile).
 init_test_workdir() {
-    TEST_DIR="$(mktemp -d)"
-    WORK_DIR="${TEST_DIR}/project"
-    mkdir -p "${WORK_DIR}"
-    setup_git_test_profile "${TEST_DIR}"
+	TEST_DIR="$(mktemp -d)"
+	WORK_DIR="${TEST_DIR}/project"
+	mkdir -p "${WORK_DIR}"
+	setup_git_test_profile "${TEST_DIR}"
 }
 
 # Run a command under a pseudo-terminal so the child sees an interactive stdin
@@ -82,8 +82,9 @@ init_test_workdir() {
 # caller; the child inherits it.
 # Usage: run_under_pty "<input>" COMMAND [ARGS...]
 run_under_pty() {
-    local input="$1"; shift
-    PTY_INPUT="${input}" python3 - "$@" <<'PY'
+	local input="$1"
+	shift
+	PTY_INPUT="${input}" python3 - "$@" <<'PY'
 import os, pty, sys, time
 
 argv = sys.argv[1:]
@@ -125,62 +126,62 @@ PY
 # stub prints "STUB-LAUNCH reached: <args>" and exits 0. Echoes the root path.
 # Usage: fake_root="$(make_fake_root "<real_riotbox_dir>" "<base_dir>")"
 make_fake_root() {
-    local real="$1" base="$2"
-    local root="${base}/fakeroot"
-    mkdir -p "${root}/libexec"
-    ln -s "${real}/scripts" "${root}/scripts"
-    ln -s "${real}/agents"  "${root}/agents"
-    ln -s "${real}/libexec/run.sh"        "${root}/libexec/run.sh"
-    ln -s "${real}/libexec/checkpoint.sh" "${root}/libexec/checkpoint.sh"
-    cat > "${root}/libexec/launch.sh" <<'STUB'
+	local real="$1" base="$2"
+	local root="${base}/fakeroot"
+	mkdir -p "${root}/libexec"
+	ln -s "${real}/scripts" "${root}/scripts"
+	ln -s "${real}/agents" "${root}/agents"
+	ln -s "${real}/libexec/run.sh" "${root}/libexec/run.sh"
+	ln -s "${real}/libexec/checkpoint.sh" "${root}/libexec/checkpoint.sh"
+	cat >"${root}/libexec/launch.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "STUB-LAUNCH reached: $*"
 exit 0
 STUB
-    chmod +x "${root}/libexec/launch.sh"
-    printf '%s\n' "${root}"
+	chmod +x "${root}/libexec/launch.sh"
+	printf '%s\n' "${root}"
 }
 
 human_commit() {
-    local msg="${1}"
-    echo "${msg}" >> history.txt
-    git add -A
-    GIT_AUTHOR_NAME="${HUMAN_NAME}" \
-    GIT_AUTHOR_EMAIL="${HUMAN_EMAIL}" \
-    GIT_COMMITTER_NAME="${HUMAN_NAME}" \
-    GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
-        git commit -m "${msg}" --allow-empty-message >/dev/null
+	local msg="${1}"
+	echo "${msg}" >>history.txt
+	git add -A
+	GIT_AUTHOR_NAME="${HUMAN_NAME}" \
+		GIT_AUTHOR_EMAIL="${HUMAN_EMAIL}" \
+		GIT_COMMITTER_NAME="${HUMAN_NAME}" \
+		GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
+		git commit -m "${msg}" --allow-empty-message >/dev/null
 }
 
 # Commit using the current container identity (LLM_NAME / LLM_EMAIL).
 llm_commit() {
-    local msg="${1}"
-    echo "${msg}" >> history.txt
-    git add -A
-    GIT_AUTHOR_NAME="${LLM_NAME}" \
-    GIT_AUTHOR_EMAIL="${LLM_EMAIL}" \
-    GIT_COMMITTER_NAME="${LLM_NAME}" \
-    GIT_COMMITTER_EMAIL="${LLM_EMAIL}" \
-        git commit -m "${msg}" --allow-empty-message >/dev/null
+	local msg="${1}"
+	echo "${msg}" >>history.txt
+	git add -A
+	GIT_AUTHOR_NAME="${LLM_NAME}" \
+		GIT_AUTHOR_EMAIL="${LLM_EMAIL}" \
+		GIT_COMMITTER_NAME="${LLM_NAME}" \
+		GIT_COMMITTER_EMAIL="${LLM_EMAIL}" \
+		git commit -m "${msg}" --allow-empty-message >/dev/null
 }
 
 # Commit using an arbitrary identity — used in tests that need to exercise
 # the legacy email recognition paths in reown-commits.sh / pre-push.
 identity_commit() {
-    local name="${1}"
-    local email="${2}"
-    local msg="${3}"
-    echo "${msg}" >> history.txt
-    git add -A
-    GIT_AUTHOR_NAME="${name}" \
-    GIT_AUTHOR_EMAIL="${email}" \
-    GIT_COMMITTER_NAME="${name}" \
-    GIT_COMMITTER_EMAIL="${email}" \
-        git commit -m "${msg}" --allow-empty-message >/dev/null
+	local name="${1}"
+	local email="${2}"
+	local msg="${3}"
+	echo "${msg}" >>history.txt
+	git add -A
+	GIT_AUTHOR_NAME="${name}" \
+		GIT_AUTHOR_EMAIL="${email}" \
+		GIT_COMMITTER_NAME="${name}" \
+		GIT_COMMITTER_EMAIL="${email}" \
+		git commit -m "${msg}" --allow-empty-message >/dev/null
 }
 
 count_by_author() {
-    local email="${1}"
-    shift
-    git log "$@" --author="${email}" --format='%H' | wc -l | tr -d ' '
+	local email="${1}"
+	shift
+	git log "$@" --author="${email}" --format='%H' | wc -l | tr -d ' '
 }

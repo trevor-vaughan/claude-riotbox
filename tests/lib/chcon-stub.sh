@@ -32,10 +32,10 @@ PATH="${CHCON_STUB_DIR}:${PATH}"
 export PATH
 
 chcon_marker_clean() {
-    if [ ! -s "${CHCON_MARKER}" ]; then
-        echo "CHCON_NOT_CALLED"
-    else
-        echo "CHCON_WAS_CALLED:"
-        cat "${CHCON_MARKER}"
-    fi
+	if [[ ! -s "${CHCON_MARKER}" ]]; then
+		echo "CHCON_NOT_CALLED"
+	else
+		echo "CHCON_WAS_CALLED:"
+		cat "${CHCON_MARKER}"
+	fi
 }

@@ -26,9 +26,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-if [ $# -ne 2 ]; then
-    echo "Usage: $0 <host-claude-dir> <session-dir>" >&2
-    exit 1
+if [[ $# -ne 2 ]]; then
+	echo "Usage: $0 <host-claude-dir> <session-dir>" >&2
+	exit 1
 fi
 
 HOST_CLAUDE_DIR="$1"
@@ -41,8 +41,8 @@ CONTAINER_HOME="/home/llm"
 # Bind-mounted RW as a nested mount inside the session dir so that token
 # refresh writes go directly to the host file. OAuth uses rotating refresh
 # tokens, so keeping the host file current is essential for subsequent runs.
-if [ -f "${HOST_CLAUDE_DIR}/.credentials.json" ]; then
-    echo "-v ${HOST_CLAUDE_DIR}/.credentials.json:${CONTAINER_HOME}/.claude/.credentials.json:z"
+if [[ -f "${HOST_CLAUDE_DIR}/.credentials.json" ]]; then
+	echo "-v ${HOST_CLAUDE_DIR}/.credentials.json:${CONTAINER_HOME}/.claude/.credentials.json:z"
 fi
 
 # ── Config copy (.claude.json) ────────────────────────────────────────────────
@@ -50,10 +50,10 @@ fi
 # Contains account metadata needed for auth, plus host-specific UI state that
 # the container shouldn't permanently modify. Copied writable so Claude Code
 # can update oauthAccount fields during token refresh without error.
-if [ -f "${HOME}/.claude.json" ]; then
-    dest="${SESSION_DIR}/.claude.json"
-    cp "${HOME}/.claude.json" "${dest}"
-    chmod 600 "${dest}"
+if [[ -f "${HOME}/.claude.json" ]]; then
+	dest="${SESSION_DIR}/.claude.json"
+	cp "${HOME}/.claude.json" "${dest}"
+	chmod 600 "${dest}"
 fi
 
 # ── User CLAUDE.md ───────────────────────────────────────────────────────────
@@ -61,21 +61,21 @@ fi
 # (/etc/claude-code/CLAUDE.md) inside the container, so ~/.claude/CLAUDE.md is
 # free for the user's personal instructions. Copy from host if present; remove
 # stale copies if the host file was deleted.
-if [ -f "${HOST_CLAUDE_DIR}/CLAUDE.md" ]; then
-    cp "${HOST_CLAUDE_DIR}/CLAUDE.md" "${SESSION_DIR}/CLAUDE.md"
+if [[ -f "${HOST_CLAUDE_DIR}/CLAUDE.md" ]]; then
+	cp "${HOST_CLAUDE_DIR}/CLAUDE.md" "${SESSION_DIR}/CLAUDE.md"
 else
-    rm -f "${SESSION_DIR}/CLAUDE.md"
+	rm -f "${SESSION_DIR}/CLAUDE.md"
 fi
 
 # ── User rules ───────────────────────────────────────────────────────────────
 # Personal rules in ~/.claude/rules/ apply to every project. Path-scoped rules
 # use glob frontmatter and load on demand. Re-copy each launch so
 # added/removed rules don't linger.
-if [ -d "${HOST_CLAUDE_DIR}/rules" ]; then
-    rm -rf "${SESSION_DIR}/rules"
-    cp -rL "${HOST_CLAUDE_DIR}/rules" "${SESSION_DIR}/"
+if [[ -d "${HOST_CLAUDE_DIR}/rules" ]]; then
+	rm -rf "${SESSION_DIR}/rules"
+	cp -rL "${HOST_CLAUDE_DIR}/rules" "${SESSION_DIR}/"
 else
-    rm -rf "${SESSION_DIR}/rules"
+	rm -rf "${SESSION_DIR}/rules"
 fi
 
 # ── User extension directories ────────────────────────────────────────────────
@@ -100,13 +100,14 @@ fi
 # destination when the source has been removed so it does not outlive the
 # host.
 for _user_dir in skills agents commands output-styles; do
-    rm -rf "${SESSION_DIR:?}/${_user_dir}"
-    if [ -d "${HOST_CLAUDE_DIR}/${_user_dir}" ]; then
-        ( cd "${HOST_CLAUDE_DIR}" \
-            && find -L "${_user_dir}" ! -type l -print0 \
-            | tar -ch --null --no-recursion --files-from=- -f - \
-        ) | tar -xf - -C "${SESSION_DIR}/" --no-same-owner
-    fi
+	rm -rf "${SESSION_DIR:?}/${_user_dir}"
+	if [[ -d "${HOST_CLAUDE_DIR}/${_user_dir}" ]]; then
+		(
+			cd "${HOST_CLAUDE_DIR}" &&
+				find -L "${_user_dir}" ! -type l -print0 |
+				tar -ch --null --no-recursion --files-from=- -f -
+		) | tar -xf - -C "${SESSION_DIR}/" --no-same-owner
+	fi
 done
 unset _user_dir
 
@@ -116,19 +117,19 @@ unset _user_dir
 # chmod +x is explicit: cp preserves bits from the source, but the source may
 # not be executable (e.g. created without chmod +x), so we enforce it here.
 # If the source has been removed, delete any stale copy from the session dir.
-if [ -f "${HOST_CLAUDE_DIR}/statusline-command.sh" ]; then
-    cp "${HOST_CLAUDE_DIR}/statusline-command.sh" "${SESSION_DIR}/statusline-command.sh"
-    chmod +x "${SESSION_DIR}/statusline-command.sh"
+if [[ -f "${HOST_CLAUDE_DIR}/statusline-command.sh" ]]; then
+	cp "${HOST_CLAUDE_DIR}/statusline-command.sh" "${SESSION_DIR}/statusline-command.sh"
+	chmod +x "${SESSION_DIR}/statusline-command.sh"
 else
-    rm -f "${SESSION_DIR}/statusline-command.sh"
+	rm -f "${SESSION_DIR}/statusline-command.sh"
 fi
 
 # ── Host plugins (read-only mount) ───────────────────────────────────────────
 # Mounted at /home/llm/.host-plugins inside the container. plugin-setup.sh
 # copies contents into ~/.claude/plugins/ at startup, with host plugins taking
 # highest precedence (overwriting pre-staged defaults on conflict).
-if [ -d "${HOST_CLAUDE_DIR}/plugins" ]; then
-    echo "-v ${HOST_CLAUDE_DIR}/plugins:${CONTAINER_HOME}/.host-plugins:ro,z"
+if [[ -d "${HOST_CLAUDE_DIR}/plugins" ]]; then
+	echo "-v ${HOST_CLAUDE_DIR}/plugins:${CONTAINER_HOME}/.host-plugins:ro,z"
 else
-    echo "Notice: ~/.claude/plugins not found on host — host plugin copy will be skipped." >&2
+	echo "Notice: ~/.claude/plugins not found on host — host plugin copy will be skipped." >&2
 fi

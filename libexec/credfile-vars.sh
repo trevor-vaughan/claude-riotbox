@@ -29,32 +29,32 @@ AWS_CONFIG_FILE:/run/secrets/aws-config \
 KUBECONFIG:/run/secrets/kubeconfig"
 
 credfile_flags() {
-    local vars="${RIOTBOX_CREDFILE_VARS:-${RIOTBOX_CREDFILE_VARS_DEFAULT}}"
-    local entry name container_path host_path flags=""
-    for entry in ${vars}; do
-        name="${entry%%:*}"
-        container_path="${entry#*:}"
-        if [ -z "${name}" ] || [ "${name}" = "${container_path}" ]; then
-            echo "Notice: malformed credfile entry '${entry}', skipping" >&2
-            continue
-        fi
-        host_path="${!name:-}"
-        if [ -z "${host_path}" ]; then
-            continue
-        fi
-        if [ ! -e "${host_path}" ]; then
-            echo "Notice: ${name}=${host_path} does not exist, not mounting" >&2
-            continue
-        fi
-        if [ ! -f "${host_path}" ]; then
-            echo "Notice: ${name}=${host_path} is not a regular file, not mounting" >&2
-            continue
-        fi
-        if [ -z "${flags}" ]; then
-            flags="-v ${host_path}:${container_path}:ro,z -e ${name}=${container_path}"
-        else
-            flags="${flags} -v ${host_path}:${container_path}:ro,z -e ${name}=${container_path}"
-        fi
-    done
-    printf '%s' "${flags}"
+	local vars="${RIOTBOX_CREDFILE_VARS:-${RIOTBOX_CREDFILE_VARS_DEFAULT}}"
+	local entry name container_path host_path flags=""
+	for entry in ${vars}; do
+		name="${entry%%:*}"
+		container_path="${entry#*:}"
+		if [[ -z "${name}" ]] || [[ "${name}" = "${container_path}" ]]; then
+			echo "Notice: malformed credfile entry '${entry}', skipping" >&2
+			continue
+		fi
+		host_path="${!name:-}"
+		if [[ -z "${host_path}" ]]; then
+			continue
+		fi
+		if [[ ! -e "${host_path}" ]]; then
+			echo "Notice: ${name}=${host_path} does not exist, not mounting" >&2
+			continue
+		fi
+		if [[ ! -f "${host_path}" ]]; then
+			echo "Notice: ${name}=${host_path} is not a regular file, not mounting" >&2
+			continue
+		fi
+		if [[ -z "${flags}" ]]; then
+			flags="-v ${host_path}:${container_path}:ro,z -e ${name}=${container_path}"
+		else
+			flags="${flags} -v ${host_path}:${container_path}:ro,z -e ${name}=${container_path}"
+		fi
+	done
+	printf '%s' "${flags}"
 }

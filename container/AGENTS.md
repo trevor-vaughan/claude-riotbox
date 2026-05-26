@@ -67,7 +67,7 @@ You are autonomous by default, but autonomy is not a license to guess. Stop and 
 
 ## Testing & Automation
 
-- Use `task` (https://taskfile.dev) for build/test/lint. Don't bypass it with raw commands. Create one if missing.
+- Use `task` (<https://taskfile.dev>) for build/test/lint. Don't bypass it with raw commands. Create one if missing.
 - Unit tests: language-native frameworks. Integration/E2E tests: Venom (YAML suites).
 - Write meaningful tests with negative cases. For security-sensitive code, test both positive and negative paths.
 - If the project produces a deployable artifact, write container-driven integration tests that build and exercise it. Use podman-compose (preferred, runs in user space) or docker-compose for complex systems. If no container runtime is available, scaffold the tests and ask the user to run them.

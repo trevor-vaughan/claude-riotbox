@@ -3,6 +3,9 @@
 
 .claude/
 
+# Megalinter
+megalinter-reports/
+
 # Superpowers session artifacts
 docs/superpowers/
 

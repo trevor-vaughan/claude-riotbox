@@ -16,7 +16,7 @@ _AGENT_OPENCODE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Name of the binary on PATH inside the container.
 agent_opencode_real_binary() {
-    printf 'opencode\n'
+	printf 'opencode\n'
 }
 
 # Argv for non-interactive "run with prompt" mode. opencode uses a cobra-style
@@ -28,64 +28,64 @@ agent_opencode_real_binary() {
 # argv tokens cannot contain NUL bytes (execve invariant). See
 # docs/maintainer/adding-an-agent.md for the full contract.
 agent_opencode_run_argv() {
-    local prompt="${1:?run_argv requires a prompt argument}"
-    printf '%s\0' opencode run "${prompt}"
+	local prompt="${1:?run_argv requires a prompt argument}"
+	printf '%s\0' opencode run "${prompt}"
 }
 
 # Argv for "continue last session". opencode's continuation is also a
 # `run` subcommand flag.
 agent_opencode_resume_argv() {
-    printf '%s\0' opencode run --continue
+	printf '%s\0' opencode run --continue
 }
 
 # Argv for read-only audit mode. Same shape as run — the read-only project
 # mount is a launch-time concern, not an agent flag.
 agent_opencode_audit_argv() {
-    local prompt="${1:?audit_argv requires a prompt argument}"
-    printf '%s\0' opencode run "${prompt}"
+	local prompt="${1:?audit_argv requires a prompt argument}"
+	printf '%s\0' opencode run "${prompt}"
 }
 
 # Wrapper injection rules. opencode rejects --dangerously-skip-permissions at
 # the root level — it must follow the `run` subcommand. When `run` is absent
 # (e.g. `opencode auth login`, `opencode --version`) we leave argv untouched.
 agent_opencode_wrapper_inject() {
-    local saw_run=0
-    local arg
-    for arg in "$@"; do
-        if [ "${saw_run}" -eq 0 ] && [ "${arg}" = "run" ]; then
-            saw_run=1
-            printf '%s\0' "${arg}"
-            printf '%s\0' --dangerously-skip-permissions
-            continue
-        fi
-        printf '%s\0' "${arg}"
-    done
-    # Env hints go to the wrapper-allocated sidecar file (one KEY=VAL per
-    # line). The wrapper reads + exports it after we return. Stderr is
-    # reserved for user-facing diagnostics.
-    if [ "${saw_run}" -eq 1 ] && [ -n "${RIOTBOX_INJECT_ENV_FILE:-}" ]; then
-        printf 'CI=true\n' >> "${RIOTBOX_INJECT_ENV_FILE}"
-    fi
+	local saw_run=0
+	local arg
+	for arg in "$@"; do
+		if [[ "${saw_run}" -eq 0 ]] && [[ "${arg}" = "run" ]]; then
+			saw_run=1
+			printf '%s\0' "${arg}"
+			printf '%s\0' --dangerously-skip-permissions
+			continue
+		fi
+		printf '%s\0' "${arg}"
+	done
+	# Env hints go to the wrapper-allocated sidecar file (one KEY=VAL per
+	# line). The wrapper reads + exports it after we return. Stderr is
+	# reserved for user-facing diagnostics.
+	if [[ "${saw_run}" -eq 1 ]] && [[ -n "${RIOTBOX_INJECT_ENV_FILE:-}" ]]; then
+		printf 'CI=true\n' >>"${RIOTBOX_INJECT_ENV_FILE}"
+	fi
 }
 
 # Container-side runtime setup. setup.sh places AGENTS.md and a merged
 # opencode.jsonc (combining host opencode.json + opencode.jsonc with
 # riotbox-mandatory overrides) on every container start; both are idempotent.
 agent_opencode_container_setup() {
-    # shellcheck source=./setup.sh
-    source "${_AGENT_OPENCODE_DIR}/setup.sh"
-    opencode_setup
+	# shellcheck source=./setup.sh
+	source "${_AGENT_OPENCODE_DIR}/setup.sh"
+	opencode_setup
 }
 
 # Host-side config sync. sync-settings.sh copies the host opencode config
 # tree into the session dir and emits volume flags (including the auth.json
 # RW bind when present).
 agent_opencode_host_sync() {
-    local session_dir="${1:?host_sync requires a session_dir argument}"
-    "${_AGENT_OPENCODE_DIR}/sync-settings.sh" \
-        "${HOME}/.config/opencode" \
-        "${HOME}/.local/share/opencode" \
-        "${session_dir}"
+	local session_dir="${1:?host_sync requires a session_dir argument}"
+	"${_AGENT_OPENCODE_DIR}/sync-settings.sh" \
+		"${HOME}/.config/opencode" \
+		"${HOME}/.local/share/opencode" \
+		"${session_dir}"
 }
 
 # Print the env var names this agent reads (one per line). The launcher
@@ -97,7 +97,7 @@ agent_opencode_host_sync() {
 # configured to use that provider. We list every key opencode supports
 # upstream so users can switch providers without re-editing this manifest.
 agent_opencode_env_vars() {
-    cat <<'EOF'
+	cat <<'EOF'
 ANTHROPIC_API_KEY
 OPENAI_API_KEY
 OPENROUTER_API_KEY

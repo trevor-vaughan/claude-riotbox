@@ -46,9 +46,10 @@ set -euo pipefail
 #
 # Re-set every run: setcap is idempotent and the rootid only fits the running
 # user, so a stale v3 cap from a different host uid would silently no-op.
-if [ -e /usr/bin/newuidmap ] && [ -e /usr/bin/newgidmap ]; then
-    sudo setcap -n "$(id -u)" cap_setuid+ep /usr/bin/newuidmap
-    sudo setcap -n "$(id -u)" cap_setgid+ep /usr/bin/newgidmap
+if [[ -e /usr/bin/newuidmap ]] && [[ -e /usr/bin/newgidmap ]]; then
+	_uid="$(id -u)"
+	sudo setcap -n "${_uid}" cap_setuid+ep /usr/bin/newuidmap
+	sudo setcap -n "${_uid}" cap_setgid+ep /usr/bin/newgidmap
 fi
 
 # --- 2. /etc/subuid and /etc/subgid alignment ---------------------------------
@@ -63,8 +64,8 @@ fi
 #   * The user's own uid cannot be subordinate. newuidmap rejects /etc/
 #     sub{u,g}id lines that include the calling user's uid. Split around it.
 emit_subid_lines() {
-    local map_file="$1" excluded="$2"
-    awk -v ex="${excluded}" '
+	local map_file="$1" excluded="$2"
+	awk -v ex="${excluded}" '
         # Each /proc/*_map entry covers inside uids [$1 .. $1+$3-1].
         { ranges[NR, "lo"] = $1; ranges[NR, "hi"] = $1 + $3 - 1; n = NR }
         END {
@@ -106,27 +107,29 @@ emit_subid_lines() {
 }
 
 write_subid_file() {
-    local target="$1" map_file="$2" excluded_id="$3" kind="$4"
-    local lines
-    lines="$(emit_subid_lines "${map_file}" "${excluded_id}")"
-    if [ -z "${lines}" ]; then
-        echo "nested-podman-setup: no usable ${kind} range in ${map_file} after excluding ${excluded_id}" >&2
-        return 1
-    fi
-    local user_name
-    user_name="$(id -un)"
-    local rendered=""
-    while IFS=' ' read -r start length; do
-        [ -z "${start}" ] && continue
-        rendered="${rendered}${user_name}:${start}:${length}"$'\n'
-    done <<< "${lines}"
-    sudo tee "${target}" >/dev/null <<EOF
+	local target="$1" map_file="$2" excluded_id="$3" kind="$4"
+	local lines
+	lines="$(emit_subid_lines "${map_file}" "${excluded_id}")"
+	if [[ -z "${lines}" ]]; then
+		echo "nested-podman-setup: no usable ${kind} range in ${map_file} after excluding ${excluded_id}" >&2
+		return 1
+	fi
+	local user_name
+	user_name="$(id -un)"
+	local rendered=""
+	while IFS=' ' read -r start length; do
+		[[ -z "${start}" ]] && continue
+		rendered="${rendered}${user_name}:${start}:${length}"$'\n'
+	done <<<"${lines}"
+	sudo tee "${target}" >/dev/null <<EOF
 ${rendered}
 EOF
 }
 
-write_subid_file /etc/subuid /proc/self/uid_map "$(id -u)" UID
-write_subid_file /etc/subgid /proc/self/gid_map "$(id -g)" GID
+_host_uid="$(id -u)"
+_host_gid="$(id -g)"
+write_subid_file /etc/subuid /proc/self/uid_map "${_host_uid}" UID
+write_subid_file /etc/subgid /proc/self/gid_map "${_host_gid}" GID
 
 # --- 3. inner storage driver: vfs ---------------------------------------------
 # The Dockerfile pre-installs overlay+fuse-overlayfs in
@@ -138,7 +141,7 @@ write_subid_file /etc/subgid /proc/self/gid_map "$(id -g)" GID
 # Done at runtime (not in the Dockerfile) so non-nested mode keeps the
 # faster overlay storage when the user is using podman host-side caches.
 mkdir -p "${HOME}/.config/containers"
-cat > "${HOME}/.config/containers/storage.conf" <<'EOF'
+cat >"${HOME}/.config/containers/storage.conf" <<'EOF'
 [storage]
 driver = "vfs"
 EOF

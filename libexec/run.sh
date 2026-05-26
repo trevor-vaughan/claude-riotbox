@@ -4,8 +4,8 @@ set -euo pipefail
 # first. Required env: CONTAINER_CMD, IMAGE_NAME, ROOT_DIR
 # Arguments: prompt [projects...]
 
-if [ $# -eq 0 ]; then
-    cat >&2 <<EOF
+if [[ $# -eq 0 ]]; then
+	cat >&2 <<EOF
 Error: a prompt is required.
 
 Usage:
@@ -20,7 +20,7 @@ Examples:
   riotbox run "add error handling to the API" . ../shared-lib
   riotbox run "refactor the auth module" .
 EOF
-    exit 1
+	exit 1
 fi
 
 task_prompt="$1"
@@ -35,14 +35,17 @@ resolve_projects "${RIOTBOX_PROJECTS}"
 # Resolve the agent's argv via the registry. The previous implementation
 # had a per-agent case statement here; with the registry every agent
 # advertises its own argv shape and adding one is a manifest edit.
-# shellcheck source=../agents/registry.sh
+# shellcheck source=../agents/registry.sh disable=SC1091  # source path resolves only from libexec/; safe to skip follow
 source "${ROOT_DIR}/agents/registry.sh"
 agent="${RIOTBOX_AGENT:-claude}"
+# shellcheck disable=SC2310  # if-condition handles non-zero; set -e suppression is intentional
 if ! agent_is_registered "${agent}"; then
-    echo "ERROR: unknown RIOTBOX_AGENT: '${agent}'" >&2
-    echo "       Registered agents: ${AGENT_REGISTRY[*]}" >&2
-    exit 1
+	echo "ERROR: unknown RIOTBOX_AGENT: '${agent}'" >&2
+	# shellcheck disable=SC2154  # AGENT_REGISTRY is set by agents/registry.sh (sourced above)
+	echo "       Registered agents: ${AGENT_REGISTRY[*]}" >&2
+	exit 1
 fi
+# shellcheck disable=SC2312  # agent_call prints; mapfile captures its stdout deliberately
 mapfile -d '' -t agent_argv < <(agent_call "${agent}" run_argv "${task_prompt}")
 
 echo "Launching ${agent} in riotbox..."
