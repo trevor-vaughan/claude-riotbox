@@ -205,6 +205,97 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "missing_stubs=pass"
 
+  - name: Preserves session dirs and backups on re-install (no data loss)
+    steps:
+      - type: exec
+        script: |
+          set -e
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          "{{.riotbox_dir}}/install.sh" >/dev/null
+          # Seed a fake session and a fake backup that an upgrade must NOT
+          # touch. Sessions are real once they carry a .projects file
+          # (mount-projects.sh writes it at launch); backups live under
+          # backups/<project>.git/.
+          mkdir -p "${XDG_DATA_HOME}/riotbox/myproj"
+          echo "/path/to/myproj" > "${XDG_DATA_HOME}/riotbox/myproj/.projects"
+          echo "session-data" > "${XDG_DATA_HOME}/riotbox/myproj/important.txt"
+          mkdir -p "${XDG_DATA_HOME}/riotbox/backups/myproj.git/refs"
+          echo "ref-data" > "${XDG_DATA_HOME}/riotbox/backups/myproj.git/refs/heads"
+          # Reinstall. The app tree gets refreshed but session + backup
+          # must remain untouched.
+          "{{.riotbox_dir}}/install.sh" >/dev/null
+          test -f "${XDG_DATA_HOME}/riotbox/myproj/.projects" \
+              || { echo "BAD: session .projects gone after reinstall" >&2; exit 1; }
+          test "$(cat "${XDG_DATA_HOME}/riotbox/myproj/important.txt")" = "session-data" \
+              || { echo "BAD: session payload lost" >&2; exit 1; }
+          test "$(cat "${XDG_DATA_HOME}/riotbox/backups/myproj.git/refs/heads")" = "ref-data" \
+              || { echo "BAD: backup payload lost" >&2; exit 1; }
+          # And the marker file is in place so the next upgrade is
+          # unambiguous about which tree it owns.
+          test -f "${XDG_DATA_HOME}/riotbox/.riotbox-app" \
+              || { echo "BAD: app marker missing" >&2; exit 1; }
+          echo "data_preserved=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "data_preserved=pass"
+
+  - name: Refuses to install over a non-RiotBox data dir
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          # User has populated the riotbox data dir with their own stuff
+          # before installing — no marker, no app paths. We must NOT wipe
+          # it; we must refuse with an actionable error.
+          mkdir -p "${XDG_DATA_HOME}/riotbox/their-data"
+          echo "their work" > "${XDG_DATA_HOME}/riotbox/their-data/notes.txt"
+          out="$("{{.riotbox_dir}}/install.sh" 2>&1 || echo "EXIT=$?")"
+          echo "${out}"
+          case "${out}" in
+              *"is not a RiotBox install tree"*"EXIT=1"*) ;;
+              *) echo "BAD: should have refused" >&2; exit 1 ;;
+          esac
+          test "$(cat "${XDG_DATA_HOME}/riotbox/their-data/notes.txt")" = "their work" \
+              || { echo "BAD: their data was modified" >&2; exit 1; }
+          echo "refusal=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "refusal=pass"
+
+  - name: Accepts a positional BIN_DIR argument
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          CUSTOM_BIN="${root}/customer-bin"
+          "{{.riotbox_dir}}/install.sh" "${CUSTOM_BIN}" >/dev/null
+          # Symlink lands in the custom dir, not the default ~/.local/bin.
+          test -L "${CUSTOM_BIN}/riotbox" \
+              || { echo "BAD: symlink missing from ${CUSTOM_BIN}" >&2; exit 1; }
+          test ! -e "${HOME}/.local/bin/riotbox" \
+              || { echo "BAD: default ~/.local/bin/riotbox should be absent" >&2; exit 1; }
+          real="$(readlink -f "${CUSTOM_BIN}/riotbox")"
+          test "${real}" = "${XDG_DATA_HOME}/riotbox/bin/riotbox" \
+              || { echo "BAD: symlink target wrong" >&2; exit 1; }
+          echo "bin_dir_arg=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "bin_dir_arg=pass"
+
   - name: Falls back to unknown version gracefully when VERSION is absent
     steps:
       - type: exec

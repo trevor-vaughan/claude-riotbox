@@ -79,6 +79,18 @@ echo "-v /home/llm/.config"
 echo "-v /home/llm/.cache"
 MOUNTS
 	chmod +x "${TEST_DIR}/app/scripts/detect-mounts.sh"
+
+	# mount-projects.sh also feeds the `mounts` verb (per-project +
+	# session group). Stub it to emit a couple of triple-form lines so
+	# the verb produces visible output without pulling in the real
+	# multi-project resolver / agent registry. The verb invokes it with
+	# `--format=triple`, which we accept but ignore.
+	cat >"${TEST_DIR}/app/scripts/mount-projects.sh" <<'MOUNTPROJ'
+#!/usr/bin/env bash
+echo "/projects/foo:/workspace:rw"
+echo "/home/llm/.local/share/riotbox/foo:/home/llm/.claude:rw"
+MOUNTPROJ
+	chmod +x "${TEST_DIR}/app/scripts/mount-projects.sh"
 }
 
 # _write_capture_stub <dest> <scriptname>

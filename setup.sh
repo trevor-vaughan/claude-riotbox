@@ -364,7 +364,7 @@ elif [[ -n "${CONTAINER_CMD}" ]] && ${CONTAINER_CMD} inspect "${IMAGE_NAME}" &>/
 	ok "Image '${IMAGE_NAME}' already exists"
 	# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
 	if ask_yn "Rebuild anyway?"; then
-		"${SCRIPT_DIR}/scripts/build.sh"
+		RIOTBOX_NONINTERACTIVE_BUILD="${AUTO_YES:+1}" "${SCRIPT_DIR}/scripts/build.sh"
 	fi
 else
 	if [[ "${ERRORS}" -gt 0 ]]; then
@@ -373,7 +373,7 @@ else
 		echo "  The image build takes a while (installs toolchains, security tools, etc.)."
 		# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
 		if ask_yn "Build now?" "y"; then
-			"${SCRIPT_DIR}/scripts/build.sh"
+			RIOTBOX_NONINTERACTIVE_BUILD="${AUTO_YES:+1}" "${SCRIPT_DIR}/scripts/build.sh"
 		else
 			ok "Skipped. Run 'riotbox build' when ready."
 		fi

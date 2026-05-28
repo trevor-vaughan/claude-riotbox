@@ -75,6 +75,32 @@ for dir in "${PROJECT_DIRS[@]}"; do
 	_untracked="$(git -C "${dir}" ls-files --others --exclude-standard)"
 	if ! git -C "${dir}" diff --quiet || ! git -C "${dir}" diff --cached --quiet ||
 		[[ -n "${_untracked}" ]]; then
+		# Warn if `git add -A` is about to sweep in a large untracked set
+		# (e.g. a .test-output/ tree that should have been gitignored).
+		# Without this, multi-hundred-MB checkpoint commits get pushed to
+		# the bare backup on every run and the backup volume balloons
+		# silently. Threshold tuned to "noticeable but not nagging":
+		# anything over 100 files OR 50 MB triggers the warning.
+		# RIOTBOX_CHECKPOINT_QUIET=1 silences (CI, scripted runs).
+		if [[ -n "${_untracked}" ]] && [[ -z "${RIOTBOX_CHECKPOINT_QUIET:-}" ]]; then
+			_untracked_count="$(printf '%s\n' "${_untracked}" | wc -l)"
+			# Sum bytes of the untracked set. Use ls-files -z + du
+			# --files0-from to handle paths with spaces/newlines safely.
+			# shellcheck disable=SC2312 # awk on pipe stdout; failure → 0
+			_untracked_bytes="$(
+				cd "${dir}" 2>/dev/null &&
+					git ls-files -z --others --exclude-standard |
+					du -bc --files0-from=- 2>/dev/null |
+					awk 'END {print $1+0}'
+			)"
+			_untracked_mb=$(((_untracked_bytes + 1048575) / 1048576))
+			if [[ "${_untracked_count}" -gt 100 ]] || [[ "${_untracked_mb}" -gt 50 ]]; then
+				echo "  WARNING: checkpoint will bundle ${_untracked_count} untracked file(s), ~${_untracked_mb} MB, into ${project_name}." >&2
+				echo "           Add patterns to .gitignore if these shouldn't be in the checkpoint commit." >&2
+				echo "           Suppress with RIOTBOX_CHECKPOINT_QUIET=1." >&2
+			fi
+			unset _untracked_count _untracked_bytes _untracked_mb
+		fi
 		git -C "${dir}" add -A
 		git -C "${dir}" -c commit.gpgsign=false commit -m "checkpoint: pre-riotbox-${timestamp}"
 	fi

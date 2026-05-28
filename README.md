@@ -105,9 +105,13 @@ If you prefer to set things up yourself:
 1. Install the `riotbox` command:
 
    ```sh
-   ./install.sh            # installs to ~/bin (default)
-   ./install.sh ~/.local/bin   # or pick a different directory
+   ./install.sh                 # symlink → ~/.local/bin/riotbox (default)
+   ./install.sh ~/bin           # pick a different directory for the symlink
    ```
+
+   The app tree always lands in `$XDG_DATA_HOME/riotbox` (default
+   `~/.local/share/riotbox`); only the entrypoint symlink's directory is
+   configurable.
 
 1. Configure podman (see [Podman setup](#podman-setup))
 
@@ -204,8 +208,10 @@ the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent na
 | `riotbox overlay-diff [project]`      | Show overlay changes vs host project                                                                                    |
 | `riotbox overlay-accept [project]`    | Apply overlay changes to host project                                                                                   |
 | `riotbox overlay-reject [project]`    | Discard overlay changes                                                                                                 |
+| `riotbox audit "<task>" [dir]`        | Read-only session for inspecting untrusted code (workspace mounted RO)                                                  |
+| `riotbox install-hooks [global]`      | Install the pre-push hook that blocks container-identity commits ([details](#reclaiming-authorship))                    |
 | `riotbox agents`                      | List registered agents (riotbox name + binary)                                                                          |
-| `riotbox doctor`                      | Verify host setup; reports each preflight check with a fix hint. Exits non-zero on failure.                             |
+| `riotbox doctor`                      | Walks every preflight check; prints each result with a fix hint. Exits with the first failure's code (0 on full pass).  |
 
 ## Pre-installed tools
 
@@ -292,22 +298,37 @@ RiotBox ships a more complete default script with a Unicode progress bar and col
 
 ## Auto-detected mounts
 
-At runtime, `scripts/detect-mounts.sh` generates mount flags for the container. This uses an allowlist — only explicitly listed paths are ever mounted.
+The mount set comes from two scripts, applied in this order:
 
-**Functional** (required for operation):
+1. **`scripts/detect-mounts.sh`** — always-on mounts that don't depend on a project: `~/bin`, `~/.config/riotbox/`, and the named cache volumes. Uses an allowlist (only paths listed in the script are mounted).
+2. **`scripts/mount-projects.sh`** — per-launch mounts: the project bind, the session directory mount, and the per-agent contributions from `agents/<name>/manifest.sh::host_sync` (credentials nest, opencode auth, host plugins, host `~/.claude/{skills,agents,…}` copies, statusline script copy).
+
+Run `riotbox mounts [project ...]` to print the projected mount set — it lists the always-on group, the project + session group, and a static enumeration of what the agent host_sync hooks would add at launch.
+
+**Always-on** (from `detect-mounts.sh`):
+
+| Host path            | Container path       | How                          |
+|----------------------|----------------------|------------------------------|
+| `~/.config/riotbox/` | `~/.config/riotbox/` | bind mount (read-only, `:z`) |
+| `~/bin`              | `~/bin`              | bind mount (read-only, `:z`) |
+| named cache volumes  | `~/.npm`, `~/.cargo/registry`, … | named volumes (rw)     |
+
+**Per-launch** (from `mount-projects.sh`):
 
 | Host path                                           | Container path                | How                                  |
 |-----------------------------------------------------|-------------------------------|--------------------------------------|
+| Each `<project>` path                               | `/workspace[/<basename>]`     | bind mount (`:z` or `:O` overlay)    |
 | `~/.local/share/riotbox/<session>/`                 | `~/.claude`                   | bind mount (`:z`)                    |
 | `~/.claude/.credentials.json`                       | `~/.claude/.credentials.json` | nested bind mount (`:z`, read-write) |
 | `~/.claude.json`                                    | copied into session dir       | file copy                            |
 | `~/.claude/{skills,agents,commands,output-styles}/` | copied into session dir       | file copy (symlinks dereferenced)    |
 | `~/.claude/statusline-command.sh`                   | copied into session dir       | file copy (chmod +x enforced)        |
-| `~/.config/riotbox/`                                | `~/.config/riotbox/`          | bind mount (`:z`)                    |
 | `~/.claude/plugins/`                                | `~/.host-plugins`             | bind mount (read-only, `:z`)         |
-| `~/bin`                                             | `~/bin`                       | bind mount (read-only)               |
+| `~/.local/share/opencode/auth.json`                 | same path in container        | bind mount (rw, when opencode runs)  |
 
 RiotBox sessions are isolated from your host `~/.claude` — it is never mounted directly. `.credentials.json` is bind-mounted read-write so OAuth token refreshes write directly back to the host file (rotating refresh tokens require this). `.claude.json` is copied so each container gets a writable snapshot without host contention.
+
+> `detect-mounts.sh` and `mount-projects.sh` both accept `--format=podman` (default; one `-v host:container[:flag]` line per mount) and `--format=triple` (one `host:container:mode` line per mount, where `mode` is `rw`/`ro`/`ovl`). The triple format is for tooling that needs to parse the mount table — config generators, tests — without regexing podman flags.
 
 **Package caches** (named volumes, shared across containers):
 
@@ -474,6 +495,19 @@ riotbox reown abc123       # rewrites only commits since a specific ref
 > **Note:** This uses `git filter-repo` under the hood, which rewrites commit hashes. Only use this on commits that haven't been pushed to a shared remote, or be prepared to force-push. A backup tag (`backup/pre-reown-<timestamp>`) is created before rewriting — use `git diff <backup-tag>..<branch>` to verify the result.
 >
 > `reown` recognises the current container identity (`llm@riotbox`) and three legacy identities used by older RiotBox versions (`claude@riotbox`, `llm@localhost`, `riotbox@local`), so old commits are also caught.
+
+**Forgetting to reown is a footgun** — pushing a container-identity commit to a shared remote leaks `llm@riotbox` into your project's history. To make that mistake hard to make accidentally, install the pre-push guard hook:
+
+```sh
+# Per-repo
+cd /path/to/project
+riotbox install-hooks
+
+# Or globally (applies to every repo without its own hooksPath)
+riotbox install-hooks global
+```
+
+The hook checks the push range for any container-identity commits and aborts the push with a hint to run `riotbox reown` if it finds any. Existing hook managers (lefthook, husky, pre-commit) are detected and a snippet is printed so you can chain the RiotBox hook from your manager's config. `riotbox install-hooks --help` lists the options.
 
 ## Overlay mode (podman-only)
 
@@ -762,7 +796,16 @@ echo "options overlay metacopy=on" | sudo tee /etc/modprobe.d/overlay.conf
 
 ## Troubleshooting
 
-When something breaks, the first thing to try is `riotbox doctor` — it walks every host prerequisite (podman, fuse-overlayfs, image build, credentials, plugin/skill dirs) and prints a fix hint per failure. The same checks run at the end of `./setup.sh`, so a fresh install is self-verifying.
+When something breaks, the first thing to try is `riotbox doctor` — it walks every host prerequisite (podman, fuse-overlayfs, image build, credentials, plugin/skill dirs) and prints a fix hint per failure. By default every check runs even if earlier ones failed, so a single invocation surfaces every problem at once; set `RIOTBOX_DOCTOR_FIRST_FAIL=1` to short-circuit at the first failure. The exit code is the FIRST failure encountered (0 on full pass). The same checks run at the end of `./setup.sh`, so a fresh install is self-verifying.
+
+Other knobs:
+
+| Env var                       | Effect                                            |
+|-------------------------------|---------------------------------------------------|
+| `RIOTBOX_DOCTOR_QUIET=1`      | Print only failures (still shows the fix hint)    |
+| `RIOTBOX_DOCTOR_JSON=1`       | Emit one JSON line per check (machine-readable)   |
+| `RIOTBOX_DOCTOR_FIRST_FAIL=1` | Stop at the first failure                         |
+| `IMAGE_NAME=<tag>`            | Probe a tag other than `riotbox`                  |
 
 ### Container startup hangs
 

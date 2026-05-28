@@ -129,6 +129,57 @@ cmd="${1:-}"
 	exit 0
 }
 
+# Per-command --help / -h. Lifted out of the dispatch case so every verb
+# gets the same treatment without having to remember the pattern. Help
+# routes either to a subcommand's own usage block (when it has one) or
+# to a short stanza printed here. Without this, `riotbox audit --help`
+# was treated as the prompt argument and silently sent to the agent.
+print_command_help() {
+	case "$1" in
+	audit) exec "${LIBEXEC}/audit.sh" --help ;;
+	install-hooks) exec "${LIBEXEC}/install-hooks.sh" --help ;;
+	build | rebuild)
+		echo "Usage: riotbox ${1}"
+		echo ""
+		echo "Introspect the host environment (nvm, uv, Go, Rust, RVM) and build"
+		echo "the container image. rebuild adds --no-cache to invalidate every"
+		echo "layer. Environment knobs:"
+		echo "  NODE_VERSIONS_MAX=<N>|all  Cap baked-in Node versions (default 3)"
+		echo "  RIOTBOX_DIAGRAMS=1         Include Chromium + mmdc"
+		echo "  RIOTBOX_NONINTERACTIVE_BUILD=1  Skip the proceed prompt"
+		echo "  IMAGE_NAME=<tag>           Override the image tag"
+		;;
+	doctor)
+		echo "Usage: riotbox doctor"
+		echo ""
+		echo "Walk every host prerequisite and print a fix hint per failure."
+		echo "Returns the FIRST failure's exit code (0 on full pass)."
+		echo "Environment knobs:"
+		echo "  RIOTBOX_DOCTOR_QUIET=1       Print only failures"
+		echo "  RIOTBOX_DOCTOR_JSON=1        Emit JSON lines (one per check)"
+		echo "  RIOTBOX_DOCTOR_FIRST_FAIL=1  Stop at the first failure"
+		echo "  IMAGE_NAME=<tag>             Probe a tag other than 'riotbox'"
+		;;
+	mounts)
+		echo "Usage: riotbox mounts [project ...]"
+		echo ""
+		echo "Print the mount table that would be applied at launch for the"
+		echo "given projects (or CWD if none). Side-effect-free: no session"
+		echo "dir is created."
+		;;
+	*)
+		# Fall back to the global usage; common verbs are documented
+		# there. Avoid pretending we have a man page for everything.
+		usage
+		;;
+	esac
+}
+
+if [[ "${1:-}" = "-h" ]] || [[ "${1:-}" = "--help" ]]; then
+	print_command_help "${cmd}"
+	exit 0
+fi
+
 case "${cmd}" in
 help | -h | --help) usage ;;
 version | --version | -V) echo "riotbox ${VERSION}" ;;
@@ -164,6 +215,12 @@ resume)
 	exec "${LIBEXEC}/resume.sh"
 	;;
 audit)
+	# Argument validation must run before ensure_image — otherwise a
+	# user who forgot the prompt gets "image not found" instead of the
+	# usage hint, which is a confusing first interaction.
+	if [[ $# -eq 0 ]] || [[ "${1:-}" = "-h" ]] || [[ "${1:-}" = "--help" ]]; then
+		exec "${LIBEXEC}/audit.sh" "$@"
+	fi
 	ensure_image
 	exec "${LIBEXEC}/audit.sh" "$@"
 	;;
@@ -207,8 +264,35 @@ overlay-reject) exec "${SCRIPTS}/overlay.sh" reject "$@" ;;
 reown) exec "${SCRIPTS}/reown-commits.sh" "$@" ;;
 install-hooks) exec "${LIBEXEC}/install-hooks.sh" "$@" ;;
 mounts)
-	echo "Auto-detected mounts:"
+	# Two groups, surfaced together so the output matches what a real
+	# launch does:
+	#   1. detect-mounts.sh — functional bind mounts + named caches +
+	#      anything in mounts.conf (read at run time from system + XDG).
+	#   2. mount-projects.sh --format=triple — the per-project bind and
+	#      the session-dir mount, computed against the project paths
+	#      given on the command line (or CWD if none).
+	# A `mounts` invocation that only shows group 1 missed group 2,
+	# which left users debugging missing mounts confused about why
+	# `riotbox mounts` and the actual launch disagreed.
+	#
+	# RIOTBOX_DRY_RUN=1 keeps this command side-effect-free: no session
+	# dir gets created, no agent host_sync hook writes files. Agent-
+	# contributed mounts (credentials nest, opencode auth) are listed
+	# separately as a static note so the user knows what gets added.
+	echo "Auto-detected (always-mounted) — from scripts/detect-mounts.sh:"
 	"${SCRIPTS}/detect-mounts.sh" | while read -r _flag path; do echo "  ${path}"; done
+	echo ""
+	echo "Project + session — for: ${*:-$(pwd)} (from scripts/mount-projects.sh):"
+	RIOTBOX_DRY_RUN=1 RIOTBOX_PROJECTS="${*:-$(pwd)}" \
+		"${SCRIPTS}/mount-projects.sh" --format=triple |
+		while IFS= read -r line; do echo "  ${line}"; done
+	echo ""
+	echo "Agent host_sync — added at launch by the selected --agent (not shown above):"
+	echo "  ~/.claude/.credentials.json → session-nested credentials (RW bind)"
+	echo "  ~/.claude.json → session-dir copy"
+	echo "  ~/.claude/{skills,agents,commands,output-styles,rules,CLAUDE.md} → session-dir copy"
+	echo "  ~/.claude/plugins/ → ~/.host-plugins (RO bind, when host plugins exist)"
+	echo "  ~/.local/share/opencode/auth.json → in-place RW bind (when opencode is registered)"
 	;;
 
 *)

@@ -141,9 +141,13 @@ testcases:
       - type: exec
         script: |
           source "{{.riotbox_dir}}/scripts/preflight.sh"
-          # Strip podman from PATH; the function MUST emit its [12] line
-          # plus the "Install podman" hint and return 12.
-          out="$(PATH=/usr/bin:/bin preflight_check_podman 2>&1 || echo "EXIT=$?")"
+          # Strip podman from PATH entirely. Setting PATH=/usr/bin:/bin
+          # didn't work on hosts that have podman in those exact paths;
+          # use an empty path-stub dir instead so `command -v podman`
+          # truly fails regardless of where podman lives on the host.
+          STUB_DIR="$(mktemp -d)"
+          trap 'rm -rf "${STUB_DIR}"' EXIT
+          out="$(PATH="${STUB_DIR}" preflight_check_podman 2>&1 || echo "EXIT=$?")"
           echo "${out}"
           case "${out}" in
               *"EXIT=12"*) ;;
@@ -284,7 +288,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
-  - name: ALL mode runs every check and returns the FIRST failure code
+  - name: Default mode runs every check and returns the FIRST failure code
     steps:
       - type: exec
         script: |
@@ -295,13 +299,13 @@ testcases:
           # installed but `podman info` cannot start a daemon nested. We
           # are exercising the composer's iteration order and exit-code
           # selection here, not the podman check itself (covered above).
-          # Force two failures: image (17) before creds (18). With ALL=1
-          # both lines must appear, and the return code must be 17 (the
-          # first failure) — not 18.
+          # Force two failures: image (17) before creds (18). Default mode
+          # runs every check, so both lines must appear, and the return
+          # code must be 17 (the first failure) — not 18.
           preflight_check_podman() { _preflight_report podman ok "podman stub"; return 0; }
           preflight_check_image()  { _preflight_report image fail "image stub" 17 "Run riotbox build"; return 17; }
           unset ANTHROPIC_API_KEY
-          out="$(RIOTBOX_DOCTOR_ALL=1 HOME="${FAKE_HOME}" preflight_run 2>&1 || echo "EXIT=$?")"
+          out="$(HOME="${FAKE_HOME}" preflight_run 2>&1 || echo "EXIT=$?")"
           echo "${out}"
           case "${out}" in
               *"image stub"*"claude credentials readable"*) ;;
@@ -315,21 +319,21 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
-  - name: Default mode stops at the first failure
+  - name: FIRST_FAIL mode stops at the first failure
     steps:
       - type: exec
         script: |
           source "{{.riotbox_dir}}/scripts/preflight.sh"
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
-          # Same stub strategy as ALL-mode test above: pin podman to ok and
-          # image to fail so the assertion targets the composer behavior.
+          # Same stub strategy as the default-mode test above: pin podman
+          # to ok and image to fail so the assertion targets the composer.
           preflight_check_podman() { _preflight_report podman ok "podman stub"; return 0; }
           preflight_check_image()  { _preflight_report image fail "image stub" 17 "Run riotbox build"; return 17; }
           unset ANTHROPIC_API_KEY
-          # Without ALL=1 the run must exit at the image check (code 17)
-          # and never reach the creds check.
-          out="$(HOME="${FAKE_HOME}" preflight_run 2>&1 || echo "EXIT=$?")"
+          # With FIRST_FAIL=1 the run must exit at the image check (code
+          # 17) and never reach the creds check.
+          out="$(RIOTBOX_DOCTOR_FIRST_FAIL=1 HOME="${FAKE_HOME}" preflight_run 2>&1 || echo "EXIT=$?")"
           echo "${out}"
           case "${out}" in
               *"image stub"*) ;;
@@ -342,6 +346,26 @@ testcases:
           case "${out}" in
               *"EXIT=17"*) echo "OK" ;;
               *) echo "BAD: expected EXIT=17" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Legacy RIOTBOX_DOCTOR_ALL=1 still runs every check (back-compat)
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          preflight_check_podman() { _preflight_report podman ok "podman stub"; return 0; }
+          preflight_check_image()  { _preflight_report image fail "image stub" 17 "Run riotbox build"; return 17; }
+          unset ANTHROPIC_API_KEY
+          out="$(RIOTBOX_DOCTOR_ALL=1 HOME="${FAKE_HOME}" preflight_run 2>&1 || echo "EXIT=$?")"
+          echo "${out}"
+          case "${out}" in
+              *"image stub"*"claude credentials readable"*"EXIT=17"*) echo "OK" ;;
+              *) echo "BAD: legacy ALL=1 should still run every check" >&2; exit 1 ;;
           esac
         assertions:
           - result.code ShouldEqual 0
@@ -371,40 +395,40 @@ testcases:
   # Script-invocation tests run preflight.sh as a subprocess. The test
   # container has podman installed but cannot run `podman info` (no nested
   # daemon), so the podman check fails first and the script's overall
-  # exit code is always 12 in this environment. We use RIOTBOX_DOCTOR_ALL
-  # so every line is still emitted and assert on the per-check label/hint.
+  # exit code is always 12 in this environment. The default mode now runs
+  # every check, so per-check label/hint assertions work without setting
+  # any env knob. RIOTBOX_DOCTOR_ALL is accepted as a no-op alias for
+  # back-compat (see the legacy-alias test above).
   # The exit-code/return contract is covered by the sourced preflight_run
   # tests above, which stub podman to ok.
 
-  - name: preflight.sh reports image missing with build hint (script invocation, ALL mode)
+  - name: preflight.sh reports image missing with build hint (script invocation)
     steps:
       - type: exec
         script: |
           out="$(IMAGE_NAME="riotbox-doctor-test-$(date +%s%N)-no-such-tag" \
-              RIOTBOX_DOCTOR_ALL=1 \
               "{{.riotbox_dir}}/scripts/preflight.sh" 2>&1 || true)"
           echo "${out}"
           case "${out}" in
-              *"[17]"*"riotbox image present"*"riotbox build"*) echo "OK" ;;
+              *"[fail]"*"riotbox image present"*"riotbox build"*"exit code 17"*) echo "OK" ;;
               *) echo "BAD: missing image fail line" >&2; exit 1 ;;
           esac
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
-  - name: preflight.sh reports creds missing with hint (script invocation, ALL mode)
+  - name: preflight.sh reports creds missing with hint (script invocation)
     steps:
       - type: exec
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
-          out="$(RIOTBOX_DOCTOR_ALL=1 \
-              HOME="${FAKE_HOME}" \
+          out="$(HOME="${FAKE_HOME}" \
               env -u ANTHROPIC_API_KEY \
               "{{.riotbox_dir}}/scripts/preflight.sh" 2>&1 || true)"
           echo "${out}"
           case "${out}" in
-              *"[18]"*"claude credentials readable"*"ANTHROPIC_API_KEY"*) echo "OK" ;;
+              *"[fail]"*"claude credentials readable"*"ANTHROPIC_API_KEY"*"exit code 18"*) echo "OK" ;;
               *) echo "BAD: missing creds fail line" >&2; exit 1 ;;
           esac
         assertions:
@@ -416,7 +440,7 @@ testcases:
       - type: exec
         script: |
           out="$(IMAGE_NAME="riotbox-doctor-test-$(date +%s%N)-no-such-tag" \
-              RIOTBOX_DOCTOR_JSON=1 RIOTBOX_DOCTOR_ALL=1 \
+              RIOTBOX_DOCTOR_JSON=1 \
               "{{.riotbox_dir}}/scripts/preflight.sh" 2>&1 || true)"
           echo "${out}"
           while IFS= read -r line; do

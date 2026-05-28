@@ -47,7 +47,7 @@ if [[ -s "${NVM_DIR}/nvm.sh" ]]; then
 	NVM_INSTALLER_VERSION="$(nvm --version 2>/dev/null || echo "0.39.7")"
 
 	# All installed Node versions (strip the 'v' prefix)
-	NODE_VERSIONS="$(
+	ALL_NODE_VERSIONS="$(
 		nvm ls --no-colors 2>/dev/null |
 			grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' |
 			sed 's/^v//' |
@@ -64,9 +64,61 @@ if [[ -s "${NVM_DIR}/nvm.sh" ]]; then
 			echo "20"
 	)"
 
-	echo "→ nvm installer: ${NVM_INSTALLER_VERSION}"
-	echo "→ Node versions: ${NODE_VERSIONS}"
-	echo "→ Node default:  ${NODE_DEFAULT}"
+	# Cap the set baked into the image. Each installed Node version is a
+	# fresh ~80 MB layer plus npm cache; a user with a decade of legacy
+	# projects can easily have 16 versions on their host, and including
+	# them all blows the image past 11 GB and the build past an hour.
+	# Default: keep the N latest distinct majors plus the default. The
+	# user opts in to the full list with NODE_VERSIONS_MAX=all.
+	NODE_VERSIONS_MAX="${NODE_VERSIONS_MAX:-3}"
+	if [[ "${NODE_VERSIONS_MAX}" = "all" ]]; then
+		NODE_VERSIONS="${ALL_NODE_VERSIONS}"
+	else
+		# Group by major version, keep the latest patch in each, take the
+		# newest N majors plus the default. Awk handles the grouping in a
+		# single pass over the sorted list to avoid spawning more shells.
+		NODE_VERSIONS="$(
+			printf '%s\n' "${ALL_NODE_VERSIONS}" | tr ' ' '\n' |
+				awk -F. '
+					NF >= 1 && $1 != "" {
+						# Track the latest version per major (input is
+						# already sort -V ascending, so the last seen
+						# entry for each major is the winner).
+						by_major[$1] = $0
+					}
+					END {
+						# Emit majors descending, take top N.
+						n = 0
+						for (m in by_major) majors[++n] = m+0
+						# Simple descending sort on majors[].
+						for (i = 1; i <= n; i++) {
+							for (j = i+1; j <= n; j++) {
+								if (majors[j] > majors[i]) {
+									t = majors[i]; majors[i] = majors[j]; majors[j] = t
+								}
+							}
+						}
+						limit = (n < '"${NODE_VERSIONS_MAX}"') ? n : '"${NODE_VERSIONS_MAX}"'
+						for (i = 1; i <= limit; i++) print by_major[majors[i]]
+					}
+				' | tr '\n' ' ' | xargs
+		)"
+		# Always include the default version (it may be in an older major
+		# the cap dropped — keep it so `node` without nvm switching works).
+		if [[ -n "${NODE_DEFAULT}" ]] && [[ " ${NODE_VERSIONS} " != *" ${NODE_DEFAULT} "* ]]; then
+			NODE_VERSIONS="${NODE_VERSIONS} ${NODE_DEFAULT}"
+		fi
+	fi
+
+	echo "→ nvm installer:        ${NVM_INSTALLER_VERSION}"
+	echo "→ Node versions (host): ${ALL_NODE_VERSIONS}"
+	if [[ "${NODE_VERSIONS}" != "${ALL_NODE_VERSIONS}" ]]; then
+		echo "→ Node versions (image, capped at ${NODE_VERSIONS_MAX}): ${NODE_VERSIONS}"
+		echo "  (set NODE_VERSIONS_MAX=all to include every host version)"
+	else
+		echo "→ Node versions (image): ${NODE_VERSIONS}"
+	fi
+	echo "→ Node default:         ${NODE_DEFAULT}"
 else
 	echo "⚠️  nvm not found at ${NVM_DIR} — using Node 20 LTS as default"
 	NVM_INSTALLER_VERSION="0.39.7"
@@ -206,11 +258,52 @@ fi
 # Ensure COPY in Containerfile never fails on an empty dir
 touch "${CONFIGS_DIR}/.keep"
 
-# ── 8. Docker build ───────────────────────────────────────────────────────────
+# ── 8. Pre-build summary ──────────────────────────────────────────────────────
+# The build can run for an hour and produce an 11 GB image when the host has
+# a long nvm history + Rust + Ruby. Print a one-screen summary so a fresh
+# user can see what's going to be installed and bail out (^C) before the
+# long step kicks off. Skipped under RIOTBOX_NONINTERACTIVE_BUILD=1, used by
+# CI and the rpm/deb post-install path.
+echo ""
+echo "══════════════════════════════════════════════════════"
+echo "  Build plan — review before continuing"
+echo "══════════════════════════════════════════════════════"
+echo "  Image:           ${IMAGE_NAME}"
+echo "  Runtime:         ${CONTAINER_CMD}"
+echo "  Node versions:   ${NODE_VERSIONS:-(none)}"
+echo "  Node default:    ${NODE_DEFAULT:-(none)}"
+echo "  uv:              ${UV_VERSION}"
+echo "  Go:              ${GO_VERSION:-(skipped — not on host)}"
+echo "  Rust toolchains: ${RUST_TOOLCHAINS:-(skipped — not on host)}"
+echo "  Ruby versions:   ${RUBY_VERSIONS:-(skipped — set RUBY_VERSIONS or install RVM to enable)}"
+echo "  Diagram tools:   $([ "${RIOTBOX_DIAGRAMS:-0}" = "1" ] && echo "chromium + mmdc (opt-in)" || echo "(skipped — set RIOTBOX_DIAGRAMS=1 to include)")"
+echo ""
+echo "  Expected runtime: 15–60 min on a clean host. Heavier with many"
+echo "  Node versions, full Rust toolchains, or RVM Ruby builds (compiled"
+echo "  from source). Expected image size: 4–11 GB depending on toolchain"
+echo "  selection. Subsequent builds reuse layer cache and are much faster."
+echo ""
+
+if [[ -z "${RIOTBOX_NONINTERACTIVE_BUILD:-}" ]] && [[ -t 0 ]]; then
+	printf "  Proceed with build? [Y/n] "
+	read -r _proceed || _proceed=""
+	if [[ "${_proceed}" =~ ^[Nn] ]]; then
+		echo "  Aborted by user." >&2
+		exit 1
+	fi
+fi
+
+# ── 9. Container build ────────────────────────────────────────────────────────
 echo ""
 echo "══════════════════════════════════════════════════════"
 echo "  Building image: ${IMAGE_NAME}"
 echo "══════════════════════════════════════════════════════"
+
+# Image format defaults to whatever the runtime picks (podman: OCI,
+# docker: docker v2s2). The Containerfile achieves pipefail via explicit
+# `bash -o pipefail -c` in each RUN that uses pipes, not via the
+# Dockerfile-only SHELL directive — that way nothing has to override the
+# format to silence "SHELL is not supported for OCI image format".
 
 # shellcheck disable=SC2086  # intentional word splitting for extra args
 ${CONTAINER_CMD} build \
@@ -227,6 +320,7 @@ ${CONTAINER_CMD} build \
 	--build-arg "RUST_TOOLCHAINS=${RUST_TOOLCHAINS}" \
 	--build-arg "RUBY_VERSIONS=${RUBY_VERSIONS}" \
 	--build-arg "RUBY_DEFAULT=${RUBY_DEFAULT}" \
+	--build-arg "RIOTBOX_DIAGRAMS=${RIOTBOX_DIAGRAMS:-0}" \
 	--progress=plain \
 	-t "${IMAGE_NAME}" \
 	-f "${BUILD_CONTEXT}/Containerfile" \

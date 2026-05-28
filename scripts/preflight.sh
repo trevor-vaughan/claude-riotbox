@@ -19,16 +19,24 @@
 #     helpers.
 #
 # Environment knobs:
-#   RIOTBOX_DOCTOR_QUIET=1   Print only failures (still prints the failure's
-#                            fix hint).
-#   RIOTBOX_DOCTOR_JSON=1    Emit one JSON line per check via log_emit.
-#                            Mutually exclusive with QUIET (JSON wins).
-#   RIOTBOX_DOCTOR_ALL=1     Run every check even after a failure. Exit code
-#                            reflects the FIRST failure (0 if all pass).
-#   IMAGE_NAME               RiotBox image tag to look for (default
-#                            `riotbox`, matches scripts/build.sh).
-#                            Read at call time inside preflight_check_image,
-#                            so sourced callers can override per-call.
+#   RIOTBOX_DOCTOR_QUIET=1        Print only failures (still prints the
+#                                 failure's fix hint).
+#   RIOTBOX_DOCTOR_JSON=1         Emit one JSON line per check via log_emit.
+#                                 Mutually exclusive with QUIET (JSON wins).
+#   RIOTBOX_DOCTOR_FIRST_FAIL=1   Stop at the first failure instead of
+#                                 walking every check. The default since
+#                                 v0.5.1 is to run all checks so users
+#                                 fixing one prerequisite see the rest in
+#                                 the same report. The exit code is always
+#                                 the FIRST failure encountered (0 on pass).
+#   RIOTBOX_DOCTOR_ALL=1          Deprecated alias for the default "run all"
+#                                 behavior. Accepted for backward
+#                                 compatibility; has no effect.
+#   IMAGE_NAME                    RiotBox image tag to look for (default
+#                                 `riotbox`, matches scripts/build.sh).
+#                                 Read at call time inside
+#                                 preflight_check_image, so sourced callers
+#                                 can override per-call.
 #
 # Exit codes:
 #   0   all checks pass
@@ -95,8 +103,11 @@ _preflight_report() {
 			printf '%s[ok]%s %s\n' "${PREFLIGHT_GREEN}" "${PREFLIGHT_RESET}" "${label}"
 		fi
 	else
-		printf '%s[%02d]%s %s\n' "${PREFLIGHT_RED}" "${code}" "${PREFLIGHT_RESET}" "${label}"
-		printf '      → %s\n' "${hint}"
+		# Print [fail] (not the exit code) so the user doesn't read the
+		# numeric code as "17 failed". The exit code is surfaced in the
+		# hint so users can still wire scripts against it.
+		printf '%s[fail]%s %s\n' "${PREFLIGHT_RED}" "${PREFLIGHT_RESET}" "${label}"
+		printf '       → %s (exit code %d)\n' "${hint}" "${code}"
 	fi
 }
 
@@ -227,10 +238,13 @@ preflight_check_skills_dir() {
 
 # ── Composition ─────────────────────────────────────────────────────────────
 
-# preflight_run: invokes every check in order. By default returns at the
-# first failure with that check's exit code. With RIOTBOX_DOCTOR_ALL=1 it
-# runs every check; the return code is the FIRST failure encountered (or 0
-# if all checks passed).
+# preflight_run: invokes every check in order. By default runs every
+# check so a user fixing one prerequisite still sees the rest in the same
+# report. The return code is the FIRST failure encountered (or 0 if all
+# pass). With RIOTBOX_DOCTOR_FIRST_FAIL=1 the function returns at the
+# first failure — useful for scripts that want to short-circuit. The
+# legacy RIOTBOX_DOCTOR_ALL knob is accepted as a no-op for backward
+# compatibility (was needed when the default was "stop on first fail").
 preflight_run() {
 	local first_rc=0 rc
 	local checks=(
@@ -250,7 +264,7 @@ preflight_run() {
 			if [[ "${first_rc}" -eq 0 ]]; then
 				first_rc="${rc}"
 			fi
-			if [[ -z "${RIOTBOX_DOCTOR_ALL:-}" ]]; then
+			if [[ -n "${RIOTBOX_DOCTOR_FIRST_FAIL:-}" ]]; then
 				return "${first_rc}"
 			fi
 		fi

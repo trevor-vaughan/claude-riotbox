@@ -465,7 +465,7 @@ testcases:
 
   # -- mounts command --
 
-  - name: Mounts lists the auto-detected paths
+  - name: Mounts lists the auto-detected paths and the project/session group
     steps:
       - type: exec
         script: |
@@ -477,9 +477,14 @@ testcases:
           "${TEST_DIR}/app/bin/riotbox" mounts
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "Auto-detected mounts:"
+          # detect-mounts group (always-on)
+          - result.systemout ShouldContainSubstring "Auto-detected"
           - result.systemout ShouldContainSubstring "/home/llm/.config"
           - result.systemout ShouldContainSubstring "/home/llm/.cache"
+          # mount-projects group (per-launch)
+          - result.systemout ShouldContainSubstring "Project + session"
+          # Static agent host_sync note
+          - result.systemout ShouldContainSubstring "Agent host_sync"
 
   # -- install-hooks command --
 

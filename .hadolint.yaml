@@ -11,11 +11,23 @@
 #           at the top of each Containerfile) is the supply-chain anchor.
 # DL3062 — go install version pinning: gopls tracks the active Go toolchain;
 #           pinning a specific semver diverges from the installed Go version.
-# DL4006 — SHELL pipefail: SHELL directives are added after each FROM stage;
-#           this rule is also globally suppressed here as belt-and-suspenders.
+# DL4006 — SHELL pipefail: pipefail is supplied by inlining
+#           `bash -o pipefail -c '…'` in each piped RUN (the SHELL
+#           directive doesn't survive in OCI image config). Without
+#           SHELL, hadolint can't see that pipefail is applied. The
+#           rule is suppressed because the per-RUN bash invocation
+#           makes its analysis incorrect for this image.
+# DL3059 — multiple consecutive RUNs: tools-stage installers (trivy,
+#           grype, syft, task, venom) and the agent installers
+#           (opencode, claude) are each a separate RUN by design so a
+#           single installer churn doesn't invalidate the rest of the
+#           layer cache. Consolidation would trade layer-cache hit rate
+#           for a slightly smaller image, which is the wrong tradeoff
+#           for this image's iteration cadence.
 ignored:
   - DL3013
   - DL3016
   - DL3041
   - DL3062
   - DL4006
+  - DL3059

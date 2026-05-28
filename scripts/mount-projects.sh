@@ -367,17 +367,24 @@ setup_projects() {
 	fi
 
 	local riotbox_session_dir="${RIOTBOX_SESSION_DIR}"
-	mkdir -p "${riotbox_session_dir}"
-	chmod 700 "${riotbox_session_dir}"
-	# Write project paths so list-sessions can show them without decoding the key
-	printf '%s\n' "${PROJECT_DIRS[@]}" >"${riotbox_session_dir}/.projects"
-	# Bail if a previous run without --userns=keep-id left dirs owned by
-	# a subordinate UID.
-	if [[ ! -w "${riotbox_session_dir}" ]]; then
-		echo "ERROR: ${riotbox_session_dir} is not writable (wrong UID from a previous run)." >&2
-		# shellcheck disable=SC2312 # id failure is impossible in a running bash session
-		echo "  Fix with: sudo chown -R $(id -u):$(id -g) ${riotbox_session_dir}" >&2
-		exit 1
+	# RIOTBOX_DRY_RUN=1 lets diagnostic callers (e.g. `riotbox mounts`)
+	# compute the projected mount table without creating session dirs or
+	# triggering agent host_sync writes. The dry-run agent_call still
+	# returns whatever flags the manifest would emit, but it must not
+	# write any host files (manifests are expected to honor the env var).
+	if [[ "${RIOTBOX_DRY_RUN:-0}" != "1" ]]; then
+		mkdir -p "${riotbox_session_dir}"
+		chmod 700 "${riotbox_session_dir}"
+		# Write project paths so list-sessions can show them without decoding the key
+		printf '%s\n' "${PROJECT_DIRS[@]}" >"${riotbox_session_dir}/.projects"
+		# Bail if a previous run without --userns=keep-id left dirs owned by
+		# a subordinate UID.
+		if [[ ! -w "${riotbox_session_dir}" ]]; then
+			echo "ERROR: ${riotbox_session_dir} is not writable (wrong UID from a previous run)." >&2
+			# shellcheck disable=SC2312 # id failure is impossible in a running bash session
+			echo "  Fix with: sudo chown -R $(id -u):$(id -g) ${riotbox_session_dir}" >&2
+			exit 1
+		fi
 	fi
 	PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${riotbox_session_dir}:/home/llm/.claude:z"
 
@@ -386,17 +393,24 @@ setup_projects() {
 	# host_sync function knows where its host config lives and what
 	# volume flags to emit. Adding a new agent extends this loop without
 	# editing this file.
-	# shellcheck source=agents/registry.sh
-	source "${ROOT_DIR}/agents/registry.sh"
-	# shellcheck disable=SC2154 # AGENT_REGISTRY is set by agents/registry.sh sourced above
-	local _agent _sync_flags
-	for _agent in "${AGENT_REGISTRY[@]}"; do
-		_sync_flags="$(agent_call "${_agent}" host_sync "${riotbox_session_dir}")"
-		if [[ -n "${_sync_flags}" ]]; then
-			PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} ${_sync_flags}"
-		fi
-	done
-	unset _agent _sync_flags
+	#
+	# Skipped under RIOTBOX_DRY_RUN=1 — host_sync hooks write host files
+	# (credential nest, opencode auth, settings copies), which is the
+	# wrong semantics for a read-only diagnostic. Callers that want to
+	# see the projected agent mounts should launch a real session.
+	if [[ "${RIOTBOX_DRY_RUN:-0}" != "1" ]]; then
+		# shellcheck source=agents/registry.sh
+		source "${ROOT_DIR}/agents/registry.sh"
+		# shellcheck disable=SC2154 # AGENT_REGISTRY is set by agents/registry.sh sourced above
+		local _agent _sync_flags
+		for _agent in "${AGENT_REGISTRY[@]}"; do
+			_sync_flags="$(agent_call "${_agent}" host_sync "${riotbox_session_dir}")"
+			if [[ -n "${_sync_flags}" ]]; then
+				PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} ${_sync_flags}"
+			fi
+		done
+		unset _agent _sync_flags
+	fi
 
 	# ── Container name ────────────────────────────────────────────────
 	generate_container_name "${PROJECT_DIRS[@]}"

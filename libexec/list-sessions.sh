@@ -14,18 +14,21 @@ found=0
 for session_dir in "${session_root}"/*/; do
 	[[ -d "${session_dir}" ]] || continue
 	name="$(basename "${session_dir}")"
+
+	# Skip dirs that don't belong to a session:
+	#   - backups/ is the safety backup tree, not a session.
+	#   - The XDG data dir also holds the app tree on rootless installs
+	#     (bin/, libexec/, scripts/, agents/, container/). Filter sessions
+	#     by the .projects marker that mount-projects.sh writes at launch.
+	#     Without this, `riotbox session-list` listed app subdirs as
+	#     sessions and `riotbox session-remove libexec` would delete part
+	#     of the installation.
 	[[ "${name}" = "backups" ]] && continue
+	[[ -f "${session_dir}/.projects" ]] || continue
 
 	found=$((found + 1))
 
-	# Project paths — written at launch time by mount-projects.sh
-	have_projects=false
-	if [[ -f "${session_dir}/.projects" ]]; then
-		mapfile -t project_paths <"${session_dir}/.projects"
-		have_projects=true
-	else
-		project_paths=("${name}") # fallback: show the encoded key (pre-metadata sessions)
-	fi
+	mapfile -t project_paths <"${session_dir}/.projects"
 
 	# Last used: mtime of the session dir (updated on each launch)
 	last_used="$(stat -c '%y' "${session_dir}" 2>/dev/null | cut -d. -f1)"
@@ -46,13 +49,11 @@ for session_dir in "${session_root}"/*/; do
 		echo "${contents[*]:-empty}"
 	)"
 
-	# Whether the projects still exist on disk (only check if we have real paths)
+	# Whether the projects still exist on disk
 	missing=()
-	if [[ "${have_projects}" = true ]]; then
-		for p in "${project_paths[@]}"; do
-			[[ -d "${p}" ]] || missing+=("${p}")
-		done
-	fi
+	for p in "${project_paths[@]}"; do
+		[[ -d "${p}" ]] || missing+=("${p}")
+	done
 
 	# Print
 	if [[ ${#project_paths[@]} -eq 1 ]]; then

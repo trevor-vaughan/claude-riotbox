@@ -20,37 +20,45 @@
 # in runtime.
 FROM quay.io/centos/centos:stream10 AS tools
 
-# Enable pipefail so any failed command in a pipe fails the RUN step.
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+# Pipefail policy: RUN steps that pipe (`curl ... | sh`) explicitly invoke
+# `bash -o pipefail -c '…'` rather than using a Dockerfile `SHELL` directive.
+# SHELL only works for image-config formats that have a Shell field — OCI
+# does not — and emits a "SHELL is not supported for OCI image format"
+# warning at every step. Inline bash invocations keep the image OCI
+# compliant, no manifest-format override needed.
 
 # DL3041: Stream 10 is a rolling distribution — exact package versions shift
 # between releases. Pinning every rpm to a specific EVR would break on the next
 # compose. The FROM digest (set at the top of this file) pins the base layer.
 # hadolint ignore=DL3041
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
-        curl tar gzip && \
+        curl tar gzip bash && \
     dnf clean all && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc
 
 WORKDIR /tools
 
 # trivy — vulnerability scanner
-RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | \
-    sh -s -- -b /tools/bin && \
-    /tools/bin/trivy --version
+RUN bash -o pipefail -c '\
+    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+        | sh -s -- -b /tools/bin && \
+    /tools/bin/trivy --version'
 
 # grype — vulnerability scanner for SBOMs
-RUN curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | \
-    sh -s -- -b /tools/bin && \
-    /tools/bin/grype version
+RUN bash -o pipefail -c '\
+    curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
+        | sh -s -- -b /tools/bin && \
+    /tools/bin/grype version'
 
 # syft — SBOM generator (pairs with grype)
-RUN curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | \
-    sh -s -- -b /tools/bin && \
-    /tools/bin/syft version
+RUN bash -o pipefail -c '\
+    curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+        | sh -s -- -b /tools/bin && \
+    /tools/bin/syft version'
 
 # task — task runner for Taskfiles (https://taskfile.dev)
-RUN curl -sL https://taskfile.dev/install.sh | sh -s -- -b /tools/bin && \
-    /tools/bin/task --version
+RUN bash -o pipefail -c '\
+    curl -sL https://taskfile.dev/install.sh | sh -s -- -b /tools/bin && \
+    /tools/bin/task --version'
 
 # venom — integration test framework (https://github.com/ovh/venom)
 # Pinned per supply-chain review. Upstream publishes no checksums or
@@ -65,7 +73,11 @@ RUN curl -sL https://taskfile.dev/install.sh | sh -s -- -b /tools/bin && \
 ARG VENOM_VERSION=v1.3.0
 ARG VENOM_SHA256_AMD64=89832ec25e820c605cf0d3c09122e60bad43d13c1724aa6d375ef7109fbfe201
 ARG VENOM_SHA256_ARM64=aada8ac76cb642daecbc8e31e830c94c42bcdd78fecd3a9d9d1a73c37c60d946
-RUN ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/') && \
+# Pipefail matters here for `echo … | sha256sum -c -`: without it, a failed
+# sha256sum step would not abort the chain if anything before it in a pipe
+# silently succeeded.
+RUN bash -o pipefail -c '\
+    ARCH=$(uname -m | sed "s/x86_64/amd64/" | sed "s/aarch64/arm64/") && \
     case "${ARCH}" in \
         amd64) EXPECTED_SHA="${VENOM_SHA256_AMD64}" ;; \
         arm64) EXPECTED_SHA="${VENOM_SHA256_ARM64}" ;; \
@@ -75,7 +87,7 @@ RUN ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/') && \
     echo "${EXPECTED_SHA}  /tmp/venom" | sha256sum -c - && \
     mv /tmp/venom /tools/bin/venom && \
     chmod +x /tools/bin/venom && \
-    /tools/bin/venom version
+    /tools/bin/venom version'
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -85,8 +97,9 @@ RUN ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/') && \
 # top of the tools stage; both `FROM` lines must move together.
 FROM quay.io/centos/centos:stream10 AS runtime
 
-# Enable pipefail so any failed command in a pipe fails the RUN step.
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+# Pipefail policy: see the tools stage's comment. RUN steps that pipe
+# wrap themselves in `bash -o pipefail -c '…'` instead of relying on a
+# Dockerfile SHELL directive (which OCI image config doesn't support).
 
 # ── Build args (populated by build.sh from host introspection) ────────────────
 ARG NVM_INSTALLER_VERSION=0.39.7
@@ -99,8 +112,14 @@ ARG GO_VERSION=""
 # becomes default. build.sh detects what's installed on the host; if rustup
 # isn't on the host, build.sh leaves this empty and Rust is not baked in.
 ARG RUST_TOOLCHAINS=""
-ARG RUBY_VERSIONS="3.2.9"
-ARG RUBY_DEFAULT="3.2.9"
+# Ruby is OFF by default: it has no stock dnf binary at the modern versions
+# RVM ships (compiled from source, ~4 min of CPU time) and most users don't
+# need it baked in. build.sh sets RUBY_VERSIONS from the host's RVM and
+# leaves it empty when no RVM is installed, so "no Ruby on host" → "no
+# Ruby in container" automatically. Set RUBY_VERSIONS="3.2.9" explicitly
+# (e.g. `RIOTBOX_RUBY=3.2.9 task build`) to install without RVM on host.
+ARG RUBY_VERSIONS=""
+ARG RUBY_DEFAULT=""
 ARG HOST_UID=1000
 # Default HOST_GID to HOST_UID for the common case where the host user's
 # primary GID matches their UID (useradd's stock behavior on most distros).
@@ -122,6 +141,14 @@ ARG HOST_GID=${HOST_UID}
 # image digest is already current. Running update on top just shadows files
 # from the base layer with newer copies, ballooning the image.
 #
+# Diagram tools (chromium + mermaid-cli) are off by default to keep the
+# image lean. Chromium itself is ~400 MB plus 200+ multimedia codec
+# dependencies pulled in transitively. Set RIOTBOX_DIAGRAMS=1 at build
+# time to opt in (e.g. `RIOTBOX_DIAGRAMS=1 riotbox build`). The opt-in
+# is read in two places: here (chromium rpm) and at the npm install
+# block further down (mmdc).
+ARG RIOTBOX_DIAGRAMS=0
+
 # DL3041: Stream 10 is a rolling distribution — exact package versions shift
 # between releases; pinning every rpm EVR would break on each compose.
 # CKV2_DOCKER_1: sudo is intentional — this is a developer-environment image;
@@ -166,7 +193,11 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
     && dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
            epel-release \
     && dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
-           ripgrep chromium bats \
+           ripgrep bats \
+    && if [ "${RIOTBOX_DIAGRAMS}" = "1" ]; then \
+           dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+               chromium; \
+       fi \
     && dnf clean all \
     && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc /usr/share/info
 
@@ -309,9 +340,11 @@ USER llm
 WORKDIR /home/llm
 
 # ── nvm ───────────────────────────────────────────────────────────────────────
-RUN curl -fsSL \
-    "https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_INSTALLER_VERSION}/install.sh" \
-    | bash
+# bash -o pipefail: if curl fails or hits a 404 page that pipes through to
+# bash, we want the install to error out, not silently succeed.
+RUN bash -o pipefail -c '\
+    curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_INSTALLER_VERSION}/install.sh" \
+        | bash'
 
 # Install every Node version detected on the host, then set the default
 # hadolint ignore=SC2016
@@ -329,55 +362,57 @@ RUN set -e; echo '#!/usr/bin/env bash' > /tmp/install-node.sh; \
 ENV PATH=/home/llm/.nvm/versions/node/v${NODE_DEFAULT}/bin:${PATH}
 
 # ── uv (pins to the version detected on the host) ────────────────────────────
-RUN if [ "${UV_VERSION}" = "latest" ]; then \
+RUN bash -o pipefail -c '\
+    if [ "${UV_VERSION}" = "latest" ]; then \
         curl -LsSf https://astral.sh/uv/install.sh | bash; \
     else \
         curl -LsSf https://astral.sh/uv/install.sh | UV_TOOL_VERSION="${UV_VERSION}" bash; \
     fi && \
-    /home/llm/.local/bin/uv --version
+    /home/llm/.local/bin/uv --version'
 
 # ── Rust (via rustup) + cargo-binstall for pre-built binaries ────────────────
 # Conditional: when RUST_TOOLCHAINS is empty (the default), skip the whole
 # rustup install. This saves ~1.4 GB for users who don't need Rust in-container.
 # The first toolchain in the space-separated list becomes the rustup default.
-RUN if [ -n "${RUST_TOOLCHAINS}" ]; then \
+# Wrapped in `bash -o pipefail -c` so both pipes (rustup-init | sh and the
+# cargo-binstall curl | tar xz) abort on the upstream curl failing — without
+# pipefail, a 4xx HTML page piped to sh/tar succeeds and we ship a broken bin.
+RUN bash -o pipefail -c 'if [ -n "${RUST_TOOLCHAINS}" ]; then \
         set -- ${RUST_TOOLCHAINS}; \
         RUST_DEFAULT_TC="$1"; \
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-            sh -s -- -y --default-toolchain "${RUST_DEFAULT_TC}" && \
-        bash -c "\
-            source /home/llm/.cargo/env && \
-            for tc in ${RUST_TOOLCHAINS}; do \
-                echo \"==> rustup install \$tc\" && \
-                rustup toolchain install \$tc; \
-            done && \
-            rustc --version && cargo --version && \
-            ARCH=\$(uname -m) && \
-            curl -LSfs https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-\${ARCH}-unknown-linux-musl.tgz \
-                | tar xz -C /home/llm/.cargo/bin && \
-            cargo binstall --no-confirm ast-grep && sg --version \
-        "; \
-    fi
+        curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain "${RUST_DEFAULT_TC}" && \
+        source /home/llm/.cargo/env && \
+        for tc in ${RUST_TOOLCHAINS}; do \
+            echo "==> rustup install $tc" && \
+            rustup toolchain install "$tc"; \
+        done && \
+        rustc --version && cargo --version && \
+        ARCH=$(uname -m) && \
+        curl -LSfs "https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-${ARCH}-unknown-linux-musl.tgz" \
+            | tar xz -C /home/llm/.cargo/bin && \
+        cargo binstall --no-confirm ast-grep && sg --version; \
+    fi'
 # TODO(security): cargo-binstall publishes .sig files (minisign) but uses
 #   ephemeral keys per release — no stable public key to verify against.
 
 # ── Ruby (via RVM, if versions specified) ────────────────────────────────
-# GPG keys must be imported before RVM's installer will pass signature checks
-RUN if [ -n "${RUBY_VERSIONS}" ]; then \
-        bash -c "\
-            gpg2 --keyserver hkps://keyserver.ubuntu.com \
-                 --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 \
-                             7D2BAF1CF37B13E2069D6956105BD0E739499BDB && \
-            curl -sSL https://get.rvm.io | bash -s stable && \
-            source /home/llm/.rvm/scripts/rvm && \
-            for v in ${RUBY_VERSIONS}; do \
-                echo \"==> rvm install \$v\" && \
-                rvm install \$v; \
-            done && \
-            rvm alias create default ${RUBY_DEFAULT} && \
-            ruby --version \
-        "; \
-    fi
+# GPG keys must be imported before RVM's installer will pass signature checks.
+# pipefail matters: `curl https://get.rvm.io | bash -s stable` must abort if
+# curl fails — otherwise an empty body would pipe to bash and silently no-op.
+RUN bash -o pipefail -c 'if [ -n "${RUBY_VERSIONS}" ]; then \
+        gpg2 --keyserver hkps://keyserver.ubuntu.com \
+             --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 \
+                         7D2BAF1CF37B13E2069D6956105BD0E739499BDB && \
+        curl -sSL https://get.rvm.io | bash -s stable && \
+        source /home/llm/.rvm/scripts/rvm && \
+        for v in ${RUBY_VERSIONS}; do \
+            echo "==> rvm install $v" && \
+            rvm install "$v"; \
+        done && \
+        rvm alias create default "${RUBY_DEFAULT}" && \
+        ruby --version; \
+    fi'
 
 # ── Go tools (installed after user is set up) ───────────────────────────────
 # DL3062: gopls is the official Go language server — @latest tracks the active
@@ -422,7 +457,18 @@ RUN mkdir -p \
     git config --global advice.detachedHead false && \
     git config --global advice.addIgnoredFile false && \
     git config --global init.defaultBranch main && \
-    git config --global --add safe.directory /workspace && \
+    # safe.directory covers both single-project (`/workspace`) and the
+    # multi-project layout where each project is mounted at
+    # `/workspace/<dirname>`. The wildcard is needed because:
+    #   1. We do not know the project basenames at build time, so we
+    #      cannot enumerate them.
+    #   2. If --userns=keep-id has the host UID off by a subordinate
+    #      mapping (e.g. a previous nested-mode session left dirs owned
+    #      by a different inner uid), git inside the container would
+    #      refuse every operation with "dubious ownership in repository".
+    # The container is the safety boundary; treating every workspace path
+    # as a safe directory is consistent with that boundary.
+    git config --global --add safe.directory '*' && \
     git config --global receive.denyNonFastForwards true && \
     git config --global receive.denyDeletes true
 
@@ -497,13 +543,18 @@ BASHRC
 COPY --chown=llm:llm configs/ /home/llm/
 
 # ── Diagram tools (for validating generated diagrams) ────────────────────────
-# Skip puppeteer's bundled Chromium (~580 MB) — use the system package instead.
-ENV PUPPETEER_SKIP_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+# Off by default. Set RIOTBOX_DIAGRAMS=1 at build time to install Chromium
+# and mermaid-cli (mmdc). The system Chromium rpm is installed earlier in
+# the same conditional; puppeteer's bundled Chromium (~580 MB) is skipped
+# either way so we don't accidentally double-install.
 # DL3016: @mermaid-js/mermaid-cli is kept at latest to support current Mermaid
 # diagram syntax; pinning a specific version risks stale diagram rendering.
 # hadolint ignore=DL3016
-RUN npm install -g @mermaid-js/mermaid-cli && mmdc --version
+ENV PUPPETEER_SKIP_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+RUN if [ "${RIOTBOX_DIAGRAMS}" = "1" ]; then \
+        npm install -g @mermaid-js/mermaid-cli && mmdc --version; \
+    fi
 
 # ── RiotBox scripts: agent registry + generic wrapper ───────────────────────
 # The agent registry (agents/<name>.sh + agents/registry.sh) is the single
@@ -561,12 +612,13 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
 # binary into the existing user-local bin dir so no extra PATH entry is
 # needed. The .opencode/bin directory itself is left in place — empty after
 # the move and harmless.
-RUN curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path && \
+RUN bash -o pipefail -c '\
+    curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path && \
     mv /home/llm/.opencode/bin/opencode /home/llm/.local/bin/opencode && \
-    /home/llm/.local/bin/opencode --version
+    /home/llm/.local/bin/opencode --version'
 
 # ── Claude Code (LAST — changes most frequently, preserves layer cache) ─────
-RUN curl -fsSL https://claude.ai/install.sh | bash && claude --version
+RUN bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && claude --version'
 
 # ── Pre-stage plugins (no auth needed — just clones a public GitHub repo) ────
 # Installed to a staging dir because ~/.claude is bind-mounted at runtime.
