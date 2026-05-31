@@ -219,6 +219,16 @@ PASSTHROUGH_FLAGS="$(passthrough_flags)"
 source "$(dirname "${BASH_SOURCE[0]}")/vertex-adc-prompt.sh"
 vertex_adc_prompt
 
+# RIOTBOX_EXTRA_ARGS is a raw relief valve into the engine run command. Gate it
+# before assembling the command: prompt on a TTY, require RIOTBOX_EXTRA_ARGS_ACK=1
+# to proceed without a TTY, abort otherwise. See extra-args.sh for the contract.
+# NOTE: setup_projects (above) has already created the session directory and run
+# agent host_sync hooks by this point; aborting here does not roll those back.
+# The session dir is idempotent across runs, so this is acceptable.
+# shellcheck source=./extra-args.sh disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/extra-args.sh"
+extra_args_gate || exit 1
+
 # shellcheck source=./credfile-vars.sh disable=SC1091
 source "$(dirname "${BASH_SOURCE[0]}")/credfile-vars.sh"
 CREDFILE_FLAGS="$(credfile_flags)"
@@ -240,6 +250,7 @@ ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${USER_FLAG} ${IN
 	${RIOTBOX_PLUGINS:+-e RIOTBOX_PLUGINS="${RIOTBOX_PLUGINS}"} \
 	${RIOTBOX_AGENT:+-e RIOTBOX_AGENT="${RIOTBOX_AGENT}"} \
 	${RIOTBOX_NESTED:+-e RIOTBOX_NESTED="${RIOTBOX_NESTED}"} \
+	${RIOTBOX_EXTRA_ARGS:-} \
 	-w "${WORKDIR}" \
 	"${IMAGE_NAME}" \
 	"$@"

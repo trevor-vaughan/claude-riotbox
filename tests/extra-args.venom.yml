@@ -1,0 +1,257 @@
+name: libexec/extra-args.sh — RIOTBOX_EXTRA_ARGS confirmation gate
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Pins the decision table of extra_args_gate: unset/empty is a silent no-op;
+# RIOTBOX_EXTRA_ARGS_ACK=1 proceeds without prompting; a non-TTY without ack
+# aborts (fail-safe); on a TTY the [y/N] prompt accepts on "y" and aborts
+# otherwise. The interactive branches use `script` to allocate a pty so the
+# function's `-t 0` (stdin) check sees a terminal.
+
+testcases:
+  - name: no-op when RIOTBOX_EXTRA_ARGS is unset
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/libexec/extra-args.sh"
+          unset RIOTBOX_EXTRA_ARGS
+          out="$(extra_args_gate 2>&1)"; rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          [ -z "${out}" ] || { echo "BAD output: '${out}'" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: no-op when RIOTBOX_EXTRA_ARGS is empty string
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/libexec/extra-args.sh"
+          export RIOTBOX_EXTRA_ARGS=""
+          out="$(extra_args_gate 2>&1)"; rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          [ -z "${out}" ] || { echo "BAD output: '${out}'" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: ACK=1 proceeds without prompting and does not read stdin
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/libexec/extra-args.sh"
+          export RIOTBOX_EXTRA_ARGS="--device nvidia.com/gpu=all"
+          export RIOTBOX_EXTRA_ARGS_ACK=1
+          out="$(extra_args_gate </dev/null 2>&1)"; rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          echo "${out}" | grep -q "acknowledged" || { echo "BAD: no ack notice" >&2; exit 1; }
+          echo "${out}" | grep -q "Proceed?" && { echo "BAD: prompted despite ack" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: non-TTY without ACK aborts and names RIOTBOX_EXTRA_ARGS_ACK
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/libexec/extra-args.sh"
+          export RIOTBOX_EXTRA_ARGS="--privileged"
+          unset RIOTBOX_EXTRA_ARGS_ACK
+          out="$(extra_args_gate </dev/null 2>&1)"; rc=$?
+          [ "${rc}" != "0" ] || { echo "BAD: should have aborted" >&2; exit 1; }
+          echo "${out}" | grep -q "RIOTBOX_EXTRA_ARGS_ACK" || { echo "BAD: no ack hint" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: bare -- token is rejected even with ACK=1
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/libexec/extra-args.sh"
+          export RIOTBOX_EXTRA_ARGS="--device /dev/dri -- --privileged"
+          export RIOTBOX_EXTRA_ARGS_ACK=1
+          out="$(extra_args_gate </dev/null 2>&1)"; rc=$?
+          [ "${rc}" != "0" ] || { echo "BAD: -- was not rejected" >&2; exit 1; }
+          echo "${out}" | grep -q -- "--" || { echo "BAD: message does not mention --" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: TTY prompt accepts on "y"
+    steps:
+      - type: exec
+        script: |
+          out="$(printf 'y\n' | script -qe -c \
+            'source "{{.riotbox_dir}}/libexec/extra-args.sh"; export RIOTBOX_EXTRA_ARGS="--device /dev/dri"; unset RIOTBOX_EXTRA_ARGS_ACK; extra_args_gate; echo RC=$?' \
+            /dev/null)"
+          echo "${out}"
+          echo "${out}" | grep -q "RC=0" || { echo "BAD: did not proceed on y" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: TTY prompt aborts on "n"
+    steps:
+      - type: exec
+        script: |
+          out="$(printf 'n\n' | script -qe -c \
+            'source "{{.riotbox_dir}}/libexec/extra-args.sh"; export RIOTBOX_EXTRA_ARGS="--device /dev/dri"; unset RIOTBOX_EXTRA_ARGS_ACK; extra_args_gate; echo RC=$?' \
+            /dev/null)"
+          echo "${out}"
+          echo "${out}" | grep -q "RC=0" && { echo "BAD: proceeded on n" >&2; exit 1; }
+          echo "${out}" | grep -q "Aborted" || { echo "BAD: no abort message" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: launch.sh appends RIOTBOX_EXTRA_ARGS after managed flags, before the image
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
+          cat > "${TMP}/fake-cmd" <<'FAKE'
+          #!/usr/bin/env bash
+          printf '%s\n' "$*" > "${CAPTURE}"
+          FAKE
+          chmod +x "${TMP}/fake-cmd"
+          export CAPTURE="${TMP}/argv"
+          RIOTBOX_EXTRA_ARGS="--device nvidia.com/gpu=all --security-opt=label=disable" \
+          RIOTBOX_EXTRA_ARGS_ACK=1 \
+          RIOTBOX_DRY_RUN=1 \
+          RIOTBOX_PROJECTS="${TMP}/proj" \
+          RIOTBOX_DATA_DIR="${TMP}/data" \
+          RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" HOME="${TMP}" \
+          ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" bash
+          argv="$(cat "${CAPTURE}")"
+          echo "ARGV=${argv}"
+          echo "${argv}" | grep -q -- "--device nvidia.com/gpu=all" || { echo "BAD: device flag missing" >&2; exit 1; }
+          echo "${argv}" | grep -q -- "--security-opt=label=disable" || { echo "BAD: security-opt missing" >&2; exit 1; }
+          echo "${argv}" | grep -Eq -- "--security-opt=label=disable.*[[:space:]]riotbox([[:space:]]|$)" \
+            || { echo "BAD: extra args not before image" >&2; exit 1; }
+          echo "${argv}" | grep -Eq -- "--name[[:space:]][^[:space:]]+.*--device nvidia.com/gpu=all" \
+            || { echo "BAD: extra args not after managed flags (--name)" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: launch.sh leaves argv unchanged when RIOTBOX_EXTRA_ARGS is unset
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
+          cat > "${TMP}/fake-cmd" <<'FAKE'
+          #!/usr/bin/env bash
+          printf '%s\n' "$*" > "${CAPTURE}"
+          FAKE
+          chmod +x "${TMP}/fake-cmd"
+          export CAPTURE="${TMP}/argv"
+          unset RIOTBOX_EXTRA_ARGS RIOTBOX_EXTRA_ARGS_ACK
+          RIOTBOX_DRY_RUN=1 RIOTBOX_PROJECTS="${TMP}/proj" RIOTBOX_DATA_DIR="${TMP}/data" \
+          RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" HOME="${TMP}" \
+          ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" bash
+          argv="$(cat "${CAPTURE}")"
+          echo "ARGV=${argv}"
+          echo "${argv}" | grep -Eq -- "[[:space:]]riotbox[[:space:]]+bash$" \
+            || { echo "BAD: tail not '... riotbox bash'" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: launch.sh aborts when RIOTBOX_EXTRA_ARGS set, no ack, no TTY
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
+          cat > "${TMP}/fake-cmd" <<'FAKE'
+          #!/usr/bin/env bash
+          # setup_projects probes the engine with `ps -a` to pick a free
+          # container name before the gate runs; record only the container
+          # `run` so the assertion measures the gate, not the name probe.
+          [ "${1:-}" = "run" ] && printf 'RAN\n' > "${CAPTURE}"
+          FAKE
+          chmod +x "${TMP}/fake-cmd"
+          export CAPTURE="${TMP}/argv"; : > "${CAPTURE}"
+          set +e
+          RIOTBOX_EXTRA_ARGS="--privileged" \
+          RIOTBOX_DRY_RUN=1 RIOTBOX_PROJECTS="${TMP}/proj" RIOTBOX_DATA_DIR="${TMP}/data" \
+          RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" HOME="${TMP}" \
+          ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" bash </dev/null >/dev/null 2>&1
+          rc=$?
+          set -e
+          [ "${rc}" != "0" ] || { echo "BAD: launch did not abort" >&2; exit 1; }
+          [ "$(cat "${CAPTURE}")" != "RAN" ] || { echo "BAD: engine ran despite no ack" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: shipped config sources cleanly and documents RIOTBOX_EXTRA_ARGS
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cfg="{{.riotbox_dir}}/scripts/configs/config"
+          ( set -u; unset RIOTBOX_EXTRA_ARGS RIOTBOX_EXTRA_ARGS_ACK; source "${cfg}"
+            [ -z "${RIOTBOX_EXTRA_ARGS:-}" ] || { echo "BAD: default not empty" >&2; exit 1; } )
+          grep -q "riotbox-config-version: 7" "${cfg}" || { echo "BAD: version not bumped to 7" >&2; exit 1; }
+          grep -q "RIOTBOX_EXTRA_ARGS_ACK" "${cfg}" || { echo "BAD: ack not documented" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: RIOTBOX_EXTRA_ARGS and ACK sourced from the config file are honored (no prompt, no abort)
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          # Exercises the documented GPU workflow where BOTH the flags and the
+          # acknowledgement live in the config file rather than the environment.
+          # venom exec is non-TTY, so without the config-sourced _ACK the gate
+          # would abort — reaching the captured `run` proves the config ACK is
+          # honored. (Like the other launch.sh cases, this relies on a minimal
+          # env: empty XDG/etc config dirs and RIOTBOX_DRY_RUN=1 keep the other
+          # launch.sh prompts/credfile/passthrough helpers as no-ops.)
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/xdg/riotbox" "${TMP}/etc" "${TMP}/data" "${TMP}/proj"
+          printf ': "${RIOTBOX_EXTRA_ARGS:=--device /dev/dri}"\n: "${RIOTBOX_EXTRA_ARGS_ACK:=1}"\n' \
+            > "${TMP}/xdg/riotbox/config"
+          cat > "${TMP}/fake-cmd" <<'FAKE'
+          #!/usr/bin/env bash
+          [ "${1:-}" = "run" ] && printf '%s\n' "$*" > "${CAPTURE}"
+          FAKE
+          chmod +x "${TMP}/fake-cmd"
+          export CAPTURE="${TMP}/argv"; : > "${CAPTURE}"
+          unset RIOTBOX_EXTRA_ARGS RIOTBOX_EXTRA_ARGS_ACK
+          RIOTBOX_DRY_RUN=1 RIOTBOX_PROJECTS="${TMP}/proj" RIOTBOX_DATA_DIR="${TMP}/data" \
+          RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" HOME="${TMP}" \
+          ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" bash </dev/null
+          argv="$(cat "${CAPTURE}")"
+          echo "ARGV=${argv}"
+          echo "${argv}" | grep -q -- "--device /dev/dri" \
+            || { echo "BAD: config-sourced extra arg missing (gate aborted or flag dropped)" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"

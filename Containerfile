@@ -333,6 +333,9 @@ ENV PATH=/home/llm/.riotbox/bin:/home/llm/.local/bin:/home/llm/.cargo/bin:/home/
 # ── Workaround uv and SELinux issuees ──────────────────────────────────────────
 ENV UV_LINK_MODE=hardlink
 
+# ── Riotbox Detection  ─────────────────────────────────────────────────────────
+ENV RIOTBOX=1
+
 # Fix ownership after root-stage COPY that creates dirs under /home/llm.
 RUN chown -R llm:llm /home/llm
 

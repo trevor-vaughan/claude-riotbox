@@ -481,6 +481,24 @@ You can also enable nested mode on any command via the environment variable:
 RIOTBOX_NESTED=1 riotbox shell
 ```
 
+### Extra engine arguments (`RIOTBOX_EXTRA_ARGS`)
+
+`RIOTBOX_EXTRA_ARGS` is a catch-all for run-time container-engine flags that have no dedicated RiotBox setting. Its value is appended to the `podman run` (or `docker run`) command after every other managed flag, just before `-w` and the image, so whatever you put here is the last thing the engine sees.
+
+> **WARNING:** These flags bypass RiotBox's safety defaults and can weaken container isolation. When `RIOTBOX_EXTRA_ARGS` is set, the launcher prints a warning and asks `[y/N]` (default No) on every interactive launch. Set `RIOTBOX_EXTRA_ARGS_ACK=1` to acknowledge the risk and skip the prompt for routine use. Without a TTY and without that acknowledgment, the launch aborts rather than applying the flags silently.
+
+The canonical use is GPU access:
+
+```sh
+# ~/.config/riotbox/config
+: "${RIOTBOX_EXTRA_ARGS:=--device nvidia.com/gpu=all --security-opt=label=disable}"
+: "${RIOTBOX_EXTRA_ARGS_ACK:=1}"
+```
+
+The value is whitespace-split, so a single flag value cannot contain spaces, and a bare `--` is rejected (it would let the launcher's own trailing options be reinterpreted as positionals).
+
+For narrowly scoped needs, prefer the dedicated settings (`RIOTBOX_NETWORK`, project mounts, `RIOTBOX_CREDFILE_VARS`) over this catch-all.
+
 ## Reclaiming authorship
 
 After a riotbox run, the container's commits will carry its generic identity (`LLM (riotbox)` \<`llm@riotbox`>). Use `riotbox reown` from the project directory to rewrite those commits with your name and email (read from your `~/.gitconfig`).

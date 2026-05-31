@@ -1,12 +1,34 @@
-# riotbox-config-version: 6
+# riotbox-config-version: 7
 # ~/.config/riotbox/config — Persistent defaults for riotbox.
 #
-# This file is sourced as shell script by the launcher. Values use the
-# : "${VAR:=default}" pattern so that environment variables and task flags
-# always take precedence over settings here.
+# This file is *sourced* as a bash script by the launcher, so each setting is
+# a real shell statement. Most settings below are written in this form:
 #
-# To activate a setting, uncomment the line. To revert to the default,
-# comment it out or delete the line.
+#     : "${VAR:=value}"
+#
+# Read it as two parts:
+#
+#   ${VAR:=value}   Assigns `value` to VAR ONLY when VAR is unset or empty.
+#                   If you already exported VAR in your shell — or a riotbox
+#                   flag set it — the assignment is skipped and your value
+#                   wins. This is the standard bash "default if unset" idiom.
+#
+#   leading ` : `   `:` is bash's null command: it does nothing and ignores
+#                   its arguments. It is here only to carry the expansion so
+#                   the line is a harmless no-op. Without it, bash would try
+#                   to RUN the expanded value as a command (and fail).
+#
+# So these are DEFAULTS you can always override at launch — not hard
+# overrides. Precedence, highest to lowest:
+#
+#     host env / riotbox flags  >  this file  >  /etc/riotbox/config  >  built-in
+#
+# To activate a setting, uncomment the whole line — keep the leading ": ".
+# To revert to the default, comment it out or delete the line.
+#
+# (A few advanced examples further down use a plain `VAR=value` assignment
+# instead. That form FORCES a value, overriding the environment; it is called
+# out where it appears.)
 # ─────────────────────────────────────────────────────────────────────────
 
 # ── Network isolation ────────────────────────────────────────────────────
@@ -30,6 +52,31 @@
 # isolation from the host.
 #
 # : "${RIOTBOX_NESTED:=1}"
+
+# ── Extra container-engine run-time arguments (relief valve) ─────────────
+# Raw flags inserted into the `podman run` (or `docker run`) command after all
+# other RiotBox-managed flags, immediately before the `-w` working-directory
+# flag and the image name. A relief valve for run-time needs without a
+# dedicated setting — e.g. GPU access:
+#
+#   : "${RIOTBOX_EXTRA_ARGS:=--device nvidia.com/gpu=all --security-opt=label=disable}"
+#
+# SECURITY: these flags bypass RiotBox's curated safety defaults and can weaken
+# container isolation. Whitespace-separated and word-split like every other
+# flag block — a single value may NOT contain spaces (e.g. a bind-mount path
+# with a space is unsupported here). A bare `--` is rejected unconditionally
+# (even with _ACK=1), since it would end the engine's option parsing. When set,
+# the launcher prints a WARNING and a [y/N] confirmation (default No) on every
+# interactive launch. To suppress the prompt on every launch, set the
+# acknowledgement flag in this file:
+#
+#   : "${RIOTBOX_EXTRA_ARGS_ACK:=1}"
+#
+# Without _ACK=1 and without a TTY (CI/scripts), the launch ABORTS rather than
+# silently applying the flags.
+#
+# : "${RIOTBOX_EXTRA_ARGS:=}"
+# : "${RIOTBOX_EXTRA_ARGS_ACK:=1}"
 
 # ── Container image name ─────────────────────────────────────────────────
 # Override if you maintain multiple RiotBox images (e.g. per-project).
@@ -109,10 +156,13 @@
 #
 # Examples:
 #
-# Single-line, bare names only (BC with prior versions):
+# Single-line, bare names only (BC with prior versions). The `: "${VAR:=...}"`
+# default form lets a host-env RIOTBOX_PASSTHROUGH_VARS still win:
 # : "${RIOTBOX_PASSTHROUGH_VARS:=ANTHROPIC_API_KEY OPENAI_API_KEY}"
 #
-# Multi-line, mixed forms:
+# Multi-line, mixed forms. NOTE the plain `VAR="..."` assignment (no leading
+# `:`): a multi-line body can't use the `:=` default idiom, so this FORCES the
+# value and overrides anything set in the host environment.
 # RIOTBOX_PASSTHROUGH_VARS="
 #     ANTHROPIC_API_KEY
 #     OPENAI_API_KEY
