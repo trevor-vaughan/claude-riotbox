@@ -605,6 +605,16 @@ CMD ["bash"]
 HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
     CMD command -v task >/dev/null 2>&1
 
+# ── LLM CLI tool cache-bust boundary ────────────────────────────────────────
+# `task container:update` bumps LLM_TOOL_UPDATE to a fresh value, which makes
+# this RUN a cache miss and forces every layer below it (opencode, Claude
+# Code, plugins) to rebuild and re-pull latest — without rebuilding the whole
+# image. A normal `task container:build` always passes the default (0), so the
+# boundary stays cached and the tools are reused. The three tool RUNs below are
+# intentionally left unchanged; the boundary alone controls their freshness.
+ARG LLM_TOOL_UPDATE=0
+RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
+
 # ── opencode (installed alongside Claude Code) ───────────────────────────────
 # The official installer hardcodes the install target at $HOME/.opencode/bin
 # and modifies .bashrc to extend PATH. Skip the .bashrc modification with

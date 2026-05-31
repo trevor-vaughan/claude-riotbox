@@ -1,0 +1,90 @@
+name: container task namespace exposes build/rebuild/update and the docker namespace is gone
+vars:
+  root: "."
+
+# Pins the container task surface after the docker→container rename:
+#   - container:{build,rebuild,update} and the root build/rebuild/update
+#     aliases all resolve via `task --list`.
+#   - the old docker namespace no longer resolves.
+#   - the LLM_TOOL_UPDATE cache-bust boundary is wired: build.sh passes the
+#     arg with a default of 0, and the Containerfile declares the ARG above
+#     the opencode install so bumping it invalidates only the tail layers.
+# These run against the repo checkout (no image build), so they are safe for
+# `task test:direct`.
+
+testcases:
+  - name: task --list exposes the container namespace and root aliases
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          task --list
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "container:build"
+          - result.systemout ShouldContainSubstring "container:rebuild"
+          - result.systemout ShouldContainSubstring "container:update"
+          - result.systemout ShouldContainSubstring "alias for container:update"
+
+  - name: the old docker task namespace no longer resolves
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          command -v task >/dev/null
+          out="$(task docker:build 2>&1 || true)"
+          printf '%s\n' "$out"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "docker:build"
+          - result.systemout ShouldContainSubstring "does not exist"
+
+  - name: build.sh passes the LLM_TOOL_UPDATE build-arg defaulting to 0
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          grep -F 'LLM_TOOL_UPDATE=${LLM_TOOL_UPDATE:-0}' scripts/build.sh
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: build.sh uses CONTAINER_EXTRA_ARGS and no longer references DOCKER_EXTRA_ARGS
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          grep -q 'CONTAINER_EXTRA_ARGS' scripts/build.sh
+          if grep -q 'DOCKER_EXTRA_ARGS' scripts/build.sh; then
+            echo "STALE_REF_FOUND"
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "STALE_REF_FOUND"
+
+  - name: Containerfile declares the cache-bust ARG above the opencode install
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          awk '/ARG LLM_TOOL_UPDATE/{a=NR} /opencode\.ai\/install/{o=NR} END{exit !(a>0 && a<o)}' Containerfile
+          echo "boundary-ok"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "boundary-ok"
+
+  - name: riotbox update verb is wired and surfaces in help
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          bash -n bin/riotbox
+          grep -Eq '^update\)' bin/riotbox
+          bin/riotbox help | grep -q 'update'
+        assertions:
+          - result.code ShouldEqual 0

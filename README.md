@@ -191,6 +191,7 @@ the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent na
 |---------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
 | `riotbox build`                       | Introspect host environment and build the container image                                                               |
 | `riotbox rebuild`                     | Force a clean rebuild with no layer cache                                                                               |
+| `riotbox update`                      | Upgrade only the LLM CLI tools (opencode, Claude Code, plugins) to latest — reuses every other cached layer             |
 | `riotbox run "<task>" [dir]`          | Run the agent autonomously (defaults to current directory)                                                              |
 | `riotbox shell [dir]`                 | Interactive shell (defaults to current directory)                                                                       |
 | `riotbox resume [dir]`                | Continue the last agent session                                                                                         |

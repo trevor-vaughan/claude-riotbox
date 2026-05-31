@@ -8,7 +8,7 @@ vars:
 tasks:
   default:
     silent: true
-    cmd: task docker --list
+    cmd: task container --list
 
   build:
     desc: Build the RiotBox image (detects your local toolchains)
@@ -17,7 +17,14 @@ tasks:
   rebuild:
     desc: Rebuild from scratch (no cache)
     env:
-      DOCKER_EXTRA_ARGS: "--no-cache"
+      CONTAINER_EXTRA_ARGS: "--no-cache"
+    cmd: "{{.ROOT_DIR}}/scripts/build.sh"
+
+  update:
+    desc: Upgrade only the LLM CLI tools (opencode, Claude Code, plugins) to latest
+    env:
+      LLM_TOOL_UPDATE:
+        sh: date +%s
     cmd: "{{.ROOT_DIR}}/scripts/build.sh"
 
   clean:

@@ -1,8 +1,8 @@
 version: "3"
 
 includes:
-  docker:
-    taskfile: .taskfiles/docker.yml
+  container:
+    taskfile: .taskfiles/container.yml
   lint:
     taskfile: .taskfiles/lint.yml
   test:
@@ -19,58 +19,21 @@ tasks:
   default:
     silent: true
     cmd: |
-      task --list 2>/dev/null | awk '
-        /^task:/ { next }
-        /^\* / {
-          line = substr($0, 3)
-          if (!match(line, /:[[:space:]]+/)) next
-          name = substr(line, 1, RSTART - 1)
-          desc = substr(line, RSTART + RLENGTH)
-          gsub(/^[[:space:]]+/, "", desc)
-          sep = index(name, ":")
-          if (sep > 0) {
-            ns = substr(name, 1, sep - 1)
-            short = substr(name, sep + 1)
-          } else {
-            ns = ""
-            short = name
-          }
-          if (short == "default") next
-          idx++
-          ns_arr[idx] = ns
-          short_arr[idx] = short
-          desc_arr[idx] = desc
-          if (!(ns in ns_seen)) {
-            ns_order[++ns_count] = ns
-            ns_seen[ns] = 1
-          }
-        }
-        END {
-          for (o = 1; o <= ns_count; o++) {
-            ns = ns_order[o]
-            print ""
-            print "----------"
-            print (ns == "" ? "tasks" : ns) ":"
-            for (i = 1; i <= idx; i++) {
-              if (ns_arr[i] == ns) {
-                printf "  %-24s %s\n", short_arr[i], desc_arr[i]
-              }
-            }
-            print "----------"
-          }
-          print ""
-        }
-      '
-
+      task --list 2>/dev/null
   build:
-    desc: "Build the RiotBox image (alias for docker:build)"
+    desc: "Build the RiotBox image (alias for container:build)"
     cmds:
-      - task: docker:build
+      - task: container:build
 
   rebuild:
-    desc: "Rebuild from scratch (alias for docker:rebuild)"
+    desc: "Rebuild from scratch (alias for container:rebuild)"
     cmds:
-      - task: docker:rebuild
+      - task: container:rebuild
+
+  update:
+    desc: "Upgrade only the LLM CLI tools (alias for container:update)"
+    cmds:
+      - task: container:update
 
   test:
     desc: "Run integration tests (alias for test:run)"

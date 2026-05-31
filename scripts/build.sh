@@ -307,7 +307,7 @@ echo "════════════════════════�
 
 # shellcheck disable=SC2086  # intentional word splitting for extra args
 ${CONTAINER_CMD} build \
-	${DOCKER_EXTRA_ARGS:-} \
+	${CONTAINER_EXTRA_ARGS:-} \
 	--label "org.opencontainers.image.version=${VERSION}" \
 	--label "org.opencontainers.image.title=riotbox" \
 	--build-arg "HOST_UID=${HOST_UID}" \
@@ -321,6 +321,7 @@ ${CONTAINER_CMD} build \
 	--build-arg "RUBY_VERSIONS=${RUBY_VERSIONS}" \
 	--build-arg "RUBY_DEFAULT=${RUBY_DEFAULT}" \
 	--build-arg "RIOTBOX_DIAGRAMS=${RIOTBOX_DIAGRAMS:-0}" \
+	--build-arg "LLM_TOOL_UPDATE=${LLM_TOOL_UPDATE:-0}" \
 	--progress=plain \
 	-t "${IMAGE_NAME}" \
 	-f "${BUILD_CONTEXT}/Containerfile" \

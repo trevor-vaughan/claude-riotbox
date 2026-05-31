@@ -85,6 +85,7 @@ Setup / maintenance:
   install-hooks [flags...]     Install the git pre-push identity hook
   build                        Build the RiotBox image
   rebuild                      Rebuild the image from scratch (no cache)
+  update                       Upgrade only the LLM CLI tools (opencode, Claude Code, plugins)
 
 Info:
   agents                       List registered agents (name + binary)
@@ -138,12 +139,16 @@ print_command_help() {
 	case "$1" in
 	audit) exec "${LIBEXEC}/audit.sh" --help ;;
 	install-hooks) exec "${LIBEXEC}/install-hooks.sh" --help ;;
-	build | rebuild)
+	build | rebuild | update)
 		echo "Usage: riotbox ${1}"
 		echo ""
 		echo "Introspect the host environment (nvm, uv, Go, Rust, RVM) and build"
-		echo "the container image. rebuild adds --no-cache to invalidate every"
-		echo "layer. Environment knobs:"
+		echo "the container image."
+		echo "  build    Build using the layer cache where possible."
+		echo "  rebuild  Add --no-cache to invalidate every layer."
+		echo "  update   Re-pull only the LLM CLI tools (opencode, Claude Code,"
+		echo "           plugins) to latest; reuse every other cached layer."
+		echo "Environment knobs:"
 		echo "  NODE_VERSIONS_MAX=<N>|all  Cap baked-in Node versions (default 3)"
 		echo "  RIOTBOX_DIAGRAMS=1         Include Chromium + mmdc"
 		echo "  RIOTBOX_NONINTERACTIVE_BUILD=1  Skip the proceed prompt"
@@ -196,7 +201,8 @@ agents)
 	;;
 
 build) exec "${SCRIPTS}/build.sh" ;;
-rebuild) DOCKER_EXTRA_ARGS="--no-cache" exec "${SCRIPTS}/build.sh" ;;
+rebuild) CONTAINER_EXTRA_ARGS="--no-cache" exec "${SCRIPTS}/build.sh" ;;
+update) LLM_TOOL_UPDATE="$(date +%s)" exec "${SCRIPTS}/build.sh" ;;
 
 run)
 	ensure_image
