@@ -426,6 +426,98 @@ testcases:
           - result.systemout ShouldContainSubstring "run"
           - result.systemout ShouldContainSubstring "--continue"
 
+  # ── Headroom optional verb ───────────────────────────────────────────────
+  # headroom_argv is the contract's first OPTIONAL verb: agents that support
+  # headroom interposition define it; absence means "run unwrapped". The
+  # generic case validates shape wherever the verb exists; the claude cases
+  # pin the exact flag set the spec mandates.
+
+  - name: headroom_argv where defined begins with headroom wrap <agent-binary>
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          agent_test_init
+          for a in "${AGENT_REGISTRY[@]}"; do
+            if ! declare -F "agent_${a}_headroom_argv" >/dev/null; then
+              echo "${a}: headroom_argv not defined (optional -- OK)"
+              continue
+            fi
+            bin="$(agent_call "$a" real_binary)"
+            mapfile -d '' -t argv < <(agent_call "$a" headroom_argv -p "x")
+            if [ "${argv[0]:-}" != "headroom" ] || [ "${argv[1]:-}" != "wrap" ] \
+               || [ "${argv[2]:-}" != "${bin}" ]; then
+              agent_fail "${a}: headroom_argv must start 'headroom wrap ${bin}' (got: ${argv[*]:0:3})"
+            fi
+            echo "${a}: headroom_argv=${argv[*]}"
+          done
+          agent_test_done
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: claude headroom_argv carries the mandated flags and -- before user args
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          if ! declare -F agent_claude_headroom_argv >/dev/null; then
+            echo "FAIL: agent_claude_headroom_argv is not defined" >&2
+            exit 1
+          fi
+          mapfile -d '' -t argv < <(agent_call claude headroom_argv -p "do work")
+          echo "argv=${argv[*]}"
+          # Required flags (offline-after-build: serena/rtk download at start).
+          for want in --memory --learn --no-serena --no-context-tool; do
+            found=0
+            for t in "${argv[@]}"; do [ "${t}" = "${want}" ] && found=1; done
+            [ "${found}" = "1" ] || { echo "FAIL: missing ${want}" >&2; exit 1; }
+          done
+          # `--` must exist and every user arg must come after it: headroom
+          # wrap claude has its own -p/--port, so a user -p BEFORE the
+          # separator would be eaten as a proxy port.
+          sep=-1; p=-1
+          for i in "${!argv[@]}"; do
+            [ "${argv[$i]}" = "--" ] && [ "${sep}" -lt 0 ] && sep=$i
+            [ "${argv[$i]}" = "-p" ] && [ "${p}" -lt 0 ] && p=$i
+          done
+          [ "${sep}" -ge 0 ] || { echo "FAIL: no -- separator" >&2; exit 1; }
+          [ "${p}" -gt "${sep}" ] || { echo "FAIL: -p not after -- (p=${p} sep=${sep})" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: claude headroom_argv preserves a multi-line prompt as a single token
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          prompt="fix this:
+            - thing one
+            - thing two"
+          mapfile -d '' -t argv < <(agent_call claude headroom_argv -p "${prompt}")
+          # Tail must be exactly: -- -p <prompt> (3 tokens after the flags).
+          n=${#argv[@]}
+          if [ "${argv[$((n-3))]}" != "--" ] || [ "${argv[$((n-2))]}" != "-p" ]; then
+            echo "FAIL: tail is not '-- -p <prompt>' (${argv[$((n-3))]} ${argv[$((n-2))]})" >&2
+            exit 1
+          fi
+          if [ "${argv[$((n-1))]}" != "${prompt}" ]; then
+            echo "FAIL: prompt did not round-trip byte-for-byte" >&2
+            exit 1
+          fi
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
   # ── Auto-discovery edge cases ───────────────────────────────────────────
   # registry.sh discovers agents by globbing agents/*/manifest.sh. These
   # tests use a copied-and-modified registry tree to exercise edge cases

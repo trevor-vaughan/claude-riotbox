@@ -57,3 +57,18 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "startup_scripts_shipped=true"
+
+  - name: Containerfile ships container/headroom-summary.sh
+    steps:
+      - type: exec
+        script: |
+          cd "{{.riotbox_dir}}"
+          if grep -qE "COPY .*container/headroom-summary.sh .*/\.riotbox/headroom-summary.sh" Containerfile; then
+            echo "headroom_summary_shipped=true"
+          else
+            echo "FAIL: container/headroom-summary.sh is not COPYed into the image"
+            exit 1
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "headroom_summary_shipped=true"

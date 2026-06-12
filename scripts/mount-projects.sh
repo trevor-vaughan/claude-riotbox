@@ -388,6 +388,20 @@ setup_projects() {
 	fi
 	PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${riotbox_session_dir}:/home/llm/.claude:z"
 
+	# ── Headroom state (opt-in) ─────────────────────────────────────────
+	# CCR cache, memory store, and proxy logs live under ~/.headroom
+	# in-container. Mount a session-dir subdir so cross-agent memory
+	# persists across runs of the same project set. Emitted only when the
+	# feature is enabled — default sessions get no extra mount. (The same
+	# data is also reachable at ~/.claude/headroom through the session
+	# mount above; the README documents that dual path.)
+	if [[ "${RIOTBOX_HEADROOM:-0}" = "1" ]]; then
+		if [[ "${RIOTBOX_DRY_RUN:-0}" != "1" ]]; then
+			mkdir -p "${riotbox_session_dir}/headroom"
+		fi
+		PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${riotbox_session_dir}/headroom:/home/llm/.headroom:z"
+	fi
+
 	# ── Sync each registered agent's host config into the session dir ──
 	# The agent registry tells us which agents to sync. Each manifest's
 	# host_sync function knows where its host config lives and what
@@ -487,6 +501,20 @@ if [[ "${BASH_SOURCE[0]}" = "${0}" ]]; then
 	if [[ -z "${ROOT_DIR:-}" ]]; then
 		ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 	fi
+
+	# Source config for config-persisted toggles (e.g. RIOTBOX_HEADROOM). The
+	# files use `: "${VAR:=default}"` so sourcing user (XDG) before system (/etc)
+	# yields: env > $XDG_CONFIG_HOME/riotbox > /etc/riotbox > built-in default.
+	# (env wins because := only assigns when the variable is unset.) This mirrors
+	# launch.sh's sourcing logic so `riotbox mounts` reflects the same config
+	# state that a real launch would see.
+	_MPS_CONFIG_USER="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox/config"
+	_MPS_CONFIG_SYSTEM="${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}/config"
+	# shellcheck disable=SC1090
+	[[ -f "${_MPS_CONFIG_USER}" ]] && source "${_MPS_CONFIG_USER}"
+	# shellcheck disable=SC1090,SC1091
+	[[ -f "${_MPS_CONFIG_SYSTEM}" ]] && source "${_MPS_CONFIG_SYSTEM}"
+	unset _MPS_CONFIG_USER _MPS_CONFIG_SYSTEM
 
 	raw="${RIOTBOX_PROJECTS:-${PROJECT_ARGS[*]:-}}"
 	setup_projects "${raw}"

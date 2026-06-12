@@ -191,7 +191,7 @@ the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent na
 |---------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
 | `riotbox build`                       | Introspect host environment and build the container image                                                               |
 | `riotbox rebuild`                     | Force a clean rebuild with no layer cache                                                                               |
-| `riotbox update`                      | Upgrade only the LLM CLI tools (opencode, Claude Code, plugins) to latest — reuses every other cached layer             |
+| `riotbox update`                      | Re-pull LLM CLI tools — headroom re-installs at its pinned version; opencode, Claude Code, and plugins update to latest  |
 | `riotbox run "<task>" [dir]`          | Run the agent autonomously (defaults to current directory)                                                              |
 | `riotbox shell [dir]`                 | Interactive shell (defaults to current directory)                                                                       |
 | `riotbox resume [dir]`                | Continue the last agent session                                                                                         |
@@ -528,6 +528,44 @@ riotbox install-hooks global
 
 The hook checks the push range for any container-identity commits and aborts the push with a hint to run `riotbox reown` if it finds any. Existing hook managers (lefthook, husky, pre-commit) are detected and a snippet is printed so you can chain the RiotBox hook from your manager's config. `riotbox install-hooks --help` lists the options.
 
+## Headroom context compression (opt-in)
+
+[Headroom](https://github.com/chopratejas/headroom) compresses tool outputs,
+logs, and conversation history before they reach the model — typically a
+60–95% token reduction. RiotBox ships it in the image (pinned version,
+telemetry permanently off) and activates it per session:
+
+```bash
+RIOTBOX_HEADROOM=1 riotbox run "fix the failing tests"
+# or persist it:
+echo ': "${RIOTBOX_HEADROOM:=1}"' >> ~/.config/riotbox/config
+```
+
+What changes when enabled:
+
+- The agent launches through `headroom wrap` — a localhost-only compression
+  proxy inside the container. Nothing is exposed outside the container.
+- Cross-session memory and failure learning (`--memory`, `--learn`) are on.
+  State persists per project set under the session directory
+  (`~/.local/share/riotbox/<session>/headroom`, also visible in-container at
+  `~/.claude/headroom`) and is shared by all agents of that project set.
+- Model inference is fully offline — the compression models are baked into
+  the image at build time.
+- Currently wired for `--agent=claude`. Other agents print a warning and run
+  uncompressed.
+- Nested agent invocations inside a wrapped session (e.g. the agent's own
+  shell running `claude`) intentionally run uncompressed.
+
+Headroom keeps reversible copies of compressed content (originals the model
+can retrieve on demand) in that state directory — treat it with the same
+sensitivity as your `.claude` session transcripts. `riotbox session-remove`
+deletes both together.
+
+The toggle accepts only the literal `1` — anything else disables the feature
+(`riotbox doctor` flags unrecognized values). If a session misbehaves under
+compression, drop the variable and rerun — default behavior is untouched
+when `RIOTBOX_HEADROOM` is unset.
+
 ## Overlay mode (podman-only)
 
 Overlay mode mounts your project read-only and uses fuse-overlayfs to capture all changes in a separate layer. The host project is never modified directly.
@@ -580,6 +618,7 @@ RiotBox includes several layers of protection, but none are foolproof:
 - **Checkpoint tags**: A git tag (`riotbox-checkpoint/<timestamp>`) is created on the current HEAD before each run. Tags survive history rewrites inside the container.
 - **Session branches**: On `shell` sessions, the container offers to create a `riotbox/<id>` branch. The agent works there; on exit the branch is fast-forward merged back so the full commit history lands seamlessly on your branch. See [Session branches](#session-branches).
 - **Git repo bootstrapping**: If a project directory isn't a git repo, RiotBox offers to create one so the checkpoint mechanism has something to protect. Empty repos (no commits yet) are handled gracefully — see [Initializing a git repo](#initializing-a-git-repo).
+- **Managed `.git/info/exclude` block**: Before each checkpoint commit, RiotBox injects a managed block into the project's `.git/info/exclude` file that excludes common runtime artifacts — `.headroom/`, `venom.log`, `venom.*.log`, `.claude/settings.local.json`, and `CLAUDE.local.md` — so they're never swept into history. This file is per-clone and never reaches collaborators (it lives in `.git/`, which is not tracked). You can add your own exclusion patterns anywhere outside the `>>> riotbox managed excludes <<<` markers; RiotBox only ever touches content between them.
 - **Git guardrails**: Inside the container, `receive.denyNonFastForwards` and `receive.denyDeletes` are enabled to prevent the most destructive git operations.
 - **Container isolation**: The agent can't access your SSH keys, cloud credentials, or anything outside the mounted directories.
 

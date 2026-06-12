@@ -23,6 +23,10 @@ venom.*.log
 # Diagnostic dumps and runtime logs (never commit)
 *.log
 
+# Headroom per-project state (memory/code-graph DBs the proxy writes into the
+# working dir when RIOTBOX_HEADROOM=1). Never project code; never commit.
+.headroom/
+
 # Scratch space for spikes / one-off experiments
 tmp/
 

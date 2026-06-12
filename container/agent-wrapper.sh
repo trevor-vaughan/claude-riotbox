@@ -8,10 +8,13 @@
 #   1. Identifies the agent from its own filename — e.g. when invoked as
 #      `claude`, it dispatches to the `claude` manifest.
 #   2. Sources the agent registry to load every manifest.
-#   3. Resolves the real binary via container/find-real-bin.sh.
-#   4. Calls agent_<name>_wrapper_inject "$@" to rewrite argv (and decide
+#   3. Interposes headroom (when RIOTBOX_HEADROOM=1 and guard unset): execs
+#      `headroom wrap <agent> … -- <original argv>`, which re-launches the shim;
+#      the guard (RIOTBOX_HEADROOM_ACTIVE=1) makes that second pass fall through.
+#   4. Resolves the real binary via container/find-real-bin.sh.
+#   5. Calls agent_<name>_wrapper_inject "$@" to rewrite argv (and decide
 #      whether to set CI=true).
-#   5. Execs the real binary with the rewritten argv.
+#   6. Execs the real binary with the rewritten argv.
 #
 # Replaces claude-wrapper.sh and opencode-wrapper.sh. Adding a new agent
 # requires only a new manifest (agents/<name>/manifest.sh) and a symlink —
@@ -32,6 +35,28 @@ if ! agent_is_registered "${agent}"; then
 	echo "ERROR: agent-wrapper.sh invoked as '${agent}' but no such agent is registered." >&2
 	echo "       Registered agents: ${AGENT_REGISTRY[*]}" >&2
 	exit 1
+fi
+
+# ── Headroom interposition (opt-in context compression) ─────────────────────
+# First pass (RIOTBOX_HEADROOM=1, guard unset): exec `headroom wrap …`
+# instead of the real binary. headroom re-launches the agent by name, which
+# resolves back to this shim; the exported RIOTBOX_HEADROOM_ACTIVE guard
+# makes that second pass fall through to the normal inject-and-exec path
+# below. Both degraded modes (agent has no headroom_argv verb / headroom
+# missing from the image) warn and run unwrapped — headroom is an
+# optimization layer, never a reason to lose a session.
+if [[ "${RIOTBOX_HEADROOM:-0}" = "1" ]] && [[ -z "${RIOTBOX_HEADROOM_ACTIVE:-}" ]]; then
+	if ! declare -F "agent_${agent}_headroom_argv" >/dev/null; then
+		echo "WARNING: RIOTBOX_HEADROOM=1 but agent '${agent}' has no headroom support — running unwrapped." >&2
+	elif ! command -v headroom >/dev/null 2>&1; then
+		echo "WARNING: RIOTBOX_HEADROOM=1 but headroom is not installed in this image — running unwrapped." >&2
+		echo "         Update the image with: riotbox update" >&2
+	else
+		export RIOTBOX_HEADROOM_ACTIVE=1
+		# shellcheck disable=SC2312  # agent_call exit code is not masked; mapfile reads its stdout via process substitution
+		mapfile -d '' -t headroom_args < <(agent_call "${agent}" headroom_argv "$@")
+		exec "${headroom_args[@]}"
+	fi
 fi
 
 # Resolve the agent's real binary on PATH (skipping ${HOME}/.riotbox/bin).

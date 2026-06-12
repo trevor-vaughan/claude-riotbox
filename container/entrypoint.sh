@@ -30,6 +30,13 @@ export DISABLE_AUTOUPDATER=1
 export OPENCODE_DISABLE_AUTOUPDATE=1
 export OPENCODE_DISABLE_LSP_DOWNLOAD=1
 
+# Headroom (opt-in context compression): the HF model caches (Kompress,
+# memory embedder) are baked into the image at build time. Force offline
+# model loading so an enabled session never reaches out to HuggingFace.
+if [[ "${RIOTBOX_HEADROOM:-0}" = "1" ]]; then
+	export HF_HUB_OFFLINE=1
+fi
+
 # Keep marketplace cache when git pull fails (container may lack network).
 export CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE=1
 
@@ -71,6 +78,9 @@ source "${RIOTBOX_SCRIPT_DIR}/overlay-setup.sh"
 source "${RIOTBOX_SCRIPT_DIR}/plugin-setup.sh"
 # shellcheck source=./startup-scripts.sh disable=SC1091
 source "${RIOTBOX_SCRIPT_DIR}/startup-scripts.sh"
+# shellcheck source=./headroom-summary.sh disable=SC1091
+[[ -f "${RIOTBOX_SCRIPT_DIR}/headroom-summary.sh" ]] && \
+	source "${RIOTBOX_SCRIPT_DIR}/headroom-summary.sh"
 
 # Nested podman setup: file caps on newuidmap/newgidmap and /etc/sub{u,g}id
 # alignment with the outer keep-id user namespace. Only run when nested mode
@@ -117,6 +127,11 @@ session_branch_setup
 # warn and continue; the session is still usable.
 startup_scripts_run
 
+# Record headroom session start time before launching the main command so the
+# perf window covers the full session.  No-op unless RIOTBOX_HEADROOM=1 and
+# headroom-summary.sh was sourced (function may not exist on older images).
+declare -F headroom_summary_init >/dev/null 2>&1 && headroom_summary_init
+
 # Run the main command without exec so this shell survives to run teardown.
 # exec was originally used to avoid bash -lc semantics — sourcing .bashrc above
 # already handles that. Foreground child processes inherit the TTY regardless.
@@ -126,6 +141,12 @@ else
 	"$@"
 fi
 _exit_code=$?
+
+# Print compact per-model token usage summary.  No-op unless RIOTBOX_HEADROOM=1
+# and the binary + jq are available.  Never affects the exit code.
+if declare -F headroom_summary_print >/dev/null 2>&1; then
+	headroom_summary_print || true
+fi
 
 # Overlay: print exit summary with change stats
 overlay_teardown

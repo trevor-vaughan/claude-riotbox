@@ -232,6 +232,46 @@ Users can still override the registry-derived default with
 that want a curated list, or add to it without restating the base via
 `RIOTBOX_PASSTHROUGH_EXTRA_VARS` (same syntax, appended after the base).
 
+## Optional verbs
+
+Beyond the eight required functions, a manifest may implement optional
+verbs. The wrapper probes for them with `declare -F agent_<name>_<verb>`;
+absence is never an error.
+
+### `agent_<name>_headroom_argv "$@"`
+
+```bash
+agent_<name>_headroom_argv() {
+	printf '%s\0' headroom wrap <real-binary> <flags...> --
+	local arg
+	for arg in "$@"; do
+		printf '%s\0' "${arg}"
+	done
+}
+```
+
+Emits (NUL-terminated, like the other argv verbs) the `headroom wrap …`
+command line used when `RIOTBOX_HEADROOM=1`. The wrapper execs this argv
+instead of the real binary on the first pass; headroom then re-launches the
+agent by name, which resolves back to the shim — the exported
+`RIOTBOX_HEADROOM_ACTIVE=1` guard makes that second pass take the normal
+inject-and-exec path. Your verb MUST:
+
+- start with `headroom wrap <real-binary>`,
+- disable anything that downloads at session start (the claude manifest
+  passes `--no-serena --no-context-tool` — the image is offline-after-build),
+- place all caller args after a literal `--` (headroom's wrap subcommands
+  define their own flags, e.g. `-p/--port`, that would otherwise swallow
+  agent flags).
+
+Agents without the verb run unwrapped under `RIOTBOX_HEADROOM=1`, with a
+warning on stderr. `headroom wrap` has no opencode subcommand — opencode
+support would go through `headroom proxy` + `OPENAI_BASE_URL` instead and
+is intentionally not implemented yet.
+
+Contract coverage lives in `tests/agents.venom.yml` ("Headroom optional
+verb" cases) and `tests/headroom.venom.yml`.
+
 ## Worked example: adding `aider`
 
 Suppose [aider](https://aider.chat/) is your third agent. Here's the

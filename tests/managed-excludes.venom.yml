@@ -1,0 +1,393 @@
+name: Checkpoint maintains managed .git/info/exclude block
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  helpers: "{{.root}}/tests/lib/git-test-helpers.sh"
+
+testcases:
+
+  # -- Artifacts excluded from checkpoint commit --
+
+  - name: Checkpoint commit omits .headroom/ and venom.log when exclude block is injected
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          # Tracked file to confirm basic checkpoint still works
+          echo "src" > "${REPO_DIR}/main.go"
+          git -C "${REPO_DIR}" add main.go
+          GIT_AUTHOR_NAME="${HUMAN_NAME}" GIT_AUTHOR_EMAIL="${HUMAN_EMAIL}" \
+          GIT_COMMITTER_NAME="${HUMAN_NAME}" GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
+          git -C "${REPO_DIR}" commit -m "initial"
+
+          # Runtime artifacts that must NOT land in the checkpoint commit
+          mkdir -p "${REPO_DIR}/.headroom"
+          echo "db" > "${REPO_DIR}/.headroom/junk.db"
+          echo "log output" > "${REPO_DIR}/venom.log"
+
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+
+          # The managed block must be present
+          exclude_path="${REPO_DIR}/.git/info/exclude"
+          grep -q '>>> riotbox managed excludes' "${exclude_path}"
+
+          # The checkpoint commit must NOT contain the artifact files
+          stat_out="$(git -C "${REPO_DIR}" log --stat -1)"
+          if echo "${stat_out}" | grep -q '\.headroom/'; then echo "FAIL: .headroom/ appeared in commit"; exit 1; fi
+          if echo "${stat_out}" | grep -q 'venom\.log'; then echo "FAIL: venom.log appeared in commit"; exit 1; fi
+
+          echo "artifacts_excluded_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "artifacts_excluded_ok=true"
+
+  # -- Idempotency: exactly one marker pair after two runs --
+
+  - name: Running checkpoint twice leaves exactly one managed block
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          echo "src" > "${REPO_DIR}/main.go"
+          git -C "${REPO_DIR}" add main.go
+          GIT_AUTHOR_NAME="${HUMAN_NAME}" GIT_AUTHOR_EMAIL="${HUMAN_EMAIL}" \
+          GIT_COMMITTER_NAME="${HUMAN_NAME}" GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
+          git -C "${REPO_DIR}" commit -m "initial"
+
+          # Run checkpoint twice. A sleep 1 between runs ensures the tag
+          # timestamp differs so the second run never collides with the first.
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          sleep 1
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+
+          exclude_path="${REPO_DIR}/.git/info/exclude"
+          marker_count="$(grep -c '>>> riotbox managed excludes' "${exclude_path}")"
+          echo "marker_count=${marker_count}"
+          [ "${marker_count}" -eq 1 ]
+
+          echo "idempotent_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "marker_count=1"
+          - result.systemout ShouldContainSubstring "idempotent_ok=true"
+
+  # -- User content outside markers is preserved; stale list is replaced --
+
+  - name: User lines outside markers survive; stale managed block is replaced
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          echo "src" > "${REPO_DIR}/main.go"
+          git -C "${REPO_DIR}" add main.go
+          GIT_AUTHOR_NAME="${HUMAN_NAME}" GIT_AUTHOR_EMAIL="${HUMAN_EMAIL}" \
+          GIT_COMMITTER_NAME="${HUMAN_NAME}" GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
+          git -C "${REPO_DIR}" commit -m "initial"
+
+          # Pre-seed a stale managed block with an obsolete pattern.
+          # Use printf to avoid heredoc indentation contaminating the file.
+          mkdir -p "${REPO_DIR}/.git/info"
+          printf '%s\n' \
+            '# user'"'"'s own line' \
+            'mystuff/' \
+            '# >>> riotbox managed excludes (do not edit between markers) >>>' \
+            'old-pattern/' \
+            '# <<< riotbox managed excludes <<<' \
+            > "${REPO_DIR}/.git/info/exclude"
+
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+
+          exclude_path="${REPO_DIR}/.git/info/exclude"
+
+          # User line must survive
+          grep -q 'mystuff/' "${exclude_path}"
+
+          # Old pattern must be gone
+          if grep -q 'old-pattern/' "${exclude_path}"; then echo "FAIL: stale pattern survived"; exit 1; fi
+
+          # New patterns must be present
+          grep -q '\.headroom/' "${exclude_path}"
+          grep -q 'venom\.log' "${exclude_path}"
+
+          # Still only one marker pair
+          marker_count="$(grep -c '>>> riotbox managed excludes' "${exclude_path}")"
+          [ "${marker_count}" -eq 1 ]
+
+          echo "stale_replaced_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "stale_replaced_ok=true"
+
+  # -- Already-tracked file keeps being tracked (exclude != rm --cached) --
+
+  - name: Tracked .claude/settings.local.json is still checkpointed after exclude injection
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          # Commit .claude/settings.local.json so it is tracked
+          mkdir -p "${REPO_DIR}/.claude"
+          echo '{"version":1}' > "${REPO_DIR}/.claude/settings.local.json"
+          git -C "${REPO_DIR}" add .claude/settings.local.json
+          GIT_AUTHOR_NAME="${HUMAN_NAME}" GIT_AUTHOR_EMAIL="${HUMAN_EMAIL}" \
+          GIT_COMMITTER_NAME="${HUMAN_NAME}" GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
+          git -C "${REPO_DIR}" commit -m "initial"
+
+          # Modify the tracked file — checkpoint must capture the change
+          echo '{"version":2}' > "${REPO_DIR}/.claude/settings.local.json"
+
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+
+          # The tracked, modified file must appear in the checkpoint commit
+          stat_out="$(git -C "${REPO_DIR}" log --stat -1)"
+          if ! echo "${stat_out}" | grep -q 'settings.local.json'; then
+            echo "FAIL: tracked file missing from checkpoint"
+            exit 1
+          fi
+
+          echo "tracked_file_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tracked_file_ok=true"
+
+  # -- Unclosed managed block (corrupt state): warn, preserve user content --
+
+  - name: Unclosed managed block warns and preserves user content
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          echo "src" > "${REPO_DIR}/main.go"
+          git -C "${REPO_DIR}" add main.go
+          GIT_AUTHOR_NAME="${HUMAN_NAME}" GIT_AUTHOR_EMAIL="${HUMAN_EMAIL}" \
+          GIT_COMMITTER_NAME="${HUMAN_NAME}" GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
+          git -C "${REPO_DIR}" commit -m "initial"
+
+          # Seed exclude with open marker but NO close marker — corrupt state.
+          mkdir -p "${REPO_DIR}/.git/info"
+          printf '%s\n' \
+            '# >>> riotbox managed excludes (do not edit between markers) >>>' \
+            'user-line-after-open-marker/' \
+            > "${REPO_DIR}/.git/info/exclude"
+
+          err="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1 >/dev/null)" || true
+
+          exclude_path="${REPO_DIR}/.git/info/exclude"
+
+          # User line must survive — function must NOT destroy content
+          grep -q 'user-line-after-open-marker/' "${exclude_path}" \
+            || { echo "FAIL: user line was destroyed"; exit 1; }
+
+          # A warning must have been emitted to stderr
+          echo "stderr=${err}"
+          printf '%s\n' "${err}" | grep -qi "warning" \
+            || { echo "FAIL: no warning emitted for unclosed block"; exit 1; }
+
+          # No new block should have been appended (skip means skip)
+          open_count="$(grep -c '>>> riotbox managed excludes' "${exclude_path}")"
+          [ "${open_count}" -eq 1 ] \
+            || { echo "FAIL: block appended after skip — open_count=${open_count}"; exit 1; }
+
+          echo "unclosed_block_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "unclosed_block_ok=true"
+
+  # -- Substring marker does not block installation --
+
+  - name: A user line merely containing the marker text does not block installation
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          echo "src" > "${REPO_DIR}/main.go"
+          git -C "${REPO_DIR}" add main.go
+          GIT_AUTHOR_NAME="${HUMAN_NAME}" GIT_AUTHOR_EMAIL="${HUMAN_EMAIL}" \
+          GIT_COMMITTER_NAME="${HUMAN_NAME}" GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
+          git -C "${REPO_DIR}" commit -m "initial"
+
+          # Seed exclude with a line that CONTAINS the open marker text as a
+          # substring but is NOT the exact marker line (has trailing " for details").
+          # grep -qF matches this as a substring; awk $0==marker does not — so
+          # without the fix the replace path fires but awk matches nothing, the
+          # block is silently never installed.
+          mkdir -p "${REPO_DIR}/.git/info"
+          printf '%s\n' \
+            '# >>> riotbox managed excludes (do not edit between markers) >>> for details' \
+            > "${REPO_DIR}/.git/info/exclude"
+
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+
+          exclude_path="${REPO_DIR}/.git/info/exclude"
+
+          # The managed block must have been installed (append path, not replace)
+          grep -q '>>> riotbox managed excludes (do not edit between markers) >>>' "${exclude_path}" \
+            || { echo "FAIL: managed block not installed"; exit 1; }
+          grep -q '\.headroom/' "${exclude_path}" \
+            || { echo "FAIL: .headroom/ pattern missing from block"; exit 1; }
+
+          # The user's substring-containing line must survive
+          grep -q '# >>> riotbox managed excludes.*for details' "${exclude_path}" \
+            || { echo "FAIL: user substring line was destroyed"; exit 1; }
+
+          echo "substring_marker_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "substring_marker_ok=true"
+
+  # -- Non-git directory: silent no-op, no error --
+
+  - name: Duplicate open marker after a valid block warns and preserves trailing content
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          echo "src" > "${REPO_DIR}/main.go"
+          git -C "${REPO_DIR}" add main.go
+          GIT_AUTHOR_NAME="${HUMAN_NAME}" GIT_AUTHOR_EMAIL="${HUMAN_EMAIL}" \
+          GIT_COMMITTER_NAME="${HUMAN_NAME}" GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
+          git -C "${REPO_DIR}" commit -m "initial"
+
+          # Seed a valid block followed by a stray duplicate open marker and a
+          # user line. The rewrite must not re-enter the block at the second
+          # open and eat the user line to EOF.
+          mkdir -p "${REPO_DIR}/.git/info"
+          printf '%s\n' \
+            '# >>> riotbox managed excludes (do not edit between markers) >>>' \
+            'stale-pattern/' \
+            '# <<< riotbox managed excludes <<<' \
+            '# >>> riotbox managed excludes (do not edit between markers) >>>' \
+            'user-after-second-open/' \
+            > "${REPO_DIR}/.git/info/exclude"
+
+          err="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1 >/dev/null)" || true
+
+          exclude_path="${REPO_DIR}/.git/info/exclude"
+
+          grep -q 'user-after-second-open/' "${exclude_path}" \
+            || { echo "FAIL: trailing user line was destroyed"; exit 1; }
+
+          echo "stderr=${err}"
+          printf '%s\n' "${err}" | grep -qi "warning" \
+            || { echo "FAIL: no warning emitted for duplicate open marker"; exit 1; }
+
+          echo "duplicate_open_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "duplicate_open_ok=true"
+
+  - name: Orphan close before an unclosed open warns and preserves all user content
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          echo "src" > "${REPO_DIR}/main.go"
+          git -C "${REPO_DIR}" add main.go
+          GIT_AUTHOR_NAME="${HUMAN_NAME}" GIT_AUTHOR_EMAIL="${HUMAN_EMAIL}" \
+          GIT_COMMITTER_NAME="${HUMAN_NAME}" GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
+          git -C "${REPO_DIR}" commit -m "initial"
+
+          # Both markers exist, but the close precedes the open and the open is
+          # never closed. A count-based probe calls this "both present"; the
+          # rewrite would still eat everything after the open. Must warn+skip.
+          mkdir -p "${REPO_DIR}/.git/info"
+          printf '%s\n' \
+            '# <<< riotbox managed excludes <<<' \
+            'user-line-one/' \
+            '# >>> riotbox managed excludes (do not edit between markers) >>>' \
+            'user-line-two/' \
+            > "${REPO_DIR}/.git/info/exclude"
+
+          err="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1 >/dev/null)" || true
+
+          exclude_path="${REPO_DIR}/.git/info/exclude"
+
+          grep -q 'user-line-one/' "${exclude_path}" \
+            || { echo "FAIL: user-line-one was destroyed"; exit 1; }
+          grep -q 'user-line-two/' "${exclude_path}" \
+            || { echo "FAIL: user-line-two was destroyed"; exit 1; }
+
+          echo "stderr=${err}"
+          printf '%s\n' "${err}" | grep -qi "warning" \
+            || { echo "FAIL: no warning emitted for malformed block"; exit 1; }
+
+          echo "orphan_close_ordering_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "orphan_close_ordering_ok=true"
+
+  - name: Non-git directory produces no exclude file and no error
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          echo "code" > "${WORK_DIR}/main.go"
+
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${WORK_DIR}" \
+                 RIOTBOX_GIT_INIT=0 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+
+          # No .git/info/exclude file should have been created
+          if [ -f "${WORK_DIR}/.git/info/exclude" ]; then
+            echo "FAIL: exclude file appeared in non-git dir"
+            exit 1
+          fi
+
+          echo "nongit_noop_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "nongit_noop_ok=true"

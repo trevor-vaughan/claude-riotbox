@@ -21,7 +21,7 @@ tasks:
     cmd: "{{.ROOT_DIR}}/scripts/build.sh"
 
   update:
-    desc: Upgrade only the LLM CLI tools (opencode, Claude Code, plugins) to latest
+    desc: Upgrade only the LLM CLI tools (headroom, opencode, Claude Code, plugins) to latest
     env:
       LLM_TOOL_UPDATE:
         sh: date +%s

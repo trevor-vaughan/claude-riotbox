@@ -1,0 +1,491 @@
+name: headroom interposition — wrapper gate, guard, and fallbacks
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  shared_helpers: "{{.root}}/tests/lib/wrapper-shared.sh"
+
+# Pins the RIOTBOX_HEADROOM=1 interposition added to agent-wrapper.sh:
+# first pass execs `headroom wrap ...` with the guard exported; second pass
+# (guard set) takes the normal inject-and-exec path; missing verb or
+# missing binary warn and run unwrapped. Gate off must be byte-identical
+# to pre-feature behavior.
+
+testcases:
+  - name: gate off — wrapper behavior is unchanged and headroom is never invoked
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for claude
+          # A fake headroom that would loudly announce itself if (wrongly) used.
+          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
+          #!/usr/bin/env bash
+          echo "FAKE_HEADROOM_INVOKED"
+          FAKE
+          chmod +x "${TEST_DIR}/realbin/headroom"
+          unset RIOTBOX_HEADROOM RIOTBOX_HEADROOM_ACTIVE
+          claude -p "do work"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_REAL_claude_INVOKED"
+          - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
+          - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_INVOKED"
+
+  - name: gate on — wrapper execs headroom wrap with the guard exported
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for claude
+          # Fake headroom records its argv and the guard, then exits — the
+          # re-launch chain is exercised by the dedicated case below.
+          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
+          #!/usr/bin/env bash
+          echo "FAKE_HEADROOM_INVOKED"
+          echo "HR_GUARD=${RIOTBOX_HEADROOM_ACTIVE:-unset}"
+          printf 'hrarg=%s\n' "$@"
+          FAKE
+          chmod +x "${TEST_DIR}/realbin/headroom"
+          export RIOTBOX_HEADROOM=1
+          unset RIOTBOX_HEADROOM_ACTIVE
+          out="$(claude -p "do work")"
+          echo "${out}"
+          printf '%s\n' "${out}" | grep -qx 'hrarg=--' || { echo "FAIL: bare -- separator token missing" >&2; exit 1; }
+          echo "SEP_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_HEADROOM_INVOKED"
+          - result.systemout ShouldContainSubstring "HR_GUARD=1"
+          - result.systemout ShouldContainSubstring "hrarg=wrap"
+          - result.systemout ShouldContainSubstring "hrarg=claude"
+          - result.systemout ShouldContainSubstring "hrarg=--memory"
+          - result.systemout ShouldContainSubstring "hrarg=--learn"
+          - result.systemout ShouldContainSubstring "hrarg=--no-serena"
+          - result.systemout ShouldContainSubstring "hrarg=--no-context-tool"
+          - result.systemout ShouldContainSubstring "SEP_OK"
+          - result.systemout ShouldContainSubstring "hrarg=do work"
+          # First pass must NOT reach the real binary — headroom owns the launch.
+          - result.systemout ShouldNotContainSubstring "FAKE_REAL_claude_INVOKED"
+
+  - name: guard set — second pass skips headroom and execs the real binary
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for claude
+          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
+          #!/usr/bin/env bash
+          echo "FAKE_HEADROOM_INVOKED"
+          FAKE
+          chmod +x "${TEST_DIR}/realbin/headroom"
+          export RIOTBOX_HEADROOM=1
+          export RIOTBOX_HEADROOM_ACTIVE=1
+          claude -p "do work"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_REAL_claude_INVOKED"
+          - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
+          - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_INVOKED"
+
+  - name: full chain — headroom re-launches the shim and the loop breaks
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for claude
+          # Faithful fake: like the real headroom, re-invoke `claude` by NAME
+          # (PATH lookup -> hits the shim again) with the post-`--` args.
+          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
+          #!/usr/bin/env bash
+          echo "FAKE_HEADROOM_INVOKED"
+          while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
+          [ "${1:-}" = "--" ] && shift
+          exec claude "$@"
+          FAKE
+          chmod +x "${TEST_DIR}/realbin/headroom"
+          export RIOTBOX_HEADROOM=1
+          unset RIOTBOX_HEADROOM_ACTIVE
+          out="$(claude -p "do work")"
+          echo "${out}"
+          # headroom exactly once (no loop), real binary exactly once, and
+          # the second shim pass still injected the permissions flag.
+          hr_count="$(printf '%s\n' "${out}" | grep -c 'FAKE_HEADROOM_INVOKED' || true)"
+          real_count="$(printf '%s\n' "${out}" | grep -c 'FAKE_REAL_claude_INVOKED' || true)"
+          [ "${hr_count}" = "1" ] || { echo "FAIL: headroom ran ${hr_count} times" >&2; exit 1; }
+          [ "${real_count}" = "1" ] || { echo "FAIL: real binary ran ${real_count} times" >&2; exit 1; }
+          echo "CHAIN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CHAIN_OK"
+          - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
+          - result.systemout ShouldContainSubstring "arg=do work"
+
+  - name: agent without headroom_argv warns and runs unwrapped
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox opencode
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for opencode
+          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
+          #!/usr/bin/env bash
+          echo "FAKE_HEADROOM_INVOKED"
+          FAKE
+          chmod +x "${TEST_DIR}/realbin/headroom"
+          export RIOTBOX_HEADROOM=1
+          unset RIOTBOX_HEADROOM_ACTIVE
+          opencode run "do work" 2>"${TEST_DIR}/stderr"
+          echo "--- stderr ---"
+          cat "${TEST_DIR}/stderr"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_REAL_opencode_INVOKED"
+          - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_INVOKED"
+          - result.systemout ShouldContainSubstring "no headroom support"
+
+  - name: headroom binary missing warns, names riotbox update, runs unwrapped
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for claude
+          # No fake headroom installed — command -v must miss.
+          export RIOTBOX_HEADROOM=1
+          unset RIOTBOX_HEADROOM_ACTIVE
+          claude -p "do work" 2>"${TEST_DIR}/stderr"
+          echo "--- stderr ---"
+          cat "${TEST_DIR}/stderr"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_REAL_claude_INVOKED"
+          - result.systemout ShouldContainSubstring "not installed"
+          - result.systemout ShouldContainSubstring "riotbox update"
+
+  # ── Launch-side wiring (env passthrough + state-dir mount) ───────────────
+
+  - name: launch.sh passes -e RIOTBOX_HEADROOM and the state mount when enabled
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
+          cat > "${TMP}/fake-cmd" <<'FAKE'
+          #!/usr/bin/env bash
+          printf '%s\n' "$*" > "${CAPTURE}"
+          FAKE
+          chmod +x "${TMP}/fake-cmd"
+          export CAPTURE="${TMP}/argv"
+          RIOTBOX_HEADROOM=1 \
+          RIOTBOX_DRY_RUN=1 \
+          RIOTBOX_PROJECTS="${TMP}/proj" \
+          RIOTBOX_DATA_DIR="${TMP}/data" \
+          RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" HOME="${TMP}" \
+          ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" bash
+          argv="$(cat "${CAPTURE}")"
+          echo "ARGV=${argv}"
+          echo "${argv}" | grep -q -- "-e RIOTBOX_HEADROOM=1" \
+            || { echo "BAD: -e RIOTBOX_HEADROOM=1 missing" >&2; exit 1; }
+          echo "${argv}" | grep -q -- "headroom:/home/llm/.headroom:z" \
+            || { echo "BAD: headroom state mount missing" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: launch.sh emits neither headroom env nor mount when the gate is off
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
+          cat > "${TMP}/fake-cmd" <<'FAKE'
+          #!/usr/bin/env bash
+          printf '%s\n' "$*" > "${CAPTURE}"
+          FAKE
+          chmod +x "${TMP}/fake-cmd"
+          export CAPTURE="${TMP}/argv"
+          RIOTBOX_DRY_RUN=1 \
+          RIOTBOX_PROJECTS="${TMP}/proj" \
+          RIOTBOX_DATA_DIR="${TMP}/data" \
+          RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" HOME="${TMP}" \
+          ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" bash
+          argv="$(cat "${CAPTURE}")"
+          echo "ARGV=${argv}"
+          echo "${argv}" | grep -q "RIOTBOX_HEADROOM" \
+            && { echo "BAD: headroom env leaked into default launch" >&2; exit 1; }
+          echo "${argv}" | grep -q "/home/llm/.headroom" \
+            && { echo "BAD: headroom mount leaked into default launch" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: riotbox mounts includes the headroom mount when config-persisted
+    steps:
+      - type: exec
+        script: |
+          # Choice: invoke mount-projects.sh directly with RIOTBOX_DRY_RUN=1.
+          # The wrapper-test-helpers harness stubs mount-projects.sh entirely,
+          # so testing via `riotbox mounts` would never exercise the real script.
+          # Invoking the real script in dry-run mode is the strongest honest test:
+          # it runs the actual headroom gate code and reports what would be mounted,
+          # without creating any session directories.
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/xdg/riotbox" "${TMP}/etc" "${TMP}/proj"
+          printf ': "${RIOTBOX_HEADROOM:=1}"\n' > "${TMP}/xdg/riotbox/config"
+          unset RIOTBOX_HEADROOM
+          export XDG_CONFIG_HOME="${TMP}/xdg"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          export RIOTBOX_DRY_RUN=1
+          export RIOTBOX_PROJECTS="${TMP}/proj"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export CONTAINER_CMD=podman
+          out="$(bash "{{.riotbox_dir}}/scripts/mount-projects.sh" --format=triple 2>&1)"
+          echo "${out}"
+          echo "${out}" | grep -q "/home/llm/.headroom" \
+            || { echo "BAD: headroom mount missing from config-persisted output" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/home/llm/.headroom"
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: headroom state dir is created under the session dir on a real (non-dry) setup
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/proj" "${TMP}/data"
+          export HOME="${TMP}"
+          # setup_projects runs agent host_sync hooks, which want a host
+          # ~/.claude; give it an empty one so claude's sync is a no-op.
+          mkdir -p "${TMP}/.claude"
+          export RIOTBOX_HEADROOM=1
+          # XDG_DATA_HOME routes the session dir under ${TMP}/data so the
+          # find below can locate it. resolve_projects derives RIOTBOX_DATA_DIR
+          # from XDG_DATA_HOME; passing a bare RIOTBOX_DATA_DIR is ignored
+          # because resolve_projects always recomputes it from XDG/HOME.
+          export XDG_DATA_HOME="${TMP}/data"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${TMP}/proj"
+          dir="$(find "${TMP}/data" -maxdepth 3 -type d -name headroom | head -1)"
+          [ -n "${dir}" ] || { echo "BAD: no headroom dir under session dir" >&2; exit 1; }
+          echo "PROJECT_VOLUME_FLAGS=${PROJECT_VOLUME_FLAGS}"
+          echo "${PROJECT_VOLUME_FLAGS}" | grep -q "${dir}:/home/llm/.headroom:z" \
+            || { echo "BAD: mount flag does not reference the created dir" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # ── headroom-summary.sh: renderer and gate tests ─────────────────────────
+
+  - name: renderer produces the compact summary from a real perf JSON
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          source "{{.riotbox_dir}}/container/headroom-summary.sh"
+          out="$(headroom_render_perf_json <<'PERF'
+          Provider List: https://docs.litellm.ai/docs/providers
+
+          {
+            "window_hours": 168.0,
+            "total_requests": 238,
+            "total_tokens_before": 10592487,
+            "total_tokens_after": 9897955,
+            "tokens_saved": 694532,
+            "savings_pct": 6.6,
+            "cache_hit_pct": 86.9,
+            "by_model": [
+              {"model": "claude-fable-5", "requests": 16, "tokens_before": 677294, "tokens_after": 676582, "tokens_saved": 712, "savings_pct": 0.1, "list_price_per_mtok": 10.0},
+              {"model": "claude-opus-4-8", "requests": 1, "tokens_before": 23102, "tokens_after": 23102, "tokens_saved": 0, "savings_pct": 0.0, "list_price_per_mtok": 5.0},
+              {"model": "claude-sonnet-4-6", "requests": 220, "tokens_before": 9892091, "tokens_after": 9198271, "tokens_saved": 693820, "savings_pct": 7.0, "list_price_per_mtok": 3.0},
+              {"model": "claude-noprice", "requests": 2, "tokens_before": 50000, "tokens_after": 45000, "tokens_saved": 5000, "savings_pct": 10.0, "list_price_per_mtok": null},
+              {"model": "passthrough:count_tokens", "requests": 1, "tokens_before": 0, "tokens_after": 0, "tokens_saved": 0, "savings_pct": 0.0, "list_price_per_mtok": null}
+            ],
+            "by_transform": [{"transform": "content_router", "uses": 240, "tokens_before": 12020023, "tokens_saved": 60749, "savings_pct": 0.5}]
+          }
+          PERF
+          )"
+          echo "${out}"
+          echo "${out}" | grep -q "requests 238" || { echo "FAIL: missing requests 238" >&2; exit 1; }
+          echo "${out}" | grep -q "10.59M" || { echo "FAIL: missing 10.59M" >&2; exit 1; }
+          echo "${out}" | grep -q "9.90M" || { echo "FAIL: missing 9.90M" >&2; exit 1; }
+          echo "${out}" | grep -q "694.5K (6.6%)" || { echo "FAIL: missing 694.5K (6.6%)" >&2; exit 1; }
+          echo "${out}" | grep -q "cache-hit 86.9%" || { echo "FAIL: missing cache-hit 86.9%" >&2; exit 1; }
+          sonnet_line="$(echo "${out}" | grep -n "claude-sonnet-4-6" | cut -d: -f1)"
+          fable_line="$(echo "${out}" | grep -n "claude-fable-5" | cut -d: -f1)"
+          [ "${sonnet_line}" -lt "${fable_line}" ] || { echo "FAIL: sonnet not before fable-5 (lines ${sonnet_line} vs ${fable_line})" >&2; exit 1; }
+          echo "${out}" | grep -q "passthrough:count_tokens" && { echo "FAIL: passthrough row must be excluded" >&2; exit 1; }
+          echo "${out}" | grep -q "full report: headroom perf" || { echo "FAIL: missing footer" >&2; exit 1; }
+          # Dollar fields: sonnet has a price → expect spent/saved amounts
+          echo "${out}" | grep "claude-sonnet-4-6" | grep -q '\$27.59 spent' \
+            || { echo "FAIL: sonnet row missing \$27.59 spent" >&2; exit 1; }
+          echo "${out}" | grep "claude-sonnet-4-6" | grep -q '\$2.08 saved' \
+            || { echo "FAIL: sonnet row missing \$2.08 saved" >&2; exit 1; }
+          echo "${out}" | grep "claude-sonnet-4-6" | grep -q '7.0%)' \
+            || { echo "FAIL: sonnet row missing (7.0%)" >&2; exit 1; }
+          # Null-price model: row must not contain any dollar sign
+          noprice_row="$(echo "${out}" | grep "claude-noprice")"
+          [ -n "${noprice_row}" ] || { echo "FAIL: claude-noprice row missing from output" >&2; exit 1; }
+          echo "${noprice_row}" | grep -q '\$' && { echo "FAIL: null-price row must not contain dollar sign" >&2; exit 1; }
+          echo "RENDER_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RENDER_OK"
+          - result.systemout ShouldContainSubstring "requests 238"
+          - result.systemout ShouldContainSubstring "10.59M"
+          - result.systemout ShouldContainSubstring "9.90M"
+          - result.systemout ShouldContainSubstring "694.5K (6.6%)"
+          - result.systemout ShouldContainSubstring "cache-hit 86.9%"
+          - result.systemout ShouldContainSubstring "claude-sonnet-4-6"
+          - result.systemout ShouldContainSubstring "$27.59 spent"
+          - result.systemout ShouldContainSubstring "$2.08 saved"
+          - result.systemout ShouldContainSubstring "claude-fable-5"
+          - result.systemout ShouldContainSubstring "claude-noprice"
+          - result.systemout ShouldNotContainSubstring "passthrough:count_tokens"
+          - result.systemout ShouldContainSubstring "full report:"
+
+  - name: renderer is silent on zero requests
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          source "{{.riotbox_dir}}/container/headroom-summary.sh"
+          out1="$(printf '{"total_requests": 0}\n' | headroom_render_perf_json || true)"
+          out2="$(printf '{}\n' | headroom_render_perf_json || true)"
+          [ -z "${out1}" ] || { echo "FAIL: zero requests produced output: ${out1}" >&2; exit 1; }
+          [ -z "${out2}" ] || { echo "FAIL: empty object produced output: ${out2}" >&2; exit 1; }
+          echo "SILENT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SILENT_OK"
+
+  - name: renderer is silent on garbage input
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          source "{{.riotbox_dir}}/container/headroom-summary.sh"
+          out="$(printf 'not json at all\n' | headroom_render_perf_json || true)"
+          [ -z "${out}" ] || { echo "FAIL: garbage input produced output: ${out}" >&2; exit 1; }
+          echo "GARBAGE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "GARBAGE_OK"
+
+  - name: summary_print is a no-op when the gate is off
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          source "{{.riotbox_dir}}/container/headroom-summary.sh"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          cat > "${TMP}/headroom" <<'FAKE'
+          #!/usr/bin/env bash
+          echo "FAKE_HEADROOM_INVOKED"
+          FAKE
+          chmod +x "${TMP}/headroom"
+          export PATH="${TMP}:${PATH}"
+          unset RIOTBOX_HEADROOM
+          headroom_summary_init
+          out="$(headroom_summary_print || true)"
+          [ -z "${out}" ] || { echo "FAIL: gate-off produced output: ${out}" >&2; exit 1; }
+          echo "GATE_OFF_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "GATE_OFF_OK"
+          - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_INVOKED"
+
+  - name: summary_print gate-on invokes headroom perf and renders the summary
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          source "{{.riotbox_dir}}/container/headroom-summary.sh"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          ARGV_FILE="${TMP}/argv"
+          # Fake headroom: record "$@" and emit fixture JSON on stdout when
+          # called as `perf`.  Must work via `timeout 10 headroom perf ...`
+          # since headroom_summary_print calls: timeout 10 headroom perf --hours X --format json
+          cat > "${TMP}/headroom" <<'FAKE'
+          #!/usr/bin/env bash
+          printf '%s\n' "$@" >> "${ARGV_FILE}"
+          if [ "${1:-}" = "perf" ]; then
+            printf '%s\n' \
+              '{' \
+              '  "window_hours": 1.0,' \
+              '  "total_requests": 238,' \
+              '  "total_tokens_before": 10592487,' \
+              '  "total_tokens_after": 9897955,' \
+              '  "tokens_saved": 694532,' \
+              '  "savings_pct": 6.6,' \
+              '  "cache_hit_pct": 86.9,' \
+              '  "by_model": [' \
+              '    {"model": "claude-sonnet-4-6", "requests": 238, "tokens_before": 9892091, "tokens_after": 9198271, "tokens_saved": 693820, "savings_pct": 7.0, "list_price_per_mtok": 3.0}' \
+              '  ],' \
+              '  "by_transform": []' \
+              '}'
+          fi
+          FAKE
+          chmod +x "${TMP}/headroom"
+          export PATH="${TMP}:${PATH}"
+          export ARGV_FILE
+          export RIOTBOX_HEADROOM=1
+          headroom_summary_init
+          out="$(headroom_summary_print || true)"
+          echo "${out}"
+
+          # Summary output must contain the key fields
+          printf '%s\n' "${out}" | grep -q "requests 238" \
+            || { echo "FAIL: missing 'requests 238' in output"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "full report: headroom perf" \
+            || { echo "FAIL: missing 'full report: headroom perf' in output"; exit 1; }
+
+          # headroom was called with: perf --hours <float> --format json
+          grep -q "^perf$" "${ARGV_FILE}" \
+            || { echo "FAIL: 'perf' not in recorded argv"; exit 1; }
+          grep -q "^--hours$" "${ARGV_FILE}" \
+            || { echo "FAIL: '--hours' not in recorded argv"; exit 1; }
+          grep -q "^--format$" "${ARGV_FILE}" \
+            || { echo "FAIL: '--format' not in recorded argv"; exit 1; }
+          grep -q "^json$" "${ARGV_FILE}" \
+            || { echo "FAIL: 'json' not in recorded argv"; exit 1; }
+
+          echo "GATE_ON_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "GATE_ON_OK"
+          - result.systemout ShouldContainSubstring "requests 238"
+          - 'result.systemout ShouldContainSubstring "full report: headroom perf"'
