@@ -141,6 +141,11 @@ testcases:
           setup_wrapper_sandbox opencode
           trap 'rm -rf "${TEST_DIR}"' EXIT
           install_generic_wrapper_for opencode
+          # opencode gained a real headroom_argv verb; strip it from the
+          # sandbox copy so this case still exercises the "agent without
+          # headroom support" warning path.
+          sed -i '/^agent_opencode_headroom_argv()/,/^}/d' \
+            "${TEST_DIR}/home/.riotbox/agents/opencode/manifest.sh"
           cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
           #!/usr/bin/env bash
           echo "FAKE_HEADROOM_INVOKED"
@@ -156,6 +161,44 @@ testcases:
           - result.systemout ShouldContainSubstring "FAKE_REAL_opencode_INVOKED"
           - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_INVOKED"
           - result.systemout ShouldContainSubstring "no headroom support"
+
+  - name: gate on for opencode — wrapper execs the proxy helper with the guard exported
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox opencode
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for opencode
+          # The wrapper requires headroom on PATH before interposing.
+          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
+          #!/usr/bin/env bash
+          echo "FAKE_HEADROOM_INVOKED"
+          FAKE
+          chmod +x "${TEST_DIR}/realbin/headroom"
+          # Recorder in place of the copied helper: prove the wrapper execs
+          # it with args + guard, without exercising proxy logic (that is
+          # tests/headroom-opencode.venom.yml's job).
+          cat > "${TEST_DIR}/home/.riotbox/agents/opencode/headroom-exec.sh" <<'REC'
+          #!/usr/bin/env bash
+          echo "FAKE_HELPER_INVOKED"
+          echo "HR_GUARD=${RIOTBOX_HEADROOM_ACTIVE:-unset}"
+          printf 'helperarg=%s\n' "$@"
+          REC
+          chmod +x "${TEST_DIR}/home/.riotbox/agents/opencode/headroom-exec.sh"
+          export RIOTBOX_HEADROOM=1
+          unset RIOTBOX_HEADROOM_ACTIVE
+          opencode run "do work"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_HELPER_INVOKED"
+          - result.systemout ShouldContainSubstring "HR_GUARD=1"
+          - result.systemout ShouldContainSubstring "helperarg=run"
+          - result.systemout ShouldContainSubstring "helperarg=do work"
+          # First pass must NOT reach the real binary or headroom directly.
+          - result.systemout ShouldNotContainSubstring "FAKE_REAL_opencode_INVOKED"
+          - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_INVOKED"
 
   - name: headroom binary missing warns, names riotbox update, runs unwrapped
     steps:
@@ -194,6 +237,7 @@ testcases:
           chmod +x "${TMP}/fake-cmd"
           export CAPTURE="${TMP}/argv"
           RIOTBOX_HEADROOM=1 \
+          RIOTBOX_HEADROOM_PROXY_TIMEOUT=99 \
           RIOTBOX_DRY_RUN=1 \
           RIOTBOX_PROJECTS="${TMP}/proj" \
           RIOTBOX_DATA_DIR="${TMP}/data" \
@@ -204,6 +248,8 @@ testcases:
           echo "ARGV=${argv}"
           echo "${argv}" | grep -q -- "-e RIOTBOX_HEADROOM=1" \
             || { echo "BAD: -e RIOTBOX_HEADROOM=1 missing" >&2; exit 1; }
+          echo "${argv}" | grep -q -- "-e RIOTBOX_HEADROOM_PROXY_TIMEOUT=99" \
+            || { echo "BAD: -e RIOTBOX_HEADROOM_PROXY_TIMEOUT=99 missing" >&2; exit 1; }
           echo "${argv}" | grep -q -- "headroom:/home/llm/.headroom:z" \
             || { echo "BAD: headroom state mount missing" >&2; exit 1; }
           echo "OK"
@@ -224,6 +270,9 @@ testcases:
           FAKE
           chmod +x "${TMP}/fake-cmd"
           export CAPTURE="${TMP}/argv"
+          # Gate-off means gate-off: shed any ambient headroom env (e.g. when
+          # this suite itself runs inside a headroom-enabled riotbox session).
+          unset RIOTBOX_HEADROOM RIOTBOX_HEADROOM_ACTIVE
           RIOTBOX_DRY_RUN=1 \
           RIOTBOX_PROJECTS="${TMP}/proj" \
           RIOTBOX_DATA_DIR="${TMP}/data" \

@@ -432,7 +432,7 @@ testcases:
   # generic case validates shape wherever the verb exists; the claude cases
   # pin the exact flag set the spec mandates.
 
-  - name: headroom_argv where defined begins with headroom wrap <agent-binary>
+  - name: headroom_argv where defined is wrap-shaped or an agent-dir helper
     steps:
       - type: exec
         script: |
@@ -447,9 +447,20 @@ testcases:
             fi
             bin="$(agent_call "$a" real_binary)"
             mapfile -d '' -t argv < <(agent_call "$a" headroom_argv -p "x")
-            if [ "${argv[0]:-}" != "headroom" ] || [ "${argv[1]:-}" != "wrap" ] \
-               || [ "${argv[2]:-}" != "${bin}" ]; then
-              agent_fail "${a}: headroom_argv must start 'headroom wrap ${bin}' (got: ${argv[*]:0:3})"
+            # Two accepted shapes:
+            #   wrap-capable:  headroom wrap <real-binary> ...
+            #   proxy-routed:  <agents/<name>/...> executable helper + user args
+            if [ "${argv[0]:-}" = "headroom" ]; then
+              if [ "${argv[1]:-}" != "wrap" ] || [ "${argv[2]:-}" != "${bin}" ]; then
+                agent_fail "${a}: wrap-shaped headroom_argv must start 'headroom wrap ${bin}' (got: ${argv[*]:0:3})"
+              fi
+            else
+              case "${argv[0]:-}" in
+              "${RIOTBOX_DIR}/agents/${a}/"*) ;;
+              *) agent_fail "${a}: helper-shaped headroom_argv must exec a file under agents/${a}/ (got: ${argv[0]:-<empty>})" ;;
+              esac
+              [ -x "${argv[0]:-/nonexistent}" ] \
+                || agent_fail "${a}: headroom helper '${argv[0]:-}' is not executable"
             fi
             echo "${a}: headroom_argv=${argv[*]}"
           done
@@ -487,6 +498,34 @@ testcases:
           done
           [ "${sep}" -ge 0 ] || { echo "FAIL: no -- separator" >&2; exit 1; }
           [ "${p}" -gt "${sep}" ] || { echo "FAIL: -p not after -- (p=${p} sep=${sep})" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: opencode headroom_argv execs the proxy helper with user args preserved
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          if ! declare -F agent_opencode_headroom_argv >/dev/null; then
+            echo "FAIL: agent_opencode_headroom_argv is not defined" >&2
+            exit 1
+          fi
+          mapfile -d '' -t argv < <(agent_call opencode headroom_argv run "line one
+          line two")
+          echo "argv0=${argv[0]}"
+          # argv[0] is the opencode-co-located helper, resolved absolutely.
+          [ "${argv[0]}" = "${RIOTBOX_DIR}/agents/opencode/headroom-exec.sh" ] \
+            || { echo "FAIL: argv[0] is not the opencode headroom helper" >&2; exit 1; }
+          [ -x "${argv[0]}" ] || { echo "FAIL: helper is not executable" >&2; exit 1; }
+          # User args follow, in order, with multi-line tokens intact.
+          [ "${argv[1]}" = "run" ] || { echo "FAIL: first user arg lost" >&2; exit 1; }
+          [ "${argv[2]}" = "line one
+          line two" ] || { echo "FAIL: multi-line arg mangled" >&2; exit 1; }
+          [ "${#argv[@]}" -eq 3 ] || { echo "FAIL: unexpected extra tokens (${#argv[@]})" >&2; exit 1; }
           echo "OK"
         assertions:
           - result.code ShouldEqual 0

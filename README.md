@@ -543,16 +543,21 @@ echo ': "${RIOTBOX_HEADROOM:=1}"' >> ~/.config/riotbox/config
 
 What changes when enabled:
 
-- The agent launches through `headroom wrap` — a localhost-only compression
-  proxy inside the container. Nothing is exposed outside the container.
+- The agent launches through a localhost-only compression proxy inside the
+  container. Nothing is exposed outside the container.
 - Cross-session memory and failure learning (`--memory`, `--learn`) are on.
   State persists per project set under the session directory
   (`~/.local/share/riotbox/<session>/headroom`, also visible in-container at
   `~/.claude/headroom`) and is shared by all agents of that project set.
 - Model inference is fully offline — the compression models are baked into
   the image at build time.
-- Currently wired for `--agent=claude`. Other agents print a warning and run
-  uncompressed.
+- Wired for `--agent=claude` (via `headroom wrap`) and `--agent=opencode`
+  (via `headroom proxy` plus provider baseURL injection — headroom has no
+  `wrap opencode`). Other agents print a warning and run uncompressed.
+- For opencode, only the `anthropic` and `openai` providers route through
+  the proxy; other providers (openrouter, gemini, …) go direct. A baseURL
+  you set yourself in `opencode.json(c)` always wins — riotbox prints a
+  notice and leaves that provider unrouted.
 - Nested agent invocations inside a wrapped session (e.g. the agent's own
   shell running `claude`) intentionally run uncompressed.
 

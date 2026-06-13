@@ -9,8 +9,10 @@
 #      `claude`, it dispatches to the `claude` manifest.
 #   2. Sources the agent registry to load every manifest.
 #   3. Interposes headroom (when RIOTBOX_HEADROOM=1 and guard unset): execs
-#      `headroom wrap <agent> … -- <original argv>`, which re-launches the shim;
-#      the guard (RIOTBOX_HEADROOM_ACTIVE=1) makes that second pass fall through.
+#      the argv emitted by agent_<name>_headroom_argv — either
+#      `headroom wrap <agent> … -- <argv>` or an agent-dir helper that fronts
+#      `headroom proxy` — which re-launches the shim; the guard
+#      (RIOTBOX_HEADROOM_ACTIVE=1) makes that second pass fall through.
 #   4. Resolves the real binary via container/find-real-bin.sh.
 #   5. Calls agent_<name>_wrapper_inject "$@" to rewrite argv (and decide
 #      whether to set CI=true).
@@ -38,8 +40,10 @@ if ! agent_is_registered "${agent}"; then
 fi
 
 # ── Headroom interposition (opt-in context compression) ─────────────────────
-# First pass (RIOTBOX_HEADROOM=1, guard unset): exec `headroom wrap …`
-# instead of the real binary. headroom re-launches the agent by name, which
+# First pass (RIOTBOX_HEADROOM=1, guard unset): exec the argv emitted by the
+# agent's headroom_argv verb — `headroom wrap …` for natively supported
+# tools, or an agent-dir helper that fronts `headroom proxy` — instead of
+# the real binary. That command re-launches the agent by name, which
 # resolves back to this shim; the exported RIOTBOX_HEADROOM_ACTIVE guard
 # makes that second pass fall through to the normal inject-and-exec path
 # below. Both degraded modes (agent has no headroom_argv verb / headroom

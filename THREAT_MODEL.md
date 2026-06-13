@@ -196,7 +196,12 @@ on the host (`<session>/headroom`). This is the same sensitivity class as
 the `.claude` transcripts already stored there, but it is a second,
 independent copy with its own retention behavior. The compression proxy
 binds localhost inside the container network namespace and exposes no
-ports. Headroom's usage telemetry is disabled image-wide
+ports. For opencode, riotbox additionally rewrites the container-side merged
+`opencode.jsonc` to point the anthropic/openai providers at that localhost
+proxy; the rewrite happens only after the proxy passes a readiness check,
+never touches a user-set baseURL, and is discarded when the merged file is
+regenerated at the next container start (the host copy is never modified).
+Headroom's usage telemetry is disabled image-wide
 (`ENV HEADROOM_TELEMETRY=off`).
 
 ## Findings
