@@ -1,0 +1,199 @@
+name: doctor — headroom image check
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# preflight_check_headroom: a no-op pass when RIOTBOX_HEADROOM is not set;
+# a fail when it is set to a value other than "1"/"0" (every consumer gates
+# on the literal "1", so RIOTBOX_HEADROOM=true silently disables the
+# feature — surface that here); when enabled it probes the image for the
+# headroom binary and a complete offline model cache via `podman run`.
+# podman is stubbed on PATH so the tests run without a container runtime.
+
+testcases:
+  - name: check passes as not-requested when RIOTBOX_HEADROOM is unset
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          unset RIOTBOX_HEADROOM
+          out="$(preflight_check_headroom 2>&1)"; rc=$?
+          echo "${out}"
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "not requested"
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: check passes as not-requested when RIOTBOX_HEADROOM is 0
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          export RIOTBOX_HEADROOM=0
+          out="$(preflight_check_headroom 2>&1)"; rc=$?
+          echo "${out}"
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "not requested"
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: check fails with code 21 on a non-boolean RIOTBOX_HEADROOM value
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          export RIOTBOX_HEADROOM=true
+          out="$(preflight_check_headroom 2>&1)"; rc=$?
+          echo "${out}"
+          [ "${rc}" = "21" ] || { echo "BAD rc=${rc} (want 21)" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "[fail]"
+          - result.systemout ShouldContainSubstring "RIOTBOX_HEADROOM=1"
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: check passes when the stubbed image contains headroom and its cache
+    steps:
+      - type: exec
+        script: |
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          cat > "${TMP}/podman" <<'STUB'
+          #!/usr/bin/env bash
+          case "$1" in
+            image) exit 0 ;;   # `podman image exists <img>`
+            run)   exit 0 ;;   # in-image probe succeeds
+          esac
+          exit 1
+          STUB
+          chmod +x "${TMP}/podman"
+          export PATH="${TMP}:${PATH}"
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          export RIOTBOX_HEADROOM=1
+          out="$(preflight_check_headroom 2>&1)"; rc=$?
+          echo "${out}"
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "[ok]"
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: check fails with code 21 when the in-image probe fails
+    steps:
+      - type: exec
+        script: |
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          cat > "${TMP}/podman" <<'STUB'
+          #!/usr/bin/env bash
+          case "$1" in
+            image) exit 0 ;;
+            run)   exit 1 ;;   # image lacks headroom / cache incomplete
+          esac
+          exit 1
+          STUB
+          chmod +x "${TMP}/podman"
+          export PATH="${TMP}:${PATH}"
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          export RIOTBOX_HEADROOM=1
+          out="$(preflight_check_headroom 2>&1)"; rc=$?
+          echo "${out}"
+          [ "${rc}" = "21" ] || { echo "BAD rc=${rc} (want 21)" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "[fail]"
+          - result.systemout ShouldContainSubstring "rebuild"
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: check fails with code 21 when the image is missing
+    steps:
+      - type: exec
+        script: |
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          cat > "${TMP}/podman" <<'STUB'
+          #!/usr/bin/env bash
+          exit 1
+          STUB
+          chmod +x "${TMP}/podman"
+          export PATH="${TMP}:${PATH}"
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          export RIOTBOX_HEADROOM=1
+          out="$(preflight_check_headroom 2>&1)"; rc=$?
+          echo "${out}"
+          [ "${rc}" = "21" ] || { echo "BAD rc=${rc} (want 21)" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "riotbox build"
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: doctor honors RIOTBOX_HEADROOM persisted in the user config
+    steps:
+      - type: exec
+        script: |
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          # Write the canonical config-persistence form documented in the README.
+          mkdir -p "${TMP}/xdg/riotbox" "${TMP}/etc"
+          printf ': "${RIOTBOX_HEADROOM:=1}"\n' > "${TMP}/xdg/riotbox/config"
+          # Stub podman so the image-existence and in-image-probe checks pass.
+          cat > "${TMP}/podman" <<'STUB'
+          #!/usr/bin/env bash
+          case "$1" in
+            image) exit 0 ;;
+            run)   exit 0 ;;
+          esac
+          exit 1
+          STUB
+          chmod +x "${TMP}/podman"
+          export PATH="${TMP}:${PATH}"
+          export XDG_CONFIG_HOME="${TMP}/xdg"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset RIOTBOX_HEADROOM
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          out="$(preflight_check_headroom 2>&1)"; rc=$?
+          echo "${out}"
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc} (want 0)" >&2; exit 1; }
+          echo "${out}" | grep -q "\[ok\]" || { echo "BAD: missing [ok]" >&2; exit 1; }
+          echo "${out}" | grep -q "not requested" && { echo "BAD: reported not-requested despite config" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "[ok]"
+          - result.systemout ShouldNotContainSubstring "not requested"
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: env wins over config for doctor (RIOTBOX_HEADROOM=0 overrides config)
+    steps:
+      - type: exec
+        script: |
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/xdg/riotbox" "${TMP}/etc"
+          printf ': "${RIOTBOX_HEADROOM:=1}"\n' > "${TMP}/xdg/riotbox/config"
+          cat > "${TMP}/podman" <<'STUB'
+          #!/usr/bin/env bash
+          case "$1" in
+            image) exit 0 ;;
+            run)   exit 0 ;;
+          esac
+          exit 1
+          STUB
+          chmod +x "${TMP}/podman"
+          export PATH="${TMP}:${PATH}"
+          export XDG_CONFIG_HOME="${TMP}/xdg"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          export RIOTBOX_HEADROOM=0
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          out="$(preflight_check_headroom 2>&1)"; rc=$?
+          echo "${out}"
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc} (want 0)" >&2; exit 1; }
+          echo "${out}" | grep -q "not requested" || { echo "BAD: env=0 should yield not-requested" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "not requested"
+          - result.systemout ShouldContainSubstring "OK"
