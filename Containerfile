@@ -336,6 +336,12 @@ ENV UV_LINK_MODE=hardlink
 # ── Riotbox Detection  ─────────────────────────────────────────────────────────
 ENV RIOTBOX=1
 
+# ── Headroom telemetry opt-out ────────────────────────────────────────────────
+# headroom's anonymous usage beacon defaults to ON (headroom/telemetry/
+# beacon.py); permanent image-wide opt-out, in line with DO_NOT_TRACK and
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC set by the entrypoint.
+ENV HEADROOM_TELEMETRY=off
+
 # Fix ownership after root-stage COPY that creates dirs under /home/llm.
 RUN chown -R llm:llm /home/llm
 
@@ -593,11 +599,12 @@ COPY --chown=llm:llm container/overlay-setup.sh /home/llm/.riotbox/overlay-setup
 COPY --chown=llm:llm container/plugin-setup.sh /home/llm/.riotbox/plugin-setup.sh
 COPY --chown=llm:llm container/startup-scripts.sh /home/llm/.riotbox/startup-scripts.sh
 COPY --chown=llm:llm container/nested-podman-setup.sh /home/llm/.riotbox/nested-podman-setup.sh
+COPY --chown=llm:llm container/headroom-summary.sh /home/llm/.riotbox/headroom-summary.sh
 COPY --chown=llm:llm container/entrypoint.sh /home/llm/.riotbox/entrypoint.sh
 RUN chmod +x /home/llm/.riotbox/entrypoint.sh \
     /home/llm/.riotbox/session-branch.sh /home/llm/.riotbox/overlay-setup.sh \
     /home/llm/.riotbox/plugin-setup.sh /home/llm/.riotbox/startup-scripts.sh \
-    /home/llm/.riotbox/nested-podman-setup.sh
+    /home/llm/.riotbox/nested-podman-setup.sh /home/llm/.riotbox/headroom-summary.sh
 ENTRYPOINT ["/home/llm/.riotbox/entrypoint.sh"]
 CMD ["bash"]
 
@@ -610,13 +617,70 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
 
 # ── LLM CLI tool cache-bust boundary ────────────────────────────────────────
 # `task container:update` bumps LLM_TOOL_UPDATE to a fresh value, which makes
-# this RUN a cache miss and forces every layer below it (opencode, Claude
-# Code, plugins) to rebuild and re-pull latest — without rebuilding the whole
-# image. A normal `task container:build` always passes the default (0), so the
-# boundary stays cached and the tools are reused. The three tool RUNs below are
-# intentionally left unchanged; the boundary alone controls their freshness.
+# this RUN a cache miss and forces every layer below it (headroom, opencode,
+# Claude Code, plugins) to rebuild and re-pull latest — without rebuilding the
+# whole image. A normal `task container:build` always passes the default (0),
+# so the boundary stays cached and the tools are reused. The four tool RUNs
+# below are intentionally left unchanged; the boundary alone controls their
+# freshness. headroom is version-pinned, so an update re-downloads the same
+# wheels and ~350 MB of models; the cost is accepted so `riotbox update` can
+# add headroom to images built before it existed and refresh its unpinned
+# transitive deps.
 ARG LLM_TOOL_UPDATE=0
 RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
+
+# ── headroom (context compression — opt-in at runtime via RIOTBOX_HEADROOM) ──
+# Lean extras: [proxy] carries Kompress as ONNX INT8 (no torch) plus
+# sqlite-vec for --memory; [code] adds tree-sitter AST compression. The
+# [ml]/[memory] extras are deliberately excluded — both drag in torch.
+# Models are pre-warmed into ~/.cache/huggingface so enabled sessions run
+# with HF_HUB_OFFLINE=1 (set by the entrypoint) and never touch the network;
+# the final offline preload proves the cache is complete at build time.
+# NOTE: preload() is internal headroom API — acceptable because the version
+# is pinned; a pin bump that breaks it fails THIS layer, not a user session.
+# Upstream bug (present through 0.25.0): `headroom wrap --memory` spawns
+# `python -m headroom.memory.sync`, which builds its backend config with the
+# dataclass default embedder (torch sentence-transformers — excluded here)
+# instead of the ONNX embedder the proxy auto-selects; there is no flag or
+# env var to steer it. The sed below patches the call site to "onnx". The
+# guard grep fails this layer on a pin bump that changes the line — the
+# signal to re-check whether upstream fixed the sync path.
+# The smoke test then runs the exact sync command the wrap emits, offline,
+# against a seeded memory file under a throwaway HOME — proving the patched
+# embedder path AND the pre-warmed model cache end to end. PYTHONPATH is
+# pinned to the user site because overriding HOME hides pip's --user dir.
+# The hf-xet chunk cache is transfer-time scratch — the offline loads above
+# prove the hub cache alone suffices, so it is removed.
+ARG HEADROOM_VERSION=0.25.0
+RUN pip3 install --user --no-cache-dir --break-system-packages \
+        "headroom-ai[proxy,code]==${HEADROOM_VERSION}" && \
+    /home/llm/.local/bin/headroom --version && \
+    SYNC="$(python3 -c 'import headroom.memory.sync as m; print(m.__file__)')" && \
+    grep -qF 'config = LocalBackendConfig(db_path=args.db)' "${SYNC}" && \
+    sed -i 's/config = LocalBackendConfig(db_path=args.db)/config = LocalBackendConfig(db_path=args.db, embedder_backend="onnx")/' "${SYNC}" && \
+    python3 -c "from headroom.transforms.kompress_compressor import KompressCompressor; \
+print('kompress backend:', KompressCompressor().preload(allow_download=True))" && \
+    python3 -c "from huggingface_hub import hf_hub_download; \
+[hf_hub_download('Qdrant/all-MiniLM-L6-v2-onnx', f) for f in ('model.onnx', 'tokenizer.json')]" && \
+    HF_HUB_OFFLINE=1 python3 -c "from headroom.transforms.kompress_compressor import KompressCompressor; \
+KompressCompressor().preload(allow_download=False)" && \
+    HF_HUB_OFFLINE=1 python3 -c "from huggingface_hub import hf_hub_download; \
+[hf_hub_download('Qdrant/all-MiniLM-L6-v2-onnx', f, local_files_only=True) for f in ('model.onnx', 'tokenizer.json')]" && \
+    USERSITE="$(python3 -m site --user-site)" && \
+    SMOKE="$(mktemp -d)" && \
+    MEMDIR="${SMOKE}/.claude/projects/$(python3 -c "import sys; from pathlib import Path; \
+from headroom.memory.sync_adapters.claude_code import encode_claude_project_path; \
+print(encode_claude_project_path(Path(sys.argv[1])))" "${SMOKE}/work")/memory" && \
+    mkdir -p "${SMOKE}/work" "${MEMDIR}" && \
+    printf -- '---\nname: smoke\ndescription: build-time sync smoke test\n---\n\nBuild-time smoke test fact.\n' \
+        > "${MEMDIR}/smoke.md" && \
+    env -C "${SMOKE}/work" HOME="${SMOKE}" HF_HUB_OFFLINE=1 \
+        HF_HOME=/home/llm/.cache/huggingface \
+        PYTHONPATH="${USERSITE}" python3 -m headroom.memory.sync \
+        --db "${SMOKE}/memory.db" --user smoke --agent claude --force \
+        | tee /dev/stderr | grep -q '"imported": 1' && \
+    rm -rf "${SMOKE}" && \
+    rm -rf /home/llm/.cache/huggingface/xet
 
 # ── opencode (installed alongside Claude Code) ───────────────────────────────
 # The official installer hardcodes the install target at $HOME/.opencode/bin

@@ -232,6 +232,80 @@ Users can still override the registry-derived default with
 that want a curated list, or add to it without restating the base via
 `RIOTBOX_PASSTHROUGH_EXTRA_VARS` (same syntax, appended after the base).
 
+## Optional verbs
+
+Beyond the eight required functions, a manifest may implement optional
+verbs. The wrapper probes for them with `declare -F agent_<name>_<verb>`;
+absence is never an error.
+
+### `agent_<name>_headroom_argv "$@"`
+
+Emits (NUL-terminated, like the other argv verbs) the command line the
+wrapper execs instead of the real binary when `RIOTBOX_HEADROOM=1`. The
+wrapper exports `RIOTBOX_HEADROOM_ACTIVE=1` first, so when the emitted
+command eventually re-invokes the agent by name, the shim's second pass
+takes the normal inject-and-exec path. Two shapes exist:
+
+**Wrap-shaped** — for tools headroom supports natively
+(`headroom wrap claude|codex|goose|…`):
+
+```bash
+agent_<name>_headroom_argv() {
+	printf '%s\0' headroom wrap <real-binary> <flags...> --
+	local arg
+	for arg in "$@"; do
+		printf '%s\0' "${arg}"
+	done
+}
+```
+
+A wrap-shaped verb MUST:
+
+- start with `headroom wrap <real-binary>`,
+- disable anything that downloads at session start (the claude manifest
+  passes `--no-serena --no-context-tool` — the image is offline-after-build),
+- place all caller args after a literal `--` (headroom's wrap subcommands
+  define their own flags, e.g. `-p/--port`, that would otherwise swallow
+  agent flags).
+
+**Proxy-routed** — for tools headroom has no wrap subcommand for. Emit an
+executable helper co-located in your agent's directory, followed by the
+caller args verbatim:
+
+```bash
+agent_<name>_headroom_argv() {
+	printf '%s\0' "${_AGENT_<NAME>_DIR}/headroom-exec.sh"
+	local arg
+	for arg in "$@"; do
+		printf '%s\0' "${arg}"
+	done
+}
+```
+
+The helper owns whatever routing the tool needs and MUST:
+
+- ensure `headroom proxy` is listening (reuse a live one, else spawn with
+  `--memory --learn`, log to `~/.headroom/logs/proxy.log`, and wait for
+  TCP readiness with a timeout),
+- apply agent-specific routing only AFTER the proxy answers (opencode
+  ignores `*_BASE_URL` env vars, so its helper injects
+  `provider.{anthropic,openai}.options.baseURL` into the merged
+  `opencode.jsonc`, never overriding a user-set baseURL),
+- degrade to unwrapped on any failure — warn on stderr, leave config
+  untouched, `exec <real-binary-name> "$@"`,
+- end with `exec <real-binary-name> "$@"` so the shim's guarded second
+  pass applies the agent's normal injection rules.
+
+`agents/opencode/headroom-exec.sh` is the reference implementation.
+
+Agents without the verb run unwrapped under `RIOTBOX_HEADROOM=1`, with a
+warning on stderr.
+
+Contract coverage lives in `tests/agents.venom.yml` ("Headroom optional
+verb" cases), `tests/headroom.venom.yml` (wrapper gate, guard, and
+fallbacks), and `tests/headroom-opencode.venom.yml` (proxy-routed helper
+behavior).
+
 ## Worked example: adding `aider`
 
 Suppose [aider](https://aider.chat/) is your third agent. Here's the

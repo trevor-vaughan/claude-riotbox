@@ -67,6 +67,30 @@ agent_claude_wrapper_inject() {
 	fi
 }
 
+# Optional verb: argv for headroom interposition (RIOTBOX_HEADROOM=1).
+# The wrapper execs this instead of the real binary; headroom starts its
+# compression proxy and re-launches `claude`, which resolves back to the
+# shim — the wrapper's RIOTBOX_HEADROOM_ACTIVE guard makes that second
+# pass exec the real binary. See docs/maintainer/adding-an-agent.md.
+#
+# Flag rationale (verified against headroom 0.25.0):
+#   --memory / --learn      cross-session memory + failure learning,
+#                           persisted under ~/.headroom (session-mounted)
+#   --no-serena             Serena MCP registration downloads at session
+#                           start — violates offline-after-build
+#   --no-context-tool       ditto for the rtk context tool
+#   --                      REQUIRED: headroom wrap claude has its own
+#                           -p/--port; user args (claude -p "<prompt>")
+#                           must follow the separator or click eats them
+agent_claude_headroom_argv() {
+	printf '%s\0' headroom wrap claude --memory --learn \
+		--no-serena --no-context-tool --
+	local arg
+	for arg in "$@"; do
+		printf '%s\0' "${arg}"
+	done
+}
+
 # Container-side runtime setup. setup.sh is a no-op in the common case
 # (managed policy /etc/claude-code/CLAUDE.md is rendered at build time);
 # it only does work when RIOTBOX_PROMPT overrides or the build-time render

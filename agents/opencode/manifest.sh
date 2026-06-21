@@ -68,6 +68,22 @@ agent_opencode_wrapper_inject() {
 	fi
 }
 
+# Optional verb: argv for headroom interposition (RIOTBOX_HEADROOM=1).
+# headroom 0.25.0 has no `wrap opencode` subcommand — its wrap docstring
+# says to run `headroom proxy` and point opencode at it. headroom-exec.sh
+# is that proxy-routed path: it ensures the proxy is listening, injects
+# provider baseURLs into the merged opencode.jsonc (only after the proxy
+# answers), and re-execs opencode under the wrapper's exported
+# RIOTBOX_HEADROOM_ACTIVE guard. No `--` separator: the helper defines no
+# flags of its own, so every token after argv[0] is a user arg.
+agent_opencode_headroom_argv() {
+	printf '%s\0' "${_AGENT_OPENCODE_DIR}/headroom-exec.sh"
+	local arg
+	for arg in "$@"; do
+		printf '%s\0' "${arg}"
+	done
+}
+
 # Container-side runtime setup. setup.sh places AGENTS.md and a merged
 # opencode.jsonc (combining host opencode.json + opencode.jsonc with
 # riotbox-mandatory overrides) on every container start; both are idempotent.

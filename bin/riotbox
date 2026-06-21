@@ -85,7 +85,7 @@ Setup / maintenance:
   install-hooks [flags...]     Install the git pre-push identity hook
   build                        Build the RiotBox image
   rebuild                      Rebuild the image from scratch (no cache)
-  update                       Upgrade only the LLM CLI tools (opencode, Claude Code, plugins)
+  update                       Upgrade only the LLM CLI tools (headroom, opencode, Claude Code, plugins)
 
 Info:
   agents                       List registered agents (name + binary)
@@ -146,8 +146,9 @@ print_command_help() {
 		echo "the container image."
 		echo "  build    Build using the layer cache where possible."
 		echo "  rebuild  Add --no-cache to invalidate every layer."
-		echo "  update   Re-pull only the LLM CLI tools (opencode, Claude Code,"
-		echo "           plugins) to latest; reuse every other cached layer."
+		echo "  update   Re-pull only the LLM CLI tools (headroom, opencode, Claude Code,"
+		echo "           plugins) — headroom re-installs at its pinned version; opencode,"
+		echo "           Claude Code, and plugins update to latest. Reuses every other cached layer."
 		echo "Environment knobs:"
 		echo "  NODE_VERSIONS_MAX=<N>|all  Cap baked-in Node versions (default 3)"
 		echo "  RIOTBOX_DIAGRAMS=1         Include Chromium + mmdc"

@@ -82,6 +82,7 @@ You are autonomous by default, but autonomy is not a license to guess. Stop and 
 ## Commits
 
 - Commit at logical checkpoints. Do not wait until the end. Tag progression points when implementing a plan.
+- Never commit headroom artifacts (`.headroom/` directories — local memory/code-graph state, not project code).
 - Before each commit, review staged changes for:
   * [ ] Scope: only changes related to the task at hand, no drive-by cleanups
   * [ ] Tidiness: nothing extraneous, files organized sensibly

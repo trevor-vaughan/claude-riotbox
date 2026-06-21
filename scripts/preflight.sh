@@ -49,6 +49,7 @@
 #   18  no readable credentials (ANTHROPIC_API_KEY unset and no creds file)
 #   19  ~/.claude/plugins exists but is not readable
 #   20  ~/.claude/skills exists but is not readable
+#   21  RIOTBOX_HEADROOM set but invalid, or image lacks headroom/model cache
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Strict mode applies only when this file is run as a script. When sourced as
@@ -62,6 +63,23 @@ fi
 PREFLIGHT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/log.sh
 source "${PREFLIGHT_SCRIPT_DIR}/lib/log.sh"
+
+# Source config for config-persisted toggles (e.g. RIOTBOX_HEADROOM). The
+# files use `: "${VAR:=default}"` so sourcing user (XDG) before system (/etc)
+# yields: env > $XDG_CONFIG_HOME/riotbox > /etc/riotbox > built-in default.
+# (env wins because := only assigns when the variable is unset; XDG wins over
+# /etc because the value it sets first is then already set when /etc is sourced.)
+# Must apply at file level — not inside the strict-mode guard — so the same
+# config is visible both when this file is executed directly and when it is
+# sourced as a library (the venom doctor suites; setup.sh runs it as a
+# subprocess and picks the config up through the direct-execution path).
+_PREFLIGHT_CONFIG_USER="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox/config"
+_PREFLIGHT_CONFIG_SYSTEM="${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}/config"
+# shellcheck disable=SC1090
+[[ -f "${_PREFLIGHT_CONFIG_USER}" ]] && source "${_PREFLIGHT_CONFIG_USER}"
+# shellcheck disable=SC1090,SC1091
+[[ -f "${_PREFLIGHT_CONFIG_SYSTEM}" ]] && source "${_PREFLIGHT_CONFIG_SYSTEM}"
+unset _PREFLIGHT_CONFIG_USER _PREFLIGHT_CONFIG_SYSTEM
 
 # ── Output helpers ──────────────────────────────────────────────────────────
 
@@ -236,6 +254,48 @@ preflight_check_skills_dir() {
 	return 0
 }
 
+preflight_check_headroom() {
+	local image="${IMAGE_NAME:-riotbox}"
+	local label="headroom available in image (RIOTBOX_HEADROOM=1)"
+	# Not opted in → nothing to verify. Report it so users see why the
+	# check is a no-op rather than wondering if it ran.
+	if [[ -z "${RIOTBOX_HEADROOM:-}" ]] || [[ "${RIOTBOX_HEADROOM}" = "0" ]]; then
+		_preflight_report headroom ok "headroom not requested (RIOTBOX_HEADROOM=${RIOTBOX_HEADROOM:-unset})"
+		return 0
+	fi
+	# Every consumer (wrapper, mounts, entrypoint) gates on the literal
+	# "1" — any other value silently disables the feature. Fail loudly
+	# here so `RIOTBOX_HEADROOM=true` doesn't read as "enabled".
+	if [[ "${RIOTBOX_HEADROOM}" != "1" ]]; then
+		_preflight_report headroom fail "${label}" 21 \
+			"RIOTBOX_HEADROOM='${RIOTBOX_HEADROOM}' is not recognized — set RIOTBOX_HEADROOM=1 to enable or unset it"
+		return 21
+	fi
+	if ! command -v podman >/dev/null 2>&1 ||
+		! podman image exists "${image}" 2>/dev/null; then
+		_preflight_report headroom fail "${label}" 21 \
+			"Build the image first (riotbox build), then re-run doctor"
+		return 21
+	fi
+	# One short-lived container proves the full image contract: the binary
+	# is on PATH, the Kompress preload cache is intact, and the MiniLM
+	# memory-embedder cache (Qdrant/all-MiniLM-L6-v2-onnx) used by
+	# --memory is present. --network=none proves no network is needed.
+	if ! podman run --rm --network=none --entrypoint /usr/bin/bash "${image}" -c \
+		'command -v headroom >/dev/null && HF_HUB_OFFLINE=1 python3 -c "
+from headroom.transforms.kompress_compressor import KompressCompressor
+from huggingface_hub import hf_hub_download
+KompressCompressor().preload(allow_download=False)
+[hf_hub_download(\"Qdrant/all-MiniLM-L6-v2-onnx\", f, local_files_only=True)
+ for f in (\"model.onnx\", \"tokenizer.json\")]"' >/dev/null 2>&1; then
+		_preflight_report headroom fail "${label}" 21 \
+			"Image lacks headroom or its model cache — rebuild with riotbox rebuild"
+		return 21
+	fi
+	_preflight_report headroom ok "${label}"
+	return 0
+}
+
 # ── Composition ─────────────────────────────────────────────────────────────
 
 # preflight_run: invokes every check in order. By default runs every
@@ -256,6 +316,7 @@ preflight_run() {
 		preflight_check_creds
 		preflight_check_plugins_dir
 		preflight_check_skills_dir
+		preflight_check_headroom
 	)
 	for fn in "${checks[@]}"; do
 		rc=0

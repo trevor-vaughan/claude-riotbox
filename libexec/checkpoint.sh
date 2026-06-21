@@ -19,6 +19,127 @@ set -euo pipefail
 source "${ROOT_DIR}/scripts/mount-projects.sh"
 resolve_projects "${RIOTBOX_PROJECTS:-}"
 
+# Managed exclude block — exact content; markers are the stable identity.
+_MANAGED_BLOCK='# >>> riotbox managed excludes (do not edit between markers) >>>
+.headroom/
+.claude/settings.local.json
+CLAUDE.local.md
+venom.log
+venom.*.log
+# <<< riotbox managed excludes <<<'
+
+# Ensure the project repo's .git/info/exclude contains the current managed
+# block. Called for every git project before the checkpoint commit.
+#
+# Behaviour:
+#   - Resolves the exclude path via `git -C <dir> rev-parse --git-path
+#     info/exclude` to handle worktrees and submodule gitdirs correctly.
+#   - Creates the parent directory if it doesn't exist yet.
+#   - If the markers are already present, replaces everything between them
+#     (including the markers themselves) so that list updates propagate.
+#   - If no markers exist, appends the block (with a separating newline).
+#   - Never modifies content outside the markers.
+#   - Non-git directory → silent no-op.
+#   - Any other failure → one-line warning to stderr; does NOT abort.
+ensure_managed_excludes() {
+	local dir="$1"
+
+	# Resolve exclude path. rev-parse may return a relative path; canonicalise.
+	local raw_path
+	raw_path="$(git -C "${dir}" rev-parse --git-path info/exclude 2>/dev/null)" || return 0
+
+	local exclude_path
+	if [[ "${raw_path}" = /* ]]; then
+		exclude_path="${raw_path}"
+	else
+		exclude_path="${dir}/${raw_path}"
+	fi
+
+	# Create parent directory if needed (bare repos / worktrees may not have it).
+	local exclude_dir
+	exclude_dir="$(dirname "${exclude_path}")"
+	mkdir -p "${exclude_dir}" 2>/dev/null || {
+		echo "  WARNING: cannot create ${exclude_dir} — skipping managed excludes" >&2
+		return 0
+	}
+
+	# Touch the file if it doesn't exist so all paths below can treat it uniformly.
+	[[ -f "${exclude_path}" ]] || touch "${exclude_path}" 2>/dev/null || {
+		echo "  WARNING: cannot write ${exclude_path} — skipping managed excludes" >&2
+		return 0
+	}
+
+	# Derive markers from _MANAGED_BLOCK so there is only one source of truth.
+	local open_marker close_marker
+	open_marker="$(printf '%s\n' "${_MANAGED_BLOCK}" | head -1)"
+	close_marker="$(printf '%s\n' "${_MANAGED_BLOCK}" | tail -1)"
+
+	# Classify the marker structure in one pass. The replace path is only safe
+	# when there is exactly one open marker with a close marker somewhere after
+	# it — any other shape (duplicate opens, an open that never closes, a close
+	# preceding an unclosed open) would make the rewrite below eat user content
+	# to EOF. Stray close markers OUTSIDE a block are user content and are
+	# preserved. Exact-line matching ($0 ==) is consistent with the rewrite awk.
+	local marker_state
+	marker_state="$(awk \
+		-v open_marker="${open_marker}" \
+		-v close_marker="${close_marker}" \
+		'
+		BEGIN { opens=0; inside=0; closed=0 }
+		$0 == open_marker  { opens++; inside=1; next }
+		inside && $0 == close_marker { inside=0; closed=1 }
+		END {
+			if (opens == 0)                print "absent"
+			else if (opens == 1 && closed) print "valid"
+			else                           print "corrupt"
+		}
+		' "${exclude_path}" 2>/dev/null)" || marker_state="corrupt"
+
+	if [[ "${marker_state}" == "valid" ]]; then
+		# Both markers present — replace the entire block (open marker through close
+		# marker) so that list updates propagate. Awk uses exact-line matching
+		# ($0 == marker) which is consistent with the grep -xF probes above.
+		local new_content
+		new_content="$(awk \
+			-v block="${_MANAGED_BLOCK}" \
+			-v open_marker="${open_marker}" \
+			-v close_marker="${close_marker}" \
+			'
+			BEGIN { inside=0; printed_block=0 }
+			$0 == open_marker {
+				if (!printed_block) { print block; printed_block=1 }
+				inside=1
+				next
+			}
+			inside && $0 == close_marker { inside=0; next }
+			inside { next }
+			{ print }
+			' "${exclude_path}")" || {
+			echo "  WARNING: awk failed updating ${exclude_path} — skipping managed excludes" >&2
+			return 0
+		}
+		printf '%s\n' "${new_content}" > "${exclude_path}" 2>/dev/null || {
+			echo "  WARNING: cannot write ${exclude_path} — skipping managed excludes" >&2
+		}
+	elif [[ "${marker_state}" == "corrupt" ]]; then
+		# Duplicate or unclosed markers — corrupt/hand-edited state. Refuse to
+		# rewrite (would eat user content to EOF) and warn loudly.
+		echo "  WARNING: ${exclude_path} has a malformed managed block (duplicate or unclosed markers) — skipping managed excludes" >&2
+	else
+		# No markers yet — append with a separating newline if the file is
+		# non-empty (so we don't create a blank leading line). Read the size
+		# before opening the file for writing to satisfy shellcheck SC2094.
+		local needs_separator=false
+		[[ -s "${exclude_path}" ]] && needs_separator=true
+		{
+			"${needs_separator}" && printf '\n'
+			printf '%s\n' "${_MANAGED_BLOCK}"
+		} >> "${exclude_path}" 2>/dev/null || {
+			echo "  WARNING: cannot append to ${exclude_path} — skipping managed excludes" >&2
+		}
+	fi
+}
+
 # Decide whether to create a git repo in a directory that has none, so the
 # project still gets checkpoint protection. Behaviour is driven by
 # RIOTBOX_GIT_INIT to keep automation predictable:
@@ -64,6 +185,12 @@ for dir in "${PROJECT_DIRS[@]}"; do
 			continue
 		fi
 	fi
+
+	# Ensure .git/info/exclude has the managed block so runtime artifacts
+	# (headroom DBs, venom logs, Claude Code local files) are never swept
+	# into the checkpoint commit. This runs before `git add -A` so the
+	# gitignore semantics take effect for this and all future checkpoints.
+	ensure_managed_excludes "${dir}"
 
 	# Commit any uncommitted work so it's safely captured before Claude runs.
 	# Includes untracked files — the goal is a complete snapshot.

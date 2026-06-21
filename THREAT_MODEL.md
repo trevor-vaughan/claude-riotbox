@@ -187,6 +187,23 @@ Credential-file env vars listed in `RIOTBOX_CREDFILE_VARS` get a different treat
 
 opencode's session-share feature is enforced disabled inside the container regardless of host config. At session start the runtime merges `~/.config/opencode/opencode.json` and `opencode.jsonc` and forces `share = "disabled"`, `permission = "allow"`, `autoupdate = false`, and ensures `~/.config/opencode/AGENTS.md` is in `instructions`. A host `opencode.json` with `share: "enabled"` is overridden during the merge — the host file is removed and the merged `opencode.jsonc` is the single source of truth opencode loads.
 
+## Headroom compression cache (opt-in feature)
+
+When `RIOTBOX_HEADROOM=1`, headroom's reversible-compression cache (CCR) stores
+uncompressed originals of everything the agent sent to the model — tool
+outputs, file contents, conversation history — under the session directory
+on the host (`<session>/headroom`). This is the same sensitivity class as
+the `.claude` transcripts already stored there, but it is a second,
+independent copy with its own retention behavior. The compression proxy
+binds localhost inside the container network namespace and exposes no
+ports. For opencode, riotbox additionally rewrites the container-side merged
+`opencode.jsonc` to point the anthropic/openai providers at that localhost
+proxy; the rewrite happens only after the proxy passes a readiness check,
+never touches a user-set baseURL, and is discarded when the merged file is
+regenerated at the next container start (the host copy is never modified).
+Headroom's usage telemetry is disabled image-wide
+(`ENV HEADROOM_TELEMETRY=off`).
+
 ## Findings
 
 ---
