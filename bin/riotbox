@@ -89,6 +89,7 @@ Setup / maintenance:
 
 Info:
   agents                       List registered agents (name + binary)
+  tokscale [args...]           Unified tokscale usage across native + riotbox sessions
   doctor                       Verify host setup (preflight checks)
   version                      Show the current version
   help                         Show this help
@@ -155,6 +156,16 @@ print_command_help() {
 		echo "  RIOTBOX_NONINTERACTIVE_BUILD=1  Skip the proceed prompt"
 		echo "  IMAGE_NAME=<tag>           Override the image tag"
 		;;
+	tokscale)
+		echo "Usage: riotbox tokscale [tokscale args...]"
+		echo ""
+		echo "View tokscale usage over a unified scan of your native agent home"
+		echo "plus every riotbox session, fully offline (no telemetry). All"
+		echo "arguments pass through to tokscale; with no args it opens the TUI."
+		echo "  riotbox tokscale                      # interactive TUI"
+		echo "  riotbox tokscale -c opencode --month  # pass flags through"
+		echo "  riotbox tokscale help                 # tokscale's own help"
+		;;
 	doctor)
 		echo "Usage: riotbox doctor"
 		echo ""
@@ -200,6 +211,7 @@ agents)
 		printf "%-${agents_max_width}s  %s\n" "${agent}" "${binary}"
 	done
 	;;
+tokscale) exec "${SCRIPTS}/tokscale-riotbox.sh" "$@" ;;
 
 build) exec "${SCRIPTS}/build.sh" ;;
 rebuild) CONTAINER_EXTRA_ARGS="--no-cache" exec "${SCRIPTS}/build.sh" ;;

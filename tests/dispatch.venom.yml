@@ -27,6 +27,18 @@ testcases:
           - result.systemout ShouldContainSubstring "audit"
           - result.systemout ShouldContainSubstring "install-hooks"
           - result.systemout ShouldContainSubstring "doctor"
+          - result.systemout ShouldContainSubstring "tokscale"
+
+  - name: tokscale --help prints the pass-through stanza (no exec of tokscale)
+    steps:
+      - type: exec
+        script: |
+          "{{.riotbox_dir}}/bin/riotbox" tokscale --help
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "riotbox tokscale [tokscale args"
+          - result.systemout ShouldContainSubstring "no telemetry"
+          - result.systemout ShouldContainSubstring "pass through to tokscale"
 
   - name: unknown non-path command errors with exit 2
     steps:
