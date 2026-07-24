@@ -37,6 +37,11 @@ See README "Reclaiming authorship" for context.
 EOF
 		exit 0
 		;;
+	*)
+		echo "ERROR: unknown argument '${arg}'" >&2
+		echo "Usage: riotbox install-hooks [global] [--force]" >&2
+		exit 1
+		;;
 	esac
 done
 

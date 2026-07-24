@@ -215,7 +215,13 @@ tokscale) exec "${SCRIPTS}/tokscale-riotbox.sh" "$@" ;;
 
 build) exec "${SCRIPTS}/build.sh" ;;
 rebuild) CONTAINER_EXTRA_ARGS="--no-cache" exec "${SCRIPTS}/build.sh" ;;
-update) LLM_TOOL_UPDATE="$(date +%s)" exec "${SCRIPTS}/build.sh" ;;
+update)
+	# Assign on its own line so date's exit status isn't masked (SC2312);
+	# export so the value reaches build.sh's environment across the exec.
+	LLM_TOOL_UPDATE="$(date +%s)"
+	export LLM_TOOL_UPDATE
+	exec "${SCRIPTS}/build.sh"
+	;;
 
 run)
 	ensure_image
@@ -301,8 +307,9 @@ mounts)
 	echo "Auto-detected (always-mounted) — from scripts/detect-mounts.sh:"
 	"${SCRIPTS}/detect-mounts.sh" | while read -r _flag path; do echo "  ${path}"; done
 	echo ""
-	echo "Project + session — for: ${*:-$(pwd)} (from scripts/mount-projects.sh):"
-	RIOTBOX_DRY_RUN=1 RIOTBOX_PROJECTS="${*:-$(pwd)}" \
+	here="$(pwd)"
+	echo "Project + session — for: ${*:-${here}} (from scripts/mount-projects.sh):"
+	RIOTBOX_DRY_RUN=1 RIOTBOX_PROJECTS="${*:-${here}}" \
 		"${SCRIPTS}/mount-projects.sh" --format=triple |
 		while IFS= read -r line; do echo "  ${line}"; done
 	echo ""

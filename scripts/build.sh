@@ -276,7 +276,12 @@ echo "  uv:              ${UV_VERSION}"
 echo "  Go:              ${GO_VERSION:-(skipped — not on host)}"
 echo "  Rust toolchains: ${RUST_TOOLCHAINS:-(skipped — not on host)}"
 echo "  Ruby versions:   ${RUBY_VERSIONS:-(skipped — set RUBY_VERSIONS or install RVM to enable)}"
-echo "  Diagram tools:   $([ "${RIOTBOX_DIAGRAMS:-0}" = "1" ] && echo "chromium + mmdc (opt-in)" || echo "(skipped — set RIOTBOX_DIAGRAMS=1 to include)")"
+if [[ "${RIOTBOX_DIAGRAMS:-0}" = "1" ]]; then
+	_diagrams="chromium + mmdc (opt-in)"
+else
+	_diagrams="(skipped — set RIOTBOX_DIAGRAMS=1 to include)"
+fi
+echo "  Diagram tools:   ${_diagrams}"
 echo ""
 echo "  Expected runtime: 15–60 min on a clean host. Heavier with many"
 echo "  Node versions, full Rust toolchains, or RVM Ruby builds (compiled"
