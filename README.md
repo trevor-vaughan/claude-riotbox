@@ -212,6 +212,7 @@ the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent na
 | `riotbox audit "<task>" [dir]`        | Read-only session for inspecting untrusted code (workspace mounted RO)                                                  |
 | `riotbox install-hooks [global]`      | Install the pre-push hook that blocks container-identity commits ([details](#reclaiming-authorship))                    |
 | `riotbox agents`                      | List registered agents (riotbox name + binary)                                                                          |
+| `riotbox tokscale [args...]`          | Unified [tokscale](https://github.com/IvGolovach/tokscale) usage across your native agent home + every riotbox session, offline (no telemetry); args pass through to tokscale |
 | `riotbox doctor`                      | Walks every preflight check; prints each result with a fix hint. Exits with the first failure's code (0 on full pass).  |
 
 ## Pre-installed tools
