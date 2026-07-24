@@ -66,6 +66,7 @@ _proxy_listening() {
 }
 
 # ── 1. Ensure the proxy ──────────────────────────────────────────────────────
+# shellcheck disable=SC2310  # _proxy_listening is a predicate; its 0/1 return is the control signal, so set -e suppression is intentional.
 if ! _proxy_listening; then
 	log_dir="${HOME}/.headroom/logs"
 	mkdir -p "${log_dir}"
@@ -85,6 +86,7 @@ if ! _proxy_listening; then
 	fi
 	proxy_pid=$!
 	waited=0
+	# shellcheck disable=SC2310  # _proxy_listening is a predicate; its 0/1 return is the control signal, so set -e suppression is intentional.
 	until _proxy_listening; do
 		if ! kill -0 "${proxy_pid}" 2>/dev/null; then
 			_fallback "headroom proxy exited during startup (see ${log_dir}/proxy.log)"

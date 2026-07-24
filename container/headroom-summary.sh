@@ -67,6 +67,7 @@ headroom_render_perf_json() {
 
 	# Compute max model name width (capped at 24) for column alignment
 	local max_width=0
+	# shellcheck disable=SC2312  # jq failure yields an empty stream; the loop simply runs zero times and max_width keeps its fallback. Capturing its status would reintroduce the mask.
 	while IFS= read -r row; do
 		local name
 		name="$(printf '%s\n' "${row}" | jq -r '.model')"
@@ -84,6 +85,7 @@ headroom_render_perf_json() {
 		printf ' cache-hit %s%%\n' "${cache_hit}"
 	fi
 
+	# shellcheck disable=SC2312  # jq failure yields an empty stream; the loop simply prints no model rows. Capturing its status would reintroduce the mask.
 	while IFS= read -r row; do
 		local mname mreq msavings mprice mtok_after mtok_saved
 		mname="$(printf '%s\n' "${row}" | jq -r '.model')"
@@ -136,8 +138,9 @@ headroom_summary_print() {
 
 	# Compute elapsed hours; pass current epoch via -v to avoid gawk-only systime().
 	# Minimum 0.1 h so the perf window is never zero.
-	local _hours
-	_hours="$(awk -v s="${_HEADROOM_SUMMARY_START}" -v now="$(date +%s)" \
+	local _hours _now
+	_now="$(date +%s)"
+	_hours="$(awk -v s="${_HEADROOM_SUMMARY_START}" -v now="${_now}" \
 		'BEGIN{h=(now-s)/3600; if(h<0.1)h=0.1; printf "%.2f",h}')"
 
 	timeout 10 headroom perf --hours "${_hours}" --format json 2>/dev/null \
