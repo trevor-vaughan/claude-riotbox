@@ -1,0 +1,262 @@
+name: scripts/lib/overlay-ignore.sh derived-cache filter
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Pins the public contract of scripts/lib/overlay-ignore.sh. The predicate is
+# the single source of truth for "this overlay upper entry is a derived cache,
+# not a project change" — consumed by scripts/overlay.sh, libexec/launch.sh and
+# container/overlay-setup.sh. A regression here silently either blocks launches
+# (index counted as pending) or hides real changes from review.
+
+testcases:
+  - name: predicate matches the ignored name only as the first component
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          overlay_path_ignored ".codegraph" || { echo "FAIL: bare dir"; exit 1; }
+          overlay_path_ignored ".codegraph/codegraph.db" || { echo "FAIL: child"; exit 1; }
+          overlay_path_ignored ".codegraph/x/y.db" || { echo "FAIL: deep child"; exit 1; }
+          # Deeper matches are NOT filtered. Each overlay upper is rooted at one
+          # project root and CodeGraph indexes <project-root>/.codegraph, so a
+          # nested one is not this session's index --- and overlay-accept is
+          # unfiltered by design, so hiding it from review would hand the
+          # container an invisible write channel to the host.
+          if overlay_path_ignored "sub/.codegraph/codegraph.db"; then
+            echo "FAIL: nested index hidden from review"; exit 1
+          fi
+          if overlay_path_ignored "a/b/.codegraph/x/y.db"; then
+            echo "FAIL: deeply nested index hidden from review"; exit 1
+          fi
+          echo "match=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "match=pass"
+
+  - name: predicate matches the whiteout form at the first component only
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          overlay_path_ignored ".wh..codegraph" || { echo "FAIL: whiteout"; exit 1; }
+          if overlay_path_ignored "sub/.wh..codegraph"; then
+            echo "FAIL: nested whiteout hidden from review"; exit 1
+          fi
+          echo "whiteout=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "whiteout=pass"
+
+  - name: walker surfaces a nested .codegraph so review cannot be bypassed
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          UPPER="$(mktemp -d)"
+          trap 'rm -rf "${UPPER}"' EXIT
+          # overlay-accept copies every upper entry to the host, filtered or
+          # not. Anything the walker drops is therefore applied without ever
+          # appearing in `riotbox overlay-diff` --- the command the launch
+          # guard tells the user to run. Only the project root's own index
+          # earns that exemption.
+          mkdir -p "${UPPER}/nested/deep/.codegraph" "${UPPER}/.codegraph"
+          touch "${UPPER}/nested/deep/.codegraph/exfil.py"
+          touch "${UPPER}/.codegraph/codegraph.db"
+          out="$(overlay_upper_changes "${UPPER}")"
+          [ "${out}" = "nested/deep/.codegraph/exfil.py" ] \
+            || { echo "FAIL: got '${out}'"; exit 1; }
+          echo "nested_visible=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "nested_visible=pass"
+
+  - name: predicate does not match lookalikes or project files
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          for p in "src/main.go" ".codegraphrc" "codegraph.json" "my.codegraph" \
+                   ".codegraph-old/db" "docs/codegraph/notes.md" "." ""; do
+            if overlay_path_ignored "${p}"; then
+              echo "FAIL: '${p}' should not be ignored"; exit 1
+            fi
+          done
+          echo "nomatch=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "nomatch=pass"
+
+  - name: walker lists only non-ignored non-directory entries
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          UPPER="$(mktemp -d)"
+          trap 'rm -rf "${UPPER}"' EXIT
+          mkdir -p "${UPPER}/.codegraph" "${UPPER}/sub/.codegraph" "${UPPER}/emptydir"
+          touch "${UPPER}/.codegraph/codegraph.db"
+          touch "${UPPER}/sub/.codegraph/codegraph.db"
+          touch "${UPPER}/sub/real.go"
+          touch "${UPPER}/.wh.deleted.txt"
+          # LC_ALL=C pins byte ordering; en_US collation ignores the leading dot.
+          out="$(overlay_upper_changes "${UPPER}" | LC_ALL=C sort | tr '\n' ' ')"
+          [ "${out}" = ".wh.deleted.txt sub/.codegraph/codegraph.db sub/real.go " ] \
+            || { echo "FAIL: got '${out}'"; exit 1; }
+          echo "walker=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "walker=pass"
+
+  - name: walker keeps a root opaque marker and drops the one inside the index
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          UPPER="$(mktemp -d)"
+          trap 'rm -rf "${UPPER}"' EXIT
+          mkdir -p "${UPPER}/.codegraph"
+          # overlay_diff reads a root-level .wh..wh..opq as "the project was
+          # emptied", so filtering it would corrupt diff output. The same marker
+          # under .codegraph is index churn like the rest of that tree.
+          touch "${UPPER}/.wh..wh..opq"
+          touch "${UPPER}/.codegraph/.wh..wh..opq"
+          out="$(overlay_upper_changes "${UPPER}" | tr '\n' ' ')"
+          [ "${out}" = ".wh..wh..opq " ] || { echo "FAIL: got '${out}'"; exit 1; }
+          echo "opaque=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "opaque=pass"
+
+  - name: walker round-trips a path containing spaces
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          UPPER="$(mktemp -d)"
+          trap 'rm -rf "${UPPER}"' EXIT
+          mkdir -p "${UPPER}/dir with spaces"
+          touch "${UPPER}/dir with spaces/file name.txt"
+          out="$(overlay_upper_changes "${UPPER}")"
+          [ "${out}" = "dir with spaces/file name.txt" ] || { echo "FAIL: got '${out}'"; exit 1; }
+          echo "spaces=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "spaces=pass"
+
+  - name: walker emits upper-relative paths for a trailing-slash argument
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          UPPER="$(mktemp -d)"
+          trap 'rm -rf "${UPPER}"' EXIT
+          touch "${UPPER}/real.txt"
+          # Consumers join the printed path onto a project directory; an
+          # absolute path here would build garbage destinations.
+          out="$(overlay_upper_changes "${UPPER}/")"
+          [ "${out}" = "real.txt" ] || { echo "FAIL: got '${out}'"; exit 1; }
+          echo "trailingslash=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "trailingslash=pass"
+
+  - name: walker warns instead of silently dropping an unreadable subtree
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          UPPER="$(mktemp -d)"
+          trap 'chmod 700 "${UPPER}/locked"; rm -rf "${UPPER}"' EXIT
+          mkdir -p "${UPPER}/locked"
+          touch "${UPPER}/locked/hidden.txt" "${UPPER}/visible.txt"
+          chmod 000 "${UPPER}/locked"
+          # root ignores the mode bits, so there is nothing to observe there.
+          if find "${UPPER}/locked" -mindepth 1 >/dev/null 2>&1; then
+            echo "SKIP: permission bits do not restrict this user (root?)"
+            echo "unreadable=pass"
+            exit 0
+          fi
+          warn="$(overlay_upper_changes "${UPPER}" 2>&1 >/dev/null)"
+          out="$(overlay_upper_changes "${UPPER}" 2>/dev/null)"
+          # find's own diagnostic names the path it could not read; the walker
+          # adds its own line so a truncated listing is unmistakable.
+          case "${warn}" in
+            *"${UPPER}/locked"*) ;;
+            *) echo "FAIL: find diagnostic suppressed: '${warn}'"; exit 1 ;;
+          esac
+          case "${warn}" in
+            *"listing may be incomplete"*) ;;
+            *) echo "FAIL: no incomplete-listing warning: '${warn}'"; exit 1 ;;
+          esac
+          [ "${out}" = "visible.txt" ] || { echo "FAIL: got '${out}'"; exit 1; }
+          echo "unreadable=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "unreadable=pass"
+
+  - name: has_changes is false for an index-only upper and true with a real change
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          UPPER="$(mktemp -d)"
+          trap 'rm -rf "${UPPER}"' EXIT
+          mkdir -p "${UPPER}/.codegraph" "${UPPER}/emptydir"
+          touch "${UPPER}/.codegraph/codegraph.db"
+          if overlay_upper_has_changes "${UPPER}"; then
+            echo "FAIL: index-only upper reported as changed"; exit 1
+          fi
+          touch "${UPPER}/real.txt"
+          overlay_upper_has_changes "${UPPER}" || { echo "FAIL: real change missed"; exit 1; }
+          echo "haschanges=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "haschanges=pass"
+
+  - name: has_changes returns to its caller on an upper larger than a pipe buffer
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          UPPER="$(mktemp -d)"
+          trap 'rm -rf "${UPPER}"' EXIT
+          # Names long enough that the listing exceeds the 64 KiB pipe buffer:
+          # the walker is still writing when the reader stops. A pipeline-based
+          # implementation dies of SIGPIPE there, and pipefail turns that into
+          # an errexit abort of the caller.
+          i=1
+          while [ "${i}" -le 2000 ]; do
+            : >"${UPPER}/entry-${i}-padding-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.txt"
+            i=$((i + 1))
+          done
+          # Bare statement, not a condition: errexit is live for this call.
+          overlay_upper_has_changes "${UPPER}"
+          echo "largeupper=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "largeupper=pass"
+
+  - name: walkers tolerate a missing upper directory
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          out="$(overlay_upper_changes "/nonexistent/upper")"
+          [ -z "${out}" ] || { echo "FAIL: expected no output"; exit 1; }
+          if overlay_upper_has_changes "/nonexistent/upper"; then
+            echo "FAIL: missing dir reported as changed"; exit 1
+          fi
+          echo "missing=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "missing=pass"

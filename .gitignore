@@ -27,6 +27,12 @@ venom.*.log
 # working dir when RIOTBOX_HEADROOM=1). Never project code; never commit.
 .headroom/
 
+# CodeGraph per-project index. CodeGraph writes its own .codegraph/.gitignore
+# ("*" then "!.gitignore"), which re-admits that one file — so without this
+# rule the directory still shows up as untracked. Derived from the source
+# tree; never commit.
+.codegraph/
+
 # Scratch space for spikes / one-off experiments
 tmp/
 

@@ -342,6 +342,14 @@ ENV RIOTBOX=1
 # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC set by the entrypoint.
 ENV HEADROOM_TELEMETRY=off
 
+# ── CodeGraph telemetry opt-out ───────────────────────────────────────────────
+# CodeGraph's telemetry also defaults to ON. Its resolution order is
+# DO_NOT_TRACK > CODEGRAPH_TELEMETRY > stored config > default on, and this is
+# the middle of three layers: the entrypoint exports DO_NOT_TRACK=1 (which also
+# disables its update check) and the install layer below persists the choice to
+# ~/.codegraph/telemetry.json.
+ENV CODEGRAPH_TELEMETRY=0
+
 # Fix ownership after root-stage COPY that creates dirs under /home/llm.
 RUN chown -R llm:llm /home/llm
 
@@ -600,11 +608,21 @@ COPY --chown=llm:llm container/plugin-setup.sh /home/llm/.riotbox/plugin-setup.s
 COPY --chown=llm:llm container/startup-scripts.sh /home/llm/.riotbox/startup-scripts.sh
 COPY --chown=llm:llm container/nested-podman-setup.sh /home/llm/.riotbox/nested-podman-setup.sh
 COPY --chown=llm:llm container/headroom-summary.sh /home/llm/.riotbox/headroom-summary.sh
+COPY --chown=llm:llm container/codegraph-setup.sh /home/llm/.riotbox/codegraph-setup.sh
+# The entrypoint sources lib/overlay-ignore.sh from this path, so the shared
+# shell library has to exist inside the image as well as on the host. The
+# directory is copied wholesale rather than file by file, so anything added
+# under scripts/lib/ ships automatically — no second list to update here.
+# The host-side copies (libexec/launch.sh, scripts/overlay.sh) read straight
+# from the checkout, so a host edit is live on the next launch; the copy in
+# the image only picks it up on the next image build.
+COPY --chown=llm:llm scripts/lib/ /home/llm/.riotbox/lib/
 COPY --chown=llm:llm container/entrypoint.sh /home/llm/.riotbox/entrypoint.sh
 RUN chmod +x /home/llm/.riotbox/entrypoint.sh \
     /home/llm/.riotbox/session-branch.sh /home/llm/.riotbox/overlay-setup.sh \
     /home/llm/.riotbox/plugin-setup.sh /home/llm/.riotbox/startup-scripts.sh \
-    /home/llm/.riotbox/nested-podman-setup.sh /home/llm/.riotbox/headroom-summary.sh
+    /home/llm/.riotbox/nested-podman-setup.sh /home/llm/.riotbox/headroom-summary.sh \
+    /home/llm/.riotbox/codegraph-setup.sh
 ENTRYPOINT ["/home/llm/.riotbox/entrypoint.sh"]
 CMD ["bash"]
 
@@ -618,14 +636,15 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
 # ── LLM CLI tool cache-bust boundary ────────────────────────────────────────
 # `task container:update` bumps LLM_TOOL_UPDATE to a fresh value, which makes
 # this RUN a cache miss and forces every layer below it (headroom, opencode,
-# Claude Code, plugins) to rebuild and re-pull latest — without rebuilding the
-# whole image. A normal `task container:build` always passes the default (0),
-# so the boundary stays cached and the tools are reused. The four tool RUNs
-# below are intentionally left unchanged; the boundary alone controls their
-# freshness. headroom is version-pinned, so an update re-downloads the same
-# wheels and ~350 MB of models; the cost is accepted so `riotbox update` can
-# add headroom to images built before it existed and refresh its unpinned
-# transitive deps.
+# Claude Code, CodeGraph, plugins) to rebuild and re-pull latest — without
+# rebuilding the whole image. A normal `task container:build` always passes
+# the default (0), so the boundary stays cached and the tools are reused. The
+# five tool RUNs below are intentionally left unchanged; the boundary alone
+# controls their freshness. headroom and CodeGraph are version-pinned, so an
+# update re-installs them unchanged — the same headroom wheels and ~350 MB of
+# models, and the same CodeGraph npm package (no model download); the cost is
+# accepted so `riotbox update` can add both to images built before they
+# existed and refresh headroom's unpinned transitive deps.
 ARG LLM_TOOL_UPDATE=0
 RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 
@@ -696,6 +715,28 @@ RUN bash -o pipefail -c '\
 
 # ── Claude Code (LAST — changes most frequently, preserves layer cache) ─────
 RUN bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && claude --version'
+
+# ── CodeGraph (pre-indexed code knowledge graph, MCP server per session) ─────
+# The published npm package is a thin launcher: the payload ships as a
+# per-platform optionalDependency (@colbymchenry/codegraph-linux-x64). When a
+# registry or proxy silently skips that optional dep, the launcher falls back
+# to downloading the bundle from GitHub Releases ON FIRST RUN — inside a user
+# session, which breaks RIOTBOX_NETWORK=none and violates offline-after-build.
+# `CODEGRAPH_NO_DOWNLOAD=1 codegraph version` fails this layer instead.
+#
+# `codegraph telemetry off` persists the opt-out to ~/.codegraph/telemetry.json
+# (outside every session bind mount, so it survives into every container). The
+# `env -u` re-check proves that stored layer stands on its own rather than
+# reflecting the ENV set above. The machine_id the opt-out generates is baked
+# into the image and shared by every container; it is never transmitted,
+# because all three opt-out layers short-circuit before any send path.
+#
+# DL3016 does not apply: the version is pinned via the build ARG.
+ARG CODEGRAPH_VERSION=1.5.0
+RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
+    CODEGRAPH_NO_DOWNLOAD=1 codegraph version && \
+    codegraph telemetry off && \
+    env -u CODEGRAPH_TELEMETRY codegraph telemetry status | grep -q disabled
 
 # ── Pre-stage plugins (no auth needed — just clones a public GitHub repo) ────
 # Installed to a staging dir because ~/.claude is bind-mounted at runtime.

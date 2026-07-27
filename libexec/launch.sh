@@ -49,14 +49,18 @@ if [[ "${RIOTBOX_OVERLAY:-}" = "1" ]]; then
 	fi
 fi
 
-# Overlay guard: block launch if pending overlay data exists
+# Overlay guard: block launch if pending overlay data exists. Derived caches
+# (a CodeGraph index) are not pending data — a session that only rebuilt its
+# index must not lock the next launch. See scripts/lib/overlay-ignore.sh.
 if [[ "${RIOTBOX_OVERLAY:-}" = "1" ]]; then
+	# shellcheck source=../scripts/lib/overlay-ignore.sh disable=SC1091
+	source "${ROOT_DIR}/scripts/lib/overlay-ignore.sh"
 	overlay_base="${RIOTBOX_SESSION_DIR}/overlay"
 	if [[ -d "${overlay_base}" ]]; then
 		for overlay_subdir in "${overlay_base}"/*/; do
 			[[ -d "${overlay_subdir}/upper" ]] || continue
-			overlay_upper_contents="$(ls -A "${overlay_subdir}/upper" 2>/dev/null)"
-			if [[ -n "${overlay_upper_contents}" ]]; then
+			# shellcheck disable=SC2310 # designed to be tested in conditions
+			if overlay_upper_has_changes "${overlay_subdir}/upper"; then
 				echo "ERROR: Pending overlay data exists. Accept or reject before starting a new session." >&2
 				echo "  riotbox overlay-diff      Review changes" >&2
 				echo "  riotbox overlay-accept     Apply to project" >&2

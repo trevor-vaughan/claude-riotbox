@@ -20,6 +20,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/mount-projects.sh
 source "${SCRIPT_DIR}/mount-projects.sh"
+# shellcheck source=scripts/lib/overlay-ignore.sh
+source "${SCRIPT_DIR}/lib/overlay-ignore.sh"
 
 # ─── overlay resolve ───────────────────────────────────────────────────────
 # Resolve a project path to its overlay data directory.
@@ -73,11 +75,12 @@ resolve_overlay() {
 	fi
 }
 
-# Check if an overlay dir has any actual changes (non-empty upper).
+# Check if an overlay dir has any actual changes. Derived caches (.codegraph)
+# are not changes — see scripts/lib/overlay-ignore.sh.
 overlay_has_changes() {
 	local overlay_dir="$1"
-	# shellcheck disable=SC2312 # ls failure just means empty/missing dir; -n check handles it
-	[[ -d "${overlay_dir}/upper" ]] && [[ -n "$(ls -A "${overlay_dir}/upper" 2>/dev/null)" ]]
+	# shellcheck disable=SC2310 # overlay_upper_has_changes is designed to be tested in conditions
+	overlay_upper_has_changes "${overlay_dir}/upper"
 }
 
 # ─── overlay list ──────────────────────────────────────────────────────────
@@ -107,8 +110,8 @@ overlay_list() {
 		# Check each overlay subdir for non-empty upper
 		for overlay_dir in "${overlay_base}"/*/; do
 			[[ -d "${overlay_dir}/upper" ]] || continue
-			# shellcheck disable=SC2312 # ls failure means empty dir; -n check handles it
-			[[ -n "$(ls -A "${overlay_dir}/upper" 2>/dev/null)" ]] || continue
+			# shellcheck disable=SC2310 # designed to be tested in conditions
+			overlay_upper_has_changes "${overlay_dir}/upper" || continue
 
 			# This overlay has changes
 			if [[ "${found}" -eq 0 ]]; then
@@ -129,7 +132,7 @@ overlay_list() {
 
 			# Count changes in upper dir
 			local_added=0 local_deleted=0
-			# shellcheck disable=SC2312 # find failure means no files; loop just won't execute
+			# shellcheck disable=SC2312 # walker failure means no entries; loop just won't execute
 			while IFS= read -r path; do
 				base="$(basename "${path}")"
 				if [[ "${base}" == .wh.* ]]; then
@@ -137,7 +140,7 @@ overlay_list() {
 				else
 					local_added=$((local_added + 1))
 				fi
-			done < <(find "${overlay_dir}/upper" -mindepth 1 -not -type d 2>/dev/null)
+			done < <(overlay_upper_changes "${overlay_dir}/upper")
 
 			size="$(du -sh "${overlay_dir}" 2>/dev/null | cut -f1)"
 
@@ -170,10 +173,16 @@ overlay_diff() {
 	echo ""
 
 	local found=0
+	local hidden=0
 	local path rel base dir real_name
 	# shellcheck disable=SC2312 # find failure means no files; loop just won't execute
 	while IFS= read -r path; do
 		rel="${path#"${upper}"/}"
+		# shellcheck disable=SC2310 # designed to be tested in conditions
+		if overlay_path_ignored "${rel}"; then
+			hidden=$((hidden + 1))
+			continue
+		fi
 		base="$(basename "${path}")"
 		dir="$(dirname "${rel}")"
 
@@ -209,6 +218,17 @@ overlay_diff() {
 
 	if [[ "${found}" -eq 0 ]]; then
 		echo "No changes."
+	fi
+
+	# Application is deliberately unfiltered (see scripts/lib/overlay-ignore.sh):
+	# whenever overlay-accept applies anything at all it copies these entries to
+	# the project too, so omitting them here without saying so would let bytes
+	# reach the host that the review never showed.
+	if [[ "${hidden}" -gt 0 ]]; then
+		echo ""
+		echo "Note: ${hidden} file(s) under .codegraph/ not shown (derived cache)."
+		echo "      overlay-accept does not filter them: they are copied to the"
+		echo "      project whenever it applies changes."
 	fi
 }
 

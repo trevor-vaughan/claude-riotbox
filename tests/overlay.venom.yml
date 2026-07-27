@@ -474,3 +474,421 @@ testcases:
         assertions:
           - result.code ShouldEqual 1
           - result.systemout ShouldContainSubstring "Overlay mode requires podman"
+
+  # ── derived-cache filtering (.codegraph) ────────────────────────────────
+
+  - name: Diff omits .codegraph entries but still shows real changes
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          mkdir -p "${OVERLAY}/upper/.codegraph"
+          echo "index bytes" > "${OVERLAY}/upper/.codegraph/codegraph.db"
+          echo "real change" > "${OVERLAY}/upper/real.txt"
+
+          out="$("{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJECT}")"
+          printf '%s\n' "${out}"
+          # Anchored on the status column: the diff now closes with a note that
+          # names .codegraph/ as withheld, so a bare substring match would flag
+          # the disclosure itself. What must not appear is a change line for it.
+          printf '%s\n' "${out}" | grep -qE '^[AMD]  .*codegraph' && { echo "FAIL: index in diff"; exit 1; }
+          printf '%s\n' "${out}" | grep -q "A  real.txt" || { echo "FAIL: real change missing"; exit 1; }
+          echo "diff_filter=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "diff_filter=pass"
+
+  - name: Diff reports no changes for an index-only upper
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          mkdir -p "${OVERLAY}/upper/.codegraph"
+          echo "index bytes" > "${OVERLAY}/upper/.codegraph/codegraph.db"
+
+          "{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJECT}" | grep -q "No changes." \
+            || { echo "FAIL: expected 'No changes.'"; exit 1; }
+          echo "diff_index_only=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "diff_index_only=pass"
+
+  - name: List does not report an index-only overlay as pending
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          mkdir -p "${OVERLAY}/upper/.codegraph"
+          echo "index bytes" > "${OVERLAY}/upper/.codegraph/codegraph.db"
+
+          set +e
+          out="$("{{.riotbox_dir}}/scripts/overlay.sh" list)"
+          code=$?
+          set -e
+          printf '%s\n' "${out}"
+          [ "${code}" -eq 1 ] || { echo "FAIL: expected exit 1 (no overlays)"; exit 1; }
+          printf '%s\n' "${out}" | grep -q "No pending overlays." \
+            || { echo "FAIL: expected 'No pending overlays.'"; exit 1; }
+          echo "list_index_only=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "list_index_only=pass"
+
+  - name: List counts only non-index files when a real change exists
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          mkdir -p "${OVERLAY}/upper/.codegraph"
+          echo "a" > "${OVERLAY}/upper/.codegraph/codegraph.db"
+          echo "b" > "${OVERLAY}/upper/.codegraph/cache.bin"
+          echo "real" > "${OVERLAY}/upper/real.txt"
+
+          out="$("{{.riotbox_dir}}/scripts/overlay.sh" list)"
+          printf '%s\n' "${out}"
+          printf '%s\n' "${out}" | grep -q "1 added/modified, 0 deleted" \
+            || { echo "FAIL: wrong count"; exit 1; }
+          echo "list_count=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "list_count=pass"
+
+  - name: Accept still copies .codegraph through to the project
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          mkdir -p "${OVERLAY}/upper/.codegraph"
+          echo "index bytes" > "${OVERLAY}/upper/.codegraph/codegraph.db"
+          echo "real" > "${OVERLAY}/upper/real.txt"
+
+          echo "y" | "{{.riotbox_dir}}/scripts/overlay.sh" accept "${PROJECT}"
+
+          [ -f "${PROJECT}/.codegraph/codegraph.db" ] \
+            || { echo "FAIL: index not copied through"; exit 1; }
+          [ -f "${PROJECT}/real.txt" ] || { echo "FAIL: real change not applied"; exit 1; }
+          echo "accept_index=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "accept_index=pass"
+
+  - name: Accept on an index-only upper does nothing and keeps the index
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          mkdir -p "${OVERLAY}/upper/.codegraph"
+          echo "index bytes" > "${OVERLAY}/upper/.codegraph/codegraph.db"
+
+          # An index-only upper reads as "no changes", so accept must stop at
+          # its early-exit gate. What that gate protects is the
+          # `rm -rf "${upper}" "${work}"` at the end of the apply: reaching it
+          # would wipe an index that the same run never copied to the project,
+          # because the copy pass runs only after the confirmation.
+          #
+          # --force is not redundant here. With the gate working the run returns
+          # before the prompt, but a broken gate would fall through to
+          # `read -rp ... [y/N]` and hang the suite on stdin instead of failing.
+          "{{.riotbox_dir}}/scripts/overlay.sh" accept --force "${PROJECT}"
+
+          [ -f "${OVERLAY}/upper/.codegraph/codegraph.db" ] \
+            || { echo "FAIL: index destroyed by a no-op accept"; exit 1; }
+          [ ! -e "${PROJECT}/.codegraph" ] \
+            || { echo "FAIL: index copied to the project by a no-op accept"; exit 1; }
+          echo "accept_index_only_noop=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "No overlay changes to apply"
+          - result.systemout ShouldContainSubstring "accept_index_only_noop=pass"
+
+  - name: Reject on an index-only upper does nothing and keeps the index
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          mkdir -p "${OVERLAY}/upper/.codegraph"
+          echo "index bytes" > "${OVERLAY}/upper/.codegraph/codegraph.db"
+
+          # Same gate on the discard side: the index stays in the overlay for
+          # the next session rather than being thrown away by a reject the user
+          # aimed at changes that do not exist. --force for the same reason as
+          # the accept case above.
+          "{{.riotbox_dir}}/scripts/overlay.sh" reject --force "${PROJECT}"
+
+          [ -f "${OVERLAY}/upper/.codegraph/codegraph.db" ] \
+            || { echo "FAIL: index discarded by a no-op reject"; exit 1; }
+          echo "reject_index_only_noop=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "No overlay changes to discard"
+          - result.systemout ShouldContainSubstring "reject_index_only_noop=pass"
+
+  - name: Launch guard ignores an index-only pending overlay
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          mkdir -p "${OVERLAY}/upper/.codegraph"
+          echo "index bytes" > "${OVERLAY}/upper/.codegraph/codegraph.db"
+
+          # Unit test for overlay_upper_has_changes, the predicate the guard
+          # calls. It does not exercise launch.sh — the cases named
+          # "launch.sh starts with..." and "launch.sh blocks on..." below
+          # cover the wiring end to end.
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          blocked=0
+          for overlay_subdir in "${SESSION}/overlay"/*/; do
+            [ -d "${overlay_subdir}/upper" ] || continue
+            if overlay_upper_has_changes "${overlay_subdir}/upper"; then
+              blocked=1
+            fi
+          done
+          [ "${blocked}" -eq 0 ] || { echo "FAIL: index-only overlay blocked launch"; exit 1; }
+          echo "guard_index_only=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "guard_index_only=pass"
+
+  - name: Launch guard still blocks on a real pending change
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          mkdir -p "${OVERLAY}/upper/.codegraph"
+          echo "index bytes" > "${OVERLAY}/upper/.codegraph/codegraph.db"
+          echo "real" > "${OVERLAY}/upper/real.txt"
+
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          blocked=0
+          for overlay_subdir in "${SESSION}/overlay"/*/; do
+            [ -d "${overlay_subdir}/upper" ] || continue
+            if overlay_upper_has_changes "${overlay_subdir}/upper"; then
+              blocked=1
+            fi
+          done
+          [ "${blocked}" -eq 1 ] || { echo "FAIL: real change did not block launch"; exit 1; }
+          echo "guard_real=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "guard_real=pass"
+
+  - name: launch.sh sources the overlay ignore library
+    steps:
+      - type: exec
+        script: |
+          cd "{{.riotbox_dir}}"
+          # Anchored on the source statement itself: the comment above it and the
+          # shellcheck directive beside it both name the file, so an unanchored
+          # match is satisfied by a launch.sh that no longer sources anything.
+          grep -qE '^[[:space:]]*source .*scripts/lib/overlay-ignore.sh' libexec/launch.sh \
+            || { echo "FAIL: launch.sh does not source the ignore library"; exit 1; }
+          grep -q 'ls -A "${overlay_subdir}/upper"' libexec/launch.sh \
+            && { echo "FAIL: launch.sh still uses the unfiltered ls -A guard"; exit 1; }
+          echo "launch_wired=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "launch_wired=pass"
+
+  - name: launch.sh starts with an index-only pending overlay
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
+          # Overlay mode refuses any CONTAINER_CMD whose basename is not
+          # podman (a separate gate, ahead of the pending-overlay guard), so
+          # the capture stub has to carry that name.
+          cat > "${TMP}/podman" <<'FAKE'
+          #!/usr/bin/env bash
+          printf '%s\n' "$*" > "${CAPTURE}"
+          FAKE
+          chmod +x "${TMP}/podman"
+
+          # Derive the overlay path exactly as resolve_projects does: it
+          # canonicalizes with `cd && pwd -P` before mangling, and mktemp -d
+          # honours TMPDIR, so a temp path crossing a symlink would otherwise
+          # yield a key launch.sh never looks at and pass this case vacuously.
+          proj="$(cd "${TMP}/proj" && pwd -P)"
+          key="$(printf '%s\n' "${proj}" | sed 's|/|-|g; s|^-||')"
+          upper="${TMP}/data/riotbox/${key}/overlay/project/upper"
+          mkdir -p "${upper}/.codegraph"
+          echo "index bytes" > "${upper}/.codegraph/codegraph.db"
+
+          # RIOTBOX_DRY_RUN=1 suppresses only session-dir creation and the
+          # agent host_sync writes; it does not gate the container run, so
+          # asserting the run happened is consistent with dry-run.
+          rc=0
+          CAPTURE="${TMP}/argv" \
+          RIOTBOX_OVERLAY=1 RIOTBOX_DRY_RUN=1 \
+          RIOTBOX_PROJECTS="${proj}" \
+          XDG_DATA_HOME="${TMP}/data" XDG_CONFIG_HOME="${TMP}/xdg" \
+          RIOTBOX_SYSCONF_DIR="${TMP}/etc" HOME="${TMP}" \
+          ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/podman" IMAGE_NAME=riotbox \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" bash 2>"${TMP}/err" || rc=$?
+
+          # Capture the status rather than letting errexit abort here: on the
+          # regression this case exists to catch, launch.sh exits 1 and the
+          # EXIT trap would delete err before anything could report it.
+          [ "${rc}" -eq 0 ] || { echo "FAIL: launch exited ${rc}"; cat "${TMP}/err" >&2; exit 1; }
+          # Match the `run` verb, not mere non-emptiness: setup_projects probes
+          # `${CONTAINER_CMD} ps -a` when picking a collision-free container
+          # name, ahead of the guard, so the stub always captures something.
+          grep -q '^run ' "${TMP}/argv" \
+            || { echo "FAIL: launch never reached the container run"; cat "${TMP}/err" >&2; exit 1; }
+          grep -q 'Pending overlay data exists' "${TMP}/err" \
+            && { echo "FAIL: index-only overlay blocked launch"; exit 1; }
+          echo "launch_index_only=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "launch_index_only=pass"
+
+  - name: launch.sh blocks on a real pending overlay change
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
+          cat > "${TMP}/podman" <<'FAKE'
+          #!/usr/bin/env bash
+          printf '%s\n' "$*" > "${CAPTURE}"
+          FAKE
+          chmod +x "${TMP}/podman"
+
+          # Canonicalized for the same reason as the case above.
+          proj="$(cd "${TMP}/proj" && pwd -P)"
+          key="$(printf '%s\n' "${proj}" | sed 's|/|-|g; s|^-||')"
+          upper="${TMP}/data/riotbox/${key}/overlay/project/upper"
+          mkdir -p "${upper}/.codegraph"
+          echo "index bytes" > "${upper}/.codegraph/codegraph.db"
+          echo "real edit" > "${upper}/real.txt"
+
+          rc=0
+          CAPTURE="${TMP}/argv" \
+          RIOTBOX_OVERLAY=1 RIOTBOX_DRY_RUN=1 \
+          RIOTBOX_PROJECTS="${proj}" \
+          XDG_DATA_HOME="${TMP}/data" XDG_CONFIG_HOME="${TMP}/xdg" \
+          RIOTBOX_SYSCONF_DIR="${TMP}/etc" HOME="${TMP}" \
+          ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/podman" IMAGE_NAME=riotbox \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" bash >/dev/null 2>"${TMP}/err" || rc=$?
+
+          [ "${rc}" -eq 1 ] || { echo "FAIL: expected exit 1, got ${rc}"; cat "${TMP}/err" >&2; exit 1; }
+          grep -q 'Pending overlay data exists' "${TMP}/err" \
+            || { echo "FAIL: no block message"; cat "${TMP}/err" >&2; exit 1; }
+          # Same reason as the case above: the stub also catches the pre-guard
+          # `ps -a` name probe, so the container `run` verb is the real signal.
+          # A missing capture file means the stub never ran at all — a broken
+          # harness, not a blocked launch, so fail loudly instead of passing.
+          [ -f "${TMP}/argv" ] || { echo "FAIL: capture stub never ran"; exit 1; }
+          grep -q '^run ' "${TMP}/argv" \
+            && { echo "FAIL: launch ran the container despite pending data"; exit 1; }
+          echo "launch_blocks=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "launch_blocks=pass"
+
+  - name: Teardown stats exclude the derived cache
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # overlay_teardown reads the fixed paths /mnt/lower and /mnt/overlay,
+          # so drive its counting loop through the same functions with a fake
+          # upper: source the library the entrypoint sources, then the script.
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          source "{{.riotbox_dir}}/container/overlay-setup.sh"
+
+          mkdir -p "${TEST_DIR}/upper/.codegraph" "${TEST_DIR}/lower"
+          echo "index" > "${TEST_DIR}/upper/.codegraph/codegraph.db"
+          echo "new" > "${TEST_DIR}/upper/added.txt"
+          echo "old" > "${TEST_DIR}/lower/changed.txt"
+          echo "new" > "${TEST_DIR}/upper/changed.txt"
+          touch "${TEST_DIR}/upper/.wh.gone.txt"
+
+          out="$(overlay_count_changes "${TEST_DIR}/upper" "${TEST_DIR}/lower")"
+          [ "${out}" = "1 1 1" ] || { echo "FAIL: expected '1 1 1', got '${out}'"; exit 1; }
+          echo "teardown_stats=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "teardown_stats=pass"
+
+  - name: entrypoint sources the overlay ignore library before overlay-setup
+    steps:
+      - type: exec
+        script: |
+          cd "{{.riotbox_dir}}"
+          # Anchored on the source lines themselves: the surrounding comments
+          # name both files, so an unanchored match reports comment positions.
+          lib_line="$(grep -n '^source .*lib/overlay-ignore.sh' container/entrypoint.sh | head -1 | cut -d: -f1)"
+          setup_line="$(grep -n '^source .*overlay-setup.sh' container/entrypoint.sh | head -1 | cut -d: -f1)"
+          [ -n "${lib_line}" ] || { echo "FAIL: entrypoint does not source the ignore library"; exit 1; }
+          [ "${lib_line}" -lt "${setup_line}" ] \
+            || { echo "FAIL: ignore library sourced after overlay-setup.sh"; exit 1; }
+          echo "entrypoint_order=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "entrypoint_order=pass"
+
+  - name: Diff discloses hidden derived-cache entries
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          mkdir -p "${OVERLAY}/upper/.codegraph"
+          echo "index bytes" > "${OVERLAY}/upper/.codegraph/codegraph.db"
+          echo "more index" > "${OVERLAY}/upper/.codegraph/nodes.bin"
+
+          out="$("{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJECT}" 2>&1)"
+          printf '%s\n' "${out}" | grep -q 'No changes.' \
+            || { echo "FAIL: expected 'No changes.'; got: ${out}"; exit 1; }
+          printf '%s\n' "${out}" | grep -q '2 file' \
+            || { echo "FAIL: hidden entries not disclosed: ${out}"; exit 1; }
+          printf '%s\n' "${out}" | grep -q '.codegraph/' \
+            || { echo "FAIL: disclosure does not name the directory: ${out}"; exit 1; }
+          echo "diff_discloses=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "diff_discloses=pass"

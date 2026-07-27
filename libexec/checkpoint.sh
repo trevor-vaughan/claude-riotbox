@@ -22,6 +22,7 @@ resolve_projects "${RIOTBOX_PROJECTS:-}"
 # Managed exclude block — exact content; markers are the stable identity.
 _MANAGED_BLOCK='# >>> riotbox managed excludes (do not edit between markers) >>>
 .headroom/
+.codegraph/
 .claude/settings.local.json
 CLAUDE.local.md
 venom.log
