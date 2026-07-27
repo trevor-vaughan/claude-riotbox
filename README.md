@@ -191,7 +191,7 @@ the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent na
 |---------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
 | `riotbox build`                       | Introspect host environment and build the container image                                                               |
 | `riotbox rebuild`                     | Force a clean rebuild with no layer cache                                                                               |
-| `riotbox update`                      | Re-pull LLM CLI tools — headroom re-installs at its pinned version; opencode, Claude Code, and plugins update to latest  |
+| `riotbox update`                      | Re-pull LLM CLI tools — headroom and CodeGraph re-install at pinned versions; opencode, Claude Code, plugins to latest  |
 | `riotbox run "<task>" [dir]`          | Run the agent autonomously (defaults to current directory)                                                              |
 | `riotbox shell [dir]`                 | Interactive shell (defaults to current directory)                                                                       |
 | `riotbox resume [dir]`                | Continue the last agent session                                                                                         |
@@ -572,6 +572,77 @@ The toggle accepts only the literal `1` — anything else disables the feature
 compression, drop the variable and rerun — default behavior is untouched
 when `RIOTBOX_HEADROOM` is unset.
 
+## CodeGraph code intelligence
+
+[CodeGraph](https://github.com/colbymchenry/codegraph) is a pre-built knowledge graph of
+every symbol, call edge, and dependency in a project. Agents answer structural questions
+("how does X reach Y?") from one query instead of a grep-and-read loop, which is where
+most of the token spend on a large codebase goes. It runs entirely locally.
+
+RiotBox ships it in the image (pinned version, telemetry permanently off) and wires its
+MCP server at session start into every agent CodeGraph detects. Building the index is a
+one-time step per project, and RiotBox does not do it for you:
+
+```sh
+riotbox shell ~/code/myproject
+# inside the container:
+codegraph init
+```
+
+The container prints a reminder for any project that has no index yet. After `init`,
+nothing else is needed — the index lives in `.codegraph/` at the project root, and
+CodeGraph brings it up to date at session start and watches for changes for the rest of
+the session. On an ordinary read-write project mount it therefore persists across
+restarts through the same bind mount as your code; the overlay and `:O` cases below are
+the exceptions.
+
+Details worth knowing:
+
+- **Shell scripts are not indexed.** CodeGraph covers 28 languages — TypeScript,
+  JavaScript, Python, Go, Rust, Java, C#, C/C++, Ruby, PHP, Swift, Kotlin, and so on —
+  but Bash is not among them. `codegraph init` on a shell-only project reports
+  `No files found to index` and leaves an empty index, which is why RiotBox's own
+  codebase gains nothing from it. Check the
+  [supported languages](https://github.com/colbymchenry/codegraph#supported-languages)
+  before indexing.
+- **Telemetry is off in three independent ways**: `DO_NOT_TRACK=1` from the entrypoint
+  (which also disables CodeGraph's update check), `CODEGRAPH_TELEMETRY=0` in the image,
+  and a stored opt-out written at build time.
+- **The index is never committed.** CodeGraph writes a `.codegraph/.gitignore` that
+  ignores the whole directory, and RiotBox's managed `.git/info/exclude` block lists
+  `.codegraph/` as well.
+- **Session wiring lives in the session directory.** `codegraph install` runs at every
+  session start and writes into the session's `~/.claude/settings.json`: an
+  `mcp__codegraph__*` permissions entry and a `UserPromptSubmit` hook that runs
+  `codegraph prompt-hook` on every prompt. It also appends a marker-fenced block to
+  `~/.claude/CLAUDE.md` and `~/.config/opencode/AGENTS.md`; `CLAUDE.md` is re-synced from
+  the host every launch, as is `AGENTS.md` whenever you have a host `~/.config/opencode`,
+  so those blocks do not pile up. None of it reaches your host configuration.
+  `settings.json` is the exception — RiotBox never syncs it in either direction, so wiring
+  written by an earlier image would outlive that image and keep invoking `codegraph
+  prompt-hook` on every prompt after you roll back to one without CodeGraph. The first
+  session that starts with no `codegraph` on `PATH` therefore strips that hook and the
+  `mcp__codegraph__*` entry back out and reports what it removed, leaving your own hooks
+  and permissions untouched. You never have to run `codegraph uninstall` from an image
+  that no longer ships it. See [THREAT_MODEL.md](THREAT_MODEL.md) for the full analysis.
+- **The index contains your source.** It stores verbatim code and symbol names — treat
+  `.codegraph/` with the same sensitivity as the project itself.
+- **In overlay mode**, the index is written into the overlay rather than your project and
+  is treated as a rebuildable cache rather than a change: it never appears in `riotbox
+  overlay-diff` and never blocks the next session. Because it lives in the session
+  directory there, `riotbox session-remove` and `riotbox session-reset` delete it. See
+  [Overlay mode](#overlay-mode-podman-only) for what `overlay-accept` and
+  `overlay-reject` do with it.
+- **Only a `.codegraph/` at the project root is treated as a cache.** If you index a
+  subdirectory of a mounted project, that index counts as an ordinary change everywhere —
+  it shows up in `overlay-diff` and will hold up the next overlay session. The filter is
+  anchored deliberately: matching at any depth would let anything under a directory named
+  `.codegraph` reach your project through `overlay-accept` without ever appearing in the
+  review you ran first.
+- **On unowned project directories** (podman `:O` mounts — see [Unowned project
+  directories](#unowned-project-directories)), all writes are ephemeral, so the index is
+  discarded when the container exits and `codegraph init` runs again next session.
+
 ## Overlay mode (podman-only)
 
 Overlay mode mounts your project read-only and uses fuse-overlayfs to capture all changes in a separate layer. The host project is never modified directly.
@@ -592,6 +663,17 @@ riotbox overlay-diff      # See what changed
 riotbox overlay-accept    # Apply changes to your project
 riotbox overlay-reject    # Discard all changes
 ```
+
+A [CodeGraph](#codegraph-code-intelligence) index (`.codegraph/`) is rebuildable derived
+data, not a change to review, so it is excluded from `overlay-diff`, from the file counts
+in `riotbox overlays`, from the session exit summary, and from the check that refuses to
+start a new session while changes are pending. Rebuilding an index therefore never locks
+you out. `overlay-accept` still copies it through to your project alongside the changes
+you accepted; an overlay containing *only* an index counts as no changes at all, so both
+`overlay-accept` and `overlay-reject` report nothing to do and the index simply stays in
+the overlay for the next session. One consequence: such an overlay is invisible to
+`riotbox overlays`, including its disk usage, so a large index can sit in the session
+directory unreported — `riotbox session-remove` clears it.
 
 > Overlay mode requires podman. Docker is not supported due to differences in how it handles bind-mounted overlays.
 
@@ -624,7 +706,7 @@ RiotBox includes several layers of protection, but none are foolproof:
 - **Checkpoint tags**: A git tag (`riotbox-checkpoint/<timestamp>`) is created on the current HEAD before each run. Tags survive history rewrites inside the container.
 - **Session branches**: On `shell` sessions, the container offers to create a `riotbox/<id>` branch. The agent works there; on exit the branch is fast-forward merged back so the full commit history lands seamlessly on your branch. See [Session branches](#session-branches).
 - **Git repo bootstrapping**: If a project directory isn't a git repo, RiotBox offers to create one so the checkpoint mechanism has something to protect. Empty repos (no commits yet) are handled gracefully — see [Initializing a git repo](#initializing-a-git-repo).
-- **Managed `.git/info/exclude` block**: Before each checkpoint commit, RiotBox injects a managed block into the project's `.git/info/exclude` file that excludes common runtime artifacts — `.headroom/`, `venom.log`, `venom.*.log`, `.claude/settings.local.json`, and `CLAUDE.local.md` — so they're never swept into history. This file is per-clone and never reaches collaborators (it lives in `.git/`, which is not tracked). You can add your own exclusion patterns anywhere outside the `>>> riotbox managed excludes <<<` markers; RiotBox only ever touches content between them.
+- **Managed `.git/info/exclude` block**: Before each checkpoint commit, RiotBox injects a managed block into the project's `.git/info/exclude` file that excludes common runtime artifacts — `.headroom/`, `.codegraph/`, `.claude/settings.local.json`, `CLAUDE.local.md`, `venom.log`, and `venom.*.log` — so they're never swept into history. This file is per-clone and never reaches collaborators (it lives in `.git/`, which is not tracked). You can add your own exclusion patterns anywhere outside the `>>> riotbox managed excludes <<<` markers; RiotBox only ever touches content between them.
 - **Git guardrails**: Inside the container, `receive.denyNonFastForwards` and `receive.denyDeletes` are enabled to prevent the most destructive git operations.
 - **Container isolation**: The agent can't access your SSH keys, cloud credentials, or anything outside the mounted directories.
 

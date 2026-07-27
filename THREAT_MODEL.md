@@ -204,6 +204,64 @@ regenerated at the next container start (the host copy is never modified).
 Headroom's usage telemetry is disabled image-wide
 (`ENV HEADROOM_TELEMETRY=off`).
 
+## CodeGraph index
+
+CodeGraph's per-project index lives at `<project>/.codegraph/` — inside the
+project tree, because CodeGraph supports renaming that directory but never
+relocating it. It stores verbatim source, symbol names, and call edges for
+every indexed file, so it is the same sensitivity class as the project itself
+and is removed with it. Under `RIOTBOX_OVERLAY=1` that changes: the project is
+read-only at `/mnt/lower` and the index is written into the overlay upper
+directory *inside the session directory*, so `riotbox session-remove` and
+`riotbox session-reset` do delete it along with everything else there.
+CodeGraph writes a `.gitignore` inside the index directory ignoring the whole
+tree, and riotbox's managed `.git/info/exclude` block lists `.codegraph/` as a
+second layer, so an index never reaches a checkpoint commit.
+
+An index changes retrieval efficiency, not reach: the agent can already read
+every file in the project, and the index only lets it do so in one MCP call
+instead of many. The MCP server runs as a child of the agent process, but the
+sync daemon behind it does not: CodeGraph spawns it detached, in its own
+process group, and it listens on a **Unix domain socket** (mode 0600) with a
+300-second idle timeout. The socket normally sits inside `.codegraph/`, but
+when that path would exceed `UNIX_PATH_MAX` CodeGraph falls back to a hashed
+name under the container's temp directory. No TCP port is opened and nothing
+leaves the container, but "a child process that dies with the agent" is not an
+accurate description of its lifetime — the container exiting is what reaps it.
+
+Indexing is never started automatically — a session only prints a reminder
+naming `codegraph init` for a project that has none — so no project is indexed
+without an explicit decision.
+
+`codegraph install`, which the entrypoint runs once per session, writes more
+than an MCP entry. Into the session `~/.claude/settings.json` it adds
+`mcp__codegraph__*` to `permissions.allow` **and a `UserPromptSubmit` command
+hook that runs `codegraph prompt-hook` on every prompt**; it also appends a
+marker-fenced CodeGraph block to `~/.claude/CLAUDE.md` and to
+`~/.config/opencode/AGENTS.md`. All of it is confined to the session directory
+and none of it reaches the host, but it deserves explicit mention here: riotbox
+otherwise refuses to sync a host `settings.json` precisely because it can carry
+hooks, and this is a third-party installer writing one. Two consequences worth
+knowing. The hook is written once into a persistent session directory and is
+never regenerated away by the installer, so an image rebuilt without CodeGraph
+would leave a session whose every prompt invokes a command that no longer
+exists; `codegraph_strip_session_wiring` in `container/codegraph-setup.sh`
+removes the hook and the `mcp__codegraph__*` entry on the first session that
+finds no `codegraph` on `PATH`, and deleting the session directory also clears
+them. And `CODEGRAPH_NO_PROMPT_HOOK=1` makes the hook a no-op at runtime
+without removing the entry.
+
+Nothing about an indexed session goes out to the network. Telemetry is off in
+all three layers CodeGraph honors — `DO_NOT_TRACK=1` from the entrypoint (which
+also disables its update check), `ENV CODEGRAPH_TELEMETRY=0` image-wide, and a
+stored opt-out written at build time to `~/.codegraph/telemetry.json`. That
+opt-out generates a random `machine_id` which is therefore baked into the image
+and shared by every container built from it; it carries no host-identifying
+data and is never transmitted, because all three layers short-circuit before
+any send path. The build asserts `CODEGRAPH_NO_DOWNLOAD=1 codegraph version`,
+which rules out the npm launcher's first-run bundle download ever firing inside
+a session.
+
 ## Findings
 
 ---

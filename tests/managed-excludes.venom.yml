@@ -391,3 +391,42 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "nongit_noop_ok=true"
+
+  - name: Checkpoint commit omits .codegraph/ when exclude block is injected
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          echo "src" > "${REPO_DIR}/main.go"
+          git -C "${REPO_DIR}" add main.go
+          GIT_AUTHOR_NAME="${HUMAN_NAME}" GIT_AUTHOR_EMAIL="${HUMAN_EMAIL}" \
+          GIT_COMMITTER_NAME="${HUMAN_NAME}" GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
+          git -C "${REPO_DIR}" commit -m "initial"
+
+          # A CodeGraph index whose self-written .gitignore has been removed —
+          # the managed block is the only thing keeping it out of the commit.
+          mkdir -p "${REPO_DIR}/.codegraph"
+          echo "index bytes" > "${REPO_DIR}/.codegraph/codegraph.db"
+
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+
+          exclude_path="${REPO_DIR}/.git/info/exclude"
+          grep -q '>>> riotbox managed excludes' "${exclude_path}"
+
+          stat_out="$(git -C "${REPO_DIR}" log --stat -1)"
+          if echo "${stat_out}" | grep -q '\.codegraph/'; then
+            echo "FAIL: .codegraph/ appeared in commit"; exit 1
+          fi
+
+          echo "codegraph_excluded_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "codegraph_excluded_ok=true"

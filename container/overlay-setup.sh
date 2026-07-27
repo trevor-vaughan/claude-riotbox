@@ -38,6 +38,27 @@ overlay_setup() {
 	fi
 }
 
+# Count changes in one overlay upper dir against its lower dir.
+# Prints "<modified> <added> <deleted>" on one line. Derived caches are not
+# counted — see scripts/lib/overlay-ignore.sh, sourced by entrypoint.sh.
+overlay_count_changes() {
+	local upper="$1" lower="$2"
+	local added=0 modified=0 deleted=0
+	local rel base
+	# shellcheck disable=SC2312  # walker failure means no entries; loop just won't run
+	while IFS= read -r rel; do
+		base="${rel##*/}"
+		if [[ "${base}" == .wh.* ]]; then
+			deleted=$((deleted + 1))
+		elif [[ -f "${lower}/${rel}" ]]; then
+			modified=$((modified + 1))
+		else
+			added=$((added + 1))
+		fi
+	done < <(overlay_upper_changes "${upper}")
+	printf '%s %s %s\n' "${modified}" "${added}" "${deleted}"
+}
+
 overlay_teardown() {
 	[[ -d /mnt/lower ]] || return 0
 
@@ -55,30 +76,18 @@ overlay_teardown() {
 	fi
 
 	local added=0 modified=0 deleted=0
+	local upper lower name counts
 	for upper in "${upper_dirs[@]}"; do
-		local lower
 		if [[ "${upper}" = "/mnt/overlay/upper" ]]; then
 			lower="/mnt/lower"
 		else
-			local name
 			name="$(basename "$(dirname "${upper}")")"
 			lower="/mnt/lower/${name}"
 		fi
-		# shellcheck disable=SC2312  # find exit code not relevant — empty result is the success case
-		while IFS= read -r path; do
-			local base
-			base="$(basename "${path}")"
-			if [[ "${base}" == .wh.* ]]; then
-				deleted=$((deleted + 1))
-			elif [[ -f "${path}" ]]; then
-				local rel="${path#"${upper}"/}"
-				if [[ -f "${lower}/${rel}" ]]; then
-					modified=$((modified + 1))
-				else
-					added=$((added + 1))
-				fi
-			fi
-		done < <(find "${upper}" -mindepth 1 -not -type d 2>/dev/null)
+		counts="$(overlay_count_changes "${upper}" "${lower}")"
+		modified=$((modified + $(printf '%s' "${counts}" | cut -d' ' -f1)))
+		added=$((added + $(printf '%s' "${counts}" | cut -d' ' -f2)))
+		deleted=$((deleted + $(printf '%s' "${counts}" | cut -d' ' -f3)))
 	done
 
 	if [[ $((added + modified + deleted)) -gt 0 ]]; then

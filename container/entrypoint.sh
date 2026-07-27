@@ -70,6 +70,12 @@ mkdir -p ~/.claude/debug ~/.claude/plugins/cache
 # RIOTBOX_PROMPT overrides the template or the build-time render is missing
 # (backward compat with older images).
 RIOTBOX_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Shared overlay derived-cache filter. Sourced here (not from overlay-setup.sh)
+# because the entrypoint composes all of these into one shell; overlay-setup.sh
+# lives at ~/.riotbox/ in the image but at container/ in the repo, so a
+# self-relative source would need two candidate paths.
+# shellcheck source=../scripts/lib/overlay-ignore.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/lib/overlay-ignore.sh"
 # shellcheck source=./session-branch.sh disable=SC1091  # source path resolves only from container/; safe to skip follow
 source "${RIOTBOX_SCRIPT_DIR}/session-branch.sh"
 # shellcheck source=./overlay-setup.sh disable=SC1091
@@ -81,6 +87,8 @@ source "${RIOTBOX_SCRIPT_DIR}/startup-scripts.sh"
 # shellcheck source=./headroom-summary.sh disable=SC1091
 [[ -f "${RIOTBOX_SCRIPT_DIR}/headroom-summary.sh" ]] && \
 	source "${RIOTBOX_SCRIPT_DIR}/headroom-summary.sh"
+# shellcheck source=./codegraph-setup.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/codegraph-setup.sh"
 
 # Nested podman setup: file caps on newuidmap/newgidmap and /etc/sub{u,g}id
 # alignment with the outer keep-id user namespace. Only run when nested mode
@@ -116,6 +124,12 @@ unset _agent
 
 # Overlay: mount fuse-overlayfs at /workspace (sets SESSION_BRANCH=0 if active)
 overlay_setup
+
+# CodeGraph: wire the MCP server into every detected agent and hint at any
+# unindexed project. Runs after the agent setup loop so opencode's regenerated
+# config is already in place, and after overlay_setup so the hint sees the
+# final /workspace.
+codegraph_setup
 
 # Session branch: create a dedicated branch for this session (if repo detected
 # and not suppressed). Must run after all setup is complete, before the main
