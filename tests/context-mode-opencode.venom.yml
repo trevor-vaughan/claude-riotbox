@@ -8,7 +8,7 @@ vars:
 # re-exports the copy vendored in the image: an npm entry in opencode.jsonc
 # would make opencode bun-install context-mode from the registry at startup,
 # which RIOTBOX_NETWORK=none forbids and which floats the version off the pin.
-# See docs/design/2026-07-31-context-mode-opencode-design.md.
+# See docs/dev/decisions/context-mode-opencode.md.
 
 testcases:
   - name: store dir is the opencode config dir, not the claude one

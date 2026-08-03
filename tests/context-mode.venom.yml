@@ -10,7 +10,7 @@ vars:
 # installed package tree. Running it at session start would swap pinned,
 # reviewed code for whatever is on main, inside a container holding the user's
 # project, and would break RIOTBOX_NETWORK=none.
-# See docs/design/context-mode-evaluation.md.
+# See docs/dev/decisions/context-mode-adoption.md.
 
 # Every case sources scripts/lib/json-write.sh first, the way entrypoint.sh
 # does: the atomic config writer is shared with codegraph-setup.sh, so neither
@@ -1550,7 +1550,7 @@ testcases:
 
   # Everything above runs against a stub shim, so nothing in this suite notices
   # what the image actually installs. Context Mode shipped 223 npm versions in
-  # five months (docs/design/context-mode-evaluation.md), and the build-time
+  # five months (docs/dev/decisions/context-mode-adoption.md), and the build-time
   # guards in the Containerfile — the matcher greps, the MCP-name grep, the
   # dispatcher check — only assert against whatever version the build resolved.
   # Drop the `@${CONTEXT_MODE_VERSION}` and every one of them still passes while
@@ -1637,7 +1637,7 @@ testcases:
   # exports _CONTEXT_MODE_WIRED on this verb returning 0, so a give-up that
   # returned 0 would set the flag from outside no matter how carefully this
   # function avoids setting it from within. That is the registry contract in
-  # docs/design/2026-07-31-context-mode-opencode-design.md section A: return 0
+  # docs/dev/decisions/context-mode-opencode.md "Registry contract": return 0
   # only when every artifact landed.
   #
   # Making .claude.json a pre-existing directory does not force this: mktemp

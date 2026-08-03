@@ -1,8 +1,14 @@
-# Context Mode Rollup — Accumulating Savings Beyond the 7-Day Window
+# Recording Context Mode savings across sessions
 
-**Status:** Implemented 2026-07-30. What shipped differs from this design in six places; see [What actually shipped](#what-actually-shipped). The design body below is kept as written, as the rationale the README links to.
-**Depends on:** Context Mode (`RIOTBOX_CONTEXT_MODE=1`), shipped in `eabfa1c`.
-**Related:** [Context Mode Evaluation](./context-mode-evaluation.md), `container/context-mode-summary.sh`.
+**Decision:** Capture one JSON record per session exit into a user-owned ledger
+outside `RIOTBOX_DATA_DIR`, and add `riotbox ctx-stats` to aggregate them.
+
+**Date:** 2026-07-30 · **Depends on:** Context Mode (`RIOTBOX_CONTEXT_MODE=1`), shipped in `eabfa1c`
+
+> **Frozen design record.** The body below is as written; six things changed
+> during review, listed under [What actually shipped](#what-actually-shipped).
+> For the current implementation, read
+> [How Context Mode works in RiotBox](../context-mode.md).
 
 ## TL;DR
 

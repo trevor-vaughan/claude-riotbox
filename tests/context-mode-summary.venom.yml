@@ -6,7 +6,7 @@ vars:
 # The report is the only evidence a Context Mode session leaves. Before it
 # existed, a run where the model took every routing suggestion and a run where
 # it ignored all of them looked identical from outside, which is why the
-# head-to-head measurement docs/design/context-mode-evaluation.md demands could
+# head-to-head measurement docs/dev/decisions/context-mode-adoption.md demands could
 # not be made.
 #
 # A wired session therefore always reports, including when it saved nothing:

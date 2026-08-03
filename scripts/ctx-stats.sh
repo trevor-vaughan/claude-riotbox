@@ -3,7 +3,7 @@
 #
 # Reads the ledger `scripts/mount-projects.sh` mounts into each session
 # (one JSON file per run, schema in
-# docs/design/2026-07-30-context-mode-rollup-design.md) and reports what the
+# docs/dev/decisions/context-mode-ledger.md) and reports what the
 # feature actually withheld over time. Runs entirely on the host: no container
 # is started, and the session stores are never touched.
 #

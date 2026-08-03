@@ -1,9 +1,20 @@
-# OpenShell Port Evaluation — What Would Make It Viable
+# Should RiotBox run on OpenShell?
 
-**Status:** Port abandoned in RiotBox 0.5.x — see [Why we abandoned](#why-we-abandoned). This document records what an "OpenShell-as-engine" port of RiotBox would require, so a future re-evaluation starts from concrete requirements rather than fresh assumptions.
+**Decision:** No. Port abandoned in RiotBox 0.5.x; stay on direct podman.
 
-**Evaluation date:** 2026-05-07
-**Evaluated against:** [NVIDIA/OpenShell](https://github.com/NVIDIA/OpenShell) v0.0.36, base image `ghcr.io/nvidia/openshell-community/sandboxes/base@sha256:11c73b5a...c67c68` (revision `8f7d0da`, 2026-04-03).
+**Date:** 2026-05-07 · **Evaluated against:** [NVIDIA/OpenShell](https://github.com/NVIDIA/OpenShell) v0.0.36, base image `ghcr.io/nvidia/openshell-community/sandboxes/base@sha256:11c73b5a...c67c68` (revision `8f7d0da`, 2026-04-03)
+
+This records what an "OpenShell-as-engine" port would require, so a future
+re-evaluation starts from concrete requirements rather than fresh assumptions.
+See [Re-evaluation criteria](#re-evaluation-criteria) for the signals worth
+watching.
+
+> **The working notes behind this evaluation were not retained.** The spec, plan,
+> and four spike documents lived under the gitignored `docs/superpowers/` tree and
+> no longer exist. Their substance is summarised in
+> [What the spikes found](#what-the-spikes-found); anything not captured there is
+> gone, and a re-evaluation should expect to re-run the spikes rather than resume
+> them.
 
 ## TL;DR
 
@@ -31,14 +42,14 @@ Every one of those points except #2 and #6 depends on **shared filesystem state 
 
 ## What OpenShell provides today (0.0.36)
 
-Verified in [research artifacts](#research-artifacts).
+Verified by the spikes summarised under [What the spikes found](#what-the-spikes-found).
 
 - `openshell sandbox create --from <image-or-Dockerfile> --name <n> --policy <yaml>`
 - `--upload <local-path>[:<sandbox-path>]` — **one-shot copy** of host files into the sandbox at create time. No live binding. No writeback. No refresh.
 - `--forward [bind:]port` — host-port-to-sandbox port forward.
 - `--provider <name>` — attach a credential bundle (managed via `openshell provider create --type … --from-existing`). Bundles are injected as environment values at runtime; the sandbox filesystem never gets the credential file.
 - `--policy <yaml>` — Landlock-based filesystem allow/deny lists, network egress rules, process restrictions, inference routing rules. Enforced inside the sandbox.
-- `Privacy router` — routes inference traffic through a controlled backend (default behavior not characterized in this evaluation; see Spike #8 in research artifacts).
+- `Privacy router` — routes inference traffic through a controlled backend (default behaviour was never characterised — Spike 8 was not run before the port was abandoned).
 - Backend: `openshell gateway start` brings up a privileged container running k3s + flannel + containerd + Helm. Sandboxes are scheduled as Kubernetes pods inside that container, managed by `agent-sandbox-controller` via a `Sandbox` CRD.
 
 What is missing for the RiotBox use case:
@@ -57,7 +68,10 @@ The two findings together — CLI surface lacks the primitives we need, and the 
 - **Adopt and patch** would require coordinated changes across the CLI (env injection, mount flag), the protobuf schema (host-mount field on `SandboxSpec`), the gRPC plumbing, the agent-sandbox controller (translate the new field into pod hostPath mounts), and the policy engine (the Landlock layer would need to allow the new mounts). That is a multi-component upstream contribution against an alpha project, with our work blocked behind it.
 - **Adopt at the CRD level** is the architecturally correct path if the goal is "RiotBox uses OpenShell." RiotBox would write `Sandbox` CRDs against the cluster, with hostPath / PVC mounts in the pod template. But the CRD's schema isn't documented for external use, the stability guarantees are unclear, and RiotBox's control loop becomes a Kubernetes operator. That is a much bigger project than the original "wrap the CLI" port — well beyond the scope under consideration.
 
-The spec and plan written for this port are preserved on disk under `docs/superpowers/specs/2026-05-07-openshell-port-design.md` and `docs/superpowers/plans/2026-05-07-openshell-port.md` (gitignored — local working notes). They remain useful as a record of the intended design.
+A full spec and implementation plan were written for this port before the two
+findings above landed. Both were local working notes and have not survived; the
+architecture they described is the one sketched under
+[What would make a port viable](#what-would-make-a-port-viable).
 
 ## What would make a port viable
 
@@ -73,7 +87,9 @@ OpenShell adds, at the CLI level:
 
 This is the smallest set of CLI features that would let RiotBox layer on top of OpenShell without architectural compromise. The proto additions for `--mount` are non-trivial (need to land in `SandboxSpec` / `SandboxTemplate`, propagate through the controller into pod hostPath mounts, and have the policy engine reason about them); `--env` is comparatively trivial (proto field exists, just needs CLI wiring).
 
-If Path 1 lands, the existing RiotBox-on-OpenShell spec at `docs/superpowers/specs/2026-05-07-openshell-port-design.md` becomes broadly applicable again with minor adjustments — the rest of Phase 0 (Spikes 3–8) would need re-running but the high-level architecture stands.
+If Path 1 lands, the architecture originally specced for this port becomes broadly
+applicable again with minor adjustments — the rest of Phase 0 (Spikes 3–8) would
+need re-running, but the high-level shape stands.
 
 ### Path 2 — Stable CRD-level integration
 
@@ -133,16 +149,30 @@ If we want to push the project toward Path 1 (the most likely-to-succeed near-te
 
 Both issues should reference this evaluation document for context.
 
-## Research artifacts
+## What the spikes found
 
-The following local-only documents (under `docs/superpowers/research/`, gitignored per project convention for `docs/superpowers/`) hold the raw findings:
+Four spikes produced the findings this evaluation rests on. The spike documents
+themselves are gone; this is what they established.
 
-- `2026-05-07-openshell-spike-1-base-image.md` — base image is `ghcr.io/nvidia/openshell-community/sandboxes/base@sha256:11c73b5a...c67c68`, Ubuntu 24.04, USER `sandbox`, WORKDIR `/sandbox`, all four agents pre-installed, image size ~3.34 GB.
-- `2026-05-07-openshell-spike-2-byoc-surface.md` — full `--help` capture for `sandbox create`, proof of `--mount`/`--env` absence, citations to proto + CLI source where the CLI hardcodes empty env.
-- `2026-05-07-openshell-spike-6-version-pin.md` — CLI version pin chosen (v0.0.36), full release listing, install command.
-- `2026-05-07-openshell-spike-7-postcreate-bind.md` — direct inspection of the `cluster:0.0.36` image, evidence that the runtime is k3s+containerd, and the architectural argument that B1 (post-create bind via host podman) does not work even on a real host.
+**Spike 1 — base image.** `ghcr.io/nvidia/openshell-community/sandboxes/base@sha256:11c73b5a...c67c68`
+is Ubuntu 24.04, `USER sandbox`, `WORKDIR /sandbox`, with all four agents
+pre-installed. Image size ~3.34 GB.
 
-If a future contributor wants to re-run the evaluation, the relevant `tmp/spike-*/` directories from the original work are gitignored; recreate them by following the steps in the research artifacts.
+**Spike 2 — BYOC surface.** A full `--help` capture for `sandbox create` showing
+no `--mount` and no `--env`, plus the proto and CLI source locations where
+`CreateSandboxRequest` is built with `SandboxSpec::default()` and the environment
+map is never populated.
+
+**Spike 6 — version pin.** v0.0.36 chosen, against the full release listing at the
+time.
+
+**Spike 7 — post-create bind.** Direct inspection of the `cluster:0.0.36` image,
+establishing that the runtime is k3s + containerd, and the architectural argument
+that binding a host path into a sandbox after creation does not work even on a
+real host.
+
+Re-running the evaluation means re-running these four against whatever version is
+current.
 
 ## Decision
 

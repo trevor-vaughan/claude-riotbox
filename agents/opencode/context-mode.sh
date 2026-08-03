@@ -13,7 +13,7 @@
 # tools directly — there is no MCP server and no hook stanza on this path, so
 # none of the Claude constants (matchers, MCP name) have an analogue here.
 #
-# See docs/design/2026-07-31-context-mode-opencode-design.md.
+# See docs/dev/decisions/context-mode-opencode.md.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # First line of every shim RiotBox writes. Load-bearing in both directions:

@@ -580,7 +580,7 @@ testcases:
           - result.systemout ShouldContainSubstring "sentinel_body=pass"
 
   # Context Mode is wired per agent through the optional registry verbs (see
-  # docs/maintainer/adding-an-agent.md), so an agent implementing none of them
+  # docs/dev/agent-contract.md), so an agent implementing none of them
   # runs with the feature off however the toggle is set. doctor is where a user
   # checks whether the feature will engage, so it has to say that rather than
   # reporting on an image probe the session will never act on.

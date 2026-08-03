@@ -11,7 +11,7 @@
 # The constants below are asserted against the installed bundle at image build
 # time, so an upstream rename fails the build rather than a user session.
 #
-# See docs/design/2026-07-31-context-mode-opencode-design.md.
+# See docs/dev/decisions/context-mode-opencode.md.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # The tool set Context Mode's PreToolUse hook intercepts, pipe-joined exactly
@@ -135,7 +135,7 @@ context_mode_hook_table() {
 #
 # A path that gives up also returns non-zero, and that is the whole of this
 # verb's contract with the registry: return 0 only when every artifact landed
-# (docs/design/2026-07-31-context-mode-opencode-design.md, section A).
+# (docs/dev/decisions/context-mode-opencode.md, "Registry contract").
 # container/context-mode-setup.sh reads that status to decide whether the
 # session may claim the feature ran, so a give-up that returned 0 would hand a
 # session running with Context Mode off a teardown report saying it was wired —

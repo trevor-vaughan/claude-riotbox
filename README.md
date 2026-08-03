@@ -156,7 +156,7 @@ riotbox shell
 
 Default is `claude` if `--agent` is omitted. You can persist a default in `~/.config/riotbox/config` by uncommenting the `RIOTBOX_AGENT` line.
 
-> Want to add a third agent (aider, goose, cursor-agent, codex, …)? See [`docs/maintainer/adding-an-agent.md`](docs/maintainer/adding-an-agent.md). The agent registry at `agents/registry.sh` is the single source of truth — adding an agent is a manifest plus a Containerfile install line, no edits to dispatch sites or wrappers.
+> Want to add a third agent (aider, goose, cursor-agent, codex, …)? See [`docs/dev/adding-an-agent.md`](docs/dev/adding-an-agent.md). The agent registry at `agents/registry.sh` is the single source of truth — adding an agent is a manifest plus a Containerfile install line, no edits to dispatch sites or wrappers.
 
 ### Opencode auth
 
@@ -597,7 +597,7 @@ through a TypeScript plugin that runs inside the agent process; there is no
 shared shape to abstract over. Each agent supplies its own wiring in
 `agents/<name>/context-mode.sh`, and `container/context-mode-setup.sh` drives it
 without naming any agent — see
-[`docs/maintainer/adding-an-agent.md`](docs/maintainer/adding-an-agent.md#the-context-mode-verbs)
+[`docs/dev/agent-contract.md`](docs/dev/agent-contract.md#optional-verbs-context-mode)
 for the contract. An agent that supplies none runs with the feature off after a
 warning naming it.
 
@@ -859,7 +859,7 @@ The toggle accepts only the literal `1` — anything else disables the feature
 > not OSI open source, unlike everything else in the image. It is pulled from npm
 > onto your machine at `riotbox build` time and is not redistributed in the rpm/deb
 > packages. See
-> [`docs/design/context-mode-evaluation.md`](docs/design/context-mode-evaluation.md)
+> [`docs/dev/decisions/context-mode-adoption.md`](docs/dev/decisions/context-mode-adoption.md)
 > for the full evaluation, including what was and was not measured.
 
 ## CodeGraph code intelligence

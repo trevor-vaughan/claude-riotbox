@@ -1,4 +1,8 @@
-# Maintainer notes — `scripts/mount-projects.sh`
+# Invariants of `scripts/mount-projects.sh`
+
+Five things this script must keep doing. Each was a bug once, and each is cheap to
+reintroduce by a refactor that looks like a simplification. Read this before
+changing the file.
 
 ## Per-path ownership branch (introduced 2026-05-19)
 

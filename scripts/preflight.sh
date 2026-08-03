@@ -356,7 +356,7 @@ preflight_check_context_mode() {
 	# than a coincidence of a connected host: the installed CLI runs, and its
 	# unsuppressable npm version check degrades to a warning instead of hanging
 	# or failing, with no connectivity at all — the offline behaviour recorded
-	# in docs/design/context-mode-evaluation.md.
+	# in docs/dev/decisions/context-mode-adoption.md.
 	#
 	# It says nothing about session start, and must not be read as saying it.
 	# --entrypoint below bypasses container/entrypoint.sh, where
