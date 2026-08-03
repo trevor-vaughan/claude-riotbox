@@ -24,6 +24,13 @@
 #           layer cache. Consolidation would trade layer-cache hit rate
 #           for a slightly smaller image, which is the wrong tradeoff
 #           for this image's iteration cadence.
+# DL3066 — non-numeric user-id: the `llm` user is created with
+#           `useradd -u ${HOST_UID}` so the container UID matches the host
+#           user and bind-mounted /workspace files keep the right ownership.
+#           HOST_UID is a build arg with a fallback branch, so the effective
+#           UID is not knowable at authoring time — a numeric `USER 1000`
+#           would hardcode the very value the build is trying to discover.
+#           The rule also flags `USER root`, which is resolvable everywhere.
 ignored:
   - DL3013
   - DL3016
@@ -31,3 +38,4 @@ ignored:
   - DL3062
   - DL4006
   - DL3059
+  - DL3066

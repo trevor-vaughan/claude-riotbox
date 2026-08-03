@@ -489,9 +489,10 @@ recorded here rather than defended against.
     stable`
   - `/workspace/setup.sh:113` — `sudo sh -c 'curl -sL
     https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin'`
-  - `/workspace/.github/workflows/test.yml:21` — `curl -sSfL -o
+  - `/workspace/.github/workflows/test.yml:32` — `curl -sSfL -o
     /usr/local/bin/hadolint
-    https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64`
+    https://github.com/hadolint/hadolint/releases/latest/download/hadolint-linux-x86_64`
+    (accepted 2026-08-03 — see Mitigations)
 
 #### Asset & Security Criteria
 
@@ -1694,9 +1695,10 @@ document the behaviour.
   - `/workspace/.github/workflows/test.yml:13` — `uses: actions/checkout@v4`
   - `/workspace/.github/workflows/test.yml:26` — `sudo sh -c 'curl -sL
     https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin'`
-  - `/workspace/.github/workflows/test.yml:21` — `curl -sSfL -o
+  - `/workspace/.github/workflows/test.yml:32` — `curl -sSfL -o
     /usr/local/bin/hadolint
-    https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64`
+    https://github.com/hadolint/hadolint/releases/latest/download/hadolint-linux-x86_64`
+    (accepted 2026-08-03 — see Mitigations)
 
 #### Asset & Security Criteria
 
@@ -1796,8 +1798,13 @@ publishing steps.
   SHA: gh api repos/actions/checkout/commits/v4 --jq .sha. Add a comment with
   the tag for readability: uses: actions/checkout@<sha> # v4
 - **Pin CI tool downloads to versioned URLs with checksums** _(effort: S)_ →
-  step 4: For hadolint: download a specific version and verify SHA256. For task:
-  pin the install script URL to a versioned release.
+  step 4: pin the task install script URL to a versioned release. **hadolint is
+  excluded by decision (2026-08-03):** it is a scanner, and tracking `latest`
+  means new rules reach us the day they ship. The cost is that an upstream
+  release can fail the lint job with no change on our side — 2.15.0 did, via
+  DL3066 and a widened DL3025 — and that a moving target cannot be checksummed.
+  That is accepted; the intended response is to answer the new rule, not to pin.
+  Formal sign-off belongs in Risk Treatment below.
 
 **Detective controls:**
 - **GitHub Dependabot or Renovate for action version monitoring** _(effort: S)_
@@ -1828,8 +1835,9 @@ URLs with checksum verification.
 **Steps to reproduce:**
 1. Inspect .github/workflows/test.yml
 1. Note actions/checkout@v4 uses a mutable tag, not a commit SHA
-1. Note hadolint download uses /latest/ URL without checksum
 1. Note task install uses curl|sh without version pinning
+1. Note hadolint download uses a /latest/ URL without checksum (accepted — see
+   Mitigations; scanners track latest on purpose)
 
 **Acceptance criteria:**
 - [ ] All GitHub Actions use full commit SHA references with version comment
