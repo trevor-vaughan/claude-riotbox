@@ -4,7 +4,7 @@ vars:
   riotbox_dir: "{{.root}}"
 
 # Pins the public contract of scripts/lib/json-write.sh. Every caller
-# (container/codegraph-setup.sh, container/context-mode-setup.sh) rewrites an
+# (container/codegraph-setup.sh, agents/claude/context-mode.sh) rewrites an
 # agent config file the user owns, in a bind-mounted host session directory, so
 # a regression here either loses configuration that cannot be recovered or
 # leaves a file on the host looser than the user set it.
@@ -130,17 +130,23 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "entrypoint_order=pass"
 
-  # container/context-mode-setup.sh is also sourced by the image build, which
-  # asserts its two build-time constants against the installed package. That
-  # source must stay free of side effects and must not need this library, so
-  # the dependency is a call inside a function and never a top-level source.
+  # container/context-mode-setup.sh and agents/claude/context-mode.sh are both
+  # sourced by the image build, which asserts the build-time constants the
+  # second one defines against the installed package. Those sources must stay
+  # free of side effects and must not need this library, so the dependency is a
+  # call inside a function and never a top-level source.
   - name: the setup scripts depend on the writer without sourcing it
     steps:
       - type: exec
         script: |
           set -e
           cd "{{.riotbox_dir}}"
-          for setup in container/codegraph-setup.sh container/context-mode-setup.sh; do
+          # container/context-mode-setup.sh is deliberately not in this list.
+          # The code that writes JSON moved to agents/claude/context-mode.sh;
+          # what is left there (context_mode_pkg_root, context_mode_setup)
+          # writes nothing, so "calls the shared writer" is no longer true of
+          # it. The standalone-source probe below still covers it.
+          for setup in container/codegraph-setup.sh agents/claude/context-mode.sh; do
             grep -q 'json_write_atomic' "${setup}" \
               || { echo "FAIL: ${setup} no longer calls the shared writer"; exit 1; }
             grep -qE '^[[:space:]]*(source|\.) .*json-write\.sh' "${setup}" \
@@ -148,10 +154,14 @@ testcases:
             grep -qE '^[a-z_]+_write_json_atomic\(\)' "${setup}" \
               && { echo "FAIL: ${setup} defines its own copy of the writer"; exit 1; }
           done
-          # The build sources context-mode-setup.sh alone and reads the two
-          # constants; nothing it does may call the missing writer.
+          # The build sources both files and reads the constants the Context
+          # Mode layer's guards need; nothing either does on source may call
+          # the missing writer.
           out="$(bash -uc '. container/context-mode-setup.sh
+            . agents/claude/context-mode.sh
+            : "${CONTEXT_MODE_BIN:?}"
             : "${CONTEXT_MODE_MATCHER:?}"
+            : "${CONTEXT_MODE_POST_MATCHER:?}"
             : "${CONTEXT_MODE_MCP_NAME:?}"
             echo standalone_source_ok' 2>&1)"
           [ "${out}" = "standalone_source_ok" ] \

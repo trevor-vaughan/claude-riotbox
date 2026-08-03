@@ -141,11 +141,12 @@ overlay_setup
 # final /workspace.
 codegraph_setup
 
-# Context Mode: wire the MCP server and the PreToolUse/SessionStart hooks when
-# RIOTBOX_CONTEXT_MODE=1, or strip wiring an earlier session left behind.
-# Runs after codegraph_setup so both MCP entries merge into a settled
-# .claude.json instead of racing for it. Claude Code only — it warns and
-# skips for any other agent.
+# Context Mode: wire the agent-appropriate form when RIOTBOX_CONTEXT_MODE=1, or
+# strip wiring an earlier session left behind. Runs after codegraph_setup so
+# both MCP entries merge into a settled .claude.json instead of racing for it,
+# and after the agent setup loop so opencode's regenerated config is in place.
+# Agents opt in by implementing the Context Mode verbs; any that does not warns
+# and runs with the feature off.
 context_mode_setup
 
 # Session branch: create a dedicated branch for this session (if repo detected

@@ -770,15 +770,16 @@ RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
 # .../v22/bin path, with nothing in it to suggest that the format of the arg,
 # rather than a broken install, was the cause.
 #
-# Build-time guards on the wiring template in
-# container/context-mode-setup.sh and the exit report in
+# Build-time guards on the shim template in container/context-mode-setup.sh,
+# the per-agent wiring in agents/*/context-mode.sh, and the exit report in
 # container/context-mode-summary.sh, all of which fail THIS layer rather than
-# letting a user session discover the drift. Both files are sourced here, so
-# the guards assert the constants a session will actually use and cannot fall
-# out of step with them. The ${VAR:?} lines are what keep that honest:
-# the RUN is not `set -u`, and cannot be because nvm.sh is not clean under it,
-# so a renamed or emptied constant would otherwise expand to nothing and let
-# the checks below pass having checked nothing at all:
+# letting a user session discover the drift. All three are sourced here — the
+# agent wiring through agents/registry.sh — so the guards assert the constants
+# and the paths a session will actually use and cannot fall out of step with
+# them. The ${VAR:?} lines are what keep that honest: the RUN is not `set -u`,
+# and cannot be because nvm.sh is not clean under it, so a renamed or emptied
+# constant would otherwise expand to nothing and let the checks below pass
+# having checked nothing at all:
 #
 #   * CONTEXT_MODE_BIN, which is where the shim is written, in place of a
 #     literal repeated across this RUN. context_mode_setup skips the wiring and
@@ -793,7 +794,17 @@ RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
 #     so an edit that puts the file anywhere else fails here instead. HOME is
 #     ENV-set to /home/llm and the image runs as llm well above this layer, so
 #     build and session expand the constant to the same path.
-#   * The event set and both matchers, compared for EQUALITY against
+#   * Every registered agent's context_mode_build_assert verb, one call per
+#     entry in AGENT_REGISTRY, each handed the installed package root. The
+#     contract an agent depends on is declared in agents/<name>/context-mode.sh
+#     beside the constants that encode it: a guard kept here instead would stop
+#     guarding the day either one moved, and a third agent's guard would be a
+#     Containerfile edit rather than a manifest one. An agent with no such verb
+#     is skipped: the Context Mode verbs are optional, and an agent that never
+#     reaches Context Mode has no upstream contract to assert. A failure here
+#     always names the agent whose contract broke.
+#
+#     claude compares the event set and both matchers for EQUALITY against
 #     hooks/hooks.json in the installed package — the hooks config upstream's
 #     own installer emits, and the one artifact in the package that states all
 #     three exactly rather than in fragments. Three comparisons: the event
@@ -814,13 +825,14 @@ RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
 #     costs continuity. A dropped tool, an added tool, a renamed event, an
 #     added event and a reordered alternation all fail this layer instead. The
 #     last of those is cosmetic upstream and still fails here, deliberately and
-#     on the same terms as the MCP-name grep below: the drift gets read by a
+#     on the same terms as the MCP-name grep: the drift gets read by a
 #     maintainer instead of by a session.
-#   * CONTEXT_MODE_MCP_NAME, in hooks/core/tool-naming.mjs — the routing table
-#     that names the tools a redirect points the agent at, and a file that the
-#     path RiotBox uses actually reaches: `context-mode hook claude-code
-#     <event>` dispatches by importing hooks/<event>.mjs out of the package,
-#     which imports that table. It hardcodes
+#
+#     claude also greps CONTEXT_MODE_MCP_NAME out of hooks/core/tool-naming.mjs
+#     — the routing table that names the tools a redirect points the agent at,
+#     and a file that the path RiotBox uses actually reaches: `context-mode
+#     hook claude-code <event>` dispatches by importing hooks/<event>.mjs out
+#     of the package, which imports that table. It hardcodes
 #     mcp__plugin_context-mode_context-mode__<tool> with nothing to steer it,
 #     so the MCP server has to be registered under that name; a pin bump that
 #     changed the prefix would leave every redirect pointing at a tool the
@@ -830,6 +842,18 @@ RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
 #     are upstream internals that could be relocated without any change in
 #     behaviour; that would fail this layer too, which is the intent — the
 #     drift then gets read by a maintainer instead of by a session.
+#
+#     opencode asserts the three things its plugin shim re-exports through:
+#     build/adapters/opencode/plugin.js exists, still exports
+#     ContextModePlugin, and is still what package.json maps ./plugin to.
+#     Nothing on that path is a hook or an MCP server, so none of the claude
+#     constants have an analogue — an upstream move would surface as an
+#     opencode session whose plugin silently fails to load.
+#   * context_mode_pkg_root against CM_PKG, and after the shim is generated
+#     rather than before, because the derivation parses that shim. The opencode
+#     wiring builds the re-export path from it every session, so a change to
+#     the shim's shape would point every generated plugin at a package root
+#     that does not exist.
 #   * The `hook <platform> <event>` dispatcher the template's hook commands
 #     call. This one is load-bearing: the CLI treats an unrecognised first
 #     argument as "start the MCP server", so if upstream ever drops or renames
@@ -865,10 +889,7 @@ RUN bash -c '\
     # shellcheck disable=SC1091  # copied into the image by the COPY above \
     . /home/llm/.riotbox/context-mode-summary.sh; \
     : "${CONTEXT_MODE_STATS_BIN:?is no longer defined by context-mode-summary.sh — the exit report would read a shim that was never written}"; \
-    : "${CONTEXT_MODE_POST_MATCHER:?is no longer defined by context-mode-setup.sh — the PostToolUse guard below would check nothing}"; \
     : "${CONTEXT_MODE_BIN:?is no longer defined by context-mode-setup.sh — the shim would go where no session looks for it}"; \
-    : "${CONTEXT_MODE_MATCHER:?is no longer defined by context-mode-setup.sh — the guard below would check nothing}"; \
-    : "${CONTEXT_MODE_MCP_NAME:?is no longer defined by context-mode-setup.sh — the guard below would check nothing}"; \
     printf "%s\n" \
         "#!/usr/bin/env bash" \
         "# Generated by the RiotBox image build. Pins the interpreter — see the" \
@@ -877,13 +898,15 @@ RUN bash -c '\
         > "${CONTEXT_MODE_BIN}"; \
     chmod +x "${CONTEXT_MODE_BIN}"; \
     [ -x "${CONTEXT_MODE_BIN}" ]; \
-    grep -qF "\`mcp__${CONTEXT_MODE_MCP_NAME}__" "${CM_PKG}/hooks/core/tool-naming.mjs"; \
-    [ "$(jq -Sc ".hooks|keys" "${CM_PKG}/hooks/hooks.json")" = "$(context_mode_hook_table | jq -Sc keys)" ] \
-        || { echo "hooks/hooks.json in context-mode@${CONTEXT_MODE_VERSION} wires a different event set than context_mode_hook_table — a session would leave an upstream hook unwired, or wire an event that no longer exists" >&2; exit 1; }; \
-    [ "$(jq -r "[.hooks.PreToolUse[].matcher]|join(\"|\")" "${CM_PKG}/hooks/hooks.json")" = "${CONTEXT_MODE_MATCHER}" ] \
-        || { echo "the PreToolUse tool set in hooks/hooks.json no longer equals CONTEXT_MODE_MATCHER — sessions would intercept a different set of tools than upstream ships" >&2; exit 1; }; \
-    [ "$(jq -r ".hooks.PostToolUse[0].matcher" "${CM_PKG}/hooks/hooks.json")" = "${CONTEXT_MODE_POST_MATCHER}" ] \
-        || { echo "the PostToolUse tool set in hooks/hooks.json no longer equals CONTEXT_MODE_POST_MATCHER — sessions would capture a different set of tools than upstream, and a narrower one means less survives a compact or a restart" >&2; exit 1; }; \
+    # shellcheck disable=SC1091  # copied into the image by the COPY above \
+    . /home/llm/.riotbox/agents/registry.sh; \
+    for _cm_agent in "${AGENT_REGISTRY[@]}"; do \
+        declare -F "agent_${_cm_agent}_context_mode_build_assert" >/dev/null || continue; \
+        agent_call "${_cm_agent}" context_mode_build_assert "${CM_PKG}" \
+            || { echo "context-mode@${CONTEXT_MODE_VERSION} broke the ${_cm_agent} Context Mode contract (above)" >&2; exit 1; }; \
+    done; \
+    [ "$(context_mode_pkg_root)" = "${CM_PKG}" ] \
+        || { echo "context_mode_pkg_root derives $(context_mode_pkg_root) from the generated shim, but the package is at ${CM_PKG} — the opencode shim would re-export from the wrong path" >&2; exit 1; }; \
     "${CONTEXT_MODE_BIN}" --help | grep -q "context-mode hook <platform> <event>"; \
     context_mode_hook_table | jq -r "to_entries[] | .value.event" > /tmp/cm-events; \
     while read -r event; do \

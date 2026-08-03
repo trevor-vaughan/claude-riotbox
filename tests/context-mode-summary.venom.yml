@@ -26,6 +26,14 @@ vars:
 # context_mode_render_stats is pure: {"before":…,"after":…} on stdin, text or
 # nothing on stdout. Every case below drives that seam directly, so none of them
 # need the image, the pinned Node, or a store.
+#
+# Every case clears _CONTEXT_MODE_WIRED, CONTEXT_MODE_DIR, RIOTBOX_CONTEXT_MODE
+# and RIOTBOX_AGENT before it does anything else, and re-exports whatever it
+# actually needs afterwards. A wired RiotBox session — the environment a
+# maintainer of this feature runs the suite in — exports all four, and the gate
+# case in particular asserts what happens with the wired flag ABSENT, so an
+# inherited 1 turns a real regression into a green run in CI and a red one on a
+# developer's machine.
 
 testcases:
   # The fixture keeps non-zero eventDataBytes and snapshotBytes on purpose: both
@@ -36,6 +44,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           out="$(jq -nc '{
             before: {eventDataBytes: 1000, bytesAvoided: 2000, bytesReturned: 500,
@@ -79,6 +88,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           out="$(jq -nc '{
             before: {eventDataBytes: 0, bytesAvoided: 0, bytesReturned: 4096,
@@ -110,6 +120,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           rc=0
           out="$(jq -nc '{before: {}, after: {eventDataBytes: 0, bytesAvoided: 0,
@@ -153,6 +164,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           rc=0
           out="$(jq -nc '{
@@ -190,6 +202,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           out="$(jq -nc '{
             before: {eventDataBytes: 1000, bytesAvoided: 2000, bytesReturned: 500,
@@ -213,6 +226,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           out="$(jq -nc '{
             before: {eventDataBytes: 5000, bytesAvoided: 5000, bytesReturned: 0,
@@ -243,6 +257,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           out="$(jq -nc '{
             before: {eventDataBytes: 900000, bytesAvoided: 900000, bytesReturned: 4096,
@@ -270,6 +285,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           out="$(jq -nc '{before: null,
                           after: {eventDataBytes: 0, bytesAvoided: 1572864,
@@ -294,6 +310,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           out="$(jq -nc '{before: null, baseline_unknown: true,
                           after: {eventDataBytes: 0, bytesAvoided: 1468006,
@@ -317,6 +334,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           rc=0
           out="$(jq -nc '{before: null, baseline_unknown: true,
@@ -338,6 +356,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           # The last three carry a VALID .after with a non-object .before — a
           # number, an array, a string. Coercing any of those to {} (treating
@@ -366,6 +385,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           check() {
             got="$(_humanize_bytes "$1")"
@@ -404,6 +424,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           if ! locale -a 2>/dev/null | grep -qi '^de_DE\.utf8$\|^de_DE\.UTF-8$'; then
             echo "SKIP: de_DE.UTF-8 locale not installed"
             echo "humanize_locale=pass"
@@ -430,6 +451,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_DIR="${CLAUDE_CONFIG_DIR}/context-mode"
           export CONTEXT_MODE_STATS_BIN="${HOME}/fake-stats"
@@ -499,6 +521,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_DIR="${CLAUDE_CONFIG_DIR}/context-mode"
           export CONTEXT_MODE_STATS_BIN="${HOME}/fake-stats"
@@ -555,6 +578,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_DIR="${CLAUDE_CONFIG_DIR}/context-mode"
           export CONTEXT_MODE_STATS_BIN="${HOME}/fake-stats"
@@ -602,6 +626,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_DIR="${CLAUDE_CONFIG_DIR}/context-mode"
           # Declared, not implied by the HOME override — see the same note in
@@ -665,6 +690,7 @@ testcases:
       - type: exec
         script: |
           set -e
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           out="$(jq -nc '{
             before: {eventDataBytes: 1000, bytesAvoided: 2000, bytesReturned: 500,

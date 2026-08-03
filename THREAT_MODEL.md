@@ -268,20 +268,38 @@ Context Mode is opt-in (`RIOTBOX_CONTEXT_MODE=1`) and off by default. When
 enabled it changes what a session holds on disk and what it puts on the critical
 path, in the ways set out below.
 
-**The FTS5 store holds verbatim tool output.** Command results, file contents,
-and fetched pages are written to `~/.claude/context-mode/` — the session
-directory — so the store carries the same sensitivity as a session transcript
-and is deleted by the same `riotbox session-remove`.
-`container/context-mode-setup.sh` pins `CONTEXT_MODE_DIR` there explicitly
-rather than relying on the upstream default, so a change to that default alone
-cannot silently relocate that content onto the container overlay, where it would
-vanish at exit and escape session cleanup. The pin is a real defence with a
-stated limit: it holds only while upstream keeps honouring a variable of that
-name. Unlike the wiring template's matcher, MCP server name, and dispatcher
-form, no build-time guard greps the installed bundle for it, and the tests
-assert the exported value rather than that the package reads it — so a version
-bump that renamed or dropped the variable would surface in a user session, not
-at build time.
+**The FTS5 store holds verbatim tool output, and there is one per agent.**
+Command results, file contents, and fetched pages are written to
+`~/.claude/context-mode/` under `--agent=claude` and to
+`~/.config/opencode/context-mode/` under `--agent=opencode`. Both paths are
+inside the session directory, so both carry the same sensitivity as a session
+transcript and both are deleted by the same `riotbox session-remove`. The store
+is per agent rather than shared, which means a session directory reused across
+agents can hold two of them; the second is not a leak past any boundary the
+first does not already cross, but it is a second copy of the same class of
+content and worth knowing about before handing a session directory to anyone.
+
+`container/context-mode-setup.sh` exports `CONTEXT_MODE_DIR` explicitly, from
+the path the running agent's own verb prints, rather than relying on the
+upstream default — so a change to that default alone cannot silently relocate
+that content onto the container overlay, where it would vanish at exit and
+escape session cleanup. The pin is a real defence with two stated limits:
+
+- It holds only while upstream keeps honouring a variable of that name. Unlike
+  the Claude wiring's matcher, MCP server name, and dispatcher form, no
+  build-time guard greps the installed bundle for it, and the tests assert the
+  exported value rather than that the package reads it — so a version bump that
+  renamed or dropped the variable would surface in a user session, not at build
+  time.
+- On the opencode path the pin does not cover everything. `CONTEXT_MODE_DIR` is
+  read by the storage resolvers behind the `ctx_*` tools, but the plugin's own
+  session database resolves independently, from the platform config directory
+  (`${XDG_CONFIG_HOME:-~/.config}/opencode`) unless `CONTEXT_MODE_DATA_DIR` is
+  set. Both land in the session directory in the shipped configuration —
+  `XDG_CONFIG_HOME` is unset image-wide and `~/.config/opencode` *is* the
+  session bind mount, so the two resolutions coincide — but they coincide by
+  construction rather than because one variable governs both. Setting
+  `CONTEXT_MODE_DIR` to somewhere else by hand would move one and not the other.
 
 **Wiring the session reaches no network, by construction.** Context Mode's only
 hook-configuring command is `context-mode upgrade`, and that command
@@ -294,7 +312,60 @@ never invoked. RiotBox writes the two JSON stanzas itself, offline, and the imag
 build greps the installed bundle for the tool set the wiring template encodes, so
 a version bump that changes it fails the build rather than a user session.
 
-**Residual outbound traffic is one unauthenticated GET.** The MCP server queries
+**On opencode the same code runs inside the agent process, and that is a wider
+blast radius for identical code.** The Claude path spawns a short-lived hook
+process per matched tool call and one MCP child process, each a separate
+process with a stdio boundary between it and the agent. The opencode path has
+neither: riotbox writes one generated plugin file into
+`~/.config/opencode/plugins/`, opencode loads it under its own embedded bun at
+startup, and `ContextModePlugin` runs in-process for the life of the session. It
+registers the eleven `ctx_*` tools directly rather than over MCP, receives
+opencode's plugin input — including the `client` handle it uses to write to the
+host's log — and its `tool.execute.before` hook sits on the path of every tool
+call the agent makes, in the agent's own address space and with the agent's own
+privileges. This is the same Elastic-2.0 package reviewed for the Claude path,
+at the same pinned version, asserted by the same image build. Nothing about it
+is more trusted than before; it simply has more reach if that trust is
+misplaced, and there is no process boundary to fall back on. Sessions that want
+the narrower surface should use `--agent=claude`, or leave the feature off.
+
+**`plugins/` is a code-execution surface inside the session directory.**
+opencode loads every file under `~/.config/opencode/plugins/` at startup, and
+that directory lives in the bind-mounted session config. Write access there — on
+the host under `~/.local/share/riotbox/<session>/.config-opencode/plugins/`, or
+from inside the container — is arbitrary code execution inside the agent process
+on the next session start, whether or not Context Mode is enabled. The host's own
+`~/.config/opencode/` tree is copied into that directory on every launch
+(`agents/opencode/sync-settings.sh`), so a plugin file on the host runs inside
+the container too. All of that is a property of opencode's plugin model rather
+than of Context Mode; what Context Mode changes is that riotbox itself starts
+writing into that directory, which is why the write is guarded.
+
+The guard is a marker line: riotbox writes
+`// riotbox-generated: context-mode shim — do not edit.` as the shim's first
+line, refuses to overwrite a file at that path that does not carry it, and
+deletes that path only when it does. **That protects a user's own plugin from
+riotbox; it does not protect the session from a hostile writer.** Anyone who can
+write the file can write the marker line above it. The controls that hold are
+the ordinary ones on the session directory — host filesystem permissions, and
+what the container can reach — plus `RIOTBOX_NETWORK=none` for what such code
+could send anywhere. The marker is a correctness guard against riotbox
+clobbering or deleting a file it did not create, and nothing more.
+
+**The routing block the adapter injects is never written to disk.** On the
+Claude path, what the wiring does to a session is reviewable after the fact:
+the hook stanzas and the `mcpServers` entry sit in `settings.json` and
+`.claude.json`, and `cat` shows exactly what was added. The opencode adapter
+instead injects its routing instructions into the system prompt at runtime,
+through `experimental.chat.system.transform`, when it does not already find
+them there. Nothing in the session config records that this happened or what
+was injected — reading `opencode.jsonc` and the shim tells you the plugin is
+loaded and nothing about what it puts in front of the model. Reviewing that
+text means reading `hooks/routing-block.mjs` in the installed package at the
+pinned version.
+
+**Residual outbound traffic is one unauthenticated GET, on the Claude path
+only.** The MCP server queries
 `https://registry.npmjs.org/context-mode/latest` at startup to warn about new
 versions. It carries no payload beyond the request itself and fails soft when
 unreachable — verified by running `context-mode doctor` inside a network
@@ -305,15 +376,26 @@ no telemetry setting, because it collects no telemetry to switch off. The packag
 contains no analytics SDK and exactly one `fetch()` call, which backs the
 user-initiated `ctx_fetch_and_index` tool.
 
+The opencode path does not make that request, because it starts no server: the
+plugin imports the server module with `CONTEXT_MODE_EMBEDDED_PLUGIN_TOOLS=1`
+set, and that flag is what skips the startup routine the version check lives in
+(`build/server.js`). The reduction is upstream's doing rather than a control
+riotbox holds, so it is recorded here as an observation about the pinned
+version, not as a guarantee across bumps.
+
 **Wiring outlives the image, so it is stripped rather than documented away.**
 The hooks and the `mcpServers` entry are written into the session
-`settings.json` and `.claude.json`, neither of which riotbox ever syncs from the
-host. That is the same trap CodeGraph's prompt hook set: a session wired by an
-image that shipped the feature would keep spawning a missing binary on every
-matching tool call. `context_mode_strip_session_wiring` removes exactly the
-entries whose command names the riotbox shim — leaving any hook the user wrote
-untouched — on the first session that starts with the toggle off or the binary
-absent.
+`settings.json` and `.claude.json`, and the opencode shim into the session
+`plugins/` directory; riotbox syncs none of those from the host. That is the
+same trap CodeGraph's prompt hook set: a session wired by an image that shipped
+the feature would keep spawning a missing binary on every matching tool call, or
+keep loading a plugin that re-exports a path that no longer exists. Each agent's
+`context_mode_strip` verb removes exactly what that agent's wiring could have
+written — the entries whose command names the riotbox shim, the shim file
+carrying riotbox's marker line — leaving anything the user wrote untouched, on
+the first session that starts with the toggle off or the binary absent. Starting
+a session with a different `--agent` strips the other agent's wiring the same
+way, so a session directory never holds two agents' wiring at once.
 
 **Licence.** Context Mode is Elastic Licence 2.0: source-available, not OSI open
 source, and the only such component in the image. It is fetched from npm during
@@ -339,6 +421,16 @@ stderr, and because each hook dispatch is a fresh process, upstream's one-shot
 warning latch would not suppress the repeats. So the gate is quiet as well as
 closed. `riotbox doctor` fails when either directory has become writable or a
 `platform.json` has appeared in it.
+
+The opencode path does not reach that bridge in the pinned version, and the
+sentinel would close it anyway. Upstream's plugin comments describe
+`db.insertEvent` as "the TS-plugin equivalent of the .mjs
+attributeAndInsertEvents path", but the shipped `build/adapters/opencode/plugin.js`
+and `build/session/db.js` contain no `fetch()` and no HTTPS request between them:
+the forwarding code lives in `hooks/platform-bridge.mjs`, which only the `.mjs`
+hook dispatchers load. The sentinel is a filesystem fact rather than a code-path
+one, so it holds for any caller in the image if that changes — but the gap
+between the comment and the code is worth re-checking on a version bump.
 
 Threat addressed: inadvertent activation — upstream code writing the file, a stray
 setup flow, a dotfile copied in from a host. **Not** addressed: a deliberate actor

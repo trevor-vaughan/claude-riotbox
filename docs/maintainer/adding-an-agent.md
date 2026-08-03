@@ -40,6 +40,7 @@ agents/<name>/
   manifest.sh        ← required: contract functions
   setup.sh           ← optional: container-side runtime setup
   sync-settings.sh   ← optional: host-side config sync
+  context-mode.sh    ← optional: Context Mode verbs (sourced by manifest.sh)
 ```
 
 The registry sources `agents/<name>/manifest.sh`. The manifest decides
@@ -305,6 +306,202 @@ Contract coverage lives in `tests/agents.venom.yml` ("Headroom optional
 verb" cases), `tests/headroom.venom.yml` (wrapper gate, guard, and
 fallbacks), and `tests/headroom-opencode.venom.yml` (proxy-routed helper
 behavior).
+
+### The Context Mode verbs
+
+Five optional verbs wire [Context Mode](../../README.md#context-mode-opt-in)
+for an agent. Four run per session; the fifth runs at image build time:
+
+| Verb | When | Contract |
+|------|------|----------|
+| `context_mode_store_dir` | session start | Print this agent's absolute `CONTEXT_MODE_DIR` on stdout. No side effects. |
+| `context_mode_data_dir` | session start | Print the absolute root this agent's `CONTEXT_MODE_DATA_DIR` pins. Implement only where the pin is otherwise missing. |
+| `context_mode_wire` | session start | Write this agent's wiring. All-or-nothing: return 0 only when every artifact landed. |
+| `context_mode_strip` | session start | Remove anything this agent's `context_mode_wire` could have written. Idempotent, always returns 0. |
+| `context_mode_build_assert "$pkg_root"` | image build | Assert the upstream contract this agent's wiring depends on. Non-zero fails the build. |
+
+Every caller probes with `declare -F agent_<name>_<verb>` before calling —
+`container/context-mode-setup.sh` at session start, `scripts/preflight.sh`
+for the `riotbox doctor` check, and the Context Mode layer in the
+`Containerfile` for the build guard. An agent that implements none of them
+is not an error: the session warns naming the agent, strips any wiring an
+earlier session left in the same session directory, and runs with the
+feature off.
+
+They are a set rather than a menu. **Implementing `context_mode_wire`
+obliges the agent to implement `context_mode_store_dir` and
+`context_mode_strip` as well.** The orchestrator asks for the store path
+*before* it wires and gives up when the answer is unusable, so a `wire`
+without `store_dir` never runs; and every give-up path — including the ones
+inside `wire` itself — calls the stripper, so a `wire` without `strip`
+leaves wiring behind that nothing removes, for the life of a session
+directory that outlives the image that wrote it.
+
+`context_mode_data_dir` is the exception: it is per-agent by design and
+Claude does not implement it. See its section below for when an agent needs
+it.
+
+Put the bodies in `agents/<name>/context-mode.sh` and have `manifest.sh`
+source it:
+
+```bash
+# Context Mode verbs (optional contract — see docs/maintainer/adding-an-agent.md).
+# shellcheck source=./context-mode.sh
+source "${_AGENT_<NAME>_DIR}/context-mode.sh"
+```
+
+That keeps the upstream constants, the wiring that depends on them, and the
+build guard that asserts them in one file. `agents/claude/context-mode.sh`
+(hook stanzas plus an MCP server entry) and `agents/opencode/context-mode.sh`
+(one generated plugin file) are the two worked examples, and they are
+deliberately different shapes — the registry contract is about the
+lifecycle, not about what wiring looks like.
+
+#### `agent_<name>_context_mode_store_dir`
+
+```bash
+agent_<name>_context_mode_store_dir() {
+    printf '%s\n' "${<NAME>_CONFIG_DIR:-${HOME}/.config/<name>}/context-mode"
+}
+```
+
+Print the absolute path the session exports as `CONTEXT_MODE_DIR`, and do
+nothing else — no `mkdir`, no writes, nothing that assumes the feature is
+enabled. `container/context-mode-setup.sh` rejects an empty or relative
+answer (warn, strip, run with the feature off) instead of exporting it:
+upstream resolves a relative `CONTEXT_MODE_DIR` against whatever directory
+the hook happened to start in, which is the user's project, so the store
+would land in the repo being worked on.
+
+Point it inside the agent's config directory, which riotbox replaces with
+the session bind mount. The store holds verbatim tool output, so it has to
+be somewhere `riotbox session-remove` deletes and somewhere that cannot
+vanish onto the container overlay at exit.
+
+#### `agent_<name>_context_mode_data_dir`
+
+```bash
+agent_<name>_context_mode_data_dir() {
+    printf '%s\n' "${<NAME>_CONFIG_DIR:-${HOME}/.config/<name>}"
+}
+```
+
+`CONTEXT_MODE_DIR` pins the `sessions/` and `content/` stores behind the
+`ctx_*` tools, and nothing else. An agent whose Context Mode support runs as
+an in-process plugin has a second store — the plugin's own session DB — and
+upstream resolves that through the adapter's `getSessionDir()`, which reads
+`CONTEXT_MODE_DATA_DIR` and otherwise falls back to the agent's config
+directory. Implement this verb when riotbox does not already pin that
+fallback:
+
+- **Claude does not implement it.** `resolveClaudeConfigDir()` reads
+  `CLAUDE_CONFIG_DIR`, which `container/entrypoint.sh` exports at the session
+  bind mount, so the DB is already pinned and a second variable would only be
+  one more thing for a future reader to explain.
+- **opencode does.** `OpenCodeAdapter.getConfigDir()` reads
+  `XDG_CONFIG_HOME`, which the image never sets, and falls back to
+  `~/.config/opencode`. That is the session mount today, but by coincidence
+  rather than by anything riotbox stated — and the DB holds verbatim tool
+  output, so an upstream change to that fallback would move it onto the
+  container overlay, where it vanishes at exit and escapes
+  `riotbox session-remove`.
+
+**Print the parent of `context_mode_store_dir`'s path, not the same path.**
+Upstream builds the DB directory as `<root>/context-mode/sessions`, whereas
+`CONTEXT_MODE_DIR` names that `context-mode` directory outright. Returning
+the store path here puts the DB at `<store>/context-mode/sessions`, one level
+below the `ctx_*` stores instead of beside them.
+`container/context-mode-setup.sh` rejects an empty or relative answer the
+same way it rejects one from `store_dir`, and validates both before it
+exports either, so a session that gives up leaves no storage variable behind.
+
+Note that upstream's `getMemoryDir()` follows this root too: auto-memory
+moves from `<config>/memory` to `<config>/context-mode/memory`. That is
+harmless for an agent adopting Context Mode for the first time and worth
+checking for one that has been storing memory under the old path.
+
+#### `agent_<name>_context_mode_wire`
+
+Write whatever form of wiring this agent needs, and return 0 **only** when
+every artifact landed. On any failure: warn on stderr, leave nothing behind
+— calling the agent's own `context_mode_strip` on the way out is the
+straightforward way to guarantee that — and return non-zero.
+
+The status is not advisory. `container/context-mode-setup.sh` reads it to
+decide whether the session may claim the feature ran, so a give-up that
+returned 0 would hand a session running with Context Mode off an exit
+report saying it was wired — a false claim in the one place the user
+actually looks. A half-wired session is worse than an unwired one for the
+same reason on both agents: partial wiring changes the agent's behaviour
+while delivering none of the feature.
+
+Two further rules, both learned the hard way:
+
+- **Parse, build and format everything before writing anything**, so a
+  failure that can be seen at all is seen while the session config is still
+  untouched.
+- **Never overwrite something riotbox did not write.** Config in the
+  session directory is the user's, hand-edited, and not regenerated from
+  the host. Both existing implementations identify their own output before
+  replacing it — Claude by the shim path inside a hook command, opencode by
+  a generated marker on the shim's first line — and refuse the write
+  otherwise, so the session degrades to the feature being off rather than
+  destroying a file the user cannot get back.
+
+#### `agent_<name>_context_mode_strip`
+
+Remove everything this agent's `context_mode_wire` could have written, and
+nothing else. It runs for every registered agent on every session start,
+including sessions that never had Context Mode and sessions wired by an
+older image, so:
+
+- **It is idempotent and always returns 0.** A failure to clean is a
+  warning on stderr, not a non-zero status; nothing upstream of it has a
+  better answer than carrying on.
+- **It is silent when there was nothing to remove.** The common case is a
+  session that never had the feature, and it must not be told about a
+  cleanup that did not happen. Report on stderr only what was actually
+  removed.
+- **It under-removes rather than over-removes.** Touch only what can be
+  positively identified as riotbox's own; leave anything else — a
+  user-written hook that merely mentions `context-mode`, a user's own file
+  at the shim path — exactly as found.
+
+This verb is what keeps a session directory from outliving the image that
+wired it while still holding wiring that points at a binary that is gone.
+It is also what makes "at most one agent's wiring exists in a session
+directory at a time" enforceable: switching `--agent` strips the other
+agent's wiring through this verb.
+
+#### `agent_<name>_context_mode_build_assert "$pkg_root"`
+
+```bash
+agent_<name>_context_mode_build_assert() {
+    local pkg="${1:?package root required}"
+    ...
+}
+```
+
+Called once per registered agent by the Context Mode layer in the
+`Containerfile`, with the installed `context-mode` package root as `$1`.
+Assert every upstream contract this agent's wiring silently depends on —
+a file the wiring re-exports, a symbol it names, a config key it reproduces
+— and on any mismatch print a diagnostic that names the *consequence* (not
+just the mismatch) on stderr and return non-zero.
+
+The point is where the failure lands. Without the guard, an upstream rename
+between pinned versions surfaces as a user session that quietly runs with
+the feature broken; with it, the image build fails and names what moved.
+Guards live in the same file as the constants they check, because a guard
+that lives apart from what it guards stops guarding it the first time
+either one moves.
+
+Contract coverage lives in `tests/context-mode.venom.yml` (the Claude
+path, plus the strip-every-other-agent rule),
+`tests/context-mode-opencode.venom.yml` (the opencode path, including the
+foreign-file refusal and the `--pure` warning), and
+`tests/doctor-context-mode.venom.yml` (the preflight check for an agent
+with no support).
 
 ## Worked example: adding `aider`
 

@@ -26,6 +26,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -34,7 +35,8 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          context_mode_wire
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          agent_call claude context_mode_wire
 
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
           jq -e '.hooks.PreToolUse[0].hooks[0].command | endswith("hook claude-code pretooluse")' \
@@ -95,6 +97,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -103,7 +106,8 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          context_mode_wire
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          agent_call claude context_mode_wire
 
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
           for pair in PreToolUse:pretooluse PostToolUse:posttooluse \
@@ -148,6 +152,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -156,7 +161,8 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          context_mode_wire
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          agent_call claude context_mode_wire
 
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
           # A hook the user owns in two of the arrays we prune.
@@ -166,7 +172,7 @@ testcases:
             "${settings}" > "${tmp}"
           mv "${tmp}" "${settings}"
 
-          context_mode_strip_session_wiring
+          agent_call claude context_mode_strip
 
           for key in PreToolUse UserPromptSubmit PreCompact SessionStart; do
             jq -e --arg k "${key}" 'has("hooks") and (.hooks | has($k))' \
@@ -187,9 +193,9 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "strip_six=pass"
 
-  # The table only tells context_mode_wire what to WRITE. Pruning by it too
-  # means a session already wired with a stanza for a row later removed (or
-  # renamed) from the table can never have that stanza removed again — a hook
+  # The table only tells agent_claude_context_mode_wire what to WRITE. Pruning
+  # by it too means a session already wired with a stanza for a row later
+  # removed (or renamed) from the table can never have it removed again — a hook
   # pointing at a binary that is gone, for the life of a session directory
   # that outlives the image. is_ours does not need the table either: it
   # matches on the shim's own path in the command, which is true for any key.
@@ -203,6 +209,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -211,7 +218,8 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          context_mode_wire
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          agent_call claude context_mode_wire
 
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
           jq -e '.hooks | has("Stop")' "${settings}" >/dev/null \
@@ -237,7 +245,7 @@ testcases:
             }'
           }
 
-          context_mode_strip_session_wiring
+          agent_call claude context_mode_strip
 
           jq -e '[.hooks.Stop[].hooks[0].command] == ["my-bell.sh"]' "${settings}" >/dev/null \
             || { echo "FAIL: Stop should hold only the foreign entry: $(jq -c '.hooks.Stop' "${settings}")"; exit 1; }
@@ -264,6 +272,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -272,13 +281,17 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           context_mode_hook_table() { return 1; }
 
-          # set -e means reaching this line at all already proves wire returned
-          # 0: a non-zero status from this unchecked assignment would abort the
-          # script before the sentinel below ever printed.
-          err="$(context_mode_wire 2>&1 >/dev/null)"
+          # A give-up path returns non-zero — the all-or-nothing half of the
+          # registry contract — so the status is captured rather than left to
+          # abort the script under set -e, and asserted below.
+          rc=0
+          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
 
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: wire reported success with no hook table"; exit 1; }
           echo "${err}" | grep -q "could not build the hook table" \
             || { echo "FAIL: no warning about the failed table: ${err}"; exit 1; }
           [ ! -f "${CLAUDE_CONFIG_DIR}/settings.json" ] \
@@ -298,6 +311,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -311,7 +325,8 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          context_mode_wire
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          agent_call claude context_mode_wire
 
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
           jq -e '.statusLine.command == "mine.sh"' "${settings}" >/dev/null \
@@ -335,6 +350,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -343,9 +359,10 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          context_mode_wire
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          agent_call claude context_mode_wire
           first="$(cat "${CLAUDE_CONFIG_DIR}/settings.json")"
-          context_mode_wire
+          agent_call claude context_mode_wire
           second="$(cat "${CLAUDE_CONFIG_DIR}/settings.json")"
 
           [ "${first}" = "${second}" ] \
@@ -366,6 +383,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -375,8 +393,12 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          err="$(context_mode_wire 2>&1 >/dev/null)"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          rc=0
+          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
 
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: wire reported success over a malformed settings.json"; exit 1; }
           echo "${err}" | grep -q "not valid JSON" \
             || { echo "FAIL: no warning about the malformed file: ${err}"; exit 1; }
           [ "$(cat "${CLAUDE_CONFIG_DIR}/settings.json")" = "not json at all" ] \
@@ -411,6 +433,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -419,6 +442,7 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
 
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
           # An array and a string: the two shapes a hand edit most plausibly
@@ -428,8 +452,11 @@ testcases:
             cp "${settings}" "${TEST_DIR}/before"
             rm -f "${CLAUDE_CONFIG_DIR}/.claude.json"
 
-            err="$(context_mode_wire 2>&1 >/dev/null)"
+            rc=0
+            err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
 
+            [ "${rc}" != "0" ] \
+              || { echo "FAIL (${shape}): wire reported success on a refusal"; exit 1; }
             cmp -s "${TEST_DIR}/before" "${settings}" \
               || { echo "FAIL (${shape}): the file was rewritten: $(cat "${settings}")"; exit 1; }
             echo "${err}" | grep -q "could not build hook config" \
@@ -461,6 +488,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -469,6 +497,7 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
 
           claude_json="${CLAUDE_CONFIG_DIR}/.claude.json"
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
@@ -483,8 +512,11 @@ testcases:
             printf '%s' '{"statusLine":{"type":"command","command":"mine.sh"}}' > "${settings}"
             cp "${settings}" "${TEST_DIR}/before-settings"
 
-            err="$(context_mode_wire 2>&1 >/dev/null)"
+            rc=0
+            err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
 
+            [ "${rc}" != "0" ] \
+              || { echo "FAIL (${shape}): wire reported success on a refusal"; exit 1; }
             cmp -s "${TEST_DIR}/before-claude-json" "${claude_json}" \
               || { echo "FAIL (${shape}): account metadata rewritten: $(cat "${claude_json}")"; exit 1; }
             # Nothing is written before both documents are built, so the hooks
@@ -516,6 +548,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -528,8 +561,12 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          err="$(context_mode_wire 2>&1 >/dev/null)"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          rc=0
+          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
 
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: wire reported success over a malformed .claude.json"; exit 1; }
           echo "${err}" | grep -q "not valid JSON" \
             || { echo "FAIL: no warning about the malformed file: ${err}"; exit 1; }
           jq -e '.hooks == null' "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
@@ -558,6 +595,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -566,11 +604,12 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
           claude_json="${CLAUDE_CONFIG_DIR}/.claude.json"
 
           # Run one: a normally wired session.
-          context_mode_wire
+          agent_call claude context_mode_wire
           jq -e '.hooks.PreToolUse != null and .hooks.SessionStart != null' \
             "${settings}" >/dev/null || { echo "FAIL: the first run did not wire"; exit 1; }
 
@@ -580,8 +619,11 @@ testcases:
           printf '' > "${claude_json}"
 
           # Run two, same session directory.
-          err="$(context_mode_wire 2>&1 >/dev/null)"
+          rc=0
+          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
 
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: wire reported success over an unreadable .claude.json"; exit 1; }
           jq -e '.hooks.PreToolUse == null and .hooks.SessionStart == null' \
             "${settings}" >/dev/null \
             || { echo "FAIL: hooks from the earlier run survived with no MCP server: ${err}"; exit 1; }
@@ -610,6 +652,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -622,15 +665,19 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           mv() {
             case "${2}" in
               */settings.json) return 1 ;;
               *) command mv "$@" ;;
             esac
           }
-          err="$(context_mode_wire 2>&1 >/dev/null)"
+          rc=0
+          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
           unset -f mv
 
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: wire reported success when the hooks could not be written"; exit 1; }
           echo "${err}" | grep -q "could not write ${settings}" \
             || { echo "FAIL: the failed write was silent: ${err}"; exit 1; }
           echo "${err}" | grep -q "not wired" \
@@ -660,6 +707,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -672,16 +720,20 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           mv() {
             case "${2}" in
               */.claude.json) return 1 ;;
               *) command mv "$@" ;;
             esac
           }
-          err="$(context_mode_wire 2>&1 >/dev/null)"
+          rc=0
+          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
           unset -f mv
 
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: wire reported success when the MCP entry could not be written"; exit 1; }
           echo "${err}" | grep -q "MCP server not registered" \
             || { echo "FAIL: no warning about the failed write: ${err}"; exit 1; }
           echo "${err}" | grep -q "Removed" \
@@ -716,6 +768,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -727,15 +780,19 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           jq() {
             if [ "$#" -eq 1 ] && [ "$1" = "." ]; then
               return 0
             fi
             command jq "$@"
           }
-          err="$(context_mode_wire 2>&1 >/dev/null)"
+          rc=0
+          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
           unset -f jq
 
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: wire reported success on an empty pretty-print"; exit 1; }
           [ "${settings_before}" = "$(cat "${CLAUDE_CONFIG_DIR}/settings.json")" ] \
             || { echo "FAIL: config truncated by an empty pretty-print"; exit 1; }
           [ ! -f "${CLAUDE_CONFIG_DIR}/.claude.json" ] \
@@ -768,6 +825,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -776,10 +834,11 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
           claude_json="${CLAUDE_CONFIG_DIR}/.claude.json"
 
-          context_mode_wire >/dev/null
+          agent_call claude context_mode_wire >/dev/null
           rm -f "${claude_json}"
           cp "${settings}" "${TEST_DIR}/before"
 
@@ -789,9 +848,12 @@ testcases:
             fi
             command jq "$@"
           }
-          err="$(context_mode_wire 2>&1 >/dev/null)"
+          rc=0
+          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
           unset -f jq
 
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: wire reported success when the MCP document never formatted"; exit 1; }
           echo "${err}" | grep -q "could not format ${claude_json}" \
             || { echo "FAIL: the failed format was silent or named the wrong file: ${err}"; exit 1; }
           [ ! -f "${claude_json}" ] \
@@ -813,6 +875,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -821,7 +884,8 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          context_mode_wire
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          agent_call claude context_mode_wire
           settings_before="$(cat "${CLAUDE_CONFIG_DIR}/settings.json")"
           claude_json_before="$(cat "${CLAUDE_CONFIG_DIR}/.claude.json")"
 
@@ -831,7 +895,7 @@ testcases:
             fi
             command jq "$@"
           }
-          err="$(context_mode_strip_session_wiring 2>&1 >/dev/null)"
+          err="$(agent_call claude context_mode_strip 2>&1 >/dev/null)"
           unset -f jq
 
           [ "${settings_before}" = "$(cat "${CLAUDE_CONFIG_DIR}/settings.json")" ] \
@@ -853,6 +917,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -861,7 +926,8 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          context_mode_wire
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          agent_call claude context_mode_wire
 
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
           claude_json="${CLAUDE_CONFIG_DIR}/.claude.json"
@@ -870,7 +936,7 @@ testcases:
           jq '.mcpServers.codegraph={"command":"codegraph"}' \
             "${claude_json}" > "${claude_json}.new" && mv "${claude_json}.new" "${claude_json}"
 
-          context_mode_strip_session_wiring 2>/dev/null
+          agent_call claude context_mode_strip 2>/dev/null
 
           jq -e '.hooks.PreToolUse == null' "${settings}" >/dev/null \
             || { echo "FAIL: our PreToolUse survived"; exit 1; }
@@ -902,6 +968,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -916,8 +983,9 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          context_mode_wire
-          context_mode_strip_session_wiring 2>/dev/null
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          agent_call claude context_mode_wire
+          agent_call claude context_mode_strip 2>/dev/null
 
           jq -e '.hooks.PreToolUse | length == 2' \
             "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
@@ -950,6 +1018,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -963,9 +1032,10 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
 
-          err="$(context_mode_wire 2>&1 >/dev/null)"
+          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)"
 
           echo "${err}" | grep -q "not wired" \
             && { echo "FAIL: the malformed entry disabled wiring: ${err}"; exit 1; }
@@ -979,7 +1049,7 @@ testcases:
             "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
             || { echo "FAIL: MCP entry not registered"; exit 1; }
 
-          err="$(context_mode_strip_session_wiring 2>&1 >/dev/null)"
+          err="$(agent_call claude context_mode_strip 2>&1 >/dev/null)"
 
           echo "${err}" | grep -q "left in place" \
             && { echo "FAIL: the malformed entry blocked the cleanup: ${err}"; exit 1; }
@@ -1008,6 +1078,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}"
@@ -1018,7 +1089,8 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          err="$(context_mode_strip_session_wiring 2>&1 >/dev/null)"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          err="$(agent_call claude context_mode_strip 2>&1 >/dev/null)"
 
           [ -z "${err}" ] \
             || { echo "FAIL: spoke about a cleanup that did not happen: ${err}"; exit 1; }
@@ -1037,6 +1109,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
@@ -1046,6 +1119,7 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           context_mode_setup >/dev/null 2>&1
 
           [ "${CONTEXT_MODE_DIR}" = "${CLAUDE_CONFIG_DIR}/context-mode" ] \
@@ -1072,6 +1146,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
@@ -1081,6 +1156,7 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           # Called in this shell, not a subshell: the assertion below compares
           # the announced path against the export the session inherits.
           context_mode_setup >"${TEST_DIR}/out" 2>/dev/null
@@ -1114,6 +1190,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
@@ -1127,6 +1204,7 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           context_mode_setup >"${TEST_DIR}/out" 2>/dev/null
 
           [ ! -s "${TEST_DIR}/out" ] \
@@ -1144,6 +1222,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -1152,6 +1231,7 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           RIOTBOX_CONTEXT_MODE=1 context_mode_setup >/dev/null 2>&1
           unset RIOTBOX_CONTEXT_MODE CONTEXT_MODE_DIR
           context_mode_setup >/dev/null 2>&1
@@ -1174,6 +1254,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=true
@@ -1183,6 +1264,7 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           context_mode_setup >/dev/null 2>&1
 
           if [ -f "${CLAUDE_CONFIG_DIR}/settings.json" ]; then
@@ -1204,6 +1286,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
@@ -1213,6 +1296,7 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           context_mode_setup >/dev/null 2>&1
           rm -f "${CONTEXT_MODE_BIN}"
           err="$(context_mode_setup 2>&1 >/dev/null)"
@@ -1226,11 +1310,18 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "setup_missing=pass"
 
-  # Regression guard: the wiring this file writes is Claude Code only — the
-  # hook commands say `hook claude-code …` and everything lands under
-  # CLAUDE_CONFIG_DIR, which opencode never reads. `riotbox --agent=opencode`
-  # with the toggle on must say so rather than write config nothing will read.
-  - name: setup warns and writes nothing when the agent is not claude
+  # Regression guard on the degrade path. An agent opts into Context Mode by
+  # implementing the optional verbs; one that implements none of them must be
+  # told so rather than have another agent's form written on its behalf — the
+  # config lands in the bind-mounted session directory and nothing regenerates
+  # it, so the dead stanzas would outlive the session while the toggle,
+  # `riotbox doctor` and the launcher all still reported the feature as on.
+  #
+  # The stand-in agent is appended to AGENT_REGISTRY rather than named from
+  # agents/: every agent riotbox ships implements the verbs, so an agent that
+  # does not is exactly what the fixture has to invent. It also pins that the
+  # strip-everything loop tolerates a registered agent with no strip verb.
+  - name: setup warns and strips for an agent with no Context Mode verbs
     steps:
       - type: exec
         script: |
@@ -1238,44 +1329,51 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
-          export RIOTBOX_AGENT=opencode
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
           printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          # An earlier session in this same directory, so the degrade below has
+          # wiring to clear rather than an empty config to leave alone.
+          RIOTBOX_AGENT=claude context_mode_setup >/dev/null 2>&1
+          jq -e '.hooks.PreToolUse != null' "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
+            || { echo "FAIL: the wiring run did not wire"; exit 1; }
+
+          AGENT_REGISTRY+=(noverbs)
+          export RIOTBOX_AGENT=noverbs
+          unset CONTEXT_MODE_DIR
           # Called in this shell, not a subshell: CONTEXT_MODE_DIR is an export
           # and the assertion below is on what the session inherits.
           context_mode_setup 2>"${TEST_DIR}/err" >/dev/null
           err="$(cat "${TEST_DIR}/err")"
 
-          echo "${err}" | grep -q "opencode" \
+          echo "${err}" | grep -q "noverbs" \
             || { echo "FAIL: warning does not name the agent: ${err}"; exit 1; }
-          echo "${err}" | grep -q "Claude Code" \
-            || { echo "FAIL: warning does not say Claude Code only: ${err}"; exit 1; }
+          echo "${err}" | grep -q "no Context Mode support" \
+            || { echo "FAIL: warning does not say the agent is unsupported: ${err}"; exit 1; }
           # Guards a refactor that hoists the storage-root export above the
-          # agent branch: an opencode session must not inherit a path to an
-          # FTS5 store nothing in that session will ever write.
+          # verb probe: a session that wires nothing must not inherit a path to
+          # an FTS5 store nothing in that session will ever write.
           [ -z "${CONTEXT_MODE_DIR:-}" ] \
-            || { echo "FAIL: storage root exported for a non-claude agent"; exit 1; }
-          if [ -f "${CLAUDE_CONFIG_DIR}/settings.json" ]; then
-            jq -e '.hooks.PreToolUse == null and .hooks.SessionStart == null' \
-              "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
-              || { echo "FAIL: dead hooks written for a non-claude agent"; exit 1; }
-          fi
-          if [ -f "${CLAUDE_CONFIG_DIR}/.claude.json" ]; then
-            jq -e '.mcpServers["plugin_context-mode_context-mode"] == null' \
-              "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
-              || { echo "FAIL: dead MCP entry written for a non-claude agent"; exit 1; }
-          fi
-          echo "setup_foreign_agent=pass"
+            || { echo "FAIL: storage root exported for an agent that wires nothing"; exit 1; }
+          jq -e '.hooks.PreToolUse == null and .hooks.SessionStart == null' \
+            "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
+            || { echo "FAIL: inherited hooks survived the degrade"; exit 1; }
+          jq -e '.mcpServers["plugin_context-mode_context-mode"] == null' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
+            || { echo "FAIL: inherited MCP entry survived the degrade"; exit 1; }
+          echo "setup_unsupported_agent=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "setup_foreign_agent=pass"
+          - result.systemout ShouldContainSubstring "setup_unsupported_agent=pass"
 
   # A session directory outlives the agent choice: the same directory can be
   # opened once with claude and again with opencode. The second run must clear
@@ -1288,6 +1386,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
@@ -1297,6 +1396,7 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
           RIOTBOX_AGENT=claude context_mode_setup >/dev/null 2>&1
           jq -e '.hooks.PreToolUse != null' "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
             || { echo "FAIL: the claude run did not wire"; exit 1; }
@@ -1325,6 +1425,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
           mkdir -p "${HOME}/.local/bin"
@@ -1333,6 +1434,7 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
 
           for agent_case in unset claude; do
             export CLAUDE_CONFIG_DIR="${HOME}/.claude-${agent_case}"
@@ -1411,6 +1513,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -1419,7 +1522,8 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          context_mode_wire
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          agent_call claude context_mode_wire
 
           # Regression guard. The vendor installer writes
           # `<node> <pkg>/hooks/<event>.mjs`, and substituting the riotbox shim
@@ -1493,6 +1597,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -1501,8 +1606,9 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
 
-          context_mode_wire >/dev/null
+          agent_call claude context_mode_wire >/dev/null
           [ "${_CONTEXT_MODE_WIRED:-unset}" = "1" ] \
             || { echo "FAIL: flag not set after a successful wire"; exit 1; }
 
@@ -1511,7 +1617,7 @@ testcases:
           # feature off.
           unset _CONTEXT_MODE_WIRED
           printf 'not json at all' > "${CLAUDE_CONFIG_DIR}/settings.json"
-          context_mode_wire 2>/dev/null >/dev/null || true
+          agent_call claude context_mode_wire 2>/dev/null >/dev/null || true
           [ "${_CONTEXT_MODE_WIRED:-unset}" = "unset" ] \
             || { echo "FAIL: flag set on a give-up path"; exit 1; }
           echo "wired_flag=pass"
@@ -1520,20 +1626,27 @@ testcases:
           - result.systemout ShouldContainSubstring "wired_flag=pass"
 
   # The invalid-settings.json case above is the *first* give-up path in
-  # context_mode_wire. This one is the deepest: the six hook stanzas have
-  # already landed in settings.json, the MCP write then fails, and
-  # context_mode_strip_session_wiring takes them back out. A flag that
-  # survives this path is the worst version of the bug — the session ends
-  # with the feature off and a report claiming it ran.
+  # agent_claude_context_mode_wire. This one is the deepest: the six stanzas have
+  # already landed in settings.json, the MCP write then fails, and the strip
+  # takes them back out. A flag that survives this path is the worst version
+  # of the bug — the session ends with the feature off and a report claiming
+  # it ran.
+  #
+  # The status is asserted alongside the flag because it is what carries the
+  # same fact to the one caller that matters: container/context-mode-setup.sh
+  # exports _CONTEXT_MODE_WIRED on this verb returning 0, so a give-up that
+  # returned 0 would set the flag from outside no matter how carefully this
+  # function avoids setting it from within. That is the registry contract in
+  # docs/design/2026-07-31-context-mode-opencode-design.md section A: return 0
+  # only when every artifact landed.
   #
   # Making .claude.json a pre-existing directory does not force this: mktemp
   # stages the write beside it, and `mv` into an existing directory succeeds
   # by moving the file inside rather than failing. json_write_atomic is
   # shadowed directly instead, matching on the target path so the
-  # settings.json writes — this call's own, and the one
-  # context_mode_strip_session_wiring makes to remove the hooks again — still
-  # go through to the real implementation.
-  - name: wire does not export the flag when the deepest give-up path strips the hooks back out
+  # settings.json writes — this call's own, and the one the strip makes to
+  # remove the hooks again — still go through to the real implementation.
+  - name: wire fails and exports no flag when the deepest give-up path strips the hooks back out
     steps:
       - type: exec
         script: |
@@ -1541,6 +1654,13 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          # …and the flag this case asserts is absent. The wire verb only
+          # ever exports _CONTEXT_MODE_WIRED on success; no give-up path clears
+          # it. So a maintainer running this suite from inside a wired RiotBox
+          # session inherits a 1 the code under test cannot remove, and reads
+          # it as the very bug this case exists to catch.
+          unset _CONTEXT_MODE_WIRED
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -1549,6 +1669,7 @@ testcases:
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
 
           eval "$(declare -f json_write_atomic | sed '1s/json_write_atomic/_orig_json_write_atomic/')"
           json_write_atomic() {
@@ -1563,13 +1684,15 @@ testcases:
           # never reaches the shell this script's own assertions read from —
           # it would make the very check below vacuously true no matter where
           # the flag is set. The warning text goes to a file for the same
-          # reason stderr isn't captured with $(...) here.
-          context_mode_wire >/dev/null 2>"${TEST_DIR}/stderr.log"
+          # reason stderr isn't captured with $(...) here. The status is kept
+          # rather than allowed to abort the script under set -e: it is one of
+          # the two things this case asserts.
+          rc=0
+          agent_call claude context_mode_wire >/dev/null 2>"${TEST_DIR}/stderr.log" || rc=$?
           unset -f json_write_atomic
 
-          # set -e means reaching this line at all already proves wire
-          # returned 0: a non-zero status from the bare call above would abort
-          # the script before this line runs.
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: wire reported success on the deepest give-up path"; exit 1; }
           [ "${_CONTEXT_MODE_WIRED:-unset}" = "unset" ] \
             || { echo "FAIL: flag survived the deepest give-up path"; exit 1; }
           grep -q "MCP server not registered" "${TEST_DIR}/stderr.log" \
@@ -1580,6 +1703,67 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "wired_flag_deepest=pass"
+
+  # The two cases above call the wire verb directly, which is why neither of
+  # them can see the bug this one exists for: context_mode_setup exports
+  # _CONTEXT_MODE_WIRED itself, on the verb returning 0, so a give-up that
+  # reported success would set the flag from outside the function that so
+  # carefully avoids setting it from within. This case goes through
+  # context_mode_setup the way a session does, on the cheapest give-up path
+  # there is — a settings.json jq cannot read, which is what a crash mid-write
+  # or a hand edit leaves behind in a session directory that outlives the run
+  # that wired it.
+  #
+  # The status of context_mode_setup itself is asserted as 0 in the same
+  # breath, and the two are not in tension: wiring that gives up degrades the
+  # session to Context Mode off, it does not abort the session. entrypoint.sh
+  # calls this function bare, so a non-zero return would take the whole
+  # container down over an optional feature.
+  - name: setup exports no wired flag when the agent's wiring gives up
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          # Nothing under test ever clears this flag, so a maintainer running
+          # the suite from inside a wired RiotBox session would otherwise
+          # inherit a 1 and read it as the bug this case exists to catch.
+          unset _CONTEXT_MODE_WIRED
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_CONTEXT_MODE=1
+          export RIOTBOX_AGENT=claude
+          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
+          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+          printf 'not json at all' > "${CLAUDE_CONFIG_DIR}/settings.json"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          # Called in this shell, not a subshell: the flag below is an export
+          # and the assertion is on what the session inherits.
+          rc=0
+          context_mode_setup >/dev/null 2>"${TEST_DIR}/err" || rc=$?
+
+          [ "${rc}" = "0" ] \
+            || { echo "FAIL: setup returned ${rc}; a degraded session is not a fatal one"; exit 1; }
+          [ "${_CONTEXT_MODE_WIRED:-unset}" = "unset" ] \
+            || { echo "FAIL: the session claims to be wired after the wiring gave up"; exit 1; }
+          [ "$(cat "${CLAUDE_CONFIG_DIR}/settings.json")" = "not json at all" ] \
+            || { echo "FAIL: the malformed file was rewritten"; exit 1; }
+          [ ! -f "${CLAUDE_CONFIG_DIR}/.claude.json" ] \
+            || { echo "FAIL: MCP server registered on a give-up path"; exit 1; }
+          grep -q "not valid JSON" "${TEST_DIR}/err" \
+            || { echo "FAIL: the give-up was silent: $(cat "${TEST_DIR}/err")"; exit 1; }
+          echo "setup_wired_flag_giveup=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "setup_wired_flag_giveup=pass"
 
   # The ledger record names the project set, and only the host knows it.
   # Asserted against real argv rather than by reading launch.sh, because the
@@ -1602,6 +1786,7 @@ testcases:
           STUB
           chmod +x "${stub_dir}/podman"
           export HOME="${stub_dir}/home"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export XDG_CONFIG_HOME="${stub_dir}/home/.config"
           export XDG_DATA_HOME="${stub_dir}/home/.local/share"
           mkdir -p "${XDG_CONFIG_HOME}/riotbox" "${XDG_DATA_HOME}"
@@ -1629,3 +1814,117 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
+
+  - name: pkg root is derived from the generated shim
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          mkdir -p "${HOME}/.local/bin"
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            '# Generated by the RiotBox image build. Pins the interpreter — see the' \
+            '# Context Mode block in the Containerfile for why a bare node is wrong.' \
+            'exec "/nvm/versions/node/v22.23.1/bin/node" "/nvm/versions/node/v22.23.1/lib/node_modules/context-mode/cli.bundle.mjs" "$@"' \
+            > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          declare -F context_mode_pkg_root >/dev/null || { echo "FAIL: context_mode_pkg_root is not defined"; exit 1; }
+
+          got="$(context_mode_pkg_root)"
+          want="/nvm/versions/node/v22.23.1/lib/node_modules/context-mode"
+          [ "${got}" = "${want}" ] || { echo "FAIL: got '${got}' want '${want}'"; exit 1; }
+          echo "PKG_ROOT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PKG_ROOT_OK"
+
+  - name: pkg root fails loudly when the shim is missing or unparseable
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          mkdir -p "${HOME}/.local/bin"
+          printf '#!/usr/bin/env bash\nexec /usr/bin/node /somewhere/else.js "$@"\n' \
+            > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          declare -F context_mode_pkg_root >/dev/null || { echo "FAIL: context_mode_pkg_root is not defined"; exit 1; }
+
+          if context_mode_pkg_root; then
+            echo "FAIL: unparseable shim resolved anyway"; exit 1
+          fi
+
+          rm -f "${CONTEXT_MODE_BIN}"
+          if context_mode_pkg_root; then
+            echo "FAIL: missing shim resolved anyway"; exit 1
+          fi
+          echo "PKG_ROOT_REJECTS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PKG_ROOT_REJECTS_OK"
+
+  # The image build calls this verb against the package it just installed, so a
+  # pin bump that changes the intercepted tool set fails the build rather than
+  # shipping sessions that intercept something other than what upstream ships.
+  # The fixture is a fake package built from the constants themselves — every
+  # part of it matches except the PreToolUse matcher, so the diagnostic below
+  # proves the drift was caught by the comparison that owns it and not by an
+  # ill-formed fixture tripping an earlier check.
+  - name: the claude build assert rejects a drifted matcher
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          PKG="${HOME}/pkg/context-mode"
+          mkdir -p "${PKG}/hooks/core"
+
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_claude_context_mode_build_assert >/dev/null \
+            || { echo "FAIL: agent_claude_context_mode_build_assert is not defined"; exit 1; }
+
+          # Upstream's routing table, reduced to the one line the guard greps —
+          # including the backtick that opens the template literal.
+          printf 'const t = `mcp__%s__${name}`;\n' "${CONTEXT_MODE_MCP_NAME}" \
+            > "${PKG}/hooks/core/tool-naming.mjs"
+
+          # hooks.json as upstream's installer emits it, derived from the hook
+          # table so the event set matches by construction, then drifted on the
+          # PreToolUse matcher alone.
+          context_mode_hook_table \
+            | jq '{hooks: (to_entries
+                   | map({key: .key, value: [{matcher: .value.matcher}]})
+                   | from_entries)}' \
+            | jq '.hooks.PreToolUse[0].matcher = "Bash|Read"' \
+            > "${PKG}/hooks/hooks.json"
+
+          rc=0
+          err="$(agent_call claude context_mode_build_assert "${PKG}" 2>&1 >/dev/null)" || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: accepted a package whose PreToolUse tool set drifted"; exit 1; }
+          case "${err}" in
+            *"no longer equals CONTEXT_MODE_MATCHER"*) ;;
+            *) echo "FAIL: failed for the wrong reason: ${err}"; exit 1 ;;
+          esac
+          echo "BUILD_ASSERT_MATCHER_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BUILD_ASSERT_MATCHER_OK"

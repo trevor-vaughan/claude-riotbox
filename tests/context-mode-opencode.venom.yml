@@ -1,0 +1,873 @@
+name: agents/opencode/context-mode.sh — plugin shim wiring, stripping, and storage
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Context Mode reaches opencode through upstream's TypeScript plugin adapter,
+# not the Claude hook/MCP stanzas. RiotBox writes a local plugin shim that
+# re-exports the copy vendored in the image: an npm entry in opencode.jsonc
+# would make opencode bun-install context-mode from the registry at startup,
+# which RIOTBOX_NETWORK=none forbids and which floats the version off the pin.
+# See docs/design/2026-07-31-context-mode-opencode-design.md.
+
+testcases:
+  - name: store dir is the opencode config dir, not the claude one
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_opencode_context_mode_store_dir >/dev/null \
+            || { echo "FAIL: agent_opencode_context_mode_store_dir is not defined"; exit 1; }
+
+          got="$(agent_call opencode context_mode_store_dir)"
+          want="${HOME}/.config/opencode/context-mode"
+          [ "${got}" = "${want}" ] || { echo "FAIL: got '${got}' want '${want}'"; exit 1; }
+          case "${got}" in
+            */.claude/*) echo "FAIL: opencode store resolved under .claude"; exit 1 ;;
+          esac
+          echo "STORE_DIR_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "STORE_DIR_OK"
+
+  - name: store dir falls back to the default config dir when unset
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT OPENCODE_CONFIG_DIR
+
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_opencode_context_mode_store_dir >/dev/null \
+            || { echo "FAIL: agent_opencode_context_mode_store_dir is not defined"; exit 1; }
+
+          got="$(agent_call opencode context_mode_store_dir)"
+          want="${HOME}/.config/opencode/context-mode"
+          [ "${got}" = "${want}" ] || { echo "FAIL: got '${got}' want '${want}'"; exit 1; }
+          echo "STORE_DIR_FALLBACK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "STORE_DIR_FALLBACK_OK"
+
+  - name: wire writes the shim into plugins/ with the vendored absolute path
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          PKG="${HOME}/pkg/context-mode"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" "${OPENCODE_CONFIG_DIR}"
+          : > "${PKG}/build/adapters/opencode/plugin.js"
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" \
+            > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_opencode_context_mode_wire >/dev/null \
+            || { echo "FAIL: agent_opencode_context_mode_wire is not defined"; exit 1; }
+
+          agent_call opencode context_mode_wire
+
+          shim="${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js"
+          [ -f "${shim}" ] || { echo "FAIL: shim not written"; exit 1; }
+          [ ! -e "${OPENCODE_CONFIG_DIR}/plugin" ] || { echo "FAIL: wrote singular plugin/"; exit 1; }
+          head -n 1 "${shim}" | grep -qF 'riotbox-generated: context-mode shim' \
+            || { echo "FAIL: marker missing from first line"; exit 1; }
+          grep -qF "export { ContextModePlugin } from \"${PKG}/build/adapters/opencode/plugin.js\"" "${shim}" \
+            || { echo "FAIL: shim does not re-export from the vendored path"; exit 1; }
+          echo "WIRE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "WIRE_OK"
+
+  - name: wire is idempotent
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          PKG="${HOME}/pkg/context-mode"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" "${OPENCODE_CONFIG_DIR}"
+          : > "${PKG}/build/adapters/opencode/plugin.js"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_opencode_context_mode_wire >/dev/null \
+            || { echo "FAIL: agent_opencode_context_mode_wire is not defined"; exit 1; }
+
+          agent_call opencode context_mode_wire
+          first="$(cat "${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js")"
+          agent_call opencode context_mode_wire
+          second="$(cat "${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js")"
+
+          [ "${first}" = "${second}" ] || { echo "FAIL: rewrite changed content"; exit 1; }
+          count="$(find "${OPENCODE_CONFIG_DIR}/plugins" -type f | wc -l)"
+          [ "${count}" -eq 1 ] || { echo "FAIL: ${count} files in plugins/, want 1"; exit 1; }
+          echo "IDEMPOTENT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "IDEMPOTENT_OK"
+
+  - name: wire refuses to overwrite a foreign file at the shim path
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          PKG="${HOME}/pkg/context-mode"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" \
+            "${OPENCODE_CONFIG_DIR}/plugins"
+          : > "${PKG}/build/adapters/opencode/plugin.js"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+          printf 'export const Mine = async () => ({})\n' \
+            > "${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_opencode_context_mode_wire >/dev/null \
+            || { echo "FAIL: agent_opencode_context_mode_wire is not defined"; exit 1; }
+
+          if agent_call opencode context_mode_wire; then
+            echo "FAIL: wire reported success over a foreign file"; exit 1
+          fi
+          grep -qF 'export const Mine' "${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js" \
+            || { echo "FAIL: foreign file was clobbered"; exit 1; }
+          echo "FOREIGN_PRESERVED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FOREIGN_PRESERVED_OK"
+          - result.systemerr ShouldContainSubstring "not written by riotbox"
+
+  - name: wire fails when the vendored adapter is absent
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          PKG="${HOME}/pkg/context-mode"
+          mkdir -p "${HOME}/.local/bin" "${PKG}" "${OPENCODE_CONFIG_DIR}"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_opencode_context_mode_wire >/dev/null \
+            || { echo "FAIL: agent_opencode_context_mode_wire is not defined"; exit 1; }
+
+          if agent_call opencode context_mode_wire; then
+            echo "FAIL: wire succeeded with no adapter in the package"; exit 1
+          fi
+          [ ! -e "${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js" ] \
+            || { echo "FAIL: left a shim behind on a failed wire"; exit 1; }
+          echo "NO_ADAPTER_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NO_ADAPTER_OK"
+
+  - name: strip removes the shim and leaves other plugins alone
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          PKG="${HOME}/pkg/context-mode"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" \
+            "${OPENCODE_CONFIG_DIR}/plugins"
+          : > "${PKG}/build/adapters/opencode/plugin.js"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+          printf 'export const UserPlugin = async () => ({})\n' \
+            > "${OPENCODE_CONFIG_DIR}/plugins/user-thing.js"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_opencode_context_mode_strip >/dev/null \
+            || { echo "FAIL: agent_opencode_context_mode_strip is not defined"; exit 1; }
+
+          agent_call opencode context_mode_wire
+          agent_call opencode context_mode_strip
+
+          [ ! -e "${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js" ] \
+            || { echo "FAIL: shim survived strip"; exit 1; }
+          [ -f "${OPENCODE_CONFIG_DIR}/plugins/user-thing.js" ] \
+            || { echo "FAIL: strip removed an unrelated plugin"; exit 1; }
+          echo "STRIP_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "STRIP_OK"
+
+  - name: strip is silent and successful when there is nothing to remove
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          mkdir -p "${OPENCODE_CONFIG_DIR}"
+
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_opencode_context_mode_strip >/dev/null \
+            || { echo "FAIL: agent_opencode_context_mode_strip is not defined"; exit 1; }
+
+          out="$(agent_call opencode context_mode_strip 2>&1)"
+          [ -z "${out}" ] || { echo "FAIL: strip spoke with nothing to remove: ${out}"; exit 1; }
+          echo "STRIP_QUIET_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "STRIP_QUIET_OK"
+
+  - name: strip refuses to delete a foreign file at the shim path
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          mkdir -p "${OPENCODE_CONFIG_DIR}/plugins"
+          printf 'export const Mine = async () => ({})\n' \
+            > "${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js"
+
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_opencode_context_mode_strip >/dev/null \
+            || { echo "FAIL: agent_opencode_context_mode_strip is not defined"; exit 1; }
+
+          agent_call opencode context_mode_strip
+
+          grep -qF 'export const Mine' "${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js" \
+            || { echo "FAIL: strip deleted a file riotbox did not write"; exit 1; }
+          echo "STRIP_FOREIGN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "STRIP_FOREIGN_OK"
+          - result.systemerr ShouldContainSubstring "not written by riotbox"
+
+  # The image build calls this verb once per registered agent, against the
+  # package it just installed, so an upstream rename fails the build instead of
+  # every opencode session. The fixture is a fake package rather than the real
+  # one: this suite runs on the host, where no pinned context-mode is installed,
+  # and the point being pinned is that the verb answers correctly in both
+  # directions — a guard that cannot fail is not a guard.
+  - name: the opencode build assert passes on a well-formed package and fails otherwise
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          PKG="${HOME}/pkg/context-mode"
+          ADAPTER="${PKG}/build/adapters/opencode/plugin.js"
+          mkdir -p "$(dirname "${ADAPTER}")"
+          printf '%s\n' \
+            'const createContextModePlugin = async () => ({});' \
+            'export { createContextModePlugin as ContextModePlugin };' \
+            > "${ADAPTER}"
+          jq -n '{name: "context-mode",
+                  exports: {".": "./build/adapters/opencode/plugin.js",
+                            "./plugin": "./build/adapters/opencode/plugin.js"}}' \
+            > "${PKG}/package.json"
+
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_opencode_context_mode_build_assert >/dev/null \
+            || { echo "FAIL: agent_opencode_context_mode_build_assert is not defined"; exit 1; }
+
+          agent_call opencode context_mode_build_assert "${PKG}" \
+            || { echo "FAIL: rejected a well-formed package"; exit 1; }
+
+          # The one drift the shim cannot survive: it re-exports the name
+          # ContextModePlugin by hand, so an upstream rename leaves opencode
+          # loading a plugin with no hooks and no error.
+          printf '%s\n' \
+            'const createContextModePlugin = async () => ({});' \
+            'export { createContextModePlugin as SomethingElse };' \
+            > "${ADAPTER}"
+
+          rc=0
+          err="$(agent_call opencode context_mode_build_assert "${PKG}" 2>&1 >/dev/null)" || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: accepted a package that no longer exports ContextModePlugin"; exit 1; }
+          case "${err}" in
+            *"no longer exports ContextModePlugin"*) ;;
+            *) echo "FAIL: failed for the wrong reason: ${err}"; exit 1 ;;
+          esac
+
+          # And the same for the adapter going missing entirely.
+          rm -f "${ADAPTER}"
+          rc=0
+          err="$(agent_call opencode context_mode_build_assert "${PKG}" 2>&1 >/dev/null)" || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: accepted a package with no opencode adapter"; exit 1; }
+          case "${err}" in
+            *"no longer ships build/adapters/opencode/plugin.js"*) ;;
+            *) echo "FAIL: failed for the wrong reason: ${err}"; exit 1 ;;
+          esac
+          echo "BUILD_ASSERT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BUILD_ASSERT_OK"
+
+  # From here on the subject is container/context-mode-setup.sh — the
+  # orchestration that picks the agent — rather than the opencode verbs it
+  # drives. A session directory outlives the agent choice: the same directory
+  # can be opened once with claude and again with opencode, and nothing but
+  # this loop ever removes what the first run wrote.
+  - name: setup wires opencode and strips claude wiring left by an earlier session
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_CONTEXT_MODE=1
+          PKG="${HOME}/pkg/context-mode"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" \
+            "${OPENCODE_CONFIG_DIR}" "${CLAUDE_CONFIG_DIR}"
+          : > "${PKG}/build/adapters/opencode/plugin.js"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          export RIOTBOX_AGENT=claude
+          context_mode_setup >/dev/null 2>&1
+          jq -e '.hooks.PreToolUse != null' "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
+            || { echo "FAIL: the claude run did not wire"; exit 1; }
+
+          # Called in this shell, not a subshell: CONTEXT_MODE_DIR is an export
+          # and the assertion below is on what the session inherits.
+          export RIOTBOX_AGENT=opencode
+          context_mode_setup >/dev/null 2>&1
+
+          shim="${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js"
+          [ -f "${shim}" ] || { echo "FAIL: setup did not wire the opencode shim"; exit 1; }
+          jq -e '.hooks.PreToolUse == null and .hooks.SessionStart == null' \
+            "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
+            || { echo "FAIL: claude hooks survived the agent change"; exit 1; }
+          jq -e '.mcpServers["plugin_context-mode_context-mode"] == null' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
+            || { echo "FAIL: the claude MCP entry survived the agent change"; exit 1; }
+          [ "${CONTEXT_MODE_DIR:-}" = "${OPENCODE_CONFIG_DIR}/context-mode" ] \
+            || { echo "FAIL: store pinned at '${CONTEXT_MODE_DIR:-}', want '${OPENCODE_CONFIG_DIR}/context-mode'"; exit 1; }
+          echo "SETUP_WIRE_OPENCODE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_WIRE_OPENCODE_OK"
+
+  # Two variables, two stores. CONTEXT_MODE_DIR pins the sessions/ and content/
+  # stores behind the ctx_* tools; the opencode plugin's own session DB comes
+  # from the adapter's getSessionDir(), which reads CONTEXT_MODE_DATA_DIR
+  # instead and otherwise falls back to ~/.config/opencode. The fallback is the
+  # session mount today only by coincidence, and both stores hold verbatim tool
+  # output, so the pin has to name both. The DB path is asserted as upstream
+  # composes it — <data dir>/context-mode/sessions — which is what fails if the
+  # verb ever returns the store path itself instead of its parent.
+  - name: setup pins both the ctx_ store and the plugin session DB
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_CONTEXT_MODE=1
+          export RIOTBOX_AGENT=opencode
+          PKG="${HOME}/pkg/context-mode"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" \
+            "${OPENCODE_CONFIG_DIR}" "${CLAUDE_CONFIG_DIR}"
+          : > "${PKG}/build/adapters/opencode/plugin.js"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          # Called in this shell, not a subshell: both variables are exports and
+          # the assertions below are on what the session inherits.
+          context_mode_setup >/dev/null 2>&1
+
+          [ "${CONTEXT_MODE_DIR:-}" = "${OPENCODE_CONFIG_DIR}/context-mode" ] \
+            || { echo "FAIL: CONTEXT_MODE_DIR is '${CONTEXT_MODE_DIR:-}', want '${OPENCODE_CONFIG_DIR}/context-mode'"; exit 1; }
+          [ "${CONTEXT_MODE_DATA_DIR:-}" = "${OPENCODE_CONFIG_DIR}" ] \
+            || { echo "FAIL: CONTEXT_MODE_DATA_DIR is '${CONTEXT_MODE_DATA_DIR:-}', want '${OPENCODE_CONFIG_DIR}'"; exit 1; }
+
+          # Upstream: join(CONTEXT_MODE_DATA_DIR, "context-mode", "sessions").
+          # Off by the context-mode segment in either direction and these differ.
+          db_dir="${CONTEXT_MODE_DATA_DIR}/context-mode/sessions"
+          [ "${db_dir}" = "${CONTEXT_MODE_DIR}/sessions" ] \
+            || { echo "FAIL: the session DB resolves to '${db_dir}', beside the ctx_ stores it would be '${CONTEXT_MODE_DIR}/sessions'"; exit 1; }
+          [ "${db_dir}" = "${OPENCODE_CONFIG_DIR}/context-mode/sessions" ] \
+            || { echo "FAIL: the session DB left the session directory: '${db_dir}'"; exit 1; }
+
+          # Claude resolves its own config dir from CLAUDE_CONFIG_DIR, so the
+          # second variable buys it nothing and is not exported on that path.
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR
+          export RIOTBOX_AGENT=claude
+          context_mode_setup >/dev/null 2>&1
+          [ "${CONTEXT_MODE_DIR:-}" = "${CLAUDE_CONFIG_DIR}/context-mode" ] \
+            || { echo "FAIL: claude store pinned at '${CONTEXT_MODE_DIR:-}'"; exit 1; }
+          [ "${CONTEXT_MODE_DATA_DIR:-unset}" = "unset" ] \
+            || { echo "FAIL: CONTEXT_MODE_DATA_DIR exported for claude: '${CONTEXT_MODE_DATA_DIR}'"; exit 1; }
+          echo "SETUP_PIN_BOTH_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_PIN_BOTH_OK"
+
+  # The toggle is opt-in and a session directory is reusable, so turning it off
+  # has to take the shim back out. Left behind, it would keep loading a plugin
+  # against a store the session no longer pins, for the life of the directory.
+  - name: setup strips the opencode shim when the feature is off
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_AGENT=opencode
+          PKG="${HOME}/pkg/context-mode"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" "${OPENCODE_CONFIG_DIR}"
+          : > "${PKG}/build/adapters/opencode/plugin.js"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          shim="${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js"
+          RIOTBOX_CONTEXT_MODE=1 context_mode_setup >/dev/null 2>&1
+          [ -f "${shim}" ] || { echo "FAIL: setup did not wire with the toggle on"; exit 1; }
+
+          RIOTBOX_CONTEXT_MODE=0 context_mode_setup >/dev/null 2>&1
+          [ ! -e "${shim}" ] || { echo "FAIL: the shim survived the feature being off"; exit 1; }
+          echo "SETUP_STRIP_OFF_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_STRIP_OFF_OK"
+
+  # An agent opts in by implementing the verbs. The stand-in is appended to
+  # AGENT_REGISTRY because every agent riotbox ships implements them, so an
+  # agent that does not is what the fixture has to invent.
+  - name: an agent with no wire verb warns, strips, and leaves the feature off
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          # Nothing under test ever clears this flag, so a maintainer running
+          # the suite from inside a wired RiotBox session would otherwise
+          # inherit a 1 and read it as the bug this case exists to catch.
+          unset _CONTEXT_MODE_WIRED
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_CONTEXT_MODE=1
+          PKG="${HOME}/pkg/context-mode"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" \
+            "${OPENCODE_CONFIG_DIR}" "${CLAUDE_CONFIG_DIR}"
+          : > "${PKG}/build/adapters/opencode/plugin.js"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          AGENT_REGISTRY+=(noverbs)
+          export RIOTBOX_AGENT=noverbs
+          context_mode_setup 2>"${TEST_DIR}/err" >/dev/null
+
+          [ "${_CONTEXT_MODE_WIRED:-unset}" = "unset" ] \
+            || { echo "FAIL: the wired flag was exported for an unsupported agent"; exit 1; }
+          [ ! -e "${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js" ] \
+            || { echo "FAIL: wrote the opencode shim for another agent"; exit 1; }
+          [ -z "${CONTEXT_MODE_DIR:-}" ] \
+            || { echo "FAIL: storage root exported for an agent that wires nothing"; exit 1; }
+          grep -q "no Context Mode support" "${TEST_DIR}/err" \
+            || { echo "FAIL: no warning about the unsupported agent: $(cat "${TEST_DIR}/err")"; exit 1; }
+          grep -q "noverbs" "${TEST_DIR}/err" \
+            || { echo "FAIL: warning does not name the agent: $(cat "${TEST_DIR}/err")"; exit 1; }
+          echo "SETUP_UNSUPPORTED_AGENT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_UNSUPPORTED_AGENT_OK"
+
+  # The subject from here is agents/opencode/setup.sh, the single writer of the
+  # merged opencode.jsonc. A host config carrying the npm `context-mode` entry
+  # makes opencode load that copy *alongside* riotbox's local shim — upstream
+  # loads a local plugin and an npm plugin of the same name separately — so the
+  # ctx_* tools register twice and every hook fires twice. The body is extracted
+  # with `grep -v '^//'` the way agents/opencode/headroom-exec.sh does it, so
+  # these cases also pin the banner-plus-plain-JSON shape that split relies on.
+  - name: the merged config drops an npm context-mode plugin entry when the feature is on
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export RIOTBOX_CONTEXT_MODE=1
+          mkdir -p "${HOME}/.config/opencode"
+          printf '%s\n' \
+            '{"plugin": ["context-mode@1.0.169", "some-other-plugin"], "theme": "dark"}' \
+            > "${HOME}/.config/opencode/opencode.json"
+
+          source "{{.riotbox_dir}}/agents/opencode/setup.sh"
+          declare -F opencode_setup >/dev/null \
+            || { echo "FAIL: opencode_setup is not defined"; exit 1; }
+
+          opencode_setup
+
+          merged="${HOME}/.config/opencode/opencode.jsonc"
+          body="$(grep -v '^//' "${merged}")"
+          jq -e '(.plugin | index("context-mode@1.0.169")) == null' <<<"${body}" >/dev/null \
+            || { echo "FAIL: the npm context-mode entry survived the merge"; exit 1; }
+          jq -e '.plugin == ["some-other-plugin"]' <<<"${body}" >/dev/null \
+            || { echo "FAIL: plugin array is $(jq -c '.plugin' <<<"${body}"), want [\"some-other-plugin\"]"; exit 1; }
+          jq -e '.theme == "dark"' <<<"${body}" >/dev/null \
+            || { echo "FAIL: the rest of the host config did not survive"; exit 1; }
+          head -n 1 "${merged}" | grep -q '^//' \
+            || { echo "FAIL: first line is not a // banner line"; exit 1; }
+          echo "PLUGIN_DROPPED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PLUGIN_DROPPED_OK"
+
+  # Removing something from a user's config without saying so is an hour lost by
+  # whoever later wonders why their plugin never loaded. The message has to name
+  # the generated file, because that file is not the one the user edited.
+  - name: dropping the npm entry is reported on stderr
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export RIOTBOX_CONTEXT_MODE=1
+          mkdir -p "${HOME}/.config/opencode"
+          printf '%s\n' \
+            '{"plugin": ["context-mode@1.0.169", "some-other-plugin"]}' \
+            > "${HOME}/.config/opencode/opencode.json"
+
+          source "{{.riotbox_dir}}/agents/opencode/setup.sh"
+          opencode_setup 2>"${TEST_DIR}/err"
+
+          grep -qF 'context-mode@1.0.169' "${TEST_DIR}/err" \
+            || { echo "FAIL: the message does not name the dropped entry: $(cat "${TEST_DIR}/err")"; exit 1; }
+          grep -qF "${HOME}/.config/opencode/opencode.jsonc" "${TEST_DIR}/err" \
+            || { echo "FAIL: the message does not name the generated file: $(cat "${TEST_DIR}/err")"; exit 1; }
+          grep -qF 'some-other-plugin' "${TEST_DIR}/err" \
+            && { echo "FAIL: the message names a plugin that was not dropped"; exit 1; }
+          echo "DROP_REPORTED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DROP_REPORTED_OK"
+
+  # The message is conditioned on an actual removal, not on the feature being
+  # on. Almost nobody lists context-mode in their host config, and a line every
+  # session about a thing that did not happen is how stderr stops being read.
+  - name: no drop message when the host config has no context-mode entry
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export RIOTBOX_CONTEXT_MODE=1
+          mkdir -p "${HOME}/.config/opencode"
+          printf '%s\n' '{"plugin": ["some-other-plugin"], "theme": "dark"}' \
+            > "${HOME}/.config/opencode/opencode.json"
+
+          source "{{.riotbox_dir}}/agents/opencode/setup.sh"
+          opencode_setup 2>"${TEST_DIR}/err"
+
+          [ ! -s "${TEST_DIR}/err" ] \
+            || { echo "FAIL: spoke with nothing to drop: $(cat "${TEST_DIR}/err")"; exit 1; }
+          body="$(grep -v '^//' "${HOME}/.config/opencode/opencode.jsonc")"
+          jq -e '.plugin == ["some-other-plugin"]' <<<"${body}" >/dev/null \
+            || { echo "FAIL: an unrelated plugin entry was disturbed"; exit 1; }
+          echo "NO_DROP_QUIET_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NO_DROP_QUIET_OK"
+
+  # With Context Mode off the entry is the user's own plugin choice and none of
+  # riotbox's business — there is no shim for it to collide with.
+  - name: the merged config keeps the npm entry when the feature is off
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export RIOTBOX_CONTEXT_MODE=0
+          mkdir -p "${HOME}/.config/opencode"
+          printf '%s\n' \
+            '{"plugin": ["context-mode@1.0.169", "some-other-plugin"], "theme": "dark"}' \
+            > "${HOME}/.config/opencode/opencode.json"
+
+          source "{{.riotbox_dir}}/agents/opencode/setup.sh"
+          opencode_setup
+
+          merged="${HOME}/.config/opencode/opencode.jsonc"
+          body="$(grep -v '^//' "${merged}")"
+          jq -e '.plugin == ["context-mode@1.0.169", "some-other-plugin"]' <<<"${body}" >/dev/null \
+            || { echo "FAIL: plugin array is $(jq -c '.plugin' <<<"${body}"), want it untouched"; exit 1; }
+          head -n 1 "${merged}" | grep -q '^//' \
+            || { echo "FAIL: first line is not a // banner line"; exit 1; }
+          echo "PLUGIN_KEPT_OFF_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PLUGIN_KEPT_OFF_OK"
+
+  # The common case: nobody sets `plugin` at all. The new clause must be inert —
+  # no key invented, and the banner/body split headroom-exec.sh performs still
+  # yields a parseable JSON body.
+  - name: a host config with no plugin key is untouched and keeps the banner/body shape
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export RIOTBOX_CONTEXT_MODE=1
+          mkdir -p "${HOME}/.config/opencode"
+          printf '%s\n' '{"theme": "dark"}' \
+            > "${HOME}/.config/opencode/opencode.json"
+
+          source "{{.riotbox_dir}}/agents/opencode/setup.sh"
+          opencode_setup
+
+          merged="${HOME}/.config/opencode/opencode.jsonc"
+          # Exactly the split agents/opencode/headroom-exec.sh performs.
+          banner="$(grep '^//' "${merged}")"
+          body="$(grep -v '^//' "${merged}")"
+          [ -n "${banner}" ] || { echo "FAIL: no banner lines in the merged config"; exit 1; }
+          jq -e 'type == "object"' <<<"${body}" >/dev/null \
+            || { echo "FAIL: the body is not a parseable JSON object"; exit 1; }
+          jq -e 'has("plugin") | not' <<<"${body}" >/dev/null \
+            || { echo "FAIL: invented a plugin key that the host never set"; exit 1; }
+          jq -e '.theme == "dark" and .permission == "allow"' <<<"${body}" >/dev/null \
+            || { echo "FAIL: the merge lost host data or the forced overrides"; exit 1; }
+          echo "NO_PLUGIN_KEY_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NO_PLUGIN_KEY_OK"
+
+  # `opencode --pure` runs without external plugins, so the shim never loads and
+  # Context Mode does not engage. The warning is the only signal a user gets;
+  # without it the session reports the feature as wired and a zero saving, which
+  # is precisely the "did it engage at all?" ambiguity the exit report removes.
+  #
+  # The hard constraint in all four cases below: this verb's *stdout* is the
+  # NUL-terminated argv the wrapper reads back with `mapfile -d ''`
+  # (container/agent-wrapper.sh), so a stray line on stdout becomes a
+  # command-line argument. The warning belongs on stderr and argv must come
+  # back byte-identical.
+  - name: --pure with Context Mode on warns without touching argv
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export RIOTBOX_CONTEXT_MODE=1
+
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_opencode_wrapper_inject >/dev/null \
+            || { echo "FAIL: agent_opencode_wrapper_inject is not defined"; exit 1; }
+
+          mapfile -d '' -t argv < <(agent_call opencode wrapper_inject run --pure "hi" 2>/dev/null)
+
+          [ "${#argv[@]}" -eq 4 ] \
+            || { echo "FAIL: ${#argv[@]} argv elements, want 4: $(printf '<%s>' "${argv[@]}")"; exit 1; }
+          [ "${argv[0]}" = "run" ] || { echo "FAIL: argv[0]='${argv[0]}', want 'run'"; exit 1; }
+          [ "${argv[1]}" = "--dangerously-skip-permissions" ] \
+            || { echo "FAIL: argv[1]='${argv[1]}', want '--dangerously-skip-permissions'"; exit 1; }
+          [ "${argv[2]}" = "--pure" ] || { echo "FAIL: argv[2]='${argv[2]}', want '--pure'"; exit 1; }
+          [ "${argv[3]}" = "hi" ] || { echo "FAIL: argv[3]='${argv[3]}', want 'hi'"; exit 1; }
+          echo "PURE_ARGV_INTACT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PURE_ARGV_INTACT_OK"
+
+  - name: --pure warning names the conflict on stderr
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export RIOTBOX_CONTEXT_MODE=1
+
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          agent_call opencode wrapper_inject run --pure "hi" \
+            >/dev/null 2>"${TEST_DIR}/err"
+
+          grep -qF -- '--pure' "${TEST_DIR}/err" \
+            || { echo "FAIL: the warning does not name --pure: $(cat "${TEST_DIR}/err")"; exit 1; }
+          grep -qF 'Context Mode' "${TEST_DIR}/err" \
+            || { echo "FAIL: the warning does not name Context Mode: $(cat "${TEST_DIR}/err")"; exit 1; }
+          echo "PURE_WARNS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PURE_WARNS_OK"
+
+  - name: no warning without --pure
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export RIOTBOX_CONTEXT_MODE=1
+
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          agent_call opencode wrapper_inject run "hi" \
+            >/dev/null 2>"${TEST_DIR}/err"
+
+          [ ! -s "${TEST_DIR}/err" ] \
+            || { echo "FAIL: warned about --pure on an invocation without it: $(cat "${TEST_DIR}/err")"; exit 1; }
+          echo "NO_PURE_QUIET_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NO_PURE_QUIET_OK"
+
+  # Context Mode is opt-in, so the overwhelming majority of sessions run with the
+  # flag off or unset. If the gate were wrong in that direction every --pure user
+  # would get a warning about a feature they never asked for, which is how
+  # riotbox's stderr becomes noise people learn to skip. Both spellings of "off"
+  # are pinned because unset is the default a user never touches. argv is checked
+  # here too: the guard sits between the argv loop and the env-hint block, so a
+  # botched gate can drop or duplicate tokens on the quiet path as easily as on
+  # the loud one.
+  - name: --pure with Context Mode off is silent
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          for state in explicit-zero unset; do
+            if [ "${state}" = "explicit-zero" ]; then
+              export RIOTBOX_CONTEXT_MODE=0
+            else
+              unset RIOTBOX_CONTEXT_MODE
+            fi
+
+            mapfile -d '' -t argv < <(agent_call opencode wrapper_inject run --pure "hi" 2>"${TEST_DIR}/err")
+
+            [ ! -s "${TEST_DIR}/err" ] \
+              || { echo "FAIL (${state}): warned with the feature off: $(cat "${TEST_DIR}/err")"; exit 1; }
+            [ "${#argv[@]}" -eq 4 ] \
+              || { echo "FAIL (${state}): ${#argv[@]} argv elements, want 4"; exit 1; }
+            [ "${argv[0]}" = "run" ] && [ "${argv[1]}" = "--dangerously-skip-permissions" ] \
+              && [ "${argv[2]}" = "--pure" ] && [ "${argv[3]}" = "hi" ] \
+              || { echo "FAIL (${state}): argv is $(printf '<%s>' "${argv[@]}")"; exit 1; }
+          done
+          echo "PURE_OFF_SILENT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PURE_OFF_SILENT_OK"
