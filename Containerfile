@@ -633,6 +633,12 @@ CMD ["bash"]
 # This is a developer-shell image with no long-running daemon to probe. The
 # check verifies that the core toolchain is intact (task is always present)
 # without starting any service or network connection.
+# DL3025: the probe needs a shell — `command` is a builtin and >/dev/null is
+# shell redirection, so exec form would only re-wrap this in /bin/sh -c. The
+# rule's rationale (signal delivery to PID 1) does not apply to a healthcheck.
+# Suppressed here rather than globally so DL3025 still guards the real
+# ENTRYPOINT/CMD above, which are exec form on purpose.
+# hadolint ignore=DL3025
 HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
     CMD command -v task >/dev/null 2>&1
 

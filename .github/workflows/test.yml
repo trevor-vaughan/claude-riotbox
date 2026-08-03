@@ -20,11 +20,19 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
+      # Deliberately unpinned. We want new hadolint rules the day they ship and
+      # accept that a release can turn this job red with no commit on our side —
+      # 2.15.0 did exactly that by adding DL3066 and widening DL3025. Do not
+      # "fix" that by pinning; the intended response is to answer the new rule.
+      # The version is echoed so a linter-driven failure is identifiable from
+      # the log instead of looking like a regression in the change under review.
       - name: Install hadolint
         run: |
+          set -euo pipefail
           curl -sSfL -o /usr/local/bin/hadolint \
-            https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
+            https://github.com/hadolint/hadolint/releases/latest/download/hadolint-linux-x86_64
           chmod +x /usr/local/bin/hadolint
+          hadolint --version
 
       - name: Install task
         run: |

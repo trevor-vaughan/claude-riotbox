@@ -41,5 +41,9 @@ WORKDIR /home/testuser/riotbox
 
 # This is a test-only image used only in CI; no daemon is running. The check
 # verifies the core test tooling (venom) is present and executable.
+# DL3025: the probe needs a shell — `command` is a builtin and >/dev/null is
+# shell redirection, so exec form would only re-wrap this in /bin/sh -c. The
+# rule's rationale (signal delivery to PID 1) does not apply to a healthcheck.
+# hadolint ignore=DL3025
 HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
     CMD command -v venom >/dev/null 2>&1

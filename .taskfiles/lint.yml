@@ -28,19 +28,13 @@ tasks:
 
   hadolint:
     desc: Lint Containerfiles with hadolint
-    # Excluded checks:
-    #   DL3013 — Pin versions in pip install (unpinned for latest toolchains)
-    #   DL3016 — Pin versions in npm install (unpinned for latest toolchains)
-    #   DL3041 — Pin versions in dnf install (unpinned for latest toolchains)
-    #   DL3062 — Pin versions in dnf config-manager (unpinned for latest toolchains)
-    #   DL4006 — Set SHELL pipefail (SHELL not supported in OCI image format)
+    # Excluded checks live in .hadolint.yaml, next to the rationale for each
+    # one. The config is passed explicitly because hadolint only auto-discovers
+    # it from the current working directory, which would silently drop every
+    # suppression when the task is invoked from a subdirectory.
     cmd: |
       hadolint \
-        --ignore DL3013 \
-        --ignore DL3016 \
-        --ignore DL3041 \
-        --ignore DL3062 \
-        --ignore DL4006 \
+        --config {{.ROOT_DIR}}/.hadolint.yaml \
         {{.ROOT_DIR}}/Containerfile \
         {{.ROOT_DIR}}/tests/Containerfile.test
 
