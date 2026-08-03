@@ -407,7 +407,7 @@ setup_projects() {
 	# OUTSIDE riotbox_session_dir on purpose: the counters it accumulates
 	# are pruned from the store after seven days by upstream, and a
 	# history that `riotbox session-reset` also erases would answer
-	# nothing. See docs/design/2026-07-30-context-mode-rollup-design.md.
+	# nothing. See docs/dev/decisions/context-mode-ledger.md.
 	#
 	# Withheld from a read-only workspace, which is what `riotbox audit`
 	# runs. The mount is ordinary and read-write — "write-only drop" is

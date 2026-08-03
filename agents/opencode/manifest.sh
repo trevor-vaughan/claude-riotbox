@@ -8,13 +8,13 @@
 #   setup.sh          — container-side runtime setup
 #   sync-settings.sh  — host-side config sync
 #
-# See docs/maintainer/adding-an-agent.md for the full contract.
+# See docs/dev/agent-contract.md for the full contract.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Resolve this manifest's own directory so sibling files load by absolute path.
 _AGENT_OPENCODE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Context Mode verbs (optional contract — see docs/maintainer/adding-an-agent.md).
+# Context Mode verbs (optional contract — see docs/dev/agent-contract.md).
 # shellcheck source=./context-mode.sh
 source "${_AGENT_OPENCODE_DIR}/context-mode.sh"
 
@@ -30,7 +30,7 @@ agent_opencode_real_binary() {
 # Argv tokens are emitted NUL-terminated (`printf '%s\0'`) so multi-line
 # prompts survive the round-trip through `mapfile -d ''`. NUL is safe —
 # argv tokens cannot contain NUL bytes (execve invariant). See
-# docs/maintainer/adding-an-agent.md for the full contract.
+# docs/dev/agent-contract.md for the full contract.
 agent_opencode_run_argv() {
 	local prompt="${1:?run_argv requires a prompt argument}"
 	printf '%s\0' opencode run "${prompt}"

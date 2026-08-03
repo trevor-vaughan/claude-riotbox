@@ -1,10 +1,38 @@
-# Context Mode Evaluation — Is It a Valuable Addition to RiotBox?
+# Should RiotBox adopt Context Mode?
 
-**Status:** Adopted as an opt-in (`RIOTBOX_CONTEXT_MODE=1`). Of the two gates, only the Node floor is closed — pinned via `ARG CONTEXT_MODE_NODE` in the `Containerfile`, independent of `NODE_DEFAULT`. The licence gate is still a proposal: adoption assumes ELv2 is acceptable as the image's one non-OSI component, and merging this branch is what turns that assumption into the maintainer's decision (see [Decision](#decision)). What shipped differs from the plan below; see [What actually shipped](#what-actually-shipped), which also corrects one claim the evaluation got wrong. The evaluation body is otherwise as written on its original date; the exceptions are the agent-support subsection — rescoped, with a paragraph added, because its heading read as a claim about RiotBox — and the [Decision](#decision) section, whose gate framing was rewritten after the feature shipped. It is kept as the rationale the README links to.
+**Decision:** Yes — as an opt-in (`RIOTBOX_CONTEXT_MODE=1`), mutually exclusive
+with `RIOTBOX_HEADROOM=1`, and never a default.
 
-**Evaluation date:** 2026-07-28
-**Issue:** [#5 — Investigate incorporation of Context Mode](https://github.com/trevor-vaughan/claude-riotbox/issues/5)
+**Date:** 2026-07-28 · **Issue:** [#5 — Investigate incorporation of Context Mode](https://github.com/trevor-vaughan/claude-riotbox/issues/5)
+
+Two gates stood before implementation:
+
+| Gate | State |
+|---|---|
+| Install pinned to Node ≥ 22.5, independent of `NODE_DEFAULT` | **Closed** — `ARG CONTEXT_MODE_NODE` plus a generated shim that execs that interpreter |
+| Maintainer accepts an Elastic-2.0, non-OSI component in an otherwise MIT/Apache image | **Open** — assumed, not recorded. See [Decision](#decision). |
+
+> **This is a frozen record of what we believed on 2026-07-28.** It is not a
+> description of the current implementation, and two of its claims turned out to
+> be wrong. For how Context Mode actually works today — what is wired, what it
+> costs, and what is still unproven — read
+> [How Context Mode works in RiotBox](../context-mode.md).
+
 **Evaluated against:** [mksglu/context-mode](https://github.com/mksglu/context-mode) npm `context-mode@1.0.169`, git `06276b95` (2026-07-28), site [context-mode.com](https://context-mode.com/).
+
+## Where this evaluation was wrong
+
+Read the body below with these two corrections in hand:
+
+- **`WebSearch` is not intercepted, and neither is `Glob`.** This document claims
+  WebSearch is "hard-denied and redirected" and lists Glob among the routed tools.
+  The matcher that actually decides is `CONTEXT_MODE_MATCHER`, reproduced verbatim
+  from upstream, and it names `Bash`, `WebFetch`, `Read`, `Grep`, `Agent` and every
+  MCP tool — no WebSearch, no Glob. Their output lands in the transcript in full.
+  `Agent` (subagent calls) *is* intercepted, and went unmentioned here.
+- **"Upstream supports both RiotBox agents" was true of upstream, not of RiotBox.**
+  The first integration wired Claude Code only. opencode was wired later; see
+  [context-mode-opencode.md](context-mode-opencode.md).
 
 ## TL;DR
 
@@ -84,7 +112,7 @@ The store contains verbatim tool output — command results, file contents, fetc
 
 Upstream ships adapters for both agents RiotBox ships. The first integration wired
 Claude Code only; a later branch wired opencode as well. See
-[What actually shipped](#what-actually-shipped).
+[What happened next](#what-happened-next).
 
 Claude Code is the reference platform. opencode has a real adapter — 1,563 lines across five files implementing opencode's TypeScript plugin paradigm (`tool.execute.before`, `tool.execute.after`, `experimental.session.compacting`). Upstream documents one gap: opencode has no `SessionStart` hook at all, which the adapter attributes to upstream issues #14808 and #5409 (the "Constraints" list in `build/adapters/opencode/plugin.js`). That degrades session-resume attribution, not core routing.
 
@@ -176,54 +204,33 @@ Upstream has its own scar tissue here: `hooks/pretooluse.mjs:15-18` records that
 
 223 versions in five months. Pin it (`ARG CONTEXT_MODE_VERSION=`), bump it deliberately, and expect the pin to be stale often. This is the same deal RiotBox already accepted for headroom and CodeGraph.
 
-## What actually shipped
+## What happened next
 
-Adoption happened, and the plan in the next section is a record of what was proposed rather than a checklist of outstanding work. Three of its points did not land as written:
+Context Mode was adopted, in three rounds. **The implementation is documented
+separately — see [How Context Mode works in RiotBox](../context-mode.md).** This
+section records only how the plan below fared, so the plan is read as a proposal
+rather than as a checklist of outstanding work.
 
-- **Item 2's "generalise rather than duplicate" landed for the writer, not the stripper.** The atomic JSON writer was extracted to `scripts/lib/json-write.sh` as `json_write_atomic`, sourced by `container/entrypoint.sh` ahead of both setup scripts and shipped by the `COPY scripts/lib/` the image already had; `codegraph_write_json_atomic` and `context_mode_write_json_atomic` are gone, and `tests/lib-json-write.venom.yml` covers the contract. The strippers stayed separate, because they share a shape and no body: `codegraph_strip_session_wiring` prunes a `UserPromptSubmit` command and the `mcp__codegraph__*` permission from `settings.json`, while Context Mode's stripper prunes riotbox's own hook entries from `settings.json` *and* the `mcpServers` entry from `.claude.json`, then reports which of the two it actually removed. (It was `context_mode_strip_session_wiring` at the time; the opencode round moved it to `agent_claude_context_mode_strip` in `agents/claude/context-mode.sh`.)
-- **The first integration wired no opencode adapter, so `tests/context-mode-opencode.venom.yml` (item 6) had nothing to exercise.** Every stanza it wrote was Claude Code — `context-mode hook claude-code …` commands under `CLAUDE_CONFIG_DIR`, which opencode never reads. `context_mode_setup` therefore warned, stripped any wiring an earlier Claude session left in the same session directory, and skipped wiring for any agent other than `claude`. **This is no longer the case**: a third round of work wired opencode through the agent registry and item 6's suite now exists and is populated. See [the opencode round](#the-opencode-round) below; the rest of this bullet describes the state between the first integration and that branch.
-- **This document's `WebSearch` and `Glob` claim is wrong.** "WebFetch / WebSearch are hard-denied and redirected" (above) and "WebFetch/WebSearch are compelled" (below) both overstate the coverage, as does listing `Glob` among the routed tools. The matcher that actually decides which tools reach the hook is `CONTEXT_MODE_MATCHER` (in `container/context-mode-setup.sh` then, in `agents/claude/context-mode.sh` since the opencode round), reproduced verbatim from upstream's `PRE_TOOL_USE_MATCHERS`, and it names `Bash`, `WebFetch`, `Read`, `Grep`, `Agent`, and every MCP tool. Neither `WebSearch` nor `Glob` appears in it, so a `PreToolUse` hook never fires for them and their output lands in the transcript in full. `Agent` — subagent calls — is intercepted and went unmentioned in this evaluation. The README documents the shipped set.
+**Landed as proposed:** the pinned-Node install and its build-time guards, the
+launcher's mutual-exclusion refusal, the `riotbox doctor` check, the README and
+`THREAT_MODEL.md` entries, and the tests. Item 5 — no `.git/info/exclude` or
+overlay-ignore change — was checked rather than skipped: the store lives in the
+session directory, and `OVERLAY_IGNORED_NAMES` in `scripts/lib/overlay-ignore.sh`
+still lists `.codegraph` alone.
 
-Items 1, 3, 4, 5, and 7 landed as proposed: the pinned-Node install and its build-time guards (`Containerfile`), the launcher's mutual-exclusion refusal (`libexec/launch.sh`), the `riotbox doctor` check (`scripts/preflight.sh`), the README and `THREAT_MODEL.md` entries, and — item 5 — no `.git/info/exclude` or overlay-ignore change, which was checked rather than skipped: the store lives in the session directory, and `OVERLAY_IGNORED_NAMES` in `scripts/lib/overlay-ignore.sh` still lists `.codegraph` alone. Items 2 and 6 landed except for the deviations above. The head-to-head measurement demanded in [Decision](#decision) before Context Mode could become a *default* has still not been made — it is opt-in for exactly that reason.
+**Landed differently:**
 
-A second round of work (`f8a4f8f`..`6c27c03`) closed three gaps the first integration left open:
+- **Item 2's "generalise rather than duplicate" applied to the writer, not the
+  stripper.** `json_write_atomic` was extracted to `scripts/lib/json-write.sh` and
+  the two per-feature copies deleted. The strippers stayed separate, because they
+  share a shape and no body.
+- **Item 6's opencode suite had nothing to exercise for two rounds.** The first
+  integration wired Claude Code only. opencode was wired in the third round; see
+  [context-mode-opencode.md](context-mode-opencode.md).
 
-- **The hook subset is gone; all six are wired.** The first integration wired `PreToolUse` and `SessionStart` only. That left the session DB — the store `SessionStart` replays and `/resume` restores from — with no writer at all, so continuity never engaged and an autocompact lost the resume snapshot `PreCompact` exists to write. One `context_mode_hook_table` drives wiring, stripping and the build guards (in `container/context-mode-setup.sh` then, in `agents/claude/context-mode.sh` since the opencode round).
-- **The head-to-head measurement this document demands is now possible.** A session prints bytes kept out on exit (`container/context-mode-summary.sh`), read from upstream's own counters rather than from the humanized statusline. Before it, an enabled run and a run the model ignored looked identical from outside, which is why the measurement had never been made.
-- **The event bridge the four new hooks reach is neutralized**, and the limits of that neutralization are recorded in `THREAT_MODEL.md` rather than overstated.
-
-**The exit report's formula deliberately diverges from upstream's, and the divergence is the point.** The renderer first mirrored `statusline` and `ctx_stats` exactly — `bytesAvoided + snapshotBytes + eventDataBytes` as "kept", over that plus `bytesReturned` as a percentage — on the reasoning that two numbers for one store must not disagree. Reading `build/session/analytics.js` showed that formula counts things that are not savings: `eventDataBytes` is `SUM(LENGTH(data))` over every `session_events` row, the continuity bookkeeping each `PostToolUse` writes whether or not anything was redirected, and `snapshotBytes` is the `PreCompact` resume snapshot, which is context added *back* after a compact. The denominator holds only retrieval cost, so the percentage is pinned near 100% by construction and reads *lowest* exactly when the feature is working hardest — a session that redirected nothing printed `11.7 KB kept out (100%)`. The report now prints `bytesAvoided` alone as "kept out", the `bytesReturned` delta beside it as a re-read cost, and no percentage. It will therefore show a smaller number than `context-mode statusline` for the same store; ours is the saving, theirs is the saving plus this feature's own accounting.
-
-**The silence rules were then removed outright, and that reversal is worth recording.** Splitting the counters made a zero report possible for the first time, and the rules were re-derived to suppress it: a session that wrote continuity events but redirected nothing printed nothing at all, on the reasoning that a zero is not a result worth a block of output. Using it disproved that. The report is the only evidence a session leaves, so "no report" had to carry two unrelated meanings at once — *the feature engaged and saved nothing*, and *the feature never engaged* — and the first is precisely the measurement this document asks for while the second is a bug. A user cannot tell them apart, and neither could we without reading the store by hand. The renderer now always prints for a wired session, and `eventDataBytes` is printed beside the zero rather than being excluded from the report entirely: it is the counter that distinguishes "the hooks fired and withheld nothing" from "the hooks never fired". It is still never added to the saving — that remains upstream's error, not ours.
-
-**It is labelled "hook log on disk", and the unit is load-bearing.** The term first read "event bookkeeping", which put a number that is not context bytes on a line of context bytes and invited it to be read as a token cost. Reading the bundle settles it: `session_events` rows are consumed only by aggregate queries (`COUNT`, `SUM(LENGTH(data))`, `GROUP BY category`) and by `getMcpToolUsage`; nothing feeds them to a hook's `additionalContext`, so they never reach a model's context and cost zero tokens. What `hooks/sessionstart.mjs` does inject is the routing block, the session directive, and snapshot-derived content — which is why `snapshotBytes`, the counter that genuinely re-enters context after a compact, stays out of the savings figure. Stating the unit on the line is what keeps a proof-of-life signal from being mistaken for a price.
-
-**`PostToolUse` costs ~112 ms per tool call, and interpreter startup is nearly all of it.** This is the one cost of the full hook set that could plausibly outweigh its benefit: `PostToolUse` fires on nearly every tool call, and each fire spawns the pinned Node. Upstream's `hooks/posttooluse.mjs:8` promises "<20ms", but that is the SQLite work, not the process. Measured against the real `context-mode@1.0.169` inside `quay.io/centos/centos:stream10` on Node v22.23.1 — the same version `ARG CONTEXT_MODE_NODE` pins — 50 invocations per condition, each piping a 2 KB `Write` payload that actually lands a row in `session_events`: **112.6 ms/call against an empty store, 112.5 ms/call against a store already holding 350 events with WAL open.** Warming the store changes nothing measurable, so the first-ever write is not a special case. The breakdown is the useful part: `node -e ''` alone is 64.7 ms/call on the same container, and importing the hook's module graph without touching the DB is 94.7 ms/call, so roughly 85% of the wall clock is interpreter startup plus module load and only ~17 ms is the SQLite work — upstream's claim, honoured. Nothing in RiotBox's control moves the other 95 ms short of not spawning a process per tool call.
-
-At ~112 ms the hook stays. It is comfortably below the ~150 ms line the implementation plan set for reopening the decision, and it is what buys the session DB that `SessionStart` replays and `PreCompact` snapshots — the whole reason the four writers were wired. The cost is real rather than negligible, though, and it is worth stating in the units a long run feels: an agent making 2,000 tool calls pays about 3.7 minutes of wall clock for continuity, serialized into the tool-call path. That figure scales with Node's startup time on the host, not with the size of the store, so a slower machine pays proportionally more and no amount of store pruning helps. If it ever needs to come down, dropping `PostToolUse` alone would retain `UserPromptSubmit`, `PreCompact` and `Stop` — which fire per prompt, per compact and per turn, orders of magnitude less often — at the cost of the per-tool-call events those three have nothing to write.
-
-### The opencode round
-
-A third round (branch `feat/context-mode-opencode`, design in `docs/design/2026-07-31-context-mode-opencode-design.md`) wired the opencode adapter and moved the per-agent wiring behind registry verbs. `container/context-mode-setup.sh` now names no agent: each agent supplies `context_mode_store_dir`, `context_mode_wire`, `context_mode_strip` and `context_mode_build_assert` in `agents/<name>/context-mode.sh`, and every caller probes with `declare -F`. What that branch established is recorded below in the two registers this document uses elsewhere.
-
-**Verified by running it, against `context-mode@1.0.169` and `opencode 1.18.10` as installed in the image:**
-
-- **The adapter initialises under opencode's embedded bun.** Loaded through a local plugin file, `ContextModePlugin(ctx)` returns without error under **bun 1.3.14** and yields seven hook keys: `tool`, `tool.execute.before`, `tool.execute.after`, `event`, `chat.message`, `experimental.session.compacting`, `experimental.chat.system.transform`.
-- **The Node floor does not apply to this path.** bun's SQLite is **3.53.0 with FTS5 compiled in**, checked by creating an FTS5 virtual table and matching against it from inside the loaded plugin. `build/db-base.js` bridges `bun:sqlite` to the better-sqlite3 API, so the native addon that forced `ARG CONTEXT_MODE_NODE=22.23.1` is never loaded here.
-- **Eleven `ctx_*` tools arrive in-process, not over MCP.** The plugin imports `build/server.js` with `CONTEXT_MODE_EMBEDDED_PLUGIN_TOOLS=1` and registers every entry of `REGISTERED_CTX_TOOLS` as a native opencode tool: `ctx_batch_execute`, `ctx_doctor`, `ctx_execute`, `ctx_execute_file`, `ctx_fetch_and_index`, `ctx_index`, `ctx_insight`, `ctx_purge`, `ctx_search`, `ctx_stats`, `ctx_upgrade`. **No `mcpServers` entry is written for opencode, and none is needed.** That same env var is what skips `main()`, where the `registry.npmjs.org` version check lives — so the one residual outbound GET has no counterpart on this path.
-- **Local plugins load from `plugins/` (plural).** A file placed in the singular `plugin/` never loaded. RiotBox writes exactly one file there, `riotbox-context-mode.js`, re-exporting the vendored adapter by absolute path.
-- **`CONTEXT_MODE_DIR` governs the storage resolvers behind the `ctx_*` tools.** With it set, `resolveSessionStorageDir` and `resolveContentStorageDir` return `<override>/sessions` and `<override>/content` tagged `source: "override"`.
-
-**Read from source, not observed end to end:**
-
-- **The pin does not cover the plugin's own session database.** That path comes from `adapter.getSessionDir()` directly (`build/adapters/opencode/plugin.js`), which honours `CONTEXT_MODE_DATA_DIR` and otherwise derives from `${XDG_CONFIG_HOME:-~/.config}/opencode` — not from `CONTEXT_MODE_DIR`. In the image the two coincide, because `XDG_CONFIG_HOME` is unset and `~/.config/opencode` *is* the session bind mount, so both stores land in the session directory either way. Risk 1 of the design asked for the store path to be confirmed by observation before the feature was documented as pinned; what was confirmed is the resolver, not a store created by a live opencode session.
-- **No opencode session has been run end to end.** `tests/context-mode-opencode.venom.yml` is shell-level and hermetic — it sources the scripts and asserts what riotbox writes, strips and refuses to touch — for the same reason the Claude suites are: exercising the routing needs a model and credentials CI does not have. Nothing on this branch measures a saving on opencode.
-
-**Two degradations are documented rather than fixed.** opencode has no `SessionStart` hook upstream, so resume attribution is weaker than on Claude Code; and `opencode --pure` disables external plugins outright, so Context Mode cannot engage at all — riotbox warns on stderr when it sees that flag with the toggle on, and changes nothing else, because `--pure` is the user's explicit instruction.
-
-`riotbox ctx-stats` needed no change. `container/context-mode-summary.sh` already resolved the store through `CONTEXT_MODE_DIR` and already stamped `agent` into every ledger record, so opencode runs aggregate alongside Claude ones with no schema bump; `tests/context-mode-ledger.venom.yml` pins that field. The [Decision](#decision) below is untouched by all of this: the head-to-head measurement it demands before Context Mode could become a *default* still has not been made, and a second agent does not make it.
-
-**Unverified: the image has never been built.** `podman build` fails in every container this branch was developed in (`mounting an overlay over build context directory: … userxattr: invalid argument`), so `task container:build` could not be run even once. Everything above the `Containerfile` line — the shell functions in `container/context-mode-setup.sh` and `container/context-mode-summary.sh`, and the Venom suites that exercise them by sourcing the scripts directly — was verified that way, and the `Containerfile` blocks that could not be sourced were verified by running their bodies inside `quay.io/centos/centos:stream10` against the real `context-mode@1.0.169`, as Task 6 of the implementation plan describes. What that technique cannot reach is the image build itself: the `COPY`/`chmod` layers that ship `context-mode-summary.sh` and set its permissions, the nvm-resolved Node path baked into the generated shims, the `--help` grep, `context-mode doctor` running inside the built image, and the two sentinel `RUN` layers, all as they behave once composed into actual `Containerfile` layers rather than as standalone shell run against a bare CentOS container. A real `riotbox rebuild` — not `riotbox build`, which would reuse a cache that predates this branch — is required before this branch is trusted, and should be the first thing done with a working `podman build`.
+**Still outstanding:** the head-to-head measurement that [Decision](#decision)
+demands before Context Mode could become a *default*. A second agent does not
+supply it, and the feature is opt-in for exactly this reason.
 
 ## What adoption would look like
 
@@ -243,10 +250,24 @@ If the licence is acceptable, the work follows the CodeGraph integration almost 
 
 **Context Mode is a valuable addition, conditionally.** It targets RiotBox's actual binding constraint, occupies a layer nothing else in the image occupies, satisfies the telemetry requirement with no configuration at all, and lands its state exactly where RiotBox's session model wants it. Adopt it as an opt-in behind `RIOTBOX_CONTEXT_MODE=1`, mutually exclusive with `RIOTBOX_HEADROOM=1`.
 
-Two gates stood before implementation. One is closed on the facts; the other is a decision this branch proposes rather than records — see [What actually shipped](#what-actually-shipped) for the code:
+Two gates stood before implementation. One is closed on the facts; the other is a decision this branch proposes rather than records:
 
-- **Licence:** the maintainer must accept an Elastic-2.0 (source-available, non-OSI) component in an otherwise MIT/Apache image. No legal blocker was found for RiotBox's usage or distribution model, but the precedent is the maintainer's to set. *Proposed, not accepted. The branch adopts Context Mode on the assumption that ELv2 is acceptable, and documents the licence and its consequences in `THREAT_MODEL.md` and in the README's licence note; no maintainer decision is on record, and nothing written by this branch can stand in for one. Merging it is what makes the assumption a decision. Whoever does that should replace this note with a pointer to the record — a comment on [issue #5](https://github.com/trevor-vaughan/claude-riotbox/issues/5), or the merge itself.*
-- **Node floor:** the install must be pinned to Node ≥ 22.5 independent of `NODE_DEFAULT`, or the image build breaks for any user on a Node 20 host. *Pinned via `ARG CONTEXT_MODE_NODE` plus a generated shim that execs that interpreter.*
+- **Licence — open.** The maintainer must accept an Elastic-2.0
+  (source-available, non-OSI) component in an otherwise MIT/Apache image.
+  - No legal blocker was found for RiotBox's usage or distribution model, but the
+    precedent is the maintainer's to set.
+  - The branch adopts Context Mode *assuming* ELv2 is acceptable, and documents
+    the licence and its consequences in `THREAT_MODEL.md` and the README's licence
+    note. No maintainer decision is on record, and nothing written by the branch
+    can stand in for one.
+  - **Merging is what turns the assumption into a decision.** Whoever does that
+    should replace this note with a pointer to the record — a comment on
+    [issue #5](https://github.com/trevor-vaughan/claude-riotbox/issues/5), or the
+    merge itself.
+- **Node floor — closed.** The install must be pinned to Node ≥ 22.5 independent
+  of `NODE_DEFAULT`, or the image build breaks for any user on a Node 20 host.
+  - Pinned via `ARG CONTEXT_MODE_NODE` plus a generated shim that execs that
+    interpreter.
 
 Do **not** make it a default, and do not enable it alongside headroom, until the head-to-head measurement above exists.
 

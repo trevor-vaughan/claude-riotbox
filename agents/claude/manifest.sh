@@ -8,14 +8,14 @@
 #   setup.sh          — container-side runtime setup
 #   sync-settings.sh  — host-side config sync
 #
-# See docs/maintainer/adding-an-agent.md for the full contract.
+# See docs/dev/agent-contract.md for the full contract.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Resolve this manifest's own directory so sibling files load by absolute path.
 # BASH_SOURCE works regardless of caller cwd or how the registry was sourced.
 _AGENT_CLAUDE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Context Mode verbs (optional contract — see docs/maintainer/adding-an-agent.md).
+# Context Mode verbs (optional contract — see docs/dev/agent-contract.md).
 # shellcheck source=./context-mode.sh
 source "${_AGENT_CLAUDE_DIR}/context-mode.sh"
 
@@ -30,7 +30,7 @@ agent_claude_real_binary() {
 # Argv tokens are emitted NUL-terminated (`printf '%s\0'`) so multi-line
 # prompts survive the round-trip through `mapfile -d ''`. NUL is safe —
 # argv tokens cannot contain NUL bytes (execve invariant). See
-# docs/maintainer/adding-an-agent.md for the full contract.
+# docs/dev/agent-contract.md for the full contract.
 agent_claude_run_argv() {
 	local prompt="${1:?run_argv requires a prompt argument}"
 	printf '%s\0' claude -p "${prompt}"
@@ -49,7 +49,7 @@ agent_claude_audit_argv() {
 
 # Wrapper injection rules. Claude takes --dangerously-skip-permissions as
 # a root-level flag and is non-interactive when -p / --prompt is present.
-# See docs/maintainer/adding-an-agent.md for the full contract.
+# See docs/dev/agent-contract.md for the full contract.
 agent_claude_wrapper_inject() {
 	local set_ci=0
 	local arg
@@ -75,7 +75,7 @@ agent_claude_wrapper_inject() {
 # The wrapper execs this instead of the real binary; headroom starts its
 # compression proxy and re-launches `claude`, which resolves back to the
 # shim — the wrapper's RIOTBOX_HEADROOM_ACTIVE guard makes that second
-# pass exec the real binary. See docs/maintainer/adding-an-agent.md.
+# pass exec the real binary. See docs/dev/agent-contract.md.
 #
 # Flag rationale (verified against headroom 0.25.0):
 #   --memory / --learn      cross-session memory + failure learning,

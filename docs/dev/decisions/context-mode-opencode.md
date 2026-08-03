@@ -1,14 +1,19 @@
-# Context Mode for opencode: registry-driven per-agent wiring — design
+# Wiring Context Mode for opencode
 
-**Issue:** [trevor-vaughan/claude-riotbox#5](https://github.com/trevor-vaughan/claude-riotbox/issues/5) (follow-on to the full-hooks work)
-**Branch:** `feat/context-mode-opencode`
-**Date:** 2026-07-31
-**Status:** implemented
+**Decision:** Wire the upstream opencode adapter, and move all per-agent Context
+Mode wiring behind optional registry verbs so the shared orchestration script
+names no agent.
+
+**Date:** 2026-07-31 · **Issue:** [#5](https://github.com/trevor-vaughan/claude-riotbox/issues/5) (follow-on to the full-hooks work) · **Branch:** `feat/context-mode-opencode`
+
+> **Frozen design record.** The body below is as written, with corrections made
+> during implementation marked inline. For the current implementation, read
+> [How Context Mode works in RiotBox](../context-mode.md).
 
 ## Purpose
 
 Context Mode ships wired for Claude Code only. `context_mode_setup` warns and skips
-for any other agent, and [the evaluation](context-mode-evaluation.md#what-actually-shipped)
+for any other agent, and [the evaluation](context-mode-adoption.md#what-happened-next)
 records that as a deliberate scope cut: every stanza RiotBox writes is
 `context-mode hook claude-code …` under `CLAUDE_CONFIG_DIR`, which opencode never
 reads.
@@ -63,7 +68,8 @@ reading the docs, except where marked.
   writes the Claude stanzas by hand instead of running `context-mode upgrade`.
 - **A local plugin and an npm plugin of the same name both load.** Documented
   upstream. Two adapter instances means duplicate tool registration and
-  double-fired hooks; §D handles it.
+  double-fired hooks; [the opencode implementation](#opencode-implementation-agentsopencodecontext-modesh)
+  handles it.
 - **Two variables pin two stores, and this design originally saw only one.**
   Corrected during implementation, from source, against the same pinned version:
   `CONTEXT_MODE_DIR` (`build/session/db.js:22`) is read by
@@ -111,7 +117,7 @@ and neither can land on the container overlay and vanish at exit. The cost is
 accepted deliberately: two stores per session directory, and recall does not survive
 switching agents mid-session.
 
-## A. Registry contract — optional session verbs
+## Registry contract: optional session verbs
 
 `agents/*/manifest.sh` gains optional verbs. Optional means absent-is-legal:
 callers probe with `declare -F "agent_${agent}_<verb>"`, the idiom
@@ -130,17 +136,17 @@ implementing, once the second storage variable was found; it is the one verb tha
 is genuinely per-agent rather than a set — opencode implements it and Claude does
 not, because Claude's adapter already resolves its config dir from
 `CLAUDE_CONFIG_DIR`, which `container/entrypoint.sh` exports at the session mount.
-`context_mode_build_assert` (§E) is a fifth verb, and the only one that runs at
+`context_mode_build_assert` (see [Build-time guards](#build-time-guards-containerfile)) is a fifth verb, and the only one that runs at
 image build time rather than session start.
 
 An agent that defines none of them degrades exactly as today: warn, strip, run with
 the feature off.
 
-`docs/maintainer/adding-an-agent.md` documents the verbs alongside the existing
+`docs/dev/agent-contract.md` documents the verbs alongside the existing
 contract, including that implementing `context_mode_wire` obliges an agent to
 implement `context_mode_store_dir` and `context_mode_strip`.
 
-## B. Orchestration — `container/context-mode-setup.sh`
+## Orchestration: `container/context-mode-setup.sh`
 
 Retains the feature-level concerns only, and no agent name appears in the file:
 
@@ -171,7 +177,7 @@ after the per-agent `container_setup` loop (so opencode's regenerated
 `opencode.jsonc` is already in place) and after `codegraph_setup` (so both MCP
 entries merge into a settled `.claude.json` rather than racing for it).
 
-## C. Claude implementation — `agents/claude/context-mode.sh`
+## Claude implementation: `agents/claude/context-mode.sh`
 
 New file, sourced by `agents/claude/manifest.sh` the way
 `agent_opencode_container_setup` sources `setup.sh`. It receives, moved verbatim,
@@ -194,7 +200,7 @@ ambient `_CONTEXT_MODE_WIRED` / `CONTEXT_MODE_DIR` / `RIOTBOX_CONTEXT_MODE` /
 being *absent* passed in CI and failed for anyone running the suite from the
 environment this feature is developed in.
 
-## D. opencode implementation — `agents/opencode/context-mode.sh`
+## opencode implementation: `agents/opencode/context-mode.sh`
 
 `context_mode_store_dir` prints
 `${OPENCODE_CONFIG_DIR:-${HOME}/.config/opencode}/context-mode`, and
@@ -265,7 +271,7 @@ The warning goes to **stderr, and argv is returned unchanged**. That verb's stdo
 is the NUL-terminated argv the wrapper reads back with `mapfile -d ''`
 (`container/agent-wrapper.sh:90`); a stray line on stdout becomes an argument.
 
-## E. Build-time guards — `Containerfile`
+## Build-time guards: `Containerfile`
 
 The layer at `Containerfile:852-882` currently sources
 `container/context-mode-setup.sh`, asserts four constants are still defined, and
@@ -290,7 +296,7 @@ No layer reordering is needed: `COPY agents/` is already at `Containerfile:582`,
 ahead of the Context Mode layer at 852. `CONTEXT_MODE_BIN` and
 `CONTEXT_MODE_STATS_BIN` assertions stay where they are.
 
-## F. Tests
+## Tests
 
 New suite `tests/context-mode-opencode.venom.yml`, shell-level and hermetic — no
 opencode process is started, matching the existing Context Mode suites:
@@ -316,28 +322,30 @@ path and the strip-all-others rule, `tests/context-mode-ledger.venom.yml` for a
 record carrying `agent=opencode`, `tests/doctor-context-mode.venom.yml` for a doctor
 warning when the selected agent has no verb.
 
-## G. Documentation
+## Documentation
 
 - **`README.md`** — Context Mode is no longer Claude-only. Document per-agent
   support, the pinned-shim rationale, the per-agent store locations, and the
   opencode degradations: no `SessionStart` upstream, so resume attribution is
   weaker, and tools arrive in-process rather than over MCP.
-- **`THREAT_MODEL.md`** — the opencode adapter runs **in-process inside the agent**
-  under bun, holding the plugin API's `client` handle, where the
-  Claude path uses short-lived hook processes and an MCP child process. Same
-  ELv2 code, wider blast radius. Also: a second store location holding verbatim tool
-  output, and `plugins/` living in the bind-mounted session config, so write access
-  there is code execution inside the agent process. (This bullet originally also
-  claimed a `$` shell handle. It was wrong and was never written into
-  `THREAT_MODEL.md`: the adapter's typed plugin input is
-  `{ client: { app: { log } }, directory: string }` — `plugin.d.ts`, `PluginContext`
-  — and `plugin.js:190` uses `ctx.client.app.log`. The in-process placement is what
-  widens the surface, not a handed-over shell.)
-- **`docs/design/context-mode-evaluation.md`** — the "What actually shipped" section
+- **`THREAT_MODEL.md`** — three additions:
+  - **Wider blast radius.** The opencode adapter runs *in-process inside the
+    agent* under bun, holding the plugin API's `client` handle, where the Claude
+    path uses short-lived hook processes and an MCP child process. Same ELv2 code,
+    more reach.
+  - **A second store location** holding verbatim tool output.
+  - **`plugins/` lives in the bind-mounted session config,** so write access there
+    is code execution inside the agent process.
+  - *Correction:* this originally also claimed a `$` shell handle. It was wrong
+    and was never written into `THREAT_MODEL.md` — the adapter's typed plugin
+    input is `{ client: { app: { log } }, directory: string }` (`plugin.d.ts`,
+    `PluginContext`) and `plugin.js:190` uses `ctx.client.app.log`. The in-process
+    placement is what widens the surface, not a handed-over shell.
+- **`docs/dev/decisions/context-mode-adoption.md`** — the "What actually shipped" section
   states as fact that no opencode adapter is wired and that
   `tests/context-mode-opencode.venom.yml` has nothing to exercise. Both stop being
   true; replace with what was verified here.
-- **`docs/maintainer/adding-an-agent.md`** — the new optional verbs.
+- **`docs/dev/agent-contract.md`** — the new optional verbs.
 - **`libexec/launch.sh`** — the help text for `RIOTBOX_CONTEXT_MODE=1`.
 
 ## Risks
@@ -434,6 +442,6 @@ observations if the distinction is not kept:
 - **No `riotbox ctx-stats` changes.** The ledger already distinguishes runs by
   agent.
 - **Context Mode does not become a default.** The head-to-head measurement
-  [the evaluation demands](context-mode-evaluation.md#decision) still
+  [the evaluation demands](context-mode-adoption.md#decision) still
   has not been made, and adding a second agent does not make it.
 - **No fix for the invalid agent file in risk 4.**

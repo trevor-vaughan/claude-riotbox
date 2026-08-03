@@ -404,7 +404,7 @@ deb packages. Neither ELv2 limitation (no hosted/managed service, no
 circumventing licence-key functionality) binds riotbox's usage — riotbox is a
 local developer tool and the OSS package has no licence-key gate — but the
 dependency is recorded here because a licence change upstream is a supply-chain
-event for this image. See `docs/design/context-mode-evaluation.md`.
+event for this image. See `docs/dev/decisions/context-mode-adoption.md`.
 
 **Event bridge.** Four of the six hooks (`PostToolUse`, `UserPromptSubmit`,
 `PreCompact`, `Stop`) route their writes through `attributeAndInsertEvents`, which

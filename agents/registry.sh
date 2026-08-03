@@ -4,7 +4,7 @@
 # agents and the dispatcher that routes verbs to per-agent implementations.
 #
 # Every agent contributes a manifest at agents/<name>/manifest.sh that defines
-# a fixed set of agent_<name>_<verb> functions (see docs/maintainer/adding-an-agent.md
+# a fixed set of agent_<name>_<verb> functions (see docs/dev/agent-contract.md
 # for the full contract). This file:
 #   1. Auto-discovers agents by globbing agents/*/manifest.sh.
 #   2. Sources each manifest.
@@ -34,7 +34,7 @@ _agent_registry_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── The registry: auto-discovered from agents/*/manifest.sh ─────────────────
 # To add a new agent: create agents/<name>/manifest.sh defining the contract
-# functions (see docs/maintainer/adding-an-agent.md). The registry picks it
+# functions (see docs/dev/agent-contract.md). The registry picks it
 # up automatically — no edit to this file required.
 #
 # Discovery rules:

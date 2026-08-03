@@ -1,54 +1,35 @@
-# Adding a new CLI agent to RiotBox
+# The agent contract
 
-This document is for maintainers who want to add a third (or fourth, or
-fifth) CLI agent alongside `claude` and `opencode` — for example
-[aider](https://aider.chat/), [goose](https://block.github.io/goose/),
-[cursor-agent](https://docs.cursor.com/cli), or [codex](https://github.com/openai/codex).
+Reference for every function an `agents/<name>/manifest.sh` may define. Eight are
+required; the rest are optional and probed with `declare -F` — absence is never an
+error.
 
-Adding an agent is a **single-directory operation**. You drop a new manifest
-under `agents/`, register the name, install the binary in the Containerfile,
-and you're done — no edits to dispatch sites, wrappers, or test fixtures.
+**Adding an agent for the first time?** Start at
+[adding-an-agent.md](adding-an-agent.md), which walks the three steps and shows a
+complete worked example. This page is the per-verb detail that how-to links into.
 
-## TL;DR — the three steps
+Function names are mechanical: `agent_<name>_<verb>`.
 
-1. **Install the binary** in the Containerfile (one `RUN` line).
-2. **Create `agents/<name>/`** with at minimum a `manifest.sh` that
-   defines the contract functions (eight of them, each a handful of
-   lines). Add `setup.sh` for container-side runtime setup and
-   `sync-settings.sh` for host config sync if your agent needs them.
-   Use `agents/claude/` or `agents/opencode/` as a template.
-3. **Run `task lint && task test`** — the contract suite at
-   `tests/agents.venom.yml` automatically validates the new manifest.
+## Verbs at a glance
 
-That's it. The registry **auto-discovers** any directory under `agents/`
-that contains a `manifest.sh`, so you don't need to edit any list. The
-wrapper, all dispatch sites, install.sh's `--agent` validation, the
-entrypoint's setup loop, and `mount-projects.sh`'s sync loop pick up the
-new agent automatically.
+| Verb | Required | Runs |
+|---|---|---|
+| [`real_binary`](#agent_name_real_binary) | yes | wrapper, per invocation |
+| [`run_argv`](#agent_name_run_argv) | yes | `riotbox run` |
+| [`resume_argv`](#agent_name_resume_argv) | yes | `riotbox resume` |
+| [`audit_argv`](#agent_name_audit_argv) | yes | `riotbox audit` |
+| [`wrapper_inject`](#agent_name_wrapper_inject) | yes | wrapper, per invocation |
+| [`container_setup`](#agent_name_container_setup) | yes | container start |
+| [`host_sync`](#agent_name_host_sync) | yes | host, before launch |
+| [`env_vars`](#agent_name_env_vars) | yes | host, building passthrough |
+| [`headroom_argv`](#agent_name_headroom_argv) | no | wrapper, when `RIOTBOX_HEADROOM=1` |
+| [`context_mode_store_dir`](#agent_name_context_mode_store_dir) | no | session start |
+| [`context_mode_data_dir`](#agent_name_context_mode_data_dir) | no | session start |
+| [`context_mode_wire`](#agent_name_context_mode_wire) | no | session start |
+| [`context_mode_strip`](#agent_name_context_mode_strip) | no | session start |
+| [`context_mode_build_assert`](#agent_name_context_mode_build_assert) | no | image build |
 
-**Discovery rules:**
-- Subdirectories without `manifest.sh` are silently skipped (drafts,
-  scaffolding, tooling).
-- Directories whose names start with `_` or `.` are skipped (templates,
-  hidden state).
-- Iteration order is the shell glob's lexical order — stable across runs.
-
-## Layout per agent
-
-```
-agents/<name>/
-  manifest.sh        ← required: contract functions
-  setup.sh           ← optional: container-side runtime setup
-  sync-settings.sh   ← optional: host-side config sync
-  context-mode.sh    ← optional: Context Mode verbs (sourced by manifest.sh)
-```
-
-The registry sources `agents/<name>/manifest.sh`. The manifest decides
-whether to source `setup.sh` (from `container_setup`) and whether to
-exec `sync-settings.sh` (from `host_sync`). Files outside `manifest.sh`
-are agent-private — the rest of the system never references them.
-
-## The agent contract
+## Required verbs
 
 Every `agents/<name>/manifest.sh` must define this fixed set of
 functions. The function names are mechanical: `agent_<name>_<verb>`.
@@ -66,7 +47,7 @@ container. The generic wrapper in `container/agent-wrapper.sh` uses this
 name (via `find-real-bin.sh`) to resolve the real binary, skipping the
 riotbox shim at `~/.riotbox/bin/`.
 
-### `agent_<name>_run_argv "$prompt"`
+### `agent_<name>_run_argv`
 
 ```bash
 agent_<name>_run_argv() {
@@ -99,7 +80,7 @@ agent_<name>_resume_argv() {
 Print the argv to resume the most recent session in the current project.
 Examples: `claude --continue`; `opencode run --continue`.
 
-### `agent_<name>_audit_argv "$prompt"`
+### `agent_<name>_audit_argv`
 
 ```bash
 agent_<name>_audit_argv() {
@@ -112,7 +93,7 @@ Print the argv for read-only audit mode. The launcher already configures
 `RIOTBOX_READONLY=1` so the project mount is read-only — `audit_argv`
 typically returns the same tokens as `run_argv`.
 
-### `agent_<name>_wrapper_inject "$@"`
+### `agent_<name>_wrapper_inject`
 
 ```bash
 agent_<name>_wrapper_inject() {
@@ -169,7 +150,7 @@ If your agent has runtime setup, place its body in
 it and call its main function — that keeps long setup bodies out of the
 manifest.
 
-### `agent_<name>_host_sync "$session_dir"`
+### `agent_<name>_host_sync`
 
 ```bash
 agent_<name>_host_sync() {
@@ -233,13 +214,13 @@ Users can still override the registry-derived default with
 that want a curated list, or add to it without restating the base via
 `RIOTBOX_PASSTHROUGH_EXTRA_VARS` (same syntax, appended after the base).
 
-## Optional verbs
+## Optional verbs: headroom
 
 Beyond the eight required functions, a manifest may implement optional
-verbs. The wrapper probes for them with `declare -F agent_<name>_<verb>`;
-absence is never an error.
+verbs. Every caller probes with `declare -F agent_<name>_<verb>`; absence is
+never an error.
 
-### `agent_<name>_headroom_argv "$@"`
+### `agent_<name>_headroom_argv`
 
 Emits (NUL-terminated, like the other argv verbs) the command line the
 wrapper execs instead of the real binary when `RIOTBOX_HEADROOM=1`. The
@@ -307,7 +288,7 @@ verb" cases), `tests/headroom.venom.yml` (wrapper gate, guard, and
 fallbacks), and `tests/headroom-opencode.venom.yml` (proxy-routed helper
 behavior).
 
-### The Context Mode verbs
+## Optional verbs: Context Mode
 
 Five optional verbs wire [Context Mode](../../README.md#context-mode-opt-in)
 for an agent. Four run per session; the fifth runs at image build time:
@@ -345,7 +326,7 @@ Put the bodies in `agents/<name>/context-mode.sh` and have `manifest.sh`
 source it:
 
 ```bash
-# Context Mode verbs (optional contract — see docs/maintainer/adding-an-agent.md).
+# Context Mode verbs (optional contract — see docs/dev/agent-contract.md).
 # shellcheck source=./context-mode.sh
 source "${_AGENT_<NAME>_DIR}/context-mode.sh"
 ```
@@ -357,7 +338,7 @@ build guard that asserts them in one file. `agents/claude/context-mode.sh`
 deliberately different shapes — the registry contract is about the
 lifecycle, not about what wiring looks like.
 
-#### `agent_<name>_context_mode_store_dir`
+### `agent_<name>_context_mode_store_dir`
 
 ```bash
 agent_<name>_context_mode_store_dir() {
@@ -378,7 +359,7 @@ the session bind mount. The store holds verbatim tool output, so it has to
 be somewhere `riotbox session-remove` deletes and somewhere that cannot
 vanish onto the container overlay at exit.
 
-#### `agent_<name>_context_mode_data_dir`
+### `agent_<name>_context_mode_data_dir`
 
 ```bash
 agent_<name>_context_mode_data_dir() {
@@ -420,7 +401,7 @@ moves from `<config>/memory` to `<config>/context-mode/memory`. That is
 harmless for an agent adopting Context Mode for the first time and worth
 checking for one that has been storing memory under the old path.
 
-#### `agent_<name>_context_mode_wire`
+### `agent_<name>_context_mode_wire`
 
 Write whatever form of wiring this agent needs, and return 0 **only** when
 every artifact landed. On any failure: warn on stderr, leave nothing behind
@@ -448,7 +429,7 @@ Two further rules, both learned the hard way:
   otherwise, so the session degrades to the feature being off rather than
   destroying a file the user cannot get back.
 
-#### `agent_<name>_context_mode_strip`
+### `agent_<name>_context_mode_strip`
 
 Remove everything this agent's `context_mode_wire` could have written, and
 nothing else. It runs for every registered agent on every session start,
@@ -473,7 +454,7 @@ It is also what makes "at most one agent's wiring exists in a session
 directory at a time" enforceable: switching `--agent` strips the other
 agent's wiring through this verb.
 
-#### `agent_<name>_context_mode_build_assert "$pkg_root"`
+### `agent_<name>_context_mode_build_assert`
 
 ```bash
 agent_<name>_context_mode_build_assert() {
@@ -502,135 +483,3 @@ path, plus the strip-every-other-agent rule),
 foreign-file refusal and the `--pure` warning), and
 `tests/doctor-context-mode.venom.yml` (the preflight check for an agent
 with no support).
-
-## Worked example: adding `aider`
-
-Suppose [aider](https://aider.chat/) is your third agent. Here's the
-complete diff:
-
-### 1. Install in Containerfile
-
-```dockerfile
-# Aider — Python-based pair-programming agent
-RUN pip install --no-cache-dir --break-system-packages aider-install && \
-    aider-install && aider --version
-```
-
-### 2. Manifest at `agents/aider/manifest.sh`
-
-```bash
-#!/usr/bin/env bash
-_AGENT_AIDER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-agent_aider_real_binary() { printf 'aider\n'; }
-
-agent_aider_run_argv() {
-    local prompt="${1:?run_argv requires a prompt argument}"
-    # aider takes a prompt via --message and exits non-interactively
-    # with --no-stream, --yes-always for autonomy.
-    printf '%s\0' aider --message "${prompt}" --no-stream --yes-always
-}
-
-agent_aider_resume_argv() {
-    # aider has no native "resume" — opening it without a prompt picks
-    # up the local repo state.
-    printf '%s\0' aider --no-stream --yes-always
-}
-
-agent_aider_audit_argv() {
-    local prompt="${1:?audit_argv requires a prompt argument}"
-    printf '%s\0' aider --message "${prompt}" --no-stream --yes-always
-}
-
-agent_aider_wrapper_inject() {
-    # aider's --yes-always disables interactive prompts; the run_argv
-    # already passes it. The wrapper itself only needs to scan for
-    # --message to decide CI=true.
-    local set_ci=0 arg
-    for arg in "$@"; do
-        if [ "${arg}" = "--message" ]; then set_ci=1; break; fi
-    done
-    for arg in "$@"; do printf '%s\0' "${arg}"; done
-    if [ "${set_ci}" = "1" ] && [ -n "${RIOTBOX_INJECT_ENV_FILE:-}" ]; then
-        printf 'CI=true\n' >> "${RIOTBOX_INJECT_ENV_FILE}"
-    fi
-    return 0
-}
-
-agent_aider_container_setup() { :; }   # no runtime setup needed
-
-agent_aider_host_sync() {
-    local session_dir="${1:?host_sync requires a session_dir argument}"
-    # aider reads ~/.aider.conf.yml; copy it into the session dir if
-    # present, otherwise no-op.
-    if [ -f "${HOME}/.aider.conf.yml" ]; then
-        cp "${HOME}/.aider.conf.yml" "${session_dir}/.aider.conf.yml"
-        echo "-v ${session_dir}/.aider.conf.yml:/home/llm/.aider.conf.yml:z"
-    fi
-}
-
-agent_aider_env_vars() {
-    # Provider keys aider reads upstream. Listing each candidate up front
-    # lets users switch backends without re-editing this manifest.
-    cat <<'EOF'
-ANTHROPIC_API_KEY
-OPENAI_API_KEY
-DEEPSEEK_API_KEY
-GEMINI_API_KEY
-EOF
-}
-```
-
-### 3. Run the tests
-
-The registry auto-discovers `agents/aider/manifest.sh` — no edit to
-`registry.sh` is needed.
-
-```sh
-task lint && task test ARGS=agents
-```
-
-The registry contract suite at `tests/agents.venom.yml` automatically
-validates `aider` against every contract check — `real_binary`,
-`run_argv`, `resume_argv`, `audit_argv`, `container_setup`,
-`wrapper_inject`, `host_sync`, `env_vars`, plus the dispatcher's
-reject-unknown behaviour.
-
-That's the whole change. No edits to:
-
-- `install.sh` — the wrapper sources `agents/registry.sh` at runtime.
-- `libexec/run.sh`, `resume.sh`, `audit.sh` — they call
-  `agent_call "$RIOTBOX_AGENT" <verb>`.
-- `container/agent-wrapper.sh` — it dispatches by `basename($0)`.
-- `container/entrypoint.sh` — it loops over `AGENT_REGISTRY`.
-- `scripts/mount-projects.sh` — it loops over `AGENT_REGISTRY`.
-- `Containerfile` (apart from the install step) — the symlink loop reads
-  `AGENT_REGISTRY` directly.
-
-## Things to avoid
-
-- **Don't break the contract.** If a new manifest skips a function, the
-  registry tests fail loudly. Don't `# shellcheck disable=...` your way
-  past missing functions.
-- **Don't add agent-specific dispatch outside the registry.** If you're
-  about to write a `case "$RIOTBOX_AGENT" in <name>) ... ;; esac`, stop
-  and put the logic in the manifest. The whole point of the refactor is
-  that there is one place to look up agent behaviour.
-- **Don't overload the manifest with unrelated logic.** Keep it focused
-  on the contract. Long setup bodies belong in `agents/<name>/setup.sh`
-  (sourced by `container_setup`); long sync logic in
-  `agents/<name>/sync-settings.sh` (called by `host_sync`).
-
-## Where to look when something breaks
-
-| Symptom                                              | Where to look                                                                                                        |
-|------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------|
-| `--agent=<new>` rejected with "must be one of"       | Does `agents/<new>/manifest.sh` exist? The host wrapper sources the registry at runtime, so no re-install is needed. |
-| `riotbox run` exits with "unknown verb"              | Manifest is missing `agent_<name>_run_argv`                                                                          |
-| Wrapper invokes wrong binary                         | Check `agent_<name>_real_binary` and PATH order                                                                      |
-| `--dangerously-skip-permissions` in wrong place      | Bug in `agent_<name>_wrapper_inject`; see opencode for subcommand-local injection                                    |
-| Container fails to start with "no agents discovered" | The `COPY agents/` in the Containerfile didn't run, or every subdirectory is missing `manifest.sh`                      |
-| Host config not synced                               | `agent_<name>_host_sync` is a no-op or its sync script is missing                                                    |
-
-Run `task test ARGS=agents` to re-exercise the contract suite at any
-time — it's the fastest signal that a manifest is well-formed.
