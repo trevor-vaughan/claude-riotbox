@@ -84,9 +84,38 @@ for stub in config mounts.conf plugins.conf; do
 	dst="${CONFIG_DIR}/${stub}"
 	[[ -f "${src}" ]] || continue
 	if [[ ! -f "${dst}" ]]; then
-		cp "${src}" "${dst}"
+		# `config` is sourced as shell by the launcher and is the documented
+		# home of RIOTBOX_PASSTHROUGH_VARS, where users put API keys and
+		# tokens — it must never be world-readable, whatever the umask of the
+		# shell running this installer. `install -m` sets the mode as the file
+		# is created, so it is never briefly readable the way cp-then-chmod
+		# would leave it. mounts.conf and plugins.conf carry no credentials,
+		# so their mode is left to the user's umask: tightening them too
+		# would be scope creep, not defence.
+		if [[ "${stub}" == "config" ]]; then
+			install -m 600 "${src}" "${dst}"
+		else
+			cp "${src}" "${dst}"
+		fi
 		echo "  Config: ${dst} (created)"
 	else
+		# A `config` seeded before the 0600 rule above would keep its loose
+		# mode forever: this block re-runs on every install but never rewrites
+		# an existing file. Removing group/world access from a per-user config
+		# that only its owner ever reads is safe, so do it in place and say
+		# so. Owner bits are left alone — a deliberately read-only (0400)
+		# config stays read-only. Modes with no group/other bits are already
+		# private: leave them and stay quiet.
+		if [[ "${stub}" == "config" ]]; then
+			# An unreadable mode must not silently mean "already private".
+			if ! mode="$(stat -c '%a' "${dst}" 2>/dev/null)" || [[ ! "${mode}" =~ ^[0-7]+$ ]]; then
+				mode=777 # unknown mode: fail safe by tightening
+			fi
+			if ((8#${mode} & 8#077)); then
+				chmod go-rwx "${dst}"
+				echo "  Config: ${dst} (group/world access removed — may hold credentials)"
+			fi
+		fi
 		shipped_ver="$(grep -m1 '^# riotbox-config-version:' "${src}" 2>/dev/null | awk '{print $NF}' || true)"
 		installed_ver="$(grep -m1 '^# riotbox-config-version:' "${dst}" 2>/dev/null | awk '{print $NF}' || true)"
 		if [[ -n "${shipped_ver}" ]] && [[ -n "${installed_ver}" ]] &&

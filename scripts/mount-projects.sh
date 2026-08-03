@@ -402,6 +402,34 @@ setup_projects() {
 		PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${riotbox_session_dir}/headroom:/home/llm/.headroom:z"
 	fi
 
+	# ── Context Mode ledger (opt-in) ────────────────────────────────────
+	# One JSON record per session exit, for `riotbox ctx-stats`. Lives
+	# OUTSIDE riotbox_session_dir on purpose: the counters it accumulates
+	# are pruned from the store after seven days by upstream, and a
+	# history that `riotbox session-reset` also erases would answer
+	# nothing. See docs/design/2026-07-30-context-mode-rollup-design.md.
+	#
+	# Withheld from a read-only workspace, which is what `riotbox audit`
+	# runs. The mount is ordinary and read-write — "write-only drop" is
+	# this design's convention, not a podman guarantee — so a session that
+	# can read it can enumerate every other project set by filename. An
+	# untrusted repo does not get that.
+	#
+	# Deliberately `-z` here, not `= "1"` like the RIOTBOX_READONLY check
+	# a few lines above: any non-empty value withholds the ledger, because
+	# failing closed on an ambiguous value is correct for a boundary whose
+	# failure mode is leaking every project set you work on, and only
+	# libexec/audit.sh ever sets this variable.
+	if [[ "${RIOTBOX_CONTEXT_MODE:-0}" = "1" ]] && [[ -z "${RIOTBOX_READONLY:-}" ]]; then
+		local cm_ledger
+		cm_ledger="${RIOTBOX_CONTEXT_LEDGER:-${XDG_DATA_HOME:-${HOME}/.local/share}/riotbox-context-mode}/runs"
+		if [[ "${RIOTBOX_DRY_RUN:-0}" != "1" ]]; then
+			mkdir -p "${cm_ledger}"
+			chmod 0700 "${cm_ledger}"
+		fi
+		PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${cm_ledger}:/home/llm/.riotbox-ledger:z"
+	fi
+
 	# ── Sync each registered agent's host config into the session dir ──
 	# The agent registry tells us which agents to sync. Each manifest's
 	# host_sync function knows where its host config lives and what

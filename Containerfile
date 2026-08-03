@@ -609,6 +609,8 @@ COPY --chown=llm:llm container/startup-scripts.sh /home/llm/.riotbox/startup-scr
 COPY --chown=llm:llm container/nested-podman-setup.sh /home/llm/.riotbox/nested-podman-setup.sh
 COPY --chown=llm:llm container/headroom-summary.sh /home/llm/.riotbox/headroom-summary.sh
 COPY --chown=llm:llm container/codegraph-setup.sh /home/llm/.riotbox/codegraph-setup.sh
+COPY --chown=llm:llm container/context-mode-setup.sh /home/llm/.riotbox/context-mode-setup.sh
+COPY --chown=llm:llm container/context-mode-summary.sh /home/llm/.riotbox/context-mode-summary.sh
 # The entrypoint sources lib/overlay-ignore.sh from this path, so the shared
 # shell library has to exist inside the image as well as on the host. The
 # directory is copied wholesale rather than file by file, so anything added
@@ -622,7 +624,8 @@ RUN chmod +x /home/llm/.riotbox/entrypoint.sh \
     /home/llm/.riotbox/session-branch.sh /home/llm/.riotbox/overlay-setup.sh \
     /home/llm/.riotbox/plugin-setup.sh /home/llm/.riotbox/startup-scripts.sh \
     /home/llm/.riotbox/nested-podman-setup.sh /home/llm/.riotbox/headroom-summary.sh \
-    /home/llm/.riotbox/codegraph-setup.sh
+    /home/llm/.riotbox/codegraph-setup.sh /home/llm/.riotbox/context-mode-setup.sh \
+    /home/llm/.riotbox/context-mode-summary.sh
 ENTRYPOINT ["/home/llm/.riotbox/entrypoint.sh"]
 CMD ["bash"]
 
@@ -636,15 +639,18 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
 # ── LLM CLI tool cache-bust boundary ────────────────────────────────────────
 # `task container:update` bumps LLM_TOOL_UPDATE to a fresh value, which makes
 # this RUN a cache miss and forces every layer below it (headroom, opencode,
-# Claude Code, CodeGraph, plugins) to rebuild and re-pull latest — without
-# rebuilding the whole image. A normal `task container:build` always passes
-# the default (0), so the boundary stays cached and the tools are reused. The
-# five tool RUNs below are intentionally left unchanged; the boundary alone
-# controls their freshness. headroom and CodeGraph are version-pinned, so an
-# update re-installs them unchanged — the same headroom wheels and ~350 MB of
-# models, and the same CodeGraph npm package (no model download); the cost is
-# accepted so `riotbox update` can add both to images built before they
-# existed and refresh headroom's unpinned transitive deps.
+# Claude Code, CodeGraph, Context Mode, plugins) to rebuild and re-pull latest
+# — without rebuilding the whole image. A normal `task container:build` always
+# passes the default (0), so the boundary stays cached and the tools are
+# reused. The six tool RUNs below are intentionally left unchanged; the
+# boundary alone controls their freshness. headroom, CodeGraph and Context Mode
+# are version-pinned, so an update re-installs them unchanged — the same
+# headroom wheels and ~350 MB of models, the same CodeGraph npm package (no
+# model download), and the same Context Mode npm package, which additionally
+# re-runs `nvm install` and re-downloads its pinned Node toolchain because that
+# too lives below the boundary. The cost is accepted so `riotbox update` can
+# add all three to images built before they existed and refresh headroom's
+# unpinned transitive deps.
 ARG LLM_TOOL_UPDATE=0
 RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 
@@ -737,6 +743,227 @@ RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
     CODEGRAPH_NO_DOWNLOAD=1 codegraph version && \
     codegraph telemetry off && \
     env -u CODEGRAPH_TELEMETRY codegraph telemetry status | grep -q disabled
+
+# ── Context Mode (opt-in at runtime via RIOTBOX_CONTEXT_MODE) ────────────────
+# Installed under its own pinned Node, not the image default. Context Mode
+# hard-fails installation on Linux below Node 22.5 — scripts/postinstall.mjs
+# calls process.exit(1), deliberately, because engines.node is cosmetic under
+# npm's default engine-strict=false. Below 22.5 there is no node:sqlite, so it
+# falls back to better-sqlite3's native addon, which SIGSEGVs under a V8
+# madvise bug (nodejs/node#62515). NODE_DEFAULT above is whatever nvm versions
+# scripts/build.sh found on the host — often 20 — so this pin is what keeps
+# the build working on a Node 20 host instead of failing for the user and not
+# for the maintainer.
+#
+# The shim is what makes the pin stick at runtime. npm's own global bin shim
+# starts `#!/usr/bin/env node`, which resolves to the session default, and
+# Context Mode bakes process.execPath into every hook command it emits
+# (src/runtime.ts upstream). Exec'ing the pinned interpreter explicitly means
+# the CLI, the MCP server, and every hook run on 22.x whatever the agent's
+# default Node is.
+#
+# The install paths come from `nvm which` rather than from the ARG. nvm
+# accepts a partial version — `nvm install 22` succeeds and lands whatever
+# 22.x it resolved — so building the path as v${CONTEXT_MODE_NODE} by hand
+# would leave anyone who passed the arg in the major-only form NODE_VERSIONS
+# and NODE_DEFAULT above use staring at "No such file or directory" for a
+# .../v22/bin path, with nothing in it to suggest that the format of the arg,
+# rather than a broken install, was the cause.
+#
+# Build-time guards on the wiring template in
+# container/context-mode-setup.sh and the exit report in
+# container/context-mode-summary.sh, all of which fail THIS layer rather than
+# letting a user session discover the drift. Both files are sourced here, so
+# the guards assert the constants a session will actually use and cannot fall
+# out of step with them. The ${VAR:?} lines are what keep that honest:
+# the RUN is not `set -u`, and cannot be because nvm.sh is not clean under it,
+# so a renamed or emptied constant would otherwise expand to nothing and let
+# the checks below pass having checked nothing at all:
+#
+#   * CONTEXT_MODE_BIN, which is where the shim is written, in place of a
+#     literal repeated across this RUN. context_mode_setup skips the wiring and
+#     leaves the session running with the feature off when that path is not
+#     executable, and it reads the path from this constant — so relocating the
+#     shim here and leaving the template alone would silently disable the
+#     feature in every session while every check in this layer still passed,
+#     each one invoking the shim by its new path, and `riotbox doctor` still
+#     passed too, because scripts/preflight.sh resolves it through PATH.
+#     Generating into the constant makes the two agree by construction, and the
+#     `-x` test after the chmod is the predicate the session itself evaluates,
+#     so an edit that puts the file anywhere else fails here instead. HOME is
+#     ENV-set to /home/llm and the image runs as llm well above this layer, so
+#     build and session expand the constant to the same path.
+#   * The event set and both matchers, compared for EQUALITY against
+#     hooks/hooks.json in the installed package — the hooks config upstream's
+#     own installer emits, and the one artifact in the package that states all
+#     three exactly rather than in fragments. Three comparisons: the event
+#     names as sorted key lists against context_mode_hook_table; the
+#     PreToolUse matchers, pipe-joined in array order, against
+#     CONTEXT_MODE_MATCHER; and PostToolUse's single matcher against
+#     CONTEXT_MODE_POST_MATCHER. All three were verified byte-identical against
+#     context-mode@1.0.169.
+#
+#     Equality rather than a grep of cli.bundle.mjs is the whole point.
+#     Upstream's sources of truth (PRE_TOOL_USE_MATCHERS in
+#     src/adapters/claude-code/hooks.ts, and the array MI the PostToolUse set
+#     is joined from at runtime) survive bundling as individual string
+#     literals, so a grep of the 1.1 MB bundle proves only that a name appears
+#     SOMEWHERE in it — "Grep" occurs three times — which means each plain name
+#     would survive its own removal from the matcher array, and no grep of the
+#     bundle can notice a tool upstream ADDED, the direction that silently
+#     costs continuity. A dropped tool, an added tool, a renamed event, an
+#     added event and a reordered alternation all fail this layer instead. The
+#     last of those is cosmetic upstream and still fails here, deliberately and
+#     on the same terms as the MCP-name grep below: the drift gets read by a
+#     maintainer instead of by a session.
+#   * CONTEXT_MODE_MCP_NAME, in hooks/core/tool-naming.mjs — the routing table
+#     that names the tools a redirect points the agent at, and a file that the
+#     path RiotBox uses actually reaches: `context-mode hook claude-code
+#     <event>` dispatches by importing hooks/<event>.mjs out of the package,
+#     which imports that table. It hardcodes
+#     mcp__plugin_context-mode_context-mode__<tool> with nothing to steer it,
+#     so the MCP server has to be registered under that name; a pin bump that
+#     changed the prefix would leave every redirect pointing at a tool the
+#     session does not have. The grep includes the backtick that opens the
+#     template literal, so the identical string in the file's own doc table
+#     cannot satisfy it while the code drifts. Both this and the path itself
+#     are upstream internals that could be relocated without any change in
+#     behaviour; that would fail this layer too, which is the intent — the
+#     drift then gets read by a maintainer instead of by a session.
+#   * The `hook <platform> <event>` dispatcher the template's hook commands
+#     call. This one is load-bearing: the CLI treats an unrecognised first
+#     argument as "start the MCP server", so if upstream ever drops or renames
+#     the subcommand, every hook would silently emit nothing and route nothing
+#     — a feature that looks enabled and does exactly zero.
+#   * One hooks/<event>.mjs per row of context_mode_hook_table. This is the only
+#     assertion that can catch a nonexistent event name, and the only one that
+#     checks the key-to-event mapping at all: that mapping is this layer's own
+#     (PreToolUse → pretooluse), so nothing in hooks.json can validate it, and
+#     `context-mode hook claude-code <name>` exits 0 and prints nothing for an
+#     event that does not exist, exactly as a valid event fed empty stdin does —
+#     so invoking the dispatcher can only ever prove that the CLI runs.
+#   * getRealBytesStats in build/session/analytics.js — the counters the
+#     generated CONTEXT_MODE_STATS_BIN shim imports — and then that shim's own
+#     output against a throwaway empty sessions directory. Upstream renaming
+#     either the module or the export would otherwise surface as sessions that
+#     silently stop printing the exit report.
+#
+# DL3016 does not apply: the version is pinned via the build ARG.
+ARG CONTEXT_MODE_NODE=22.23.1
+ARG CONTEXT_MODE_VERSION=1.0.169
+RUN bash -c '\
+    set -e; \
+    export NVM_DIR=/home/llm/.nvm; \
+    . "${NVM_DIR}/nvm.sh"; \
+    nvm install "${CONTEXT_MODE_NODE}"; \
+    CM_NODE_EXE="$(nvm which "${CONTEXT_MODE_NODE}")"; \
+    CM_NODE_BIN="$(dirname "${CM_NODE_EXE}")"; \
+    CM_PKG="${CM_NODE_BIN%/bin}/lib/node_modules/context-mode"; \
+    "${CM_NODE_BIN}/npm" install -g "context-mode@${CONTEXT_MODE_VERSION}"; \
+    # shellcheck disable=SC1091  # copied into the image by the COPY above \
+    . /home/llm/.riotbox/context-mode-setup.sh; \
+    # shellcheck disable=SC1091  # copied into the image by the COPY above \
+    . /home/llm/.riotbox/context-mode-summary.sh; \
+    : "${CONTEXT_MODE_STATS_BIN:?is no longer defined by context-mode-summary.sh — the exit report would read a shim that was never written}"; \
+    : "${CONTEXT_MODE_POST_MATCHER:?is no longer defined by context-mode-setup.sh — the PostToolUse guard below would check nothing}"; \
+    : "${CONTEXT_MODE_BIN:?is no longer defined by context-mode-setup.sh — the shim would go where no session looks for it}"; \
+    : "${CONTEXT_MODE_MATCHER:?is no longer defined by context-mode-setup.sh — the guard below would check nothing}"; \
+    : "${CONTEXT_MODE_MCP_NAME:?is no longer defined by context-mode-setup.sh — the guard below would check nothing}"; \
+    printf "%s\n" \
+        "#!/usr/bin/env bash" \
+        "# Generated by the RiotBox image build. Pins the interpreter — see the" \
+        "# Context Mode block in the Containerfile for why a bare node is wrong." \
+        "exec \"${CM_NODE_BIN}/node\" \"${CM_PKG}/cli.bundle.mjs\" \"\$@\"" \
+        > "${CONTEXT_MODE_BIN}"; \
+    chmod +x "${CONTEXT_MODE_BIN}"; \
+    [ -x "${CONTEXT_MODE_BIN}" ]; \
+    grep -qF "\`mcp__${CONTEXT_MODE_MCP_NAME}__" "${CM_PKG}/hooks/core/tool-naming.mjs"; \
+    [ "$(jq -Sc ".hooks|keys" "${CM_PKG}/hooks/hooks.json")" = "$(context_mode_hook_table | jq -Sc keys)" ] \
+        || { echo "hooks/hooks.json in context-mode@${CONTEXT_MODE_VERSION} wires a different event set than context_mode_hook_table — a session would leave an upstream hook unwired, or wire an event that no longer exists" >&2; exit 1; }; \
+    [ "$(jq -r "[.hooks.PreToolUse[].matcher]|join(\"|\")" "${CM_PKG}/hooks/hooks.json")" = "${CONTEXT_MODE_MATCHER}" ] \
+        || { echo "the PreToolUse tool set in hooks/hooks.json no longer equals CONTEXT_MODE_MATCHER — sessions would intercept a different set of tools than upstream ships" >&2; exit 1; }; \
+    [ "$(jq -r ".hooks.PostToolUse[0].matcher" "${CM_PKG}/hooks/hooks.json")" = "${CONTEXT_MODE_POST_MATCHER}" ] \
+        || { echo "the PostToolUse tool set in hooks/hooks.json no longer equals CONTEXT_MODE_POST_MATCHER — sessions would capture a different set of tools than upstream, and a narrower one means less survives a compact or a restart" >&2; exit 1; }; \
+    "${CONTEXT_MODE_BIN}" --help | grep -q "context-mode hook <platform> <event>"; \
+    context_mode_hook_table | jq -r "to_entries[] | .value.event" > /tmp/cm-events; \
+    while read -r event; do \
+        [ -f "${CM_PKG}/hooks/${event}.mjs" ] \
+            || { echo "context_mode_hook_table names the event \"${event}\", which has no hooks/${event}.mjs in context-mode@${CONTEXT_MODE_VERSION} — the dispatcher exits 0 for it, so every session would wire a hook that does nothing" >&2; exit 1; }; \
+        "${CONTEXT_MODE_BIN}" hook claude-code "${event}" < /dev/null; \
+    done < /tmp/cm-events; \
+    rm -f /tmp/cm-events; \
+    [ -f "${CM_PKG}/build/session/analytics.js" ]; \
+    grep -qF "export function getRealBytesStats" "${CM_PKG}/build/session/analytics.js"; \
+    printf "%s\n" \
+        "import { getRealBytesStats } from \"${CM_PKG}/build/session/analytics.js\";" \
+        "const dir = process.argv[2];" \
+        "if (!dir) { process.exit(1); }" \
+        "try {" \
+        "  process.stdout.write(JSON.stringify(getRealBytesStats({ sessionsDir: dir })) + \"\\n\");" \
+        "} catch {" \
+        "  process.exit(1);" \
+        "}" \
+        > /home/llm/.riotbox/context-mode-stats.mjs; \
+    printf "%s\n" \
+        "#!/usr/bin/env bash" \
+        "# Generated by the RiotBox image build. Pins the interpreter for the same" \
+        "# reason the context-mode shim does; --no-warnings suppresses the" \
+        "# ExperimentalWarning node:sqlite emits, which would otherwise land in" \
+        "# the middle of the exit report." \
+        "exec \"${CM_NODE_BIN}/node\" --no-warnings \"/home/llm/.riotbox/context-mode-stats.mjs\" \"\$@\"" \
+        > "${CONTEXT_MODE_STATS_BIN}"; \
+    chmod +x "${CONTEXT_MODE_STATS_BIN}"; \
+    CM_PROBE="$(mktemp -d)"; \
+    "${CONTEXT_MODE_STATS_BIN}" "${CM_PROBE}" \
+        | jq -e "has(\"eventDataBytes\") and has(\"bytesAvoided\") \
+                 and has(\"bytesReturned\") and has(\"snapshotBytes\")" > /dev/null; \
+    rmdir "${CM_PROBE}"; \
+    "${CONTEXT_MODE_BIN}" doctor > /dev/null'
+
+# ── Context Mode event bridge: neutralized ───────────────────────────────────
+# The PostToolUse / UserPromptSubmit / PreCompact / Stop hooks all route through
+# attributeAndInsertEvents, which POSTs every event to ${platform_url}/events
+# when a config file exists (hooks/platform-bridge.mjs). The gate is file
+# presence: absent → readConfig() null → hasPlatformConfig() false → the
+# per-event loop never runs.
+#
+# So the barrier is on the *containing directory*, not on the filename. Both
+# directories platform-bridge.mjs resolves are created root-owned and 0555
+# (XDG_CONFIG_HOME is unset in this image, so the default ~/.context-mode
+# applies; ~/.config/context-mode is covered for a session that sets it).
+# platform.json is therefore genuinely absent — the gate is closed — and
+# nothing running as llm can create it.
+#
+# Taking the platform.json name itself, with a root-owned directory, closes the
+# gate just as well but not quietly: readConfig() suppresses its warning for
+# ENOENT alone, so an unreadable file makes every guarded hook print
+# "[context-mode] cannot read …: EISDIR" to stderr. Upstream's one-shot latch
+# does not help, because each hook dispatch is a fresh node process — and
+# PostToolUse fires on nearly every tool call. An operator would reasonably
+# read that stream of warnings as a real error. An absent file is the only
+# rejection readConfig() takes silently.
+#
+# Nothing in the package writes anything else under these directories —
+# platform.json is the only file it names there — so read-only breaks nothing.
+#
+# What this is: a barrier against inadvertent activation — upstream code writing
+# the file, a stray setup flow, a copied dotfile. What it is not: a security
+# boundary. llm holds NOPASSWD sudo, and it owns the grandparents (/home/llm and
+# /home/llm/.config), so it can move a directory aside and recreate it writable
+# without root at all. Deliberate activation stays possible;
+# RIOTBOX_NETWORK=none is the hard control. See THREAT_MODEL.md.
+USER root
+RUN for d in /home/llm/.context-mode /home/llm/.config/context-mode; do \
+        mkdir -p "${d}"; \
+        chown root:root "${d}"; \
+        chmod 0555 "${d}"; \
+    done
+USER llm
+RUN for d in /home/llm/.context-mode /home/llm/.config/context-mode; do \
+        [ -d "${d}" ]; \
+        [ ! -w "${d}" ]; \
+        [ ! -e "${d}/platform.json" ]; \
+    done
 
 # ── Pre-stage plugins (no auth needed — just clones a public GitHub repo) ────
 # Installed to a staging dir because ~/.claude is bind-mounted at runtime.

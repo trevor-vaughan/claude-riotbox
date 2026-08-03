@@ -187,33 +187,33 @@ the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent na
 
 ## Commands
 
-| Command                               | Description                                                                                                             |
-|---------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
-| `riotbox build`                       | Introspect host environment and build the container image                                                               |
-| `riotbox rebuild`                     | Force a clean rebuild with no layer cache                                                                               |
-| `riotbox update`                      | Re-pull LLM CLI tools — headroom and CodeGraph re-install at pinned versions; opencode, Claude Code, plugins to latest  |
-| `riotbox run "<task>" [dir]`          | Run the agent autonomously (defaults to current directory)                                                              |
-| `riotbox shell [dir]`                 | Interactive shell (defaults to current directory)                                                                       |
-| `riotbox resume [dir]`                | Continue the last agent session                                                                                         |
-| `riotbox reown`                       | Rewrite all container-authored commits to your git identity                                                             |
-| `riotbox reown <ref>`                 | Rewrite only commits since a specific ref                                                                               |
-| `riotbox mounts`                      | Show auto-detected mounts (useful for debugging)                                                                        |
-| `riotbox nested-run "<task>" [dir]`   | Run with podman-in-podman support (disables SELinux)                                                                    |
-| `riotbox nested-shell [dir]`          | Shell with podman-in-podman support (disables SELinux)                                                                  |
-| `riotbox socket-run "<task>" [dir]`   | Run with shared host podman socket (WARNING: grants host root)                                                          |
-| `riotbox socket-shell [dir]`          | Shell with shared host podman socket (WARNING: grants host root)                                                        |
-| `riotbox session-list`                | List all RiotBox sessions                                                                                               |
-| `riotbox session-remove [key/path]`   | Remove a session by key or project path (or `--all`)                                                                    |
-| `riotbox session-reset [all] [force]` | Reset session cache (forces fresh skill/config copy); `all` resets every session, `force` skips the confirmation prompt |
-| `riotbox overlays`                    | List sessions with pending overlay data (podman-only)                                                                   |
-| `riotbox overlay-diff [project]`      | Show overlay changes vs host project                                                                                    |
-| `riotbox overlay-accept [project]`    | Apply overlay changes to host project                                                                                   |
-| `riotbox overlay-reject [project]`    | Discard overlay changes                                                                                                 |
-| `riotbox audit "<task>" [dir]`        | Read-only session for inspecting untrusted code (workspace mounted RO)                                                  |
-| `riotbox install-hooks [global]`      | Install the pre-push hook that blocks container-identity commits ([details](#reclaiming-authorship))                    |
-| `riotbox agents`                      | List registered agents (riotbox name + binary)                                                                          |
-| `riotbox tokscale [args...]`          | Unified [tokscale](https://github.com/IvGolovach/tokscale) usage across your native agent home + every riotbox session, offline (no telemetry); args pass through to tokscale |
-| `riotbox doctor`                      | Walks every preflight check; prints each result with a fix hint. Exits with the first failure's code (0 on full pass).  |
+| Command                               | Description                                                                                                                                 |
+|---------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| `riotbox build`                       | Introspect host environment and build the container image                                                                                   |
+| `riotbox rebuild`                     | Force a clean rebuild with no layer cache                                                                                                   |
+| `riotbox update`                      | Re-pull LLM CLI tools — opencode, Claude Code, plugins to latest; headroom, CodeGraph, Context Mode at pinned versions (large re-download)  |
+| `riotbox run "<task>" [dir]`          | Run the agent autonomously (defaults to current directory)                                                                                  |
+| `riotbox shell [dir]`                 | Interactive shell (defaults to current directory)                                                                                           |
+| `riotbox resume [dir]`                | Continue the last agent session                                                                                                             |
+| `riotbox reown`                       | Rewrite all container-authored commits to your git identity                                                                                 |
+| `riotbox reown <ref>`                 | Rewrite only commits since a specific ref                                                                                                   |
+| `riotbox mounts`                      | Show auto-detected mounts (useful for debugging)                                                                                            |
+| `riotbox nested-run "<task>" [dir]`   | Run with podman-in-podman support (disables SELinux)                                                                                        |
+| `riotbox nested-shell [dir]`          | Shell with podman-in-podman support (disables SELinux)                                                                                      |
+| `riotbox socket-run "<task>" [dir]`   | Run with shared host podman socket (WARNING: grants host root)                                                                              |
+| `riotbox socket-shell [dir]`          | Shell with shared host podman socket (WARNING: grants host root)                                                                            |
+| `riotbox session-list`                | List all RiotBox sessions                                                                                                                   |
+| `riotbox session-remove [key/path]`   | Remove a session by key or project path (or `--all`)                                                                                        |
+| `riotbox session-reset [all] [force]` | Reset session cache (forces fresh skill/config copy); `all` resets every session, `force` skips the confirmation prompt                     |
+| `riotbox overlays`                    | List sessions with pending overlay data (podman-only)                                                                                       |
+| `riotbox overlay-diff [project]`      | Show overlay changes vs host project                                                                                                        |
+| `riotbox overlay-accept [project]`    | Apply overlay changes to host project                                                                                                       |
+| `riotbox overlay-reject [project]`    | Discard overlay changes                                                                                                                     |
+| `riotbox audit "<task>" [dir]`        | Read-only session for inspecting untrusted code (workspace mounted RO)                                                                      |
+| `riotbox install-hooks [global]`      | Install the pre-push hook that blocks container-identity commits ([details](#reclaiming-authorship))                                        |
+| `riotbox agents`                      | List registered agents (riotbox name + binary)                                                                                              |
+| `riotbox tokscale [args...]`          | Unified [tokscale](https://github.com/IvGolovach/tokscale) usage across your native agent home + every riotbox session, offline (no telemetry); args pass through to tokscale                     |
+| `riotbox doctor`                      | Walks every preflight check; prints each result with a fix hint. Exits with the first failure's code (0 on full pass).                      |
 
 ## Pre-installed tools
 
@@ -234,6 +234,7 @@ The image comes with a broad set of tools pre-installed so the agent can start w
 **AI tooling:**
 
 - [`lola`](https://github.com/LobsterTrap/lola) — AI Skills Package Manager (cross-assistant skill distribution)
+- [`context-mode`](https://github.com/mksglu/context-mode) — context-window optimization (opt-in per session, see [Context Mode](#context-mode-opt-in))
 
 **Diagram validation:**
 
@@ -571,6 +572,237 @@ The toggle accepts only the literal `1` — anything else disables the feature
 (`riotbox doctor` flags unrecognized values). If a session misbehaves under
 compression, drop the variable and rerun — default behavior is untouched
 when `RIOTBOX_HEADROOM` is unset.
+
+## Context Mode (opt-in)
+
+[Context Mode](https://github.com/mksglu/context-mode) keeps large tool output out
+of the model's context window. Two layers do the work. A `PreToolUse` hook
+intercepts the calls that produce large output — `Bash`, `Read`, `Grep`,
+`WebFetch`, `Agent`, and every external MCP tool — and parks the raw bytes in a
+local SQLite FTS5 store the agent searches on demand instead of re-reading.
+`PostToolUse`, `UserPromptSubmit`, `Stop` and `PreCompact` record what the
+session did into a second, per-project store, which `SessionStart` replays into
+the next session and after each compact. RiotBox ships it in the image (pinned
+version, no telemetry) and wires it per session:
+
+```bash
+RIOTBOX_CONTEXT_MODE=1 riotbox run "fix the failing tests"
+# or persist it:
+echo ': "${RIOTBOX_CONTEXT_MODE:=1}"' >> ~/.config/riotbox/config
+```
+
+What changes when enabled:
+
+- `WebFetch` is redirected to Context Mode's own fetch tools, which store the
+  response and return a summary. Large `Bash` output gets a routing suggestion
+  rather than a hard redirect, so savings there depend on the model taking it.
+- **`WebSearch` is not intercepted.** It appears in no alternative of the
+  `PreToolUse` matcher (`CONTEXT_MODE_MATCHER` in
+  `container/context-mode-setup.sh`, which reproduces upstream's
+  `PRE_TOOL_USE_MATCHERS` verbatim), and a `PreToolUse` hook only runs for the
+  tools its matcher names — so search results still land in the transcript in
+  full.
+- The FTS5 store lives in the session directory
+  (`~/.local/share/riotbox/<session>/context-mode`, visible in-container at
+  `~/.claude/context-mode`). It holds verbatim tool output — treat it with the
+  same sensitivity as your session transcripts. `riotbox session-remove` deletes
+  both together.
+- **Two stores, both in the session directory.** `content/` holds the parked tool
+  output; `sessions/` holds continuity — what the session did, and the snapshot
+  `PreCompact` writes so an autocompact does not lose the thread. Both persist for
+  the project set, so `riotbox resume` and a fresh run on the same projects pick up
+  what the last one learned.
+- **The session prints what it kept out when it exits**, the same way
+  `RIOTBOX_HEADROOM=1` prints its token summary:
+
+  ```text
+  ── context-mode ─────────────────────────────────────
+   this run 218 KB kept out · 21.5 KB re-read via ctx_search · 8.2 KB hook log on disk
+   last 7 days 1.4 MB
+   store: /home/llm/.claude/context-mode (this project set)
+  ```
+
+  "Kept out" is upstream's `bytesAvoided` — bytes the hooks withheld from the
+  model's context — and nothing else; the re-read figure is what came back out of
+  the store to pay for it, omitted when it is zero. Deliberately **not** what
+  `context-mode statusline` shows for the same store: its headline adds the
+  session bookkeeping and the resume snapshot to the savings and prints a
+  percentage of them, which is why it reads near 100% even for a session that
+  redirected nothing. See `container/context-mode-summary.sh`.
+- **A wired session always prints the report, including when it saved nothing.**
+  That is the case worth reading closely:
+
+  ```text
+  ── context-mode ─────────────────────────────────────
+   this run 0 B kept out · 8.0 KB hook log on disk
+   last 7 days 0 B
+   store: /home/llm/.claude/context-mode (this project set)
+  ```
+
+  The hooks fired and withheld nothing. "Hook log on disk" is `eventDataBytes`,
+  the continuity rows `PostToolUse` writes for every matched call whether or not
+  anything was redirected. **It is not a token cost** — those rows are read back
+  only by aggregate queries and never enter a context window, so the unit is
+  bytes on disk, not context. It is on the line as proof-of-life: non-zero means
+  the hooks ran, which beside a zero kept-out is the whole diagnosis. A missing
+  report means something else entirely: the wiring did not complete. Look for
+  `[context-mode] WARN` on stderr at session start, and see "Context Mode does
+  not appear to do anything" below.
+
+  The figures cover the store, not one session: `mount-projects.sh` allows two
+  concurrent sessions per project set and they share one store, so each one's
+  report includes the other's bytes.
+
+  "Last 7 days" is the honest ceiling, not a display choice: the totals come from
+  `session_events`, and upstream's `hooks/sessionstart.mjs` calls
+  `cleanupOldSessions(7)` — a hardcoded literal with no configuration knob —
+  deleting event, meta and resume rows for sessions older than a week. The parked
+  content is untouched by that sweep (`ctx_purge` is the only thing that removes
+  it), so retrieval keeps working across the boundary while the counters reset.
+  Totals beyond seven days have to be captured at session exit; they cannot be
+  recovered from the store afterwards.
+
+  Nothing prints in two cases now: the store could not be read at exit, or the
+  session degraded to Context Mode off. A zero run prints a row of zeros rather
+  than nothing, so an absent report always means one of those two.
+- **Each session exit also writes a durable record**, one small JSON file per
+  run, into `${RIOTBOX_CONTEXT_LEDGER:-${XDG_DATA_HOME:-~/.local/share}/riotbox-context-mode}/runs/`.
+  This is deliberately outside `RIOTBOX_DATA_DIR`, so `riotbox session-reset`
+  and `riotbox session-remove` cannot erase it along with a session directory.
+  That separation matters because of the seven-day pruning described above:
+  the store's own counters do not survive past a week, which is why the exit
+  report says "last 7 days" rather than "lifetime". A total spanning longer
+  than that exists only because it was captured into the ledger at the moment
+  each session exited — there is nothing left in the store to re-derive it
+  from later.
+- **`riotbox ctx-stats` aggregates the ledger.** It runs entirely on the host —
+  no container starts — and reads every record under the ledger directory.
+  Default view, run against a ledger with four valid records, one
+  `baseline_unknown` run, one record from a newer schema, and one unreadable
+  file:
+
+  ```text
+  ── context-mode rollup ──────────────────────────────
+   4 runs  2026-07-28 → 2026-07-29
+   kept out  264 KB
+   re-read   21.0 KB
+   hook log  18.2 KB (disk, not tokens)
+   1 run saved nothing
+   1 run excluded (baseline unknown)
+   1 record from a newer schema (upgrade riotbox)
+   1 file skipped (unreadable)
+   ledger: /tmp/riotbox-context-mode-demo/runs
+  ```
+
+  Other views:
+
+  - `--by-project` — the same totals grouped by project set. A project whose
+    every run is `baseline_unknown` prints `unmeasured` rather than `0 B`,
+    which would read as measured-and-saved-nothing.
+  - `--runs [N|all]` — a per-run table, newest first, 20 rows by default.
+    `--runs 0` is rejected at parse time (exit 2) rather than silently
+    producing an empty table that would be mistaken for an empty ledger.
+  - `--json` — the aggregation as JSON, for scripting.
+  - `--ledger-dir DIR` — read records from `DIR` instead of the mounted
+    ledger.
+
+  `--by-project` and `--runs` are mutually exclusive view selectors:
+  `ctx-stats --by-project --runs 5` exits 2 with `choose one of --by-project
+  or --runs` rather than letting the second flag silently win. Repeating the
+  same selector is fine.
+- **The record schema**, one file per run, written by
+  `context_mode_ledger_append` in `container/context-mode-summary.sh`:
+
+  ```json
+  {
+    "schema": 1,
+    "started_at": "2026-07-30T14:02:11Z",
+    "ended_at": "2026-07-30T14:48:03Z",
+    "session_id": "a3f9c1d4e8b27f60",
+    "project_set": "riotbox",
+    "agent": "claude",
+    "kept_out_bytes": 219184,
+    "re_read_bytes": 21500,
+    "hook_log_bytes": 8412,
+    "retained_total_bytes": 221184,
+    "baseline_unknown": false
+  }
+  ```
+
+  `kept_out_bytes`, `re_read_bytes` and `hook_log_bytes` are `null` and
+  `baseline_unknown` is `true` when a run's start snapshot could not be read
+  — a concurrent session held the write lock. `ctx-stats` counts those runs
+  (they happened) but excludes them from the kept/re-read/hook-log totals,
+  because a run whose start point is unknown has no honest delta to add.
+- **Audit sessions are not recorded.** `riotbox audit` runs with
+  `RIOTBOX_READONLY=1` and gets no ledger mount at all. The mount is an
+  ordinary read-write bind mount — nothing enforces "write-only" at the
+  podman level — and its filenames and record contents name every other
+  project set you work on. An untrusted repo being audited does not get
+  handed that.
+- **Three kinds of records get disclosed, not silently dropped:** files that
+  cannot be parsed as valid records ("N files skipped (unreadable)"),
+  records written by a newer schema than this reader understands ("N records
+  from a newer schema (upgrade riotbox)"), and runs excluded from the
+  aggregate totals because their baseline was unknown ("N runs excluded
+  (baseline unknown)"). The first two are reported by every view, including
+  the empty-ledger message when they're the only thing the ledger holds; the
+  third is specific to the default aggregate view — `--by-project` and
+  `--runs` surface baseline-unknown runs per row instead (`unmeasured`,
+  `baseline unknown`). A reader that silently skipped any of these would
+  under-report a total while still presenting it as complete — the wrong
+  answer, stated with confidence.
+- **Event forwarding is neutralized.** Context Mode can POST session events to a
+  remote platform when a `platform.json` config file exists. RiotBox ships that
+  file's directory root-owned and unwritable at both paths Context Mode resolves
+  by default — `~/.context-mode` when `XDG_CONFIG_HOME` is unset, and
+  `~/.config/context-mode` when it is left at `~/.config` — so the file stays
+  absent and cannot be created inadvertently. A session that points
+  `XDG_CONFIG_HOME` somewhere else moves the path outside both. Absent is also
+  the only state Context Mode reads without logging, so the closed gate is silent
+  rather than warning on every tool call. This is not a boundary against a
+  deliberate actor — the container's user holds `sudo` — and `RIOTBOX_NETWORK=none`
+  remains the hard control. See [Context Mode store and
+  wiring](THREAT_MODEL.md#context-mode-store-and-wiring).
+- **Wiring the session needs no network.** RiotBox writes the MCP and hook
+  wiring itself rather than running `context-mode upgrade`, which clones
+  upstream and overwrites the installed package with whatever is on `main`.
+  One outbound request remains, and it is not RiotBox's: the MCP server itself
+  GETs `https://registry.npmjs.org/context-mode/latest` at startup to warn about
+  newer versions. It carries no payload, fails soft, and — unlike headroom and
+  CodeGraph — has no off switch; `RIOTBOX_NETWORK=none` is what suppresses it.
+  See [Context Mode store and
+  wiring](THREAT_MODEL.md#context-mode-store-and-wiring) in the threat model.
+- Context Mode runs on its own pinned Node 22 inside the image, independent of
+  whichever Node versions the build mirrored from your host.
+- Wired for `--agent=claude` only. The hooks dispatch through
+  `context-mode hook claude-code …` and every stanza lands under the Claude
+  config directory, which opencode never reads. A session started with any other
+  agent prints a warning naming that agent, strips any wiring an earlier Claude
+  session left in that directory, and runs with Context Mode off.
+  `riotbox doctor` checks the image rather than the agent, so it still reports
+  `[ok]` for an opencode session with the toggle set — the session-start
+  warning is where that shows up.
+- Wiring is removed again the first time a session starts without the toggle, so
+  a session directory never outlives the feature holding hooks that point at a
+  binary that is gone.
+
+**Mutually exclusive with `RIOTBOX_HEADROOM=1`.** Both reduce context, at
+different layers; the combination is unmeasured, so the launcher refuses the pair
+rather than shipping an unsupported configuration. Headroom compresses payloads in
+flight and is unconditional; Context Mode keeps output out of the transcript
+entirely but relies on the model's cooperation for the `Bash` path.
+
+The toggle accepts only the literal `1` — anything else disables the feature
+(`riotbox doctor` flags unrecognized values).
+
+> **Licence note:** Context Mode is [Elastic Licence
+> 2.0](https://github.com/mksglu/context-mode/blob/main/LICENSE) — source-available,
+> not OSI open source, unlike everything else in the image. It is pulled from npm
+> onto your machine at `riotbox build` time and is not redistributed in the rpm/deb
+> packages. See
+> [`docs/design/context-mode-evaluation.md`](docs/design/context-mode-evaluation.md)
+> for the full evaluation, including what was and was not measured.
 
 ## CodeGraph code intelligence
 
@@ -952,6 +1184,7 @@ Other knobs:
 | `RIOTBOX_DOCTOR_JSON=1`       | Emit one JSON line per check (machine-readable)   |
 | `RIOTBOX_DOCTOR_FIRST_FAIL=1` | Stop at the first failure                         |
 | `IMAGE_NAME=<tag>`            | Probe a tag other than `riotbox`                  |
+| `RIOTBOX_CONTEXT_LEDGER=DIR`  | Where `ctx-stats` records/reads Context Mode runs |
 
 ### Container startup hangs
 
@@ -1006,6 +1239,19 @@ cat ~/.claude/debug/latest
 - Verify the files exist on the host: `ls -la ~/.claude.json ~/.claude/.credentials.json`
 - Verify the session directory is writable: `ls -la ~/.local/share/riotbox/`
 - If the session directory is owned by a numeric UID (e.g., 525287), a previous run without `--userns=keep-id` left it with wrong ownership. Fix with: `sudo chown -R $(id -u):$(id -g) ~/.local/share/riotbox/`
+
+### Context Mode does not appear to do anything
+
+**Symptom**: `RIOTBOX_CONTEXT_MODE=1` is set, `riotbox doctor` passes, and the session shows no sign of the feature.
+
+**Cause**: three different things look identical from outside. Work through them in order — each one has its own signal.
+
+**Check**:
+
+- **Did the wiring land?** A wired session prints exactly one line to stdout at startup: `  [context-mode] hooks wired; store at <dir>/context-mode.` If it is missing, wiring gave up, and every give-up path explains itself on **stderr** as `[context-mode] WARN:` — a stream an autonomous run usually discards. Re-run capturing it: `RIOTBOX_CONTEXT_MODE=1 riotbox run "…" 2>/tmp/rb.err; grep context-mode /tmp/rb.err`. Most common causes: `--agent` is not `claude` (Context Mode is wired for Claude Code only), or the session config could not be written.
+- **Is the exit report zero rather than absent?** `this run 0 B kept out · 8.0 KB hook log on disk` means the hooks ran and withheld nothing — the feature engaged and saved nothing. The hook-log figure is disk volume, not tokens. `bytesAvoided` only moves when the model actually routes large output through the sandbox tools; a session of small tool results has nothing to redirect. **No report at all** is the different problem, and it points back to the wiring check above.
+- **Do not read `riotbox doctor` as proof the session works.** Its probe runs the image with `--entrypoint /usr/bin/bash`, which bypasses `container/entrypoint.sh` — the file where the per-session wiring actually happens. A green check proves the image ships a working `context-mode` and nothing about your session.
+- **Compare against `context-mode statusline` and expect disagreement.** Upstream's headline divides `eventDataBytes` by 4 and calls the result saved tokens, so it reports a saving for a session that saved nothing. RiotBox reports `bytesAvoided` alone.
 
 ### Session directory owned by wrong UID
 

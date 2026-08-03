@@ -262,6 +262,96 @@ any send path. The build asserts `CODEGRAPH_NO_DOWNLOAD=1 codegraph version`,
 which rules out the npm launcher's first-run bundle download ever firing inside
 a session.
 
+## Context Mode store and wiring
+
+Context Mode is opt-in (`RIOTBOX_CONTEXT_MODE=1`) and off by default. When
+enabled it changes what a session holds on disk and what it puts on the critical
+path, in the ways set out below.
+
+**The FTS5 store holds verbatim tool output.** Command results, file contents,
+and fetched pages are written to `~/.claude/context-mode/` — the session
+directory — so the store carries the same sensitivity as a session transcript
+and is deleted by the same `riotbox session-remove`.
+`container/context-mode-setup.sh` pins `CONTEXT_MODE_DIR` there explicitly
+rather than relying on the upstream default, so a change to that default alone
+cannot silently relocate that content onto the container overlay, where it would
+vanish at exit and escape session cleanup. The pin is a real defence with a
+stated limit: it holds only while upstream keeps honouring a variable of that
+name. Unlike the wiring template's matcher, MCP server name, and dispatcher
+form, no build-time guard greps the installed bundle for it, and the tests
+assert the exported value rather than that the package reads it — so a version
+bump that renamed or dropped the variable would surface in a user session, not
+at build time.
+
+**Wiring the session reaches no network, by construction.** Context Mode's only
+hook-configuring command is `context-mode upgrade`, and that command
+`git clone`s `https://github.com/mksglu/context-mode.git` and — when upstream is
+newer than the installed copy — runs `npm install`, `npm run build`, and copies
+the result over the installed package tree. Invoking it per session would swap
+pinned, reviewed code for whatever is on `main`, inside a container that has the
+user's project mounted read-write, and would break `RIOTBOX_NETWORK=none`. It is
+never invoked. RiotBox writes the two JSON stanzas itself, offline, and the image
+build greps the installed bundle for the tool set the wiring template encodes, so
+a version bump that changes it fails the build rather than a user session.
+
+**Residual outbound traffic is one unauthenticated GET.** The MCP server queries
+`https://registry.npmjs.org/context-mode/latest` at startup to warn about new
+versions. It carries no payload beyond the request itself and fails soft when
+unreachable — verified by running `context-mode doctor` inside a network
+namespace with no connectivity, which exits 0 with a single warning — and
+`RIOTBOX_NETWORK=none` suppresses it entirely. Unlike headroom and CodeGraph
+there is no knob to disable it: Context Mode honours no `DO_NOT_TRACK` and ships
+no telemetry setting, because it collects no telemetry to switch off. The package
+contains no analytics SDK and exactly one `fetch()` call, which backs the
+user-initiated `ctx_fetch_and_index` tool.
+
+**Wiring outlives the image, so it is stripped rather than documented away.**
+The hooks and the `mcpServers` entry are written into the session
+`settings.json` and `.claude.json`, neither of which riotbox ever syncs from the
+host. That is the same trap CodeGraph's prompt hook set: a session wired by an
+image that shipped the feature would keep spawning a missing binary on every
+matching tool call. `context_mode_strip_session_wiring` removes exactly the
+entries whose command names the riotbox shim — leaving any hook the user wrote
+untouched — on the first session that starts with the toggle off or the binary
+absent.
+
+**Licence.** Context Mode is Elastic Licence 2.0: source-available, not OSI open
+source, and the only such component in the image. It is fetched from npm during
+`riotbox build` on the user's own machine and is not redistributed in the rpm or
+deb packages. Neither ELv2 limitation (no hosted/managed service, no
+circumventing licence-key functionality) binds riotbox's usage — riotbox is a
+local developer tool and the OSS package has no licence-key gate — but the
+dependency is recorded here because a licence change upstream is a supply-chain
+event for this image. See `docs/design/context-mode-evaluation.md`.
+
+**Event bridge.** Four of the six hooks (`PostToolUse`, `UserPromptSubmit`,
+`PreCompact`, `Stop`) route their writes through `attributeAndInsertEvents`, which
+also POSTs every event to `${platform_url}/events` when a config file exists at
+`$XDG_CONFIG_HOME/context-mode/platform.json`, or `~/.context-mode/platform.json`
+when that variable is unset (`hooks/platform-bridge.mjs`). The gate is file
+presence: absent, and the forwarding loop never executes.
+
+RiotBox ships that file's containing directory root-owned and mode `0555` at both
+paths, and ships no `platform.json` in it. The file is therefore absent, which
+closes the gate, and absent is the only outcome `readConfig` does not warn about —
+every other rejection (unreadable, invalid JSON, wrong schema) writes a line to
+stderr, and because each hook dispatch is a fresh process, upstream's one-shot
+warning latch would not suppress the repeats. So the gate is quiet as well as
+closed. `riotbox doctor` fails when either directory has become writable or a
+`platform.json` has appeared in it.
+
+Threat addressed: inadvertent activation — upstream code writing the file, a stray
+setup flow, a dotfile copied in from a host. **Not** addressed: a deliberate actor
+inside the container. The `llm` user holds NOPASSWD `sudo`, and the sentinel's
+parent directories are `llm`-owned, so removing the directory needs no privilege
+escalation. Against that, `RIOTBOX_NETWORK=none` is the control that holds — it is
+also what suppresses the unsuppressable `registry.npmjs.org` version check
+documented above.
+
+A session that sets `XDG_CONFIG_HOME` to a writable directory moves the config path
+outside both sentinels. That requires deliberate action inside the container and is
+recorded here rather than defended against.
+
 ## Findings
 
 ---

@@ -8,6 +8,11 @@
 #                     and hint at unindexed projects. When the binary is gone,
 #                     strip the wiring an earlier image left in this session.
 #
+# Depends on json_write_atomic (scripts/lib/json-write.sh), which entrypoint.sh
+# sources ahead of this file. Not sourced from here: the same writer is shared
+# with context-mode-setup.sh, and the entrypoint composes all of these into one
+# shell — see the source block there.
+#
 # Why this runs per session rather than at build time: ~/.claude and
 # ~/.config/opencode are replaced by session bind mounts (see
 # scripts/mount-projects.sh), so agent config written into the image is
@@ -24,50 +29,6 @@
 
 # Workspace root. Overridable so the behavior can be tested without /workspace.
 CODEGRAPH_WORKSPACE="${CODEGRAPH_WORKSPACE:-/workspace}"
-
-# Replace a JSON config file with new content, atomically and without
-# loosening its mode. Prints nothing; returns non-zero so the caller can name
-# what was lost.
-#
-# Both callers rewrite an agent config file that the user owns, living in a
-# bind-mounted host session directory, so both need the same three properties
-# and must not grow separate versions of them:
-#
-#   * A partial write must never replace a good config, hence the staging file
-#     and the rename.
-#   * The staging file is uniquely named and created inside the target
-#     directory: same filesystem keeps the rename atomic, and a unique name
-#     keeps two sessions sharing this bind-mounted config directory
-#     (mount-projects.sh supports two concurrent sessions per project) from
-#     renaming each other's half-written file over the user's config.
-#   * A rename adopts the source inode's mode, so the staging file must carry
-#     the mode the target should end up with. Whatever mode the file has is
-#     preserved and a new one is created 0600 rather than at the process
-#     umask: these paths resolve into the host session directory, so a mode
-#     this code picks persists on the host, and a config the user chose to
-#     restrict must never come back looser than they left it.
-codegraph_write_json_atomic() {
-	local target_file="${1:?codegraph_write_json_atomic requires a target file}"
-	local content="${2?codegraph_write_json_atomic requires content}"
-
-	local tmp_file
-	if ! mkdir -p "$(dirname "${target_file}")" ||
-		! tmp_file="$(mktemp "${target_file}.XXXXXX")"; then
-		return 1
-	fi
-
-	local mode
-	if ! mode="$(stat -c '%a' "${target_file}" 2>/dev/null)" || [[ -z "${mode}" ]]; then
-		mode=600
-	fi
-
-	if ! printf '%s\n' "${content}" >"${tmp_file}" ||
-		! chmod "${mode}" "${tmp_file}" ||
-		! mv "${tmp_file}" "${target_file}"; then
-		rm -f "${tmp_file}"
-		return 1
-	fi
-}
 
 # Move CodeGraph's Claude MCP entry into the config file Claude Code reads.
 #
@@ -113,7 +74,7 @@ codegraph_relocate_mcp_entry() {
 	# Every failure here warns: a session that silently lost its MCP wiring
 	# looks identical to one that never had any, which is the hardest kind of
 	# problem to notice.
-	if ! codegraph_write_json_atomic "${target_file}" "${merged}"; then
+	if ! json_write_atomic "${target_file}" "${merged}"; then
 		echo "  [codegraph] WARN: could not write ${target_file} — MCP entry not relocated." >&2
 		return 0
 	fi
@@ -215,7 +176,13 @@ codegraph_strip_session_wiring() {
 	# is hand-edited, and container/plugin-setup.sh pretty-prints it everywhere
 	# it touches it. Reflowing a whole document onto one line to delete two
 	# entries would be a far larger change than the one being made.
-	if ! codegraph_write_json_atomic "${settings_file}" "$(jq . <<<"${stripped}")"; then
+	#
+	# Checked for emptiness, not just for jq's exit status: an unchecked
+	# command substitution yields "" when jq fails or prints nothing, and the
+	# writer would happily put a lone newline where the user's config was.
+	local pretty
+	if ! pretty="$(jq . <<<"${stripped}")" || [[ -z "${pretty}" ]] ||
+		! json_write_atomic "${settings_file}" "${pretty}"; then
 		echo "  [codegraph] WARN: could not write ${settings_file} — stale wiring left in place." >&2
 		return 0
 	fi

@@ -131,6 +131,9 @@
 # it, use RIOTBOX_PASSTHROUGH_EXTRA_VARS (documented below).
 #
 # Security:
+#   * install.sh creates this file mode 0600 and strips any group/world
+#     access it finds on upgrade, so secrets written here (or read from
+#     disk by a KEY=VALUE entry) stay owner-only.
 #   * Sensitive values from KEY=VALUE entries never appear in `ps`/argv —
 #     the launcher exports them into its own env and passes only `-e KEY`
 #     (no `=value`) to podman.
