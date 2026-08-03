@@ -50,6 +50,8 @@
 #   19  ~/.claude/plugins exists but is not readable
 #   20  ~/.claude/skills exists but is not readable
 #   21  RIOTBOX_HEADROOM set but invalid, or image lacks headroom/model cache
+#   22  RIOTBOX_CONTEXT_MODE set but invalid, set alongside RIOTBOX_HEADROOM,
+#       or the image lacks a working Context Mode
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Strict mode applies only when this file is run as a script. When sourced as
@@ -296,6 +298,96 @@ KompressCompressor().preload(allow_download=False)
 	return 0
 }
 
+preflight_check_context_mode() {
+	local image="${IMAGE_NAME:-riotbox}"
+	local label="Context Mode available in image (RIOTBOX_CONTEXT_MODE=1)"
+	# Not opted in → nothing to verify. Report it so users see why the
+	# check is a no-op rather than wondering if it ran.
+	if [[ -z "${RIOTBOX_CONTEXT_MODE:-}" ]] || [[ "${RIOTBOX_CONTEXT_MODE}" = "0" ]]; then
+		_preflight_report context_mode ok \
+			"Context Mode not requested (RIOTBOX_CONTEXT_MODE=${RIOTBOX_CONTEXT_MODE:-unset})"
+		return 0
+	fi
+	# Every consumer gates on the literal "1" — any other value silently
+	# disables the feature. Fail loudly here so `RIOTBOX_CONTEXT_MODE=true`
+	# doesn't read as "enabled".
+	if [[ "${RIOTBOX_CONTEXT_MODE}" != "1" ]]; then
+		_preflight_report context_mode fail "${label}" 22 \
+			"RIOTBOX_CONTEXT_MODE='${RIOTBOX_CONTEXT_MODE}' is not recognized — set RIOTBOX_CONTEXT_MODE=1 to enable or unset it"
+		return 22
+	fi
+	# Caught here as well as in the launcher. Both toggles can be persisted in
+	# ~/.config/riotbox/config, and doctor is where a user diagnoses a config
+	# file they no longer remember editing — a pair that only ever surfaced at
+	# launch would send them to the wrong place.
+	if [[ "${RIOTBOX_HEADROOM:-}" = "1" ]]; then
+		_preflight_report context_mode fail "${label}" 22 \
+			"RIOTBOX_CONTEXT_MODE=1 and RIOTBOX_HEADROOM=1 are mutually exclusive — unset one"
+		return 22
+	fi
+	if ! command -v podman >/dev/null 2>&1 ||
+		! podman image exists "${image}" 2>/dev/null; then
+		_preflight_report context_mode fail "${label}" 22 \
+			"Build the image first (riotbox build), then re-run doctor"
+		return 22
+	fi
+	# One short-lived container proves the whole image contract: the shim is on
+	# PATH, it resolves the pinned Node 22, the package it points at is intact,
+	# and SQLite/FTS5 works. --network=none is what makes that a proof rather
+	# than a coincidence of a connected host: the installed CLI runs, and its
+	# unsuppressable npm version check degrades to a warning instead of hanging
+	# or failing, with no connectivity at all — the offline behaviour recorded
+	# in docs/design/context-mode-evaluation.md.
+	#
+	# It says nothing about session start, and must not be read as saying it.
+	# --entrypoint below bypasses container/entrypoint.sh, where
+	# context_mode_setup runs, and `doctor` is a command session start never
+	# invokes — so an edit that made session start call `context-mode upgrade`
+	# (the vendor command that clones upstream over the installed package)
+	# would leave this probe green. Session start is not offline either: Claude
+	# Code spawns the MCP server, which GETs registry.npmjs.org (README.md,
+	# THREAT_MODEL.md).
+	#
+	# The bridge sentinel is checked in the same container as the runtime probe
+	# rather than in a second one: both are image state, and a session pays for
+	# every container `riotbox doctor` starts. Two properties make the gate both
+	# closed and quiet: the config file is absent, so upstream's read fails
+	# ENOENT — the one failure it does not warn about — and its directory is
+	# root-owned and unwritable, so nothing can create it inadvertently. A
+	# writable directory, or a platform.json that has appeared in it, means the
+	# next session can switch event forwarding on. See THREAT_MODEL.md — this is
+	# not a boundary against a user with sudo, it is a check that the image state
+	# RiotBox ships is intact.
+	#
+	# The `-w` test reads the mode bits only for a non-root user: root is granted
+	# write on a 0555 directory regardless, so this probe depends on the image
+	# ending `USER llm` and would report a healthy image as broken if the
+	# container's user ever became root. The extracted-body test in
+	# tests/doctor-context-mode.venom.yml skips itself under a root runner for
+	# the same reason.
+	# Every assertion below is `|| exit 1` / `&& exit 1` — never the tail of an
+	# `&&` chain — and the script ends in an unconditional `exit 0`. The
+	# sentinel's own tests are negative (absent is healthy), so on a healthy
+	# image the last one evaluated is false; a script that let that status fall
+	# through as its own exit status would report every good image as broken.
+	if ! podman run --rm --network=none --entrypoint /usr/bin/bash "${image}" -c \
+		'command -v context-mode >/dev/null || exit 1
+		 context-mode doctor >/dev/null || exit 1
+		 for d in "${HOME}/.context-mode" \
+		          "${HOME}/.config/context-mode"; do
+			[ -d "${d}" ] || exit 1
+			[ -w "${d}" ] && exit 1
+			[ -e "${d}/platform.json" ] && exit 1
+		 done
+		 exit 0' >/dev/null 2>&1; then
+		_preflight_report context_mode fail "${label}" 22 \
+			"Image lacks Context Mode, its runtime is broken, or the event-bridge sentinel was replaced — rebuild with riotbox rebuild"
+		return 22
+	fi
+	_preflight_report context_mode ok "${label}"
+	return 0
+}
+
 # ── Composition ─────────────────────────────────────────────────────────────
 
 # preflight_run: invokes every check in order. By default runs every
@@ -317,6 +409,7 @@ preflight_run() {
 		preflight_check_plugins_dir
 		preflight_check_skills_dir
 		preflight_check_headroom
+		preflight_check_context_mode
 	)
 	for fn in "${checks[@]}"; do
 		rc=0

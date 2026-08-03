@@ -1,0 +1,597 @@
+name: ctx-stats — rollup reader
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# The reader is pure host-side jq over a directory of records; these cases
+# build a fixture directory and run the real script. Note the inverted rule
+# against the writer's: the writer skips silently on any doubt, but a reader
+# that silently skipped a file would under-report a total, so unreadable
+# records are counted and disclosed.
+
+testcases:
+  - name: aggregate totals every valid record and names the ledger
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          mk() {
+            jq -nc --arg sid "$1" --arg pset "$2" --argjson kept "$3" \
+                   --argjson reread "$4" --argjson hooklog "$5" --arg ended "$6" \
+              '{schema:1, started_at:$ended, ended_at:$ended, session_id:$sid,
+                project_set:$pset, agent:"claude", kept_out_bytes:$kept,
+                re_read_bytes:$reread, hook_log_bytes:$hooklog,
+                retained_total_bytes:($kept + 7), baseline_unknown:false}' \
+              > "${LEDGER}/${6//[:-]/}-$1.json"
+          }
+          mk s1 riotbox 1048576 1024 2048 "2026-07-01T10:00:00Z"
+          mk s2 riotbox 0       0    4096 "2026-07-02T10:00:00Z"
+          mk s3 other   2097152 2048 1024 "2026-07-03T10:00:00Z"
+
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}")"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -q '3 runs' \
+            || { echo "FAIL: run count wrong"; exit 1; }
+          # kept out: 1048576 + 0 + 2097152 = 3145728 B = 3.0 MB
+          printf '%s' "${out}" | grep -q '3.0 MB' \
+            || { echo "FAIL: kept-out total wrong"; exit 1; }
+          printf '%s' "${out}" | grep -q '1 run saved nothing' \
+            || { echo "FAIL: zero-saving count wrong"; exit 1; }
+          printf '%s' "${out}" | grep -q "${LEDGER}" \
+            || { echo "FAIL: ledger path not shown"; exit 1; }
+
+          # retained_total_bytes is deliberately offset from kept_out_bytes
+          # (+7 per record, see mk() above) so summing the wrong field is
+          # visible even under _humanize_bytes rounding — pin the exact byte
+          # count via --json rather than trust the 1-decimal MB string alone.
+          out_json="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --json)"
+          printf '%s\n' "${out_json}"
+          printf '%s' "${out_json}" | jq -e '.kept == 3145728' >/dev/null \
+            || { echo "FAIL: kept total is not the exact sum of kept_out_bytes: ${out_json}"; exit 1; }
+          echo "aggregate=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "aggregate=pass"
+
+  - name: an empty ledger is a state, not an error
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          rc=0
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}")" || rc=$?
+          [ "${rc}" = "0" ] || { echo "FAIL: exited ${rc} on an empty ledger"; exit 1; }
+          printf '%s' "${out}" | grep -q 'no runs recorded yet' \
+            || { echo "FAIL: unhelpful empty message: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -q "${LEDGER}" \
+            || { echo "FAIL: empty message does not name the path"; exit 1; }
+
+          rc=0
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}/never-created")" || rc=$?
+          [ "${rc}" = "0" ] || { echo "FAIL: exited ${rc} on a missing ledger"; exit 1; }
+          echo "empty=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "empty=pass"
+
+  - name: unreadable records are excluded from totals and disclosed
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          jq -nc '{schema:1, started_at:"2026-07-01T10:00:00Z",
+                   ended_at:"2026-07-01T10:00:00Z", session_id:"s1",
+                   project_set:"riotbox", agent:"claude", kept_out_bytes:1024,
+                   re_read_bytes:0, hook_log_bytes:0, retained_total_bytes:1024,
+                   baseline_unknown:false}' > "${LEDGER}/good.json"
+          printf 'not json at all' > "${LEDGER}/broken.json"
+          printf '[1,2,3]' > "${LEDGER}/array.json"
+
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}")"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -q '1 run' \
+            || { echo "FAIL: broken records counted as runs"; exit 1; }
+          printf '%s' "${out}" | grep -q '2 files skipped' \
+            || { echo "FAIL: skipped files not disclosed: ${out}"; exit 1; }
+          echo "skipped=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "skipped=pass"
+
+  - name: runs with an unknown baseline are excluded from totals but counted
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          jq -nc '{schema:1, started_at:"2026-07-01T10:00:00Z",
+                   ended_at:"2026-07-01T10:00:00Z", session_id:"s1",
+                   project_set:"riotbox", agent:"claude", kept_out_bytes:1024,
+                   re_read_bytes:0, hook_log_bytes:0, retained_total_bytes:1024,
+                   baseline_unknown:false}' > "${LEDGER}/good.json"
+          jq -nc '{schema:1, started_at:"2026-07-02T10:00:00Z",
+                   ended_at:"2026-07-02T10:00:00Z", session_id:"s2",
+                   project_set:"riotbox", agent:"claude", kept_out_bytes:null,
+                   re_read_bytes:null, hook_log_bytes:null,
+                   retained_total_bytes:99999, baseline_unknown:true}' \
+            > "${LEDGER}/unknown.json"
+
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}")"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -q '2 runs' \
+            || { echo "FAIL: excluded run dropped from the run count: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -q '1.0 KB' \
+            || { echo "FAIL: totals should count only the measured run: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -q '1 run excluded (baseline unknown)' \
+            || { echo "FAIL: excluded run not disclosed: ${out}"; exit 1; }
+          echo "unknown=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "unknown=pass"
+
+  - name: a baseline_unknown false record with null deltas is malformed, not a zero-saving run
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          # baseline_unknown:false is a promise the three delta fields are
+          # numbers (see the schema in the design doc). null deltas paired
+          # with baseline_unknown:false break that promise, so the record is
+          # unreadable, not a genuine zero-saving run — the `// 0` fallback
+          # would otherwise launder it into one.
+          jq -nc '{schema:1, started_at:"2026-07-01T10:00:00Z",
+                   ended_at:"2026-07-01T10:00:00Z", session_id:"s1",
+                   project_set:"riotbox", agent:"claude", kept_out_bytes:1024,
+                   re_read_bytes:0, hook_log_bytes:0, retained_total_bytes:1024,
+                   baseline_unknown:false}' > "${LEDGER}/good.json"
+          jq -nc '{schema:1, started_at:"2026-07-02T10:00:00Z",
+                   ended_at:"2026-07-02T10:00:00Z", session_id:"s2",
+                   project_set:"riotbox", agent:"claude", kept_out_bytes:null,
+                   re_read_bytes:null, hook_log_bytes:null,
+                   retained_total_bytes:0, baseline_unknown:false}' \
+            > "${LEDGER}/malformed.json"
+
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}")"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -q '1 run' \
+            || { echo "FAIL: malformed record counted as a run: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -q '0 runs saved nothing' \
+            || { echo "FAIL: malformed record laundered into a zero-saving run: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -q '1 file skipped' \
+            || { echo "FAIL: malformed record not disclosed as skipped: ${out}"; exit 1; }
+          echo "malformed=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "malformed=pass"
+
+  - name: records from a newer schema are neither summed nor called unreadable
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          jq -nc '{schema:1, started_at:"2026-07-01T10:00:00Z",
+                   ended_at:"2026-07-01T10:00:00Z", session_id:"s1",
+                   project_set:"riotbox", agent:"claude", kept_out_bytes:1048576,
+                   re_read_bytes:0, hook_log_bytes:0, retained_total_bytes:1048576,
+                   baseline_unknown:false}' > "${LEDGER}/good.json"
+          # schema 2, renamed fields — this reader must not guess at the
+          # rename and must not silently drop the 5 MB into "unreadable".
+          jq -nc '{schema:2, started_at:"2026-07-02T10:00:00Z",
+                   ended_at:"2026-07-02T10:00:00Z", session_id:"s2",
+                   project_set:"riotbox", agent:"claude",
+                   bytes_withheld:5242880, baseline_unknown:false}' \
+            > "${LEDGER}/newer.json"
+
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}")"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -q '1.0 MB' \
+            || { echo "FAIL: totals should reflect only the schema-1 record: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -q '1 record from a newer schema (upgrade riotbox)' \
+            || { echo "FAIL: newer schema not disclosed distinctly: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -qi 'unreadable' \
+            && { echo "FAIL: newer-schema record folded into 'unreadable'"; exit 1; }
+
+          # A text grep for '1 run' is satisfied by the "1 run saved nothing"
+          # line even when the header's run count is wrong — counters are
+          # unambiguous only via --json, so pin them there instead.
+          out_json="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --json)"
+          printf '%s\n' "${out_json}"
+          printf '%s' "${out_json}" | jq -e '.runs == 1 and .newer_schema_files == 1
+              and .skipped_files == 0 and .kept == 1048576' >/dev/null \
+            || { echo "FAIL: newer-schema record double-counted or summed: ${out_json}"; exit 1; }
+          echo "newerschema=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "newerschema=pass"
+
+  - name: --json emits a stable, typed shape for a populated and an empty ledger
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          jq -nc '{schema:1, started_at:"2026-07-01T10:00:00Z",
+                   ended_at:"2026-07-01T10:00:00Z", session_id:"s1",
+                   project_set:"riotbox", agent:"claude", kept_out_bytes:1024,
+                   re_read_bytes:512, hook_log_bytes:256, retained_total_bytes:1024,
+                   baseline_unknown:false}' > "${LEDGER}/good.json"
+
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --json)"
+          printf '%s\n' "${out}"
+          echo "${out}" | jq -e '.runs == 1 and .kept == 1024 and .reread == 512 and .hooklog == 256' >/dev/null \
+            || { echo "FAIL: field values wrong: ${out}"; exit 1; }
+          echo "${out}" | jq -e '
+              (.runs|type)=="number" and (.kept|type)=="number" and
+              (.reread|type)=="number" and (.hooklog|type)=="number" and
+              (.skipped_files|type)=="number" and (.newer_schema_files|type)=="number"
+            ' >/dev/null \
+            || { echo "FAIL: numeric fields are not numbers: ${out}"; exit 1; }
+
+          EMPTY="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}" "${EMPTY}"' EXIT
+          out_empty="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${EMPTY}" --json)"
+          # rmdir, not rm -rf: it only succeeds on an empty directory, so this
+          # doubles as a check that the reader never writes into the ledger
+          # it is reading — a stray file here would make rmdir fail loudly
+          # under set -e rather than leave silent litter behind.
+          rmdir "${EMPTY}"
+          printf '%s\n' "${out_empty}"
+          echo "${out_empty}" | jq -e '.runs == 0 and .kept == 0 and (.kept|type)=="number"' >/dev/null \
+            || { echo "FAIL: empty ledger is not a zeroed object: ${out_empty}"; exit 1; }
+
+          # the two shapes must expose the identical key set — a caller doing
+          # `ctx-stats --json | jq .kept` should never see null just because
+          # the ledger happened to be empty.
+          keys_populated="$(echo "${out}"       | jq -Sc 'keys')"
+          keys_empty="$(echo "${out_empty}" | jq -Sc 'keys')"
+          [ "${keys_populated}" = "${keys_empty}" ] \
+            || { echo "FAIL: key sets differ: ${keys_populated} vs ${keys_empty}"; exit 1; }
+          echo "json=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "json=pass"
+
+  - name: --by-project groups totals by project set, sorted by kept-out descending
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          mk() {
+            jq -nc --arg sid "$1" --arg pset "$2" --argjson kept "$3" \
+                   --argjson reread "$4" --argjson hooklog "$5" --arg ended "$6" \
+              '{schema:1, started_at:$ended, ended_at:$ended, session_id:$sid,
+                project_set:$pset, agent:"claude", kept_out_bytes:$kept,
+                re_read_bytes:$reread, hook_log_bytes:$hooklog,
+                retained_total_bytes:($kept + 7), baseline_unknown:false}' \
+              > "${LEDGER}/${6//[:-]/}-$1.json"
+          }
+          # alpha's two measured runs (1000 + 2000 = 3000) sum lower than
+          # beta's single run (5000), so a correct grouping-and-sort must put
+          # beta first even though it has fewer runs — this catches both
+          # "grouped by the wrong key" and "summed the wrong field" mutations.
+          mk s1 alpha 1000 10 20 "2026-07-01T10:00:00Z"
+          mk s2 alpha 2000 10 20 "2026-07-02T10:00:00Z"
+          mk s3 beta  5000 10 20 "2026-07-03T10:00:00Z"
+          # alpha also gets a baseline_unknown run whose kept_out_bytes is a
+          # large, distinguishable, and — per the schema — dishonest value
+          # (a real writer pairs baseline_unknown:true with a null delta; the
+          # reader's classifier does not enforce that, so a value can reach
+          # this far). If the `select(.baseline_unknown != true)` guard on
+          # the sum is ever dropped, alpha's total jumps from 3000 to
+          # 9003000 and its run count from 2 to 3 — either alone proves the
+          # guard is load-bearing, not dead code the suite happens to pass
+          # without exercising.
+          jq -nc '{schema:1, started_at:"2026-07-04T10:00:00Z",
+                   ended_at:"2026-07-04T10:00:00Z", session_id:"s4",
+                   project_set:"alpha", agent:"claude", kept_out_bytes:9000000,
+                   re_read_bytes:null, hook_log_bytes:null,
+                   retained_total_bytes:99999, baseline_unknown:true}' \
+            > "${LEDGER}/20260704T100000Z-s4.json"
+
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --by-project)"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -q 'alpha' \
+            || { echo "FAIL: alpha missing from output"; exit 1; }
+          printf '%s' "${out}" | grep -q 'beta' \
+            || { echo "FAIL: beta missing from output"; exit 1; }
+          beta_line="$(printf '%s\n' "${out}" | grep -n 'beta' | head -1 | cut -d: -f1)"
+          alpha_line="$(printf '%s\n' "${out}" | grep -n 'alpha' | head -1 | cut -d: -f1)"
+          [ "${beta_line}" -lt "${alpha_line}" ] \
+            || { echo "FAIL: beta (5000) should sort before alpha (3000): ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -q "${LEDGER}" \
+            || { echo "FAIL: ledger path not shown"; exit 1; }
+
+          out_json="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --by-project --json)"
+          printf '%s\n' "${out_json}"
+          printf '%s' "${out_json}" | jq -e '
+              .[0].project_set == "beta"  and .[0].runs == 1 and .[0].measured == 1 and .[0].kept == 5000 and
+              .[1].project_set == "alpha" and .[1].runs == 3 and .[1].measured == 2 and .[1].kept == 3000
+            ' >/dev/null \
+            || { echo "FAIL: by-project grouping/order/totals wrong: ${out_json}"; exit 1; }
+          echo "byproject=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "byproject=pass"
+
+  - name: --by-project shows a fully-unmeasured project as unmeasured, not a fabricated 0 B
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          # gamma has two runs, neither measured. delta has one measured run,
+          # for contrast — the fix must not turn every project's figure into
+          # "unmeasured", only ones with zero measured runs.
+          jq -nc '{schema:1, started_at:"2026-07-01T10:00:00Z",
+                   ended_at:"2026-07-01T10:00:00Z", session_id:"g1",
+                   project_set:"gamma", agent:"claude", kept_out_bytes:null,
+                   re_read_bytes:null, hook_log_bytes:null,
+                   retained_total_bytes:99999, baseline_unknown:true}' \
+            > "${LEDGER}/g1.json"
+          jq -nc '{schema:1, started_at:"2026-07-02T10:00:00Z",
+                   ended_at:"2026-07-02T10:00:00Z", session_id:"g2",
+                   project_set:"gamma", agent:"claude", kept_out_bytes:null,
+                   re_read_bytes:null, hook_log_bytes:null,
+                   retained_total_bytes:99999, baseline_unknown:true}' \
+            > "${LEDGER}/g2.json"
+          jq -nc '{schema:1, started_at:"2026-07-03T10:00:00Z",
+                   ended_at:"2026-07-03T10:00:00Z", session_id:"d1",
+                   project_set:"delta", agent:"claude", kept_out_bytes:1234,
+                   re_read_bytes:0, hook_log_bytes:0, retained_total_bytes:1234,
+                   baseline_unknown:false}' \
+            > "${LEDGER}/d1.json"
+
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --by-project)"
+          printf '%s\n' "${out}"
+          gamma_line="$(printf '%s\n' "${out}" | grep 'gamma')"
+          printf '%s' "${gamma_line}" | grep -q 'unmeasured' \
+            || { echo "FAIL: fully-unmeasured project not shown as unmeasured: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -qE '0 B|0\.0 B' \
+            && { echo "FAIL: fully-unmeasured project rendered as a fabricated zero: ${out}"; exit 1; }
+          delta_line="$(printf '%s\n' "${out}" | grep 'delta')"
+          printf '%s' "${delta_line}" | grep -q 'unmeasured' \
+            && { echo "FAIL: a measured project was also rendered as unmeasured: ${out}"; exit 1; }
+
+          out_json="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --by-project --json)"
+          printf '%s\n' "${out_json}"
+          printf '%s' "${out_json}" | jq -e '
+              (.[] | select(.project_set == "gamma") | .runs) == 2 and
+              (.[] | select(.project_set == "gamma") | .measured) == 0 and
+              (.[] | select(.project_set == "gamma") | .kept) == 0 and
+              (.[] | select(.project_set == "delta") | .measured) == 1 and
+              (.[] | select(.project_set == "delta") | .kept) == 1234
+            ' >/dev/null \
+            || { echo "FAIL: --json totals for unmeasured/measured projects wrong: ${out_json}"; exit 1; }
+          echo "unmeasuredproject=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "unmeasuredproject=pass"
+
+  - name: --runs lists newest first and honors an explicit row limit
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          mk() {
+            jq -nc --arg sid "$1" --arg pset "$2" --argjson kept "$3" \
+                   --argjson reread "$4" --argjson hooklog "$5" --arg ended "$6" \
+              '{schema:1, started_at:$ended, ended_at:$ended, session_id:$sid,
+                project_set:$pset, agent:"claude", kept_out_bytes:$kept,
+                re_read_bytes:$reread, hook_log_bytes:$hooklog,
+                retained_total_bytes:($kept + 7), baseline_unknown:false}' \
+              > "${LEDGER}/${6//[:-]/}-$1.json"
+          }
+          mk s1 riotbox 1000 10 20 "2026-07-01T10:00:00Z"
+          mk s2 riotbox 2000 10 20 "2026-07-02T10:00:00Z"
+          mk s3 riotbox 3000 10 20 "2026-07-03T10:00:00Z"
+
+          out_json="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --runs --json)"
+          printf '%s\n' "${out_json}"
+          printf '%s' "${out_json}" | jq -e '
+              length == 3 and .[0].session_id == "s3" and
+              .[1].session_id == "s2" and .[2].session_id == "s1"
+            ' >/dev/null \
+            || { echo "FAIL: --runs --json not newest-first: ${out_json}"; exit 1; }
+
+          out_all_json="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --runs all --json)"
+          printf '%s\n' "${out_all_json}"
+          printf '%s' "${out_all_json}" | jq -e 'length == 3' >/dev/null \
+            || { echo "FAIL: --runs all --json did not return every run: ${out_all_json}"; exit 1; }
+
+          out_one_json="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --runs 1 --json)"
+          printf '%s\n' "${out_one_json}"
+          printf '%s' "${out_one_json}" | jq -e 'length == 1 and .[0].session_id == "s3"' >/dev/null \
+            || { echo "FAIL: --runs 1 --json did not limit to the newest run: ${out_one_json}"; exit 1; }
+
+          out_one_text="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --runs 1)"
+          printf '%s\n' "${out_one_text}"
+          row_count="$(printf '%s\n' "${out_one_text}" | grep -cE '^ 2026-')"
+          [ "${row_count}" -eq 1 ] \
+            || { echo "FAIL: --runs 1 printed ${row_count} rows, expected 1: ${out_one_text}"; exit 1; }
+          printf '%s' "${out_one_text}" | grep -q '2026-07-03T10:00:00Z' \
+            || { echo "FAIL: --runs 1 did not show the newest run: ${out_one_text}"; exit 1; }
+          printf '%s' "${out_one_text}" | grep -q "${LEDGER}" \
+            || { echo "FAIL: ledger path not shown"; exit 1; }
+          echo "runslimit=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "runslimit=pass"
+
+  - name: --runs shows a baseline_unknown run as unmeasured, not a fabricated figure
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          jq -nc '{schema:1, started_at:"2026-07-01T10:00:00Z",
+                   ended_at:"2026-07-01T10:00:00Z", session_id:"s1",
+                   project_set:"riotbox", agent:"claude", kept_out_bytes:4096,
+                   re_read_bytes:0, hook_log_bytes:0, retained_total_bytes:4096,
+                   baseline_unknown:false}' > "${LEDGER}/measured.json"
+          jq -nc '{schema:1, started_at:"2026-07-02T10:00:00Z",
+                   ended_at:"2026-07-02T10:00:00Z", session_id:"s2",
+                   project_set:"riotbox", agent:"claude", kept_out_bytes:null,
+                   re_read_bytes:null, hook_log_bytes:null,
+                   retained_total_bytes:99999, baseline_unknown:true}' \
+            > "${LEDGER}/unknown.json"
+
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --runs)"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -q 'baseline unknown' \
+            || { echo "FAIL: unmeasured run not shown honestly: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -qE '0 B|0.0 B' \
+            && { echo "FAIL: unmeasured run rendered as a fabricated zero: ${out}"; exit 1; }
+
+          out_json="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --runs --json)"
+          printf '%s\n' "${out_json}"
+          printf '%s' "${out_json}" | jq -e '
+              (.[] | select(.session_id == "s2") | .kept_out_bytes) == null and
+              (.[] | select(.session_id == "s2") | .baseline_unknown) == true and
+              (.[] | select(.session_id == "s1") | .kept_out_bytes) == 4096
+            ' >/dev/null \
+            || { echo "FAIL: --json did not preserve the honest null: ${out_json}"; exit 1; }
+          echo "runsunknown=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "runsunknown=pass"
+
+  - name: --runs 0 is rejected rather than misreported as an empty ledger
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          jq -nc '{schema:1, started_at:"2026-07-01T10:00:00Z",
+                   ended_at:"2026-07-01T10:00:00Z", session_id:"s1",
+                   project_set:"riotbox", agent:"claude", kept_out_bytes:1024,
+                   re_read_bytes:0, hook_log_bytes:0, retained_total_bytes:1024,
+                   baseline_unknown:false}' > "${LEDGER}/good.json"
+
+          rc=0
+          err="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --runs 0 2>&1 1>/dev/null)" || rc=$?
+          [ "${rc}" -eq 2 ] \
+            || { echo "FAIL: --runs 0 exited ${rc}, expected 2: ${err}"; exit 1; }
+          printf '%s' "${err}" | grep -qi 'not a valid row count' \
+            || { echo "FAIL: --runs 0 error message unclear: ${err}"; exit 1; }
+
+          # Confirm it did not fall through and print the empty-ledger
+          # message against a ledger that actually holds a record.
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --runs 0 2>/dev/null)" || true
+          printf '%s' "${out}" | grep -q 'no runs recorded yet' \
+            && { echo "FAIL: --runs 0 fell through to the empty-ledger message"; exit 1; }
+          echo "runszero=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "runszero=pass"
+
+  - name: a record with a missing or empty project_set is skipped, not misrendered
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          jq -nc '{schema:1, started_at:"2026-07-01T10:00:00Z",
+                   ended_at:"2026-07-01T10:00:00Z", session_id:"s1",
+                   project_set:"riotbox", agent:"claude", kept_out_bytes:1048576,
+                   re_read_bytes:0, hook_log_bytes:0, retained_total_bytes:1048576,
+                   baseline_unknown:false}' > "${LEDGER}/good.json"
+          # project_set is the empty string — syntactically a string, so it
+          # would slip past a `has("project_set")`-style check, but empty
+          # enough to collapse a column in `IFS=$'\t' read`.
+          jq -nc '{schema:1, started_at:"2026-07-02T10:00:00Z",
+                   ended_at:"2026-07-02T10:00:00Z", session_id:"s2",
+                   project_set:"", agent:"claude", kept_out_bytes:2048,
+                   re_read_bytes:0, hook_log_bytes:0, retained_total_bytes:2048,
+                   baseline_unknown:false}' > "${LEDGER}/empty-pset.json"
+
+          out_by_project="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --by-project)"
+          printf '%s\n' "${out_by_project}"
+          printf '%s' "${out_by_project}" | grep -q '1 file skipped' \
+            || { echo "FAIL: empty project_set not disclosed as skipped: ${out_by_project}"; exit 1; }
+
+          out_json="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --by-project --json)"
+          printf '%s\n' "${out_json}"
+          printf '%s' "${out_json}" | jq -e 'length == 1 and .[0].project_set == "riotbox" and .[0].kept == 1048576' >/dev/null \
+            || { echo "FAIL: the malformed record leaked into the grouping: ${out_json}"; exit 1; }
+
+          out_runs="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --runs --json)"
+          printf '%s\n' "${out_runs}"
+          printf '%s' "${out_runs}" | jq -e 'length == 1 and .[0].session_id == "s1"' >/dev/null \
+            || { echo "FAIL: the malformed record leaked into --runs: ${out_runs}"; exit 1; }
+          echo "emptyproject=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "emptyproject=pass"
+
+  - name: --by-project and --runs are mutually exclusive view selectors
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+
+          rc=0
+          err="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --runs 5 --by-project 2>&1 1>/dev/null)" || rc=$?
+          [ "${rc}" -eq 2 ] \
+            || { echo "FAIL: --runs 5 --by-project exited ${rc}, expected 2: ${err}"; exit 1; }
+          printf '%s' "${err}" | grep -q 'choose one of --by-project or --runs' \
+            || { echo "FAIL: unclear conflict message: ${err}"; exit 1; }
+
+          rc=0
+          err="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --by-project --runs 2>&1 1>/dev/null)" || rc=$?
+          [ "${rc}" -eq 2 ] \
+            || { echo "FAIL: --by-project --runs exited ${rc}, expected 2: ${err}"; exit 1; }
+          printf '%s' "${err}" | grep -q 'choose one of --by-project or --runs' \
+            || { echo "FAIL: unclear conflict message (reversed order): ${err}"; exit 1; }
+
+          # Repeating the same selector is not a conflict.
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --runs 5 --runs 10 --json)"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | jq -e 'type == "array"' >/dev/null \
+            || { echo "FAIL: repeating --runs was wrongly treated as a conflict: ${out}"; exit 1; }
+          echo "conflict=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "conflict=pass"
+
+  - name: the riotbox wrapper routes ctx-stats and documents it
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          out="$(bash "{{.riotbox_dir}}/bin/riotbox" ctx-stats --ledger-dir "${LEDGER}")"
+          printf '%s' "${out}" | grep -q 'no runs recorded yet' \
+            || { echo "FAIL: verb not routed, got: ${out}"; exit 1; }
+          help="$(bash "{{.riotbox_dir}}/bin/riotbox" help)"
+          printf '%s' "${help}" | grep -q 'ctx-stats' \
+            || { echo "FAIL: verb missing from usage"; exit 1; }
+          verb_help="$(bash "{{.riotbox_dir}}/bin/riotbox" ctx-stats --help)"
+          printf '%s' "${verb_help}" | grep -q -- '--by-project' \
+            || { echo "FAIL: per-verb help missing"; exit 1; }
+          echo "routing=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "routing=pass"

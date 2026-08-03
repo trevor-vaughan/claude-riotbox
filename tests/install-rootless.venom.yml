@@ -70,6 +70,141 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
 
+  - name: Creates the config stub mode 0600 and leaves the others alone
+    steps:
+      - type: exec
+        script: |
+          set -e
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          # Permissive umask on purpose: a strict umask would hand us 0600
+          # for free and the assertion would prove nothing about install.sh.
+          umask 022
+          "{{.riotbox_dir}}/install.sh" >/dev/null
+          echo "config=$(stat -c '%a' "${XDG_CONFIG_HOME}/riotbox/config")"
+          echo "mounts=$(stat -c '%a' "${XDG_CONFIG_HOME}/riotbox/mounts.conf")"
+          echo "plugins=$(stat -c '%a' "${XDG_CONFIG_HOME}/riotbox/plugins.conf")"
+        assertions:
+          - result.code ShouldEqual 0
+          # `config` carries RIOTBOX_PASSTHROUGH_VARS (API keys, tokens).
+          - result.systemout ShouldContainSubstring "config=600"
+          # The credential-free stubs keep umask-derived modes — the
+          # asymmetry is deliberate, so pin it.
+          - result.systemout ShouldContainSubstring "mounts=644"
+          - result.systemout ShouldContainSubstring "plugins=644"
+
+  - name: Tightens a group- or world-readable existing config, content intact
+    steps:
+      - type: exec
+        script: |
+          set -e
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          umask 022
+          "{{.riotbox_dir}}/install.sh" >/dev/null
+          cfg="${XDG_CONFIG_HOME}/riotbox/config"
+          # <starting mode>:<expected mode>. 644 is what a pre-0600 install
+          # left behind; 640 is the same exposure to anyone in the user's
+          # group; 444 is a deliberately read-only config that must lose
+          # group/world access WITHOUT having owner write handed back.
+          for pair in 644:600 640:600 444:400; do
+              m="${pair%:*}"
+              want="${pair#*:}"
+              chmod "${m}" "${cfg}"
+              before="$(sha256sum < "${cfg}")"
+              out="$("{{.riotbox_dir}}/install.sh" 2>&1)"
+              printf '%s\n' "${out}"
+              after="$(sha256sum < "${cfg}")"
+              [ "${before}" = "${after}" ] \
+                  || { echo "BAD: content changed while tightening ${m}" >&2; exit 1; }
+              printf '%s\n' "${out}" | grep -q "group/world access removed" \
+                  || { echo "BAD: no notice printed for ${m}" >&2; exit 1; }
+              got="$(stat -c '%a' "${cfg}")"
+              [ "${got}" = "${want}" ] \
+                  || { echo "BAD: ${m} became ${got}, wanted ${want}" >&2; exit 1; }
+              echo "from${m}=${got}"
+          done
+          echo "mounts=$(stat -c '%a' "${XDG_CONFIG_HOME}/riotbox/mounts.conf")"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "from644=600"
+          - result.systemout ShouldContainSubstring "from640=600"
+          - result.systemout ShouldContainSubstring "from444=400"
+          # Content handling is unchanged by the permission fix.
+          - result.systemout ShouldContainSubstring "up to date"
+          # mounts.conf is not swept up in the tightening.
+          - result.systemout ShouldContainSubstring "mounts=644"
+
+  - name: Leaves an already-private config alone and says nothing
+    steps:
+      - type: exec
+        script: |
+          set -e
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          umask 022
+          "{{.riotbox_dir}}/install.sh" >/dev/null
+          cfg="${XDG_CONFIG_HOME}/riotbox/config"
+          # 600 needs nothing done; 400 is a deliberately read-only config
+          # whose owner bits must survive — no group/world access either way.
+          for m in 600 400; do
+              chmod "${m}" "${cfg}"
+              "{{.riotbox_dir}}/install.sh" 2>&1
+              echo "from${m}=$(stat -c '%a' "${cfg}")"
+          done
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "from600=600"
+          - result.systemout ShouldContainSubstring "from400=400"
+          # The installer got as far as the config block on both runs, so the
+          # absent notice below means "nothing to do", not "died early".
+          - result.systemout ShouldContainSubstring "up to date"
+          - result.systemout ShouldNotContainSubstring "group/world access removed"
+
+  - name: Reports tightening before the config-version warning
+    steps:
+      - type: exec
+        script: |
+          set -e
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${XDG_CONFIG_HOME}/riotbox"
+          umask 022
+          cfg="${XDG_CONFIG_HOME}/riotbox/config"
+          # Stale AND world-readable: the notice must not land in the middle
+          # of the version warning's multi-line merge instructions.
+          echo "# riotbox-config-version: 0" > "${cfg}"
+          chmod 644 "${cfg}"
+          out="$("{{.riotbox_dir}}/install.sh" 2>&1)"
+          printf '%s\n' "${out}"
+          tightened="$(printf '%s\n' "${out}" | grep -n "group/world access removed" | cut -d: -f1)"
+          warned="$(printf '%s\n' "${out}" | grep -n "available" | cut -d: -f1)"
+          [ -n "${tightened}" ] || { echo "BAD: no tightening notice" >&2; exit 1; }
+          [ -n "${warned}" ] || { echo "BAD: no version warning" >&2; exit 1; }
+          [ "${tightened}" -lt "${warned}" ] \
+              || { echo "BAD: notice printed after the version warning" >&2; exit 1; }
+          echo "config=$(stat -c '%a' "${cfg}")"
+          echo "order=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "config=600"
+          - result.systemout ShouldContainSubstring "order=pass"
+
   - name: Does not overwrite existing config files
     steps:
       - type: exec

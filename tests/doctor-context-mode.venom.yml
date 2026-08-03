@@ -1,0 +1,597 @@
+name: Context Mode — launcher guard and doctor preflight
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# RIOTBOX_CONTEXT_MODE and RIOTBOX_HEADROOM both keep tool output out of the
+# model's context, at different layers — headroom compresses payloads in
+# flight through a proxy, Context Mode keeps them out of the transcript
+# through a PreToolUse hook. They compose in principle, but the combination is
+# unmeasured and doubles the surface where a session can misbehave, so the
+# launcher refuses the pair the way it refuses RIOTBOX_NESTED with
+# RIOTBOX_SOCKET. The doctor check catches the same pair, because a value
+# persisted in ~/.config/riotbox/config would otherwise only surface at launch.
+
+testcases:
+  - name: launcher refuses context-mode together with headroom
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          out="$(RIOTBOX_CONTEXT_MODE=1 RIOTBOX_HEADROOM=1 \
+                 XDG_CONFIG_HOME="${TEST_DIR}/config" \
+                 RIOTBOX_SYSCONF_DIR="${TEST_DIR}/etc" \
+                 CONTAINER_CMD=/bin/true IMAGE_NAME=riotbox \
+                 ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/launch.sh" true 2>&1)" && rc=0 || rc=$?
+
+          [ "${rc}" = "1" ] || { echo "FAIL: expected exit 1, got ${rc}"; exit 1; }
+          echo "${out}" | grep -q "mutually exclusive" \
+            || { echo "FAIL: no mutual-exclusion message: ${out}"; exit 1; }
+          echo "${out}" | grep -q "RIOTBOX_CONTEXT_MODE" \
+            || { echo "FAIL: message does not name the variable: ${out}"; exit 1; }
+          echo "mutex=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "mutex=pass"
+
+  - name: launcher guard fires before any mount or session setup
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # A session directory under a throwaway XDG_DATA_HOME: if the guard
+          # let the launch reach setup_projects, that tree would be created.
+          RIOTBOX_CONTEXT_MODE=1 RIOTBOX_HEADROOM=1 \
+            XDG_CONFIG_HOME="${TEST_DIR}/config" \
+            XDG_DATA_HOME="${TEST_DIR}/data" \
+            RIOTBOX_SYSCONF_DIR="${TEST_DIR}/etc" \
+            CONTAINER_CMD=/bin/true IMAGE_NAME=riotbox \
+            ROOT_DIR="{{.riotbox_dir}}" \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" true >/dev/null 2>&1 || true
+
+          [ ! -d "${TEST_DIR}/data/riotbox" ] \
+            || { echo "FAIL: session setup ran before the guard"; exit 1; }
+          echo "mutex_early=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "mutex_early=pass"
+
+  # The seam. `${RIOTBOX_CONTEXT_MODE:+-e RIOTBOX_CONTEXT_MODE=…}` in
+  # libexec/launch.sh is the only thing joining the host-side toggle to the
+  # in-container consumer. Drop or mistype it and nothing else complains: the
+  # launcher still accepts the toggle, `riotbox doctor` still reports [ok], and
+  # context_mode_setup sees an unset variable — so it takes the off branch and
+  # *strips* wiring instead of writing it. A feature that reports healthy
+  # everywhere and does nothing. Same shape as the RIOTBOX_HEADROOM passthrough
+  # test in tests/headroom.venom.yml: a fake CONTAINER_CMD dumps its argv.
+  - name: launch.sh passes -e RIOTBOX_CONTEXT_MODE into the container when enabled
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
+          cat > "${TMP}/fake-cmd" <<'FAKE'
+          #!/usr/bin/env bash
+          printf '%s\n' "$*" > "${CAPTURE}"
+          FAKE
+          chmod +x "${TMP}/fake-cmd"
+          export CAPTURE="${TMP}/argv"
+          # The two toggles are mutually exclusive and the launcher refuses the
+          # pair, so shed any ambient headroom env before asking for this one.
+          unset RIOTBOX_HEADROOM RIOTBOX_HEADROOM_ACTIVE
+          RIOTBOX_CONTEXT_MODE=1 \
+          RIOTBOX_DRY_RUN=1 \
+          RIOTBOX_PROJECTS="${TMP}/proj" \
+          RIOTBOX_DATA_DIR="${TMP}/data" \
+          RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" HOME="${TMP}" \
+          ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" bash
+          argv="$(cat "${CAPTURE}")"
+          echo "ARGV=${argv}"
+          echo "${argv}" | grep -q -- "-e RIOTBOX_CONTEXT_MODE=1" \
+            || { echo "BAD: -e RIOTBOX_CONTEXT_MODE=1 missing from container argv" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "-e RIOTBOX_CONTEXT_MODE=1"
+          - result.systemout ShouldContainSubstring "OK"
+
+  # The other half of the seam: an unset toggle must not reach the container at
+  # all. A passthrough written without the `:+` expansion emits a bare
+  # `-e RIOTBOX_CONTEXT_MODE` on every launch, which podman resolves from the
+  # host environment — turning "unset here" into "whatever the host had".
+  - name: launch.sh emits no context-mode env when the toggle is unset
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
+          cat > "${TMP}/fake-cmd" <<'FAKE'
+          #!/usr/bin/env bash
+          printf '%s\n' "$*" > "${CAPTURE}"
+          FAKE
+          chmod +x "${TMP}/fake-cmd"
+          export CAPTURE="${TMP}/argv"
+          # Gate-off means gate-off: shed any ambient toggle (e.g. when this
+          # suite itself runs inside a context-mode-enabled riotbox session).
+          unset RIOTBOX_CONTEXT_MODE
+          RIOTBOX_DRY_RUN=1 \
+          RIOTBOX_PROJECTS="${TMP}/proj" \
+          RIOTBOX_DATA_DIR="${TMP}/data" \
+          RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" HOME="${TMP}" \
+          ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" bash
+          argv="$(cat "${CAPTURE}")"
+          echo "ARGV=${argv}"
+          echo "${argv}" | grep -q "RIOTBOX_CONTEXT_MODE" \
+            && { echo "BAD: context-mode env leaked into a default launch" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "RIOTBOX_CONTEXT_MODE"
+          - result.systemout ShouldContainSubstring "OK"
+
+  # "Not requested" has two arms — unset, and the literal 0 a user who read the
+  # docs and turned the feature back off leaves behind — and only the unset arm
+  # was ever walked here. Drop the `= "0"` clause from the predicate and the
+  # explicit opt-out falls through to the "not recognized" arm below, so doctor
+  # fails with exit 22 for doing exactly what the docs say, with a hint telling
+  # the user to unset a variable they deliberately set. Both arms run here for
+  # that reason, and both assert the reported value as well as the code: the
+  # report echoes back what doctor read, which is the whole point of reporting
+  # a no-op check at all.
+  #
+  # XDG_CONFIG_HOME and RIOTBOX_SYSCONF_DIR are isolated before the source, and
+  # the two output knobs unset, for the reason spelled out above the image cases
+  # further down: preflight.sh sources both config files as arbitrary shell, and
+  # a developer's own RIOTBOX_DOCTOR_QUIET=1 suppresses every [ok] line — which
+  # is the line this case reads.
+  - name: doctor passes when the feature is not requested
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/xdg" "${TMP}/etc"
+          export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          for value in unset 0; do
+            if [ "${value}" = "unset" ]; then
+              unset RIOTBOX_CONTEXT_MODE
+            else
+              export RIOTBOX_CONTEXT_MODE="${value}"
+            fi
+            rc=0
+            out="$(preflight_check_context_mode 2>&1)" || rc=$?
+            [ "${rc}" = "0" ] \
+              || { echo "FAIL (${value}): expected 0, got ${rc}: ${out}"; exit 1; }
+            echo "${out}" | grep -q "not requested" \
+              || { echo "FAIL (${value}): opting out is not reported as a no-op: ${out}"; exit 1; }
+            # The unset arm renders as the literal "unset" by the same
+            # substitution, so one grep covers both values.
+            echo "${out}" | grep -q "RIOTBOX_CONTEXT_MODE=${value}" \
+              || { echo "FAIL (${value}): report does not echo the value read: ${out}"; exit 1; }
+          done
+          echo "doctor_not_requested=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "doctor_not_requested=pass"
+
+  - name: doctor fails with exit 22 on an unrecognized value
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          export RIOTBOX_CONTEXT_MODE=true
+          rc=0
+          out="$(preflight_check_context_mode 2>&1)" || rc=$?
+          [ "${rc}" = "22" ] || { echo "FAIL: expected 22, got ${rc}"; exit 1; }
+          echo "${out}" | grep -q "not recognized" \
+            || { echo "FAIL: no hint about the bad value: ${out}"; exit 1; }
+          echo "doctor_badvalue=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "doctor_badvalue=pass"
+
+  - name: doctor fails with exit 22 when both context features are enabled
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          export RIOTBOX_CONTEXT_MODE=1 RIOTBOX_HEADROOM=1
+          rc=0
+          out="$(preflight_check_context_mode 2>&1)" || rc=$?
+          [ "${rc}" = "22" ] || { echo "FAIL: expected 22, got ${rc}"; exit 1; }
+          echo "${out}" | grep -q "mutually exclusive" \
+            || { echo "FAIL: no mutual-exclusion hint: ${out}"; exit 1; }
+          echo "doctor_mutex=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "doctor_mutex=pass"
+
+  # Everything above returns before the image is ever consulted, so the three
+  # branches that decide whether a real, opted-in session can start were never
+  # reached: the podman/image guard, the in-image probe, and the [ok] report a
+  # working image is supposed to produce. podman is stubbed on PATH the way
+  # tests/doctor-headroom.venom.yml stubs it, so these run without a container
+  # runtime.
+  #
+  # All three isolate XDG_CONFIG_HOME and RIOTBOX_SYSCONF_DIR, and do it before
+  # the `source`. preflight.sh sources both config files at file level as
+  # arbitrary shell (scripts/preflight.sh:78-83) — deliberately, so a library
+  # caller sees the same layering an executed doctor does — which means the
+  # developer's own ~/.config/riotbox/config runs inside these cases. The
+  # earlier cases in this file happen to survive that because they assert on
+  # message text that every output mode preserves; these three assert on the
+  # rendered `[ok]`/`[fail]` gutter, so a single `: "${RIOTBOX_DOCTOR_JSON:=1}"`
+  # in a developer's config would fail all three against unmodified code. The
+  # two output knobs are unset for the same reason: they can arrive from the
+  # ambient environment as well as from a config file.
+  - name: doctor reports ok when the stubbed image carries a working context-mode
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/xdg" "${TMP}/etc"
+          # Exported so the stub, which runs as a grandchild of this shell, can
+          # write where this shell reads.
+          export RUN_ARGV="${TMP}/run-argv"
+          cat > "${TMP}/podman" <<'STUB'
+          #!/usr/bin/env bash
+          case "$1" in
+            image) exit 0 ;;   # `podman image exists <img>`
+            # The in-image `context-mode doctor` probe. Recorded rather than
+            # merely accepted: branching on "$1" alone makes every flag on the
+            # command line invisible, so the probe's own guarantees would go
+            # unchecked.
+            run)   printf '%s\n' "$*" > "${RUN_ARGV}"; exit 0 ;;
+          esac
+          exit 1
+          STUB
+          chmod +x "${TMP}/podman"
+          export PATH="${TMP}:${PATH}"
+          export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          export RIOTBOX_CONTEXT_MODE=1
+          unset RIOTBOX_HEADROOM
+          rc=0
+          out="$(preflight_check_context_mode 2>&1)" || rc=$?
+          echo "${out}"
+          [ "${rc}" = "0" ] || { echo "FAIL: expected 0, got ${rc}"; exit 1; }
+          echo "${out}" | grep -q "\[ok\]" \
+            || { echo "FAIL: no [ok] report for a working image: ${out}"; exit 1; }
+          echo "${out}" | grep -q "not requested" \
+            && { echo "FAIL: reported not-requested with the toggle on: ${out}"; exit 1; }
+
+          # The [ok] above says only that podman exited 0, which the stub does
+          # unconditionally — so it survives a probe reduced to `true`, and
+          # would report a working image for one carrying no Context Mode at
+          # all. What the probe is worth is in the command it runs and the two
+          # flags it runs it under, and all three are asserted here against the
+          # recorded argv: `command -v context-mode` pins the shim on PATH, and
+          # `context-mode doctor` is what exercises the pinned Node, the
+          # installed package, and SQLite/FTS5 behind it.
+          #
+          # --network=none is what makes that a proof rather than a coincidence
+          # of a connected host: it establishes that the installed CLI runs and
+          # that its unsuppressable npm version check fails soft with no
+          # connectivity at all, so dropping the flag lets an image with a
+          # broken offline path pass on any connected host. It proves nothing
+          # about session start, which is not offline anyway — see the comment
+          # on the probe in scripts/preflight.sh. --entrypoint likewise:
+          # without it the probe runs through the riotbox entrypoint and stops
+          # testing the image contract in isolation.
+          [ -f "${RUN_ARGV}" ] \
+            || { echo "FAIL: the check never ran the in-image probe"; exit 1; }
+          run_argv="$(cat "${RUN_ARGV}")"
+          echo "RUN_ARGV=${run_argv}"
+          echo "${run_argv}" | grep -q -- "--network=none" \
+            || { echo "FAIL: probe does not run offline, so a broken offline path would pass: ${run_argv}"; exit 1; }
+          echo "${run_argv}" | grep -q -- "--entrypoint /usr/bin/bash" \
+            || { echo "FAIL: probe does not bypass the riotbox entrypoint: ${run_argv}"; exit 1; }
+          echo "${run_argv}" | grep -q -- "command -v context-mode" \
+            || { echo "FAIL: probe does not check the shim is on PATH: ${run_argv}"; exit 1; }
+          echo "${run_argv}" | grep -q -- "context-mode doctor" \
+            || { echo "FAIL: probe does not exercise the installed runtime: ${run_argv}"; exit 1; }
+          echo "doctor_image_ok=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "[ok]"
+          - result.systemout ShouldNotContainSubstring "not requested"
+          - result.systemout ShouldContainSubstring "--network=none"
+          - result.systemout ShouldContainSubstring "command -v context-mode"
+          - result.systemout ShouldContainSubstring "context-mode doctor"
+          - result.systemout ShouldContainSubstring "doctor_image_ok=pass"
+
+  # An image that was never built is a different problem from an image that was
+  # built wrong, and the two hints send the user to different commands. Pinning
+  # the hint, not just the code, is what keeps them from collapsing into one.
+  - name: doctor fails with exit 22 and names riotbox build when the image is missing
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/xdg" "${TMP}/etc"
+          cat > "${TMP}/podman" <<'STUB'
+          #!/usr/bin/env bash
+          exit 1
+          STUB
+          chmod +x "${TMP}/podman"
+          export PATH="${TMP}:${PATH}"
+          export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          export RIOTBOX_CONTEXT_MODE=1
+          unset RIOTBOX_HEADROOM
+          rc=0
+          out="$(preflight_check_context_mode 2>&1)" || rc=$?
+          echo "${out}"
+          [ "${rc}" = "22" ] || { echo "FAIL: expected 22, got ${rc}"; exit 1; }
+          echo "${out}" | grep -q "riotbox build" \
+            || { echo "FAIL: hint does not name riotbox build: ${out}"; exit 1; }
+          echo "${out}" | grep -q "riotbox rebuild" \
+            && { echo "FAIL: sent the user to rebuild for an image that is not there: ${out}"; exit 1; }
+          echo "doctor_image_missing=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "[fail]"
+          - result.systemout ShouldContainSubstring "riotbox build"
+          - result.systemout ShouldContainSubstring "doctor_image_missing=pass"
+
+  # The image exists but the in-image probe fails: the shim is absent, the
+  # pinned Node is gone, or SQLite/FTS5 is broken. `riotbox build` is a no-op
+  # against an image that already exists, so this arm has to say rebuild.
+  - name: doctor fails with exit 22 and names riotbox rebuild when the in-image probe fails
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/xdg" "${TMP}/etc"
+          cat > "${TMP}/podman" <<'STUB'
+          #!/usr/bin/env bash
+          case "$1" in
+            image) exit 0 ;;   # the image is there
+            run)   exit 1 ;;   # …but context-mode is missing or broken inside it
+          esac
+          exit 1
+          STUB
+          chmod +x "${TMP}/podman"
+          export PATH="${TMP}:${PATH}"
+          export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          export RIOTBOX_CONTEXT_MODE=1
+          unset RIOTBOX_HEADROOM
+          rc=0
+          out="$(preflight_check_context_mode 2>&1)" || rc=$?
+          echo "${out}"
+          [ "${rc}" = "22" ] || { echo "FAIL: expected 22, got ${rc}"; exit 1; }
+          echo "${out}" | grep -q "riotbox rebuild" \
+            || { echo "FAIL: hint does not name riotbox rebuild: ${out}"; exit 1; }
+          echo "doctor_image_probe_fails=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "[fail]"
+          - result.systemout ShouldContainSubstring "riotbox rebuild"
+          - result.systemout ShouldContainSubstring "doctor_image_probe_fails=pass"
+
+  # The bridge sentinel rides inside the same in-image probe rather than a
+  # second container — a session already pays for every container `riotbox
+  # doctor` starts, and both are image state. No built `riotbox` image exists
+  # in this dev container (podman build does not work here), so this proves
+  # what can be proven honestly without one, the same way the three cases
+  # above do: the stubbed `podman run` records the exact script the probe
+  # sends into the container, and this case asserts that script names both
+  # sentinel paths and both properties the doctor is supposed to catch —
+  # unwritable, and no platform.json. It then flips the same stub to fail the
+  # combined command, which is what a defeated sentinel does from outside the
+  # container indistinguishably from a broken runtime, and asserts that path
+  # reports [fail]/exit 22 with a hint naming the sentinel — proving the old
+  # runtime-only message was replaced, not left in place alongside a new one.
+  - name: doctor's in-image probe checks the bridge sentinel at both paths
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/xdg" "${TMP}/etc"
+          export RUN_ARGV="${TMP}/run-argv"
+          cat > "${TMP}/podman" <<'STUB'
+          #!/usr/bin/env bash
+          case "$1" in
+            image) exit 0 ;;   # `podman image exists <img>`
+            run)   printf '%s\n' "$*" > "${RUN_ARGV}"; exit 0 ;;
+          esac
+          exit 1
+          STUB
+          chmod +x "${TMP}/podman"
+          export PATH="${TMP}:${PATH}"
+          export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          export RIOTBOX_CONTEXT_MODE=1
+          unset RIOTBOX_HEADROOM
+
+          rc=0
+          out="$(preflight_check_context_mode 2>&1)" || rc=$?
+          [ "${rc}" = "0" ] || { echo "FAIL: expected 0, got ${rc}: ${out}"; exit 1; }
+          [ -f "${RUN_ARGV}" ] \
+            || { echo "FAIL: the check never ran the in-image probe"; exit 1; }
+          run_argv="$(cat "${RUN_ARGV}")"
+          echo "RUN_ARGV=${run_argv}"
+          echo "${run_argv}" | grep -q -- '\.context-mode"' \
+            || { echo "FAIL: probe does not check \${HOME}/.context-mode: ${run_argv}"; exit 1; }
+          echo "${run_argv}" | grep -q -- '\.config/context-mode"' \
+            || { echo "FAIL: probe does not check \${HOME}/.config/context-mode: ${run_argv}"; exit 1; }
+          echo "${run_argv}" | grep -q -- '\-w "\${d}"' \
+            || { echo "FAIL: probe does not assert the sentinel dir is unwritable: ${run_argv}"; exit 1; }
+          echo "${run_argv}" | grep -q -- 'platform.json' \
+            || { echo "FAIL: probe does not check for platform.json: ${run_argv}"; exit 1; }
+
+          # Flip the stub: the combined command now fails, exactly what a
+          # defeated sentinel does from outside the container.
+          cat > "${TMP}/podman" <<'STUB'
+          #!/usr/bin/env bash
+          case "$1" in
+            image) exit 0 ;;
+            run)   exit 1 ;;
+          esac
+          exit 1
+          STUB
+          chmod +x "${TMP}/podman"
+          rc=0
+          out="$(preflight_check_context_mode 2>&1)" || rc=$?
+          [ "${rc}" = "22" ] || { echo "FAIL: expected 22, got ${rc}: ${out}"; exit 1; }
+          echo "${out}" | grep -q "event-bridge sentinel" \
+            || { echo "FAIL: hint does not name the sentinel: ${out}"; exit 1; }
+          echo "${out}" | grep -q "riotbox rebuild" \
+            || { echo "FAIL: hint does not name riotbox rebuild: ${out}"; exit 1; }
+          echo "doctor_sentinel=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "doctor_sentinel=pass"
+
+  # The case above stubs `podman run` itself, so it can only prove the probe
+  # script *names* the right paths — the stub's own exit code decides the
+  # outcome, and the probe body never actually runs. That structurally cannot
+  # catch a bug in the body's own control flow, such as its exit status being
+  # decided by whichever assertion happens to run last rather than by the
+  # assertions actually failing. This case extracts the probe body verbatim
+  # out of scripts/preflight.sh — between its own opening `command -v
+  # context-mode` line and its closing `exit 0` — so what runs here is the
+  # shipped string, not a copy that can drift out of sync with it, and
+  # executes it directly under a real filesystem for four directory shapes. A
+  # stub `context-mode` on PATH stands in for the pinned Node/package install
+  # the real probe also checks, so only the sentinel half is exercised in
+  # isolation; `context-mode doctor` itself has no bearing on the sentinel
+  # bug this case exists to catch.
+  - name: the sentinel probe body exits 0 on a healthy image and non-zero on all three defeats
+    steps:
+      - type: exec
+        script: |
+          set -e
+          # The probe's healthy shape asserts that a 0555 directory is not
+          # writable, which is true of the image's llm user and false of root —
+          # root is granted write on any mode. Under a root runner the healthy
+          # and platform.json shapes would both fail for a reason that has
+          # nothing to do with the control flow this case exists to pin, so skip
+          # visibly instead of reporting a broken probe. scripts/preflight.sh
+          # records the same dependency at the probe itself.
+          if [ "$(id -u)" = "0" ]; then
+            echo "SKIP: running as root — [ -w ] ignores the 0555 sentinel mode"
+            echo "sentinel_body=pass"
+            exit 0
+          fi
+          TMP="$(mktemp -d)"
+          # The sentinel shapes below chmod their directories 0555 on
+          # purpose — that is the state under test — so a plain `rm -rf`
+          # in the trap cannot remove what is inside them and fails with
+          # its own exit status, which would otherwise become this step's
+          # exit code regardless of what the probe itself proved.
+          trap 'chmod -R u+w "${TMP}" 2>/dev/null; rm -rf "${TMP}"' EXIT
+
+          start_line="$(grep -n "^\s*'command -v context-mode >/dev/null || exit 1\$" \
+            "{{.riotbox_dir}}/scripts/preflight.sh" | head -1 | cut -d: -f1)"
+          end_line="$(grep -n "^\s*exit 0' >/dev/null 2>&1; then\$" \
+            "{{.riotbox_dir}}/scripts/preflight.sh" | head -1 | cut -d: -f1)"
+          [ -n "${start_line}" ] && [ -n "${end_line}" ] \
+            || { echo "FAIL: could not locate the probe body in scripts/preflight.sh"; exit 1; }
+
+          sed -n "${start_line},${end_line}p" "{{.riotbox_dir}}/scripts/preflight.sh" \
+            | sed "1s/^[[:space:]]*'//" \
+            | sed "\$s/' >\/dev\/null 2>&1; then\$//" \
+            > "${TMP}/probe_body.sh"
+          [ -s "${TMP}/probe_body.sh" ] \
+            || { echo "FAIL: extracted probe body is empty"; exit 1; }
+
+          # Stands in for a working pinned-Node/context-mode install so only
+          # the sentinel half is under test.
+          mkdir -p "${TMP}/bin"
+          cat > "${TMP}/bin/context-mode" <<'STUB'
+          #!/usr/bin/env bash
+          [ "$1" = "doctor" ] && exit 0
+          exit 1
+          STUB
+          chmod +x "${TMP}/bin/context-mode"
+          export PATH="${TMP}/bin:${PATH}"
+
+          run_probe() {
+            HOME="$1" bash -c "$(cat "${TMP}/probe_body.sh")"
+          }
+
+          # 1. Healthy: both sentinel directories present, mode 0555, no
+          # platform.json in either. This is the shape that regressed: the
+          # probe's own last assertion is negative (absent is healthy), so a
+          # script whose exit status falls through from that assertion's
+          # status reports a perfectly good image as broken.
+          H1="${TMP}/h1"
+          mkdir -p "${H1}/.context-mode" "${H1}/.config/context-mode"
+          chmod 0555 "${H1}/.context-mode" "${H1}/.config/context-mode"
+          rc=0; run_probe "${H1}" || rc=$?
+          [ "${rc}" = "0" ] \
+            || { echo "FAIL: healthy shape did not exit 0, got ${rc}"; exit 1; }
+
+          # 2. A sentinel directory writable by the current user.
+          H2="${TMP}/h2"
+          mkdir -p "${H2}/.context-mode" "${H2}/.config/context-mode"
+          chmod 0755 "${H2}/.context-mode"
+          chmod 0555 "${H2}/.config/context-mode"
+          rc=0; run_probe "${H2}" || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: writable directory did not fail the probe"; exit 1; }
+
+          # 3. platform.json present in an otherwise-correct directory. Using
+          # touch, not `: >`, per the house rule for probing state inside a
+          # Venom exec step — a redirection failure on a POSIX special
+          # builtin here would kill this whole script rather than the probe.
+          H3="${TMP}/h3"
+          mkdir -p "${H3}/.context-mode" "${H3}/.config/context-mode"
+          touch "${H3}/.context-mode/platform.json"
+          chmod 0555 "${H3}/.context-mode" "${H3}/.config/context-mode"
+          rc=0; run_probe "${H3}" || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: a present platform.json did not fail the probe"; exit 1; }
+
+          # 4. A sentinel directory missing entirely.
+          H4="${TMP}/h4"
+          mkdir -p "${H4}/.context-mode"
+          chmod 0555 "${H4}/.context-mode"
+          rc=0; run_probe "${H4}" || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: a missing directory did not fail the probe"; exit 1; }
+
+          echo "sentinel_body=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "sentinel_body=pass"
+
+  - name: doctor runs the context-mode check as part of the full walk
+    steps:
+      - type: exec
+        script: |
+          set -e
+          grep -q "preflight_check_context_mode" "{{.riotbox_dir}}/scripts/preflight.sh" \
+            || { echo "FAIL: check not defined"; exit 1; }
+          # The check must be registered in preflight_run's list, not merely
+          # defined — a check nothing calls is a check that never runs.
+          sed -n '/^preflight_run()/,/^}/p' "{{.riotbox_dir}}/scripts/preflight.sh" \
+            | grep -q "preflight_check_context_mode" \
+            || { echo "FAIL: check not registered in preflight_run"; exit 1; }
+          echo "doctor_registered=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "doctor_registered=pass"

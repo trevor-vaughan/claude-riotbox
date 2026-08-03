@@ -1,0 +1,162 @@
+name: scripts/lib/json-write.sh atomic config writer
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Pins the public contract of scripts/lib/json-write.sh. Every caller
+# (container/codegraph-setup.sh, container/context-mode-setup.sh) rewrites an
+# agent config file the user owns, in a bind-mounted host session directory, so
+# a regression here either loses configuration that cannot be recovered or
+# leaves a file on the host looser than the user set it.
+
+testcases:
+  - name: atomic write preserves an existing file mode
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          target="${TEST_DIR}/settings.json"
+          echo '{"a":1}' > "${target}"
+          chmod 640 "${target}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          json_write_atomic "${target}" '{"a":2}'
+
+          [ "$(stat -c '%a' "${target}")" = "640" ] \
+            || { echo "FAIL: mode not preserved"; exit 1; }
+          jq -e '.a == 2' "${target}" >/dev/null \
+            || { echo "FAIL: content not written"; exit 1; }
+          echo "atomic_mode=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "atomic_mode=pass"
+
+  - name: atomic write creates a new file 0600 and leaves no staging file
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          target="${TEST_DIR}/nested/settings.json"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          json_write_atomic "${target}" '{"a":1}'
+
+          [ "$(stat -c '%a' "${target}")" = "600" ] \
+            || { echo "FAIL: new file not 0600"; exit 1; }
+          [ "$(find "${TEST_DIR}/nested" -name 'settings.json.*' | wc -l)" = "0" ] \
+            || { echo "FAIL: staging file left behind"; exit 1; }
+          echo "atomic_create=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "atomic_create=pass"
+
+  # The failure path, which the success cases above cannot reach. These targets
+  # live in the user's bind-mounted session directory, so a staging file that
+  # survives a failed write is litter on the host that nothing ever collects —
+  # and it sits beside the real config under a name a reader has to squint at.
+  # Only the rename is failed here: an unwritable directory would fail at
+  # mktemp instead, leaving nothing to clean up, and it cannot be staged as
+  # root at all (the codegraph suite skips its equivalent case for exactly
+  # that reason). Shimming `mv` reaches the branch as any user.
+  #
+  # Coupling the test to `mv` is deliberate, not a shortcut around a better
+  # seam. The rename IS the contract this library documents — "a partial write
+  # must never replace a good config, hence the staging file and the rename",
+  # and "a rename adopts the source inode's mode" is why the mode assertion
+  # below belongs to the same guarantee. A rewrite that stops renaming has
+  # abandoned both, so this case failing to shim anything is the correct
+  # outcome, not a stale test to relax.
+  - name: a failed write leaves the target intact and no staging file behind
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          target="${TEST_DIR}/settings.json"
+          printf '{"statusLine":{"command":"mine.sh"}}\n' > "${target}"
+          chmod 640 "${target}"
+          cp "${target}" "${TEST_DIR}/before"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          mv() { return 1; }
+          rc=0
+          json_write_atomic "${target}" '{"a":2}' || rc=$?
+          unset -f mv
+
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: reported success on a write that never landed"; exit 1; }
+          cmp -s "${TEST_DIR}/before" "${target}" \
+            || { echo "FAIL: target changed: $(cat "${target}")"; exit 1; }
+          [ "$(stat -c '%a' "${target}")" = "640" ] \
+            || { echo "FAIL: mode changed to $(stat -c '%a' "${target}")"; exit 1; }
+          leftovers="$(find "${TEST_DIR}" -maxdepth 1 -name 'settings.json.*')"
+          [ -z "${leftovers}" ] \
+            || { echo "FAIL: staging file left behind: ${leftovers}"; exit 1; }
+          echo "atomic_failed_write=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "atomic_failed_write=pass"
+
+  # The writer is shared because the entrypoint sources codegraph-setup.sh and
+  # context-mode-setup.sh independently, so neither may own it. That only works
+  # if the library is sourced first: a source line moved below either setup
+  # script leaves both calling an undefined function at session start.
+  - name: entrypoint sources the writer ahead of both setup scripts
+    steps:
+      - type: exec
+        script: |
+          set -e
+          cd "{{.riotbox_dir}}"
+          # Anchored on the source statement itself: the comment above it and
+          # the shellcheck directive beside it both name the file, so an
+          # unanchored match is satisfied by an entrypoint that sources nothing.
+          lib_line="$(grep -nE '^[[:space:]]*source .*/lib/json-write\.sh' container/entrypoint.sh | head -1 | cut -d: -f1)"
+          [ -n "${lib_line}" ] \
+            || { echo "FAIL: entrypoint.sh does not source the JSON writer"; exit 1; }
+          for setup in codegraph-setup.sh context-mode-setup.sh; do
+            setup_line="$(grep -nE "^[[:space:]]*source .*/${setup}" container/entrypoint.sh | head -1 | cut -d: -f1)"
+            [ -n "${setup_line}" ] \
+              || { echo "FAIL: entrypoint.sh does not source ${setup}"; exit 1; }
+            [ "${lib_line}" -lt "${setup_line}" ] \
+              || { echo "FAIL: the writer is sourced after ${setup}"; exit 1; }
+          done
+          echo "entrypoint_order=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "entrypoint_order=pass"
+
+  # container/context-mode-setup.sh is also sourced by the image build, which
+  # asserts its two build-time constants against the installed package. That
+  # source must stay free of side effects and must not need this library, so
+  # the dependency is a call inside a function and never a top-level source.
+  - name: the setup scripts depend on the writer without sourcing it
+    steps:
+      - type: exec
+        script: |
+          set -e
+          cd "{{.riotbox_dir}}"
+          for setup in container/codegraph-setup.sh container/context-mode-setup.sh; do
+            grep -q 'json_write_atomic' "${setup}" \
+              || { echo "FAIL: ${setup} no longer calls the shared writer"; exit 1; }
+            grep -qE '^[[:space:]]*(source|\.) .*json-write\.sh' "${setup}" \
+              && { echo "FAIL: ${setup} sources the library itself"; exit 1; }
+            grep -qE '^[a-z_]+_write_json_atomic\(\)' "${setup}" \
+              && { echo "FAIL: ${setup} defines its own copy of the writer"; exit 1; }
+          done
+          # The build sources context-mode-setup.sh alone and reads the two
+          # constants; nothing it does may call the missing writer.
+          out="$(bash -uc '. container/context-mode-setup.sh
+            : "${CONTEXT_MODE_MATCHER:?}"
+            : "${CONTEXT_MODE_MCP_NAME:?}"
+            echo standalone_source_ok' 2>&1)"
+          [ "${out}" = "standalone_source_ok" ] \
+            || { echo "FAIL: standalone source is not side-effect free: ${out}"; exit 1; }
+          echo "setup_dependency=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "setup_dependency=pass"

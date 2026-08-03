@@ -554,3 +554,94 @@ testcases:
           - result.systemout ShouldContainSubstring "NO_LEAK_RO_SUFFIX"
           - result.systemout ShouldContainSubstring "NO_LEAK_ENGINE"
           - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
+
+  # The ledger is the only riotbox state that outlives session-reset, so its
+  # mount has its own coverage: emitted with the feature, absent without it,
+  # and absent for a read-only workspace. That last one is the audit boundary —
+  # the drop directory is an ordinary rw mount whose filenames name every other
+  # project set, so an untrusted repo must not receive it.
+  - name: Context Mode ledger mount is emitted when the feature is enabled
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${LEDGER}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/proj"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_CONTEXT_MODE=1
+          export RIOTBOX_CONTEXT_LEDGER="${LEDGER}/ledger"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/proj"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          [ -d "${LEDGER}/ledger/runs" ] \
+            || { echo "FAIL: ledger dir not created"; exit 1; }
+          mode="$(stat -c '%a' "${LEDGER}/ledger/runs")"
+          [ "${mode}" = "700" ] \
+            || { echo "FAIL: ledger dir mode ${mode}, expected 700"; exit 1; }
+          echo "ledger_created=ok"
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":/home/llm/.riotbox-ledger:z"
+          - result.systemout ShouldContainSubstring "ledger_created=ok"
+
+  - name: Context Mode ledger mount is absent by default
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/proj"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          unset RIOTBOX_CONTEXT_MODE
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/proj"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          [ -d "${STORE}/riotbox-context-mode/runs" ] \
+            && { echo "FAIL: ledger dir created with the feature off"; exit 1; }
+          echo "default_absent=ok"
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring ".riotbox-ledger"
+          - result.systemout ShouldContainSubstring "default_absent=ok"
+
+  - name: Context Mode ledger mount is withheld from a read-only workspace
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${LEDGER}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/proj"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_CONTEXT_MODE=1
+          export RIOTBOX_READONLY=1
+          export RIOTBOX_CONTEXT_LEDGER="${LEDGER}/ledger"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/proj"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          [ -d "${LEDGER}/ledger/runs" ] \
+            && { echo "FAIL: ledger dir created for a read-only workspace"; exit 1; }
+          echo "readonly_withheld=ok"
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring ".riotbox-ledger"
+          - result.systemout ShouldContainSubstring "readonly_withheld=ok"

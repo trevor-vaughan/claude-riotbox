@@ -2,7 +2,8 @@
 set -euo pipefail
 # Set up mounts and launch a container with the given command.
 # Required env: CONTAINER_CMD, IMAGE_NAME, ROOT_DIR
-# Optional env: RIOTBOX_PROJECTS, RIOTBOX_NETWORK, RIOTBOX_NESTED, RIOTBOX_SOCKET
+# Optional env: RIOTBOX_PROJECTS, RIOTBOX_NETWORK, RIOTBOX_NESTED, RIOTBOX_SOCKET,
+#               RIOTBOX_HEADROOM, RIOTBOX_CONTEXT_MODE
 # Arguments: command and args to run inside the container
 
 # Source config for persistent defaults (e.g. RIOTBOX_NETWORK=none). These
@@ -33,6 +34,30 @@ ERROR: RIOTBOX_NESTED=1 and RIOTBOX_SOCKET=1 are mutually exclusive.
                      effective root on the host.
 
 Pick one. See README "Container runtime modes" for trade-offs.
+EOF
+	exit 1
+fi
+
+# Mutual-exclusion guard for the two context-reduction features. Both keep tool
+# output out of the model's context, at different layers — headroom compresses
+# payloads in flight through a local proxy, Context Mode keeps them out of the
+# transcript through a PreToolUse hook. They compose in principle, but the
+# combination is unmeasured and doubles the surface where a session can
+# misbehave, so only one is supported at a time. Fires here, beside the
+# NESTED/SOCKET guard and before any side-effectful work, so an obviously
+# contradictory env never reaches mount setup.
+if [[ "${RIOTBOX_CONTEXT_MODE:-}" = "1" ]] && [[ "${RIOTBOX_HEADROOM:-}" = "1" ]]; then
+	cat >&2 <<'EOF'
+ERROR: RIOTBOX_CONTEXT_MODE=1 and RIOTBOX_HEADROOM=1 are mutually exclusive.
+
+  RIOTBOX_HEADROOM=1      Compress payloads in flight through a local
+                          proxy. Unconditional — the proxy sees every
+                          request.
+  RIOTBOX_CONTEXT_MODE=1  Keep large tool output out of the transcript
+                          entirely, searchable on demand from a local
+                          FTS5 store.
+
+Pick one. See README "Context Mode" for trade-offs.
 EOF
 	exit 1
 fi
@@ -255,6 +280,8 @@ ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${USER_FLAG} ${IN
 	${RIOTBOX_AGENT:+-e RIOTBOX_AGENT="${RIOTBOX_AGENT}"} \
 	${RIOTBOX_NESTED:+-e RIOTBOX_NESTED="${RIOTBOX_NESTED}"} \
 	${RIOTBOX_HEADROOM:+-e RIOTBOX_HEADROOM="${RIOTBOX_HEADROOM}"} \
+	${RIOTBOX_CONTEXT_MODE:+-e RIOTBOX_CONTEXT_MODE="${RIOTBOX_CONTEXT_MODE}"} \
+	${RIOTBOX_CONTEXT_MODE:+-e RIOTBOX_SESSION_KEY="$(basename "${RIOTBOX_SESSION_DIR}")"} \
 	${RIOTBOX_HEADROOM_PROXY_TIMEOUT:+-e RIOTBOX_HEADROOM_PROXY_TIMEOUT="${RIOTBOX_HEADROOM_PROXY_TIMEOUT}"} \
 	${RIOTBOX_EXTRA_ARGS:-} \
 	-w "${WORKDIR}" \

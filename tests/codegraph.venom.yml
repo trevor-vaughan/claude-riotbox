@@ -10,6 +10,11 @@ vars:
 # The hint tells the user how to build the first index; indexing is never
 # started automatically.
 
+# Every case sources scripts/lib/json-write.sh first, the way entrypoint.sh
+# does: the atomic config writer is shared with context-mode-setup.sh, so
+# neither setup script owns it. Its own contract is pinned by
+# tests/lib-json-write.venom.yml.
+
 testcases:
   - name: relocate creates the target config when it does not exist
     steps:
@@ -25,6 +30,7 @@ testcases:
           {"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}
           JSON
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_relocate_mcp_entry
 
@@ -53,6 +59,7 @@ testcases:
           {"oauthAccount":{"emailAddress":"a@b.invalid"},"mcpServers":{"other":{"command":"other"}}}
           JSON
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_relocate_mcp_entry
 
@@ -82,6 +89,7 @@ testcases:
           {"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}
           JSON
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_relocate_mcp_entry
           first="$(cat "${CLAUDE_CONFIG_DIR}/.claude.json")"
@@ -106,6 +114,7 @@ testcases:
           echo '{"oauthAccount":{"emailAddress":"a@b.invalid"}}' \
             > "${CLAUDE_CONFIG_DIR}/.claude.json"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           # No ~/.claude.json at all.
           codegraph_relocate_mcp_entry
@@ -136,6 +145,7 @@ testcases:
           echo '{"oauthAccount":{"emailAddress":"a@b.invalid"}}' \
             > "${CLAUDE_CONFIG_DIR}/.claude.json"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_relocate_mcp_entry 2>"${TEST_DIR}/stderr"
 
@@ -170,6 +180,7 @@ testcases:
           printf '{"oauthAccount": {truncated' > "${target}"
           cp "${target}" "${TEST_DIR}/before"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_relocate_mcp_entry 2>"${TEST_DIR}/stderr"
 
@@ -209,6 +220,7 @@ testcases:
           target="${CLAUDE_CONFIG_DIR}/.claude.json"
           printf '' > "${target}"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_relocate_mcp_entry 2>"${TEST_DIR}/stderr"
 
@@ -240,6 +252,7 @@ testcases:
           {"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}
           JSON
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
 
           # The target holds OAuth account metadata and lives in the host
@@ -288,6 +301,7 @@ testcases:
           # implementation that still uses it.
           mkdir -p "${CLAUDE_CONFIG_DIR}/.claude.json.tmp"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_relocate_mcp_entry 2>"${TEST_DIR}/stderr"
 
@@ -322,6 +336,7 @@ testcases:
                    "${CODEGRAPH_WORKSPACE}/beta/.codegraph"
           touch "${CODEGRAPH_WORKSPACE}/beta/.codegraph/codegraph.db"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           out="$(codegraph_index_hint)"
           printf '%s\n' "${out}"
@@ -347,6 +362,7 @@ testcases:
           export CODEGRAPH_WORKSPACE="${TEST_DIR}/workspace"
           mkdir -p "${CODEGRAPH_WORKSPACE}/.git" "${CODEGRAPH_WORKSPACE}/src"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           out="$(codegraph_index_hint)"
           printf '%s\n' "${out}"
@@ -377,6 +393,7 @@ testcases:
           printf 'gitdir: %s\n' "${TEST_DIR}/main/.git/worktrees/wt" \
             > "${CODEGRAPH_WORKSPACE}/.git"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           out="$(codegraph_index_hint)"
           printf '%s\n' "${out}"
@@ -403,6 +420,7 @@ testcases:
           mkdir -p "${CODEGRAPH_WORKSPACE}/.git" "${CODEGRAPH_WORKSPACE}/.codegraph"
           touch "${CODEGRAPH_WORKSPACE}/.codegraph/codegraph.db"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           out="$(codegraph_index_hint)"
           [ -z "${out}" ] || { echo "FAIL: expected silence, got '${out}'"; exit 1; }
@@ -430,6 +448,7 @@ testcases:
           # or one that reached an image without CodeGraph before any agent
           # wrote a config. Every other missing-binary case seeds the file, so
           # this is the only cover for the strip's absent-file branch.
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_setup 2>"${TEST_DIR}/stderr"
           grep -q 'not on PATH' "${TEST_DIR}/stderr" \
@@ -470,6 +489,7 @@ testcases:
           chmod +x "${TEST_DIR}/bin/codegraph"
           export PATH="${TEST_DIR}/bin:/usr/bin:/bin"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_setup
 
@@ -513,6 +533,7 @@ testcases:
           chmod +x "${TEST_DIR}/bin/codegraph"
           export PATH="${TEST_DIR}/bin:/usr/bin:/bin"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_setup >"${TEST_DIR}/stdout" 2>"${TEST_DIR}/stderr"
           grep -qi "codegraph" "${TEST_DIR}/stderr" || { echo "FAIL: no warning"; exit 1; }
@@ -605,6 +626,7 @@ testcases:
             exit 0
           fi
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_relocate_mcp_entry 2>"${TEST_DIR}/stderr"
 
@@ -636,6 +658,7 @@ testcases:
           # authoritative count (see setup_projects in mount-projects.sh).
           echo "/home/user/myproject" > "${CLAUDE_CONFIG_DIR}/.projects"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           roots="$(codegraph_project_roots)"
 
@@ -670,6 +693,7 @@ testcases:
           printf '%s\n' "/home/user/alpha" "/home/user/beta" \
             > "${CLAUDE_CONFIG_DIR}/.projects"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           roots="$(codegraph_project_roots)"
 
@@ -720,6 +744,7 @@ testcases:
           JSON
           cp "${settings}" "${TEST_DIR}/before"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_setup 2>"${TEST_DIR}/stderr"
 
@@ -857,6 +882,7 @@ testcases:
           }
           JSON
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_setup 2>"${TEST_DIR}/stderr"
 
@@ -899,6 +925,7 @@ testcases:
           export PATH="${TEST_DIR}/bin:/usr/bin:/bin"
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
 
           # A half-installed session — the installer writes both, but a user
@@ -949,6 +976,7 @@ testcases:
           printf 'not json at all' > "${settings}"
           cp "${settings}" "${TEST_DIR}/before"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_setup 2>"${TEST_DIR}/stderr"
 
@@ -961,6 +989,59 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "strip_malformed=pass"
+
+  # `$(jq . <<<"${stripped}")` yields the empty string when jq fails or prints
+  # nothing, and the writer accepts set-but-empty content — so an unchecked
+  # substitution replaces the user's hand-edited settings.json with a lone
+  # newline, with no backup and no error. The shim below fails exactly the
+  # pretty-print call (`jq .`, one argument, reading stdin) and leaves every
+  # other jq intact.
+  - name: strip never writes an empty document over settings.json
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export CODEGRAPH_WORKSPACE="${TEST_DIR}/workspace"
+          mkdir -p "${CLAUDE_CONFIG_DIR}" "${CODEGRAPH_WORKSPACE}" "${TEST_DIR}/bin"
+          export PATH="${TEST_DIR}/bin:/usr/bin:/bin"
+
+          settings="${CLAUDE_CONFIG_DIR}/settings.json"
+          cat > "${settings}" <<'JSON'
+          {
+            "statusLine": {"type": "command", "command": "my-statusline.sh"},
+            "hooks": {
+              "UserPromptSubmit": [
+                {"hooks": [{"type": "command", "command": "codegraph prompt-hook"}]}
+              ]
+            }
+          }
+          JSON
+          cp "${settings}" "${TEST_DIR}/before"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/codegraph-setup.sh"
+          jq() {
+            if [ "$#" -eq 1 ] && [ "$1" = "." ]; then
+              return 0
+            fi
+            command jq "$@"
+          }
+          codegraph_strip_session_wiring 2>"${TEST_DIR}/stderr"
+          unset -f jq
+
+          cmp -s "${TEST_DIR}/before" "${settings}" \
+            || { echo "FAIL: settings.json truncated by an empty pretty-print"; exit 1; }
+          grep -q 'left in place' "${TEST_DIR}/stderr" \
+            || { echo "FAIL: the failed cleanup was silent"; \
+                 cat "${TEST_DIR}/stderr"; exit 1; }
+          echo "strip_empty_format=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "strip_empty_format=pass"
 
   - name: entrypoint calls codegraph_setup after overlay_setup
     steps:

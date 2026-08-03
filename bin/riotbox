@@ -85,11 +85,14 @@ Setup / maintenance:
   install-hooks [flags...]     Install the git pre-push identity hook
   build                        Build the RiotBox image
   rebuild                      Rebuild the image from scratch (no cache)
-  update                       Upgrade only the LLM CLI tools (headroom, opencode, Claude Code, CodeGraph, plugins)
+  update                       Upgrade only the LLM CLI tools (headroom, opencode,
+                               Claude Code, CodeGraph, Context Mode, plugins).
+                               Large re-download — see riotbox update --help
 
 Info:
   agents                       List registered agents (name + binary)
   tokscale [args...]           Unified tokscale usage across native + riotbox sessions
+  ctx-stats [args...]          Context Mode savings recorded across sessions
   doctor                       Verify host setup (preflight checks)
   version                      Show the current version
   help                         Show this help
@@ -140,6 +143,7 @@ print_command_help() {
 	case "$1" in
 	audit) exec "${LIBEXEC}/audit.sh" --help ;;
 	install-hooks) exec "${LIBEXEC}/install-hooks.sh" --help ;;
+	ctx-stats) exec "${SCRIPTS}/ctx-stats.sh" --help ;;
 	build | rebuild | update)
 		echo "Usage: riotbox ${1}"
 		echo ""
@@ -148,9 +152,13 @@ print_command_help() {
 		echo "  build    Build using the layer cache where possible."
 		echo "  rebuild  Add --no-cache to invalidate every layer."
 		echo "  update   Re-pull only the LLM CLI tools (headroom, opencode, Claude Code,"
-		echo "           CodeGraph, plugins) — headroom and CodeGraph re-install at their"
-		echo "           pinned versions; opencode, Claude Code, and plugins update to"
-		echo "           latest. Reuses every other cached layer."
+		echo "           CodeGraph, Context Mode, plugins) — headroom, CodeGraph, and"
+		echo "           Context Mode re-install at their pinned versions; opencode,"
+		echo "           Claude Code, and plugins update to latest. Reuses every other"
+		echo "           cached layer. Re-installing at a pin is not free: headroom"
+		echo "           re-fetches ~350 MB of models and Context Mode re-runs"
+		echo "           'nvm install' for its pinned Node 22 toolchain, so budget a"
+		echo "           large download on a metered or slow link."
 		echo "Environment knobs:"
 		echo "  NODE_VERSIONS_MAX=<N>|all  Cap baked-in Node versions (default 3)"
 		echo "  RIOTBOX_DIAGRAMS=1         Include Chromium + mmdc"
@@ -213,6 +221,7 @@ agents)
 	done
 	;;
 tokscale) exec "${SCRIPTS}/tokscale-riotbox.sh" "$@" ;;
+ctx-stats) exec "${SCRIPTS}/ctx-stats.sh" "$@" ;;
 
 build) exec "${SCRIPTS}/build.sh" ;;
 rebuild) CONTAINER_EXTRA_ARGS="--no-cache" exec "${SCRIPTS}/build.sh" ;;

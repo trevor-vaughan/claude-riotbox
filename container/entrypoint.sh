@@ -76,6 +76,12 @@ RIOTBOX_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # self-relative source would need two candidate paths.
 # shellcheck source=../scripts/lib/overlay-ignore.sh disable=SC1091
 source "${RIOTBOX_SCRIPT_DIR}/lib/overlay-ignore.sh"
+# Shared atomic JSON config writer, sourced ahead of the two setup scripts that
+# call json_write_atomic: the entrypoint sources codegraph-setup.sh and
+# context-mode-setup.sh independently and neither may depend on the other, so
+# neither can own the writer.
+# shellcheck source=../scripts/lib/json-write.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/lib/json-write.sh"
 # shellcheck source=./session-branch.sh disable=SC1091  # source path resolves only from container/; safe to skip follow
 source "${RIOTBOX_SCRIPT_DIR}/session-branch.sh"
 # shellcheck source=./overlay-setup.sh disable=SC1091
@@ -89,6 +95,10 @@ source "${RIOTBOX_SCRIPT_DIR}/startup-scripts.sh"
 	source "${RIOTBOX_SCRIPT_DIR}/headroom-summary.sh"
 # shellcheck source=./codegraph-setup.sh disable=SC1091
 source "${RIOTBOX_SCRIPT_DIR}/codegraph-setup.sh"
+# shellcheck source=./context-mode-setup.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/context-mode-setup.sh"
+# shellcheck source=./context-mode-summary.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/context-mode-summary.sh"
 
 # Nested podman setup: file caps on newuidmap/newgidmap and /etc/sub{u,g}id
 # alignment with the outer keep-id user namespace. Only run when nested mode
@@ -131,6 +141,13 @@ overlay_setup
 # final /workspace.
 codegraph_setup
 
+# Context Mode: wire the MCP server and the PreToolUse/SessionStart hooks when
+# RIOTBOX_CONTEXT_MODE=1, or strip wiring an earlier session left behind.
+# Runs after codegraph_setup so both MCP entries merge into a settled
+# .claude.json instead of racing for it. Claude Code only — it warns and
+# skips for any other agent.
+context_mode_setup
+
 # Session branch: create a dedicated branch for this session (if repo detected
 # and not suppressed). Must run after all setup is complete, before the main
 # command, so Claude starts on the right branch.
@@ -145,6 +162,10 @@ startup_scripts_run
 # perf window covers the full session.  No-op unless RIOTBOX_HEADROOM=1 and
 # headroom-summary.sh was sourced (function may not exist on older images).
 declare -F headroom_summary_init >/dev/null 2>&1 && headroom_summary_init
+# Same window, same reason: the baseline has to be taken before the agent runs
+# or the report counts bytes the agent never wrote. No-op unless Context Mode
+# wired successfully; the function may be absent on an older image.
+declare -F context_mode_summary_init >/dev/null 2>&1 && context_mode_summary_init
 
 # Run the main command without exec so this shell survives to run teardown.
 # exec was originally used to avoid bash -lc semantics — sourcing .bashrc above
@@ -160,6 +181,12 @@ _exit_code=$?
 # and the binary + jq are available.  Never affects the exit code.
 if declare -F headroom_summary_print >/dev/null 2>&1; then
 	headroom_summary_print || true
+fi
+
+# Print bytes kept out this run.  No-op unless Context Mode wired successfully
+# and the stats shim is present.  Never affects the exit code.
+if declare -F context_mode_summary_print >/dev/null 2>&1; then
+	context_mode_summary_print || true
 fi
 
 # Overlay: print exit summary with change stats
