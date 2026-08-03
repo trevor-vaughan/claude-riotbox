@@ -15,6 +15,10 @@
 # BASH_SOURCE works regardless of caller cwd or how the registry was sourced.
 _AGENT_CLAUDE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Context Mode verbs (optional contract — see docs/maintainer/adding-an-agent.md).
+# shellcheck source=./context-mode.sh
+source "${_AGENT_CLAUDE_DIR}/context-mode.sh"
+
 # Name of the binary on PATH inside the container.
 agent_claude_real_binary() {
 	printf 'claude\n'

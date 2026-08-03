@@ -576,14 +576,14 @@ when `RIOTBOX_HEADROOM` is unset.
 ## Context Mode (opt-in)
 
 [Context Mode](https://github.com/mksglu/context-mode) keeps large tool output out
-of the model's context window. Two layers do the work. A `PreToolUse` hook
-intercepts the calls that produce large output — `Bash`, `Read`, `Grep`,
-`WebFetch`, `Agent`, and every external MCP tool — and parks the raw bytes in a
-local SQLite FTS5 store the agent searches on demand instead of re-reading.
-`PostToolUse`, `UserPromptSubmit`, `Stop` and `PreCompact` record what the
-session did into a second, per-project store, which `SessionStart` replays into
-the next session and after each compact. RiotBox ships it in the image (pinned
-version, no telemetry) and wires it per session:
+of the model's context window. Two layers do the work. **Interception** catches
+the calls that produce large output — `Bash`, `Read`, `Grep`, `WebFetch`,
+`Agent`, and every external MCP tool — before their bytes reach the transcript,
+and parks the raw output in a local SQLite FTS5 store the agent searches on
+demand instead of re-reading. **Continuity** records what the session did into a
+second, per-project store, which is replayed into the next session and after each
+compact. RiotBox ships it in the image (pinned version, no telemetry) and wires it
+per session:
 
 ```bash
 RIOTBOX_CONTEXT_MODE=1 riotbox run "fix the failing tests"
@@ -591,22 +591,50 @@ RIOTBOX_CONTEXT_MODE=1 riotbox run "fix the failing tests"
 echo ': "${RIOTBOX_CONTEXT_MODE:=1}"' >> ~/.config/riotbox/config
 ```
 
+**Both agents are wired, and the wiring has nothing in common between them.**
+Upstream reaches Claude Code through hooks and an MCP server, and opencode
+through a TypeScript plugin that runs inside the agent process; there is no
+shared shape to abstract over. Each agent supplies its own wiring in
+`agents/<name>/context-mode.sh`, and `container/context-mode-setup.sh` drives it
+without naming any agent — see
+[`docs/maintainer/adding-an-agent.md`](docs/maintainer/adding-an-agent.md#the-context-mode-verbs)
+for the contract. An agent that supplies none runs with the feature off after a
+warning naming it.
+
+|                        | `--agent=claude`                                                                | `--agent=opencode`                                                              |
+|------------------------|---------------------------------------------------------------------------------|---------------------------------------------------------------------------------|
+| What riotbox writes    | six hook stanzas in `settings.json`, plus an `mcpServers` entry in `.claude.json` | one generated plugin file, `~/.config/opencode/plugins/riotbox-context-mode.js`   |
+| Where the code runs    | a short-lived hook process per matched tool call, plus an MCP child process        | in-process, inside opencode's own embedded bun                                    |
+| How the `ctx_*` tools arrive | over MCP, named `mcp__plugin_context-mode_context-mode__ctx_*`              | eleven native opencode tools the plugin registers directly — no MCP server at all  |
+| Where interception happens | a `PreToolUse` matcher, reproduced from upstream and asserted at build time    | `tool.execute.before`, enforced in-process                                        |
+| Store                  | `~/.claude/context-mode`                                                          | `~/.config/opencode/context-mode`                                                 |
+
 What changes when enabled:
 
 - `WebFetch` is redirected to Context Mode's own fetch tools, which store the
   response and return a summary. Large `Bash` output gets a routing suggestion
   rather than a hard redirect, so savings there depend on the model taking it.
-- **`WebSearch` is not intercepted.** It appears in no alternative of the
-  `PreToolUse` matcher (`CONTEXT_MODE_MATCHER` in
-  `container/context-mode-setup.sh`, which reproduces upstream's
+- **`WebSearch` is not intercepted on Claude Code.** It appears in no alternative
+  of the `PreToolUse` matcher (`CONTEXT_MODE_MATCHER` in
+  `agents/claude/context-mode.sh`, which reproduces upstream's
   `PRE_TOOL_USE_MATCHERS` verbatim), and a `PreToolUse` hook only runs for the
   tools its matcher names — so search results still land in the transcript in
-  full.
+  full. **opencode has no matcher at all**: routing is decided in-process inside
+  `tool.execute.before`, so which tools it intercepts is upstream's runtime
+  decision rather than a list riotbox reproduces and the build asserts.
 - The FTS5 store lives in the session directory
-  (`~/.local/share/riotbox/<session>/context-mode`, visible in-container at
-  `~/.claude/context-mode`). It holds verbatim tool output — treat it with the
-  same sensitivity as your session transcripts. `riotbox session-remove` deletes
-  both together.
+  (`~/.local/share/riotbox/<session>/context-mode`), under the config directory of
+  the agent that wired it — in-container `~/.claude/context-mode` for Claude Code
+  and `~/.config/opencode/context-mode` for opencode. It holds verbatim tool
+  output — treat it with the same sensitivity as your session transcripts.
+  `riotbox session-remove` deletes it along with the rest of the session.
+
+  The location is per agent rather than shared, which is a deliberate cost: a
+  session directory reused with a different `--agent` starts from an empty store,
+  because recall does not cross from one agent's store to the other's. Only one
+  agent's *wiring* exists in a session directory at a time — starting a session
+  with a different `--agent` strips the other's on the way in — but the stores
+  themselves both stay until the session directory is removed.
 - **Two stores, both in the session directory.** `content/` holds the parked tool
   output; `sessions/` holds continuity — what the session did, and the snapshot
   `PreCompact` writes so an autocompact does not lose the thread. Both persist for
@@ -764,28 +792,58 @@ What changes when enabled:
   deliberate actor — the container's user holds `sudo` — and `RIOTBOX_NETWORK=none`
   remains the hard control. See [Context Mode store and
   wiring](THREAT_MODEL.md#context-mode-store-and-wiring).
-- **Wiring the session needs no network.** RiotBox writes the MCP and hook
-  wiring itself rather than running `context-mode upgrade`, which clones
-  upstream and overwrites the installed package with whatever is on `main`.
-  One outbound request remains, and it is not RiotBox's: the MCP server itself
-  GETs `https://registry.npmjs.org/context-mode/latest` at startup to warn about
-  newer versions. It carries no payload, fails soft, and — unlike headroom and
-  CodeGraph — has no off switch; `RIOTBOX_NETWORK=none` is what suppresses it.
-  See [Context Mode store and
+- **Wiring the session needs no network, on either agent.** RiotBox writes the
+  wiring itself rather than running `context-mode upgrade`, which clones upstream
+  and overwrites the installed package with whatever is on `main`. On opencode
+  the same reasoning is why the generated plugin file re-exports the copy
+  **vendored in the image, by absolute path**, instead of riotbox adding
+  `"plugin": ["context-mode"]` to the opencode config: an npm plugin entry makes
+  opencode `bun install` the package from the registry at every startup, which
+  needs network (`RIOTBOX_NETWORK=none` forbids it) and floats the version off
+  the pin the image build asserts against.
+
+  One outbound request remains on the Claude path, and it is not RiotBox's: the
+  MCP server GETs `https://registry.npmjs.org/context-mode/latest` at startup to
+  warn about newer versions. It carries no payload, fails soft, and — unlike
+  headroom and CodeGraph — has no off switch; `RIOTBOX_NETWORK=none` is what
+  suppresses it. The opencode path has no counterpart, because it starts no
+  server: the plugin imports the server module with
+  `CONTEXT_MODE_EMBEDDED_PLUGIN_TOOLS=1`, which is exactly the flag that skips
+  the startup routine the version check lives in. See [Context Mode store and
   wiring](THREAT_MODEL.md#context-mode-store-and-wiring) in the threat model.
-- Context Mode runs on its own pinned Node 22 inside the image, independent of
-  whichever Node versions the build mirrored from your host.
-- Wired for `--agent=claude` only. The hooks dispatch through
-  `context-mode hook claude-code …` and every stanza lands under the Claude
-  config directory, which opencode never reads. A session started with any other
-  agent prints a warning naming that agent, strips any wiring an earlier Claude
-  session left in that directory, and runs with Context Mode off.
-  `riotbox doctor` checks the image rather than the agent, so it still reports
-  `[ok]` for an opencode session with the toggle set — the session-start
-  warning is where that shows up.
-- Wiring is removed again the first time a session starts without the toggle, so
-  a session directory never outlives the feature holding hooks that point at a
-  binary that is gone.
+- **A `context-mode` entry in your own opencode config is dropped, and riotbox
+  says so.** opencode loads a local plugin file and an npm plugin of the same
+  name as two separate plugins, so leaving both in place would register the
+  eleven `ctx_*` tools twice and fire every hook twice. When
+  `RIOTBOX_CONTEXT_MODE=1`, `context-mode` and `context-mode@<version>` are
+  filtered out of the `plugin` array of the generated `opencode.jsonc` and a
+  warning on stderr names what was dropped and why. Your host config is not
+  modified, and with the toggle off nothing is filtered — the entry is then your
+  own plugin choice.
+- Context Mode runs on its own pinned Node 22 inside the image on the Claude
+  path, independent of whichever Node versions the build mirrored from your host.
+  **The opencode path does not use it**: the plugin runs under opencode's
+  embedded bun, and upstream's `bun:sqlite` adapter means the native SQLite
+  addon that forced the pinned Node is never loaded there.
+- **Two degradations are specific to opencode, and neither is a riotbox bug:**
+  - *Weaker session-resume attribution.* opencode has no `SessionStart` hook
+    upstream — the adapter cites issues #14808 and #5409 for it. The adapter
+    compensates with plugin-init cleanup and a resume snapshot injected into the
+    system prompt, but continuity across sessions is not as strong as on Claude
+    Code, where `SessionStart` replays the store directly.
+  - *`opencode --pure` turns it off entirely.* That flag runs opencode without
+    external plugins, so the shim never loads and nothing engages. RiotBox warns
+    on stderr when it sees `--pure` with `RIOTBOX_CONTEXT_MODE=1` and then
+    continues unchanged — `--pure` is your explicit instruction, not riotbox's to
+    override.
+- `riotbox doctor` reports the agent as well as the image. Ask for Context Mode
+  with an agent that has no support in riotbox and the check passes with a
+  message saying the session will run with the feature off, rather than reporting
+  a bare `[ok]` that says nothing about the agent you selected.
+- Wiring is removed again the first time a session starts without the toggle, or
+  with a different `--agent`, so a session directory never outlives the feature
+  holding hooks that point at a binary that is gone, or one agent's wiring while
+  another agent runs.
 
 **Mutually exclusive with `RIOTBOX_HEADROOM=1`.** Both reduce context, at
 different layers; the combination is unmeasured, so the launcher refuses the pair
@@ -1248,9 +1306,9 @@ cat ~/.claude/debug/latest
 
 **Check**:
 
-- **Did the wiring land?** A wired session prints exactly one line to stdout at startup: `  [context-mode] hooks wired; store at <dir>/context-mode.` If it is missing, wiring gave up, and every give-up path explains itself on **stderr** as `[context-mode] WARN:` — a stream an autonomous run usually discards. Re-run capturing it: `RIOTBOX_CONTEXT_MODE=1 riotbox run "…" 2>/tmp/rb.err; grep context-mode /tmp/rb.err`. Most common causes: `--agent` is not `claude` (Context Mode is wired for Claude Code only), or the session config could not be written.
+- **Did the wiring land?** A wired session says so once at startup — `  [context-mode] hooks wired; store at <dir>/context-mode.` on stdout under `--agent=claude`, `  [context-mode] opencode plugin shim wired at <path>.` on stderr under `--agent=opencode`. If neither appears, wiring gave up, and every give-up path explains itself on **stderr** as `[context-mode] WARN:` — a stream an autonomous run usually discards. Re-run capturing it: `RIOTBOX_CONTEXT_MODE=1 riotbox run "…" 2>/tmp/rb.err; grep context-mode /tmp/rb.err`. Most common causes: the selected agent has no Context Mode support in riotbox (the warning names it), the session config could not be written, or — on opencode — `--pure` was on the command line, which disables external plugins outright.
 - **Is the exit report zero rather than absent?** `this run 0 B kept out · 8.0 KB hook log on disk` means the hooks ran and withheld nothing — the feature engaged and saved nothing. The hook-log figure is disk volume, not tokens. `bytesAvoided` only moves when the model actually routes large output through the sandbox tools; a session of small tool results has nothing to redirect. **No report at all** is the different problem, and it points back to the wiring check above.
-- **Do not read `riotbox doctor` as proof the session works.** Its probe runs the image with `--entrypoint /usr/bin/bash`, which bypasses `container/entrypoint.sh` — the file where the per-session wiring actually happens. A green check proves the image ships a working `context-mode` and nothing about your session.
+- **Do not read `riotbox doctor` as proof the session works.** Its probe runs the image with `--entrypoint /usr/bin/bash`, which bypasses `container/entrypoint.sh` — the file where the per-session wiring actually happens. A green check proves the image ships a working `context-mode`, and that the agent you selected has Context Mode support at all, and nothing else about your session.
 - **Compare against `context-mode statusline` and expect disagreement.** Upstream's headline divides `eventDataBytes` by 4 and calls the result saved tokens, so it reports a saving for a session that saved nothing. RiotBox reports `bytesAvoided` alone.
 
 ### Session directory owned by wrong UID

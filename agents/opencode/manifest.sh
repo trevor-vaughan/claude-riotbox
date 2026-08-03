@@ -14,6 +14,10 @@
 # Resolve this manifest's own directory so sibling files load by absolute path.
 _AGENT_OPENCODE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Context Mode verbs (optional contract — see docs/maintainer/adding-an-agent.md).
+# shellcheck source=./context-mode.sh
+source "${_AGENT_OPENCODE_DIR}/context-mode.sh"
+
 # Name of the binary on PATH inside the container.
 agent_opencode_real_binary() {
 	printf 'opencode\n'
@@ -60,6 +64,21 @@ agent_opencode_wrapper_inject() {
 		fi
 		printf '%s\0' "${arg}"
 	done
+	# `opencode --pure` runs without external plugins, so the Context Mode
+	# plugin shim never loads. Say so: the session would otherwise report the
+	# feature as wired and report a zero saving, which is exactly the "did it
+	# engage at all?" ambiguity the exit report exists to remove. Warn and
+	# continue — --pure is the user's explicit instruction, not ours to drop.
+	# stderr only: stdout is the NUL-terminated argv the wrapper reads back.
+	if [[ "${RIOTBOX_CONTEXT_MODE:-0}" = "1" ]]; then
+		for arg in "$@"; do
+			if [[ "${arg}" = "--pure" ]]; then
+				echo "  [context-mode] WARN: opencode --pure disables external plugins," >&2
+				echo "  [context-mode] so Context Mode will not engage this session." >&2
+				break
+			fi
+		done
+	fi
 	# Env hints go to the wrapper-allocated sidecar file (one KEY=VAL per
 	# line). The wrapper reads + exports it after we return. Stderr is
 	# reserved for user-facing diagnostics.

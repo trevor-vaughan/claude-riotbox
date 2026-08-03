@@ -65,6 +65,11 @@ fi
 PREFLIGHT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/log.sh
 source "${PREFLIGHT_SCRIPT_DIR}/lib/log.sh"
+# The registry declares the per-agent verbs; preflight_check_context_mode probes
+# for one of them. Manifests are pure function declarations, so sourcing this is
+# inert for every other check.
+# shellcheck source=agents/registry.sh
+source "${PREFLIGHT_SCRIPT_DIR}/../agents/registry.sh"
 
 # Source config for config-persisted toggles (e.g. RIOTBOX_HEADROOM). The
 # files use `: "${VAR:=default}"` so sourcing user (XDG) before system (/etc)
@@ -324,6 +329,20 @@ preflight_check_context_mode() {
 		_preflight_report context_mode fail "${label}" 22 \
 			"RIOTBOX_CONTEXT_MODE=1 and RIOTBOX_HEADROOM=1 are mutually exclusive — unset one"
 		return 22
+	fi
+	# Context Mode is wired per agent through the optional registry verbs. An
+	# agent that implements none of them runs with the feature off, so say so
+	# here rather than letting doctor imply the feature will engage.
+	#
+	# Reported as ok, not fail: _preflight_report has two states and fail
+	# carries an exit code, which would make `riotbox doctor` non-zero for a
+	# legitimate configuration. This mirrors the "not requested" branch above —
+	# an explanatory ok line, so a user sees why rather than wondering.
+	local cm_agent="${RIOTBOX_AGENT:-claude}"
+	if ! declare -F "agent_${cm_agent}_context_mode_wire" >/dev/null; then
+		_preflight_report context_mode ok \
+			"Context Mode requested, but agent '${cm_agent}' has no Context Mode support in riotbox — the session will run with the feature off"
+		return 0
 	fi
 	if ! command -v podman >/dev/null 2>&1 ||
 		! podman image exists "${image}" 2>/dev/null; then

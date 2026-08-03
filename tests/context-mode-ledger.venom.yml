@@ -237,3 +237,42 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "wiring_seam=pass"
+
+  # The ledger stamps RIOTBOX_AGENT into every record, which is what makes a
+  # multi-agent history readable after the fact. Asserted rather than assumed:
+  # the field defaults to claude, so an agent that never reaches this code path
+  # correctly would be recorded as claude and the mistake would be invisible.
+  - name: an opencode session records agent=opencode in the ledger
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE
+          export RIOTBOX_AGENT=opencode
+          export RIOTBOX_SESSION_KEY=probe-session
+          export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/ledger"
+          export CONTEXT_MODE_DIR="${HOME}/.config/opencode/context-mode"
+          # context_mode_ledger_append writes only for a wired session.
+          export _CONTEXT_MODE_WIRED=1
+          mkdir -p "${CONTEXT_MODE_LEDGER_DIR}" "${CONTEXT_MODE_DIR}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-summary.sh"
+          declare -F context_mode_ledger_append >/dev/null \
+            || { echo "FAIL: context_mode_ledger_append is not defined"; exit 1; }
+
+          # baseline_unknown short-circuits context_mode_compute_deltas, which
+          # needs only .after to be an object.
+          context_mode_ledger_append '{"before":null,"after":{},"baseline_unknown":true}'
+
+          record="$(find "${CONTEXT_MODE_LEDGER_DIR}" -name '*.json' | head -n 1)"
+          [ -n "${record}" ] || { echo "FAIL: no ledger record written"; exit 1; }
+          jq -e '.agent == "opencode"' "${record}" >/dev/null \
+            || { echo "FAIL: record does not name the opencode agent"; jq . "${record}"; exit 1; }
+          echo "LEDGER_AGENT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEDGER_AGENT_OK"

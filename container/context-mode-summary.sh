@@ -382,10 +382,10 @@ context_mode_read_stats() {
 }
 
 # context_mode_summary_init
-# Snapshot the counters before the agent runs. No-op unless context_mode_wire
-# reported success — an unwired session has nothing to measure, and taking a
-# baseline anyway would let a later toggle change print a report for a run that
-# never had the feature.
+# Snapshot the counters before the agent runs. No-op unless the running agent's
+# context_mode_wire verb reported success — an unwired session has nothing to
+# measure, and taking a baseline anyway would let a later toggle change print a
+# report for a run that never had the feature.
 #
 # Reads with a 3-second budget, not the teardown's 10: this call sits in front
 # of the agent, on the critical path to a usable session, while

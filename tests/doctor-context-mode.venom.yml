@@ -579,6 +579,69 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "sentinel_body=pass"
 
+  # Context Mode is wired per agent through the optional registry verbs (see
+  # docs/maintainer/adding-an-agent.md), so an agent implementing none of them
+  # runs with the feature off however the toggle is set. doctor is where a user
+  # checks whether the feature will engage, so it has to say that rather than
+  # reporting on an image probe the session will never act on.
+  #
+  # The unsupported agent is simulated by unsetting the real verb after the
+  # source, so both arms run the same `declare -F` probe production uses — a
+  # fixture agent would only prove the fixture agrees with itself. podman is
+  # stubbed, and XDG_CONFIG_HOME/RIOTBOX_SYSCONF_DIR isolated before the source,
+  # for the reasons given above the image cases.
+  - name: doctor reports an agent with no Context Mode support
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/xdg" "${TMP}/etc"
+          cat > "${TMP}/podman" <<'STUB'
+          #!/usr/bin/env bash
+          case "$1" in
+            image) exit 0 ;;   # `podman image exists <img>`
+            run)   exit 0 ;;   # the in-image context-mode probe
+          esac
+          exit 1
+          STUB
+          chmod +x "${TMP}/podman"
+          export PATH="${TMP}:${PATH}"
+          export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          export RIOTBOX_CONTEXT_MODE=1
+          unset RIOTBOX_HEADROOM
+          export RIOTBOX_AGENT=opencode
+
+          # Supported: opencode implements the verbs, so the check runs on
+          # through to the image the way it always has.
+          rc=0
+          out="$(preflight_check_context_mode 2>&1)" || rc=$?
+          [ "${rc}" = "0" ] || { echo "FAIL: supported agent, expected 0, got ${rc}: ${out}"; exit 1; }
+          echo "${out}" | grep -q "\[ok\]" \
+            || { echo "FAIL: supported agent got no [ok]: ${out}"; exit 1; }
+          echo "${out}" | grep -q "no Context Mode support" \
+            && { echo "FAIL: called a supported agent unsupported: ${out}"; exit 1; }
+
+          # Unsupported: the same agent with its wire verb taken away.
+          unset -f agent_opencode_context_mode_wire
+          rc=0
+          out="$(preflight_check_context_mode 2>&1)" || rc=$?
+          # ok, not fail: a fail carries an exit code and would make
+          # `riotbox doctor` non-zero for a legitimate configuration.
+          [ "${rc}" = "0" ] || { echo "FAIL: unsupported agent, expected 0, got ${rc}: ${out}"; exit 1; }
+          echo "${out}" | grep -q "\[ok\]" \
+            || { echo "FAIL: reported as a failure rather than an ok line: ${out}"; exit 1; }
+          echo "${out}" | grep -q "no Context Mode support" \
+            || { echo "FAIL: doctor did not report the missing support: ${out}"; exit 1; }
+          echo "${out}" | grep -q "opencode" \
+            || { echo "FAIL: the report does not name the agent: ${out}"; exit 1; }
+          echo "doctor_agent_support=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "doctor_agent_support=pass"
+
   - name: doctor runs the context-mode check as part of the full walk
     steps:
       - type: exec
