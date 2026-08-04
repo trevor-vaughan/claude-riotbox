@@ -19,8 +19,9 @@ testcases:
           echo "${out}"
           echo "rc=${rc}"
           [ "${rc}" -eq 0 ]
-          # Nothing to back up yet: no checkpoint tag should be created.
-          [ -z "$(git -C "${REPO_DIR}" tag -l 'riotbox-checkpoint/*')" ]
+          # Nothing to back up yet: no snapshot ref, and no tag of any kind.
+          [ -z "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox)" ]
+          [ -z "$(git -C "${REPO_DIR}" tag -l)" ]
           echo "empty_repo_ok=true"
         assertions:
           - result.code ShouldEqual 0
@@ -40,10 +41,12 @@ testcases:
           echo "${out}"
           echo "rc=${rc}"
           [ "${rc}" -eq 0 ]
-          # A root checkpoint commit and a tag must now exist.
-          git -C "${REPO_DIR}" log --format='%s' | grep -q '^checkpoint: pre-riotbox-'
-          [ -n "$(git -C "${REPO_DIR}" tag -l 'riotbox-checkpoint/*')" ]
-          git -C "${REPO_DIR}" show HEAD -- app.txt | grep -q 'fresh work'
+          # A snapshot ref must now hold the work — and no tag was created.
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          echo "ref=${ref}"
+          [ -n "${ref}" ]
+          [ -z "$(git -C "${REPO_DIR}" tag -l)" ]
+          git -C "${REPO_DIR}" show "${ref}:app.txt" | grep -q 'fresh work'
           echo "first_checkpoint_ok=true"
         assertions:
           - result.code ShouldEqual 0
@@ -65,10 +68,14 @@ testcases:
           echo "${out}"
           echo "rc=${rc}"
           [ "${rc}" -eq 0 ]
-          # The directory is now a git repo with a checkpoint commit + tag.
+          # The directory is now a git repo holding a snapshot of its content,
+          # and no tag was created.
           [ -d "${WORK_DIR}/.git" ]
-          git -C "${WORK_DIR}" log --format='%s' | grep -q '^checkpoint: pre-riotbox-'
-          [ -n "$(git -C "${WORK_DIR}" tag -l 'riotbox-checkpoint/*')" ]
+          ref="$(git -C "${WORK_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          echo "ref=${ref}"
+          [ -n "${ref}" ]
+          [ -z "$(git -C "${WORK_DIR}" tag -l)" ]
+          git -C "${WORK_DIR}" show "${ref}:main.go" | grep -q 'code'
           echo "init_and_checkpoint_ok=true"
         assertions:
           - result.code ShouldEqual 0
@@ -89,7 +96,8 @@ testcases:
           echo "rc=${rc}"
           [ "${rc}" -eq 0 ]
           [ -d "${WORK_DIR}/.git" ]
-          [ -z "$(git -C "${WORK_DIR}" tag -l 'riotbox-checkpoint/*')" ]
+          [ -z "$(git -C "${WORK_DIR}" for-each-ref --format='%(refname)' refs/riotbox)" ]
+          [ -z "$(git -C "${WORK_DIR}" tag -l)" ]
           echo "empty_init_ok=true"
         assertions:
           - result.code ShouldEqual 0
@@ -152,12 +160,27 @@ testcases:
           source "{{.helpers}}"
           init_test_workdir
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          # Force signing on in the isolated profile with a key/program that
-          # would fail; checkpoint.sh must override per-command to stay unsigned.
+          # Force signing on in the GLOBAL profile with a key and a gpg program
+          # that always fail. The repo under test is the one checkpoint.sh
+          # creates itself with `git init`, so it inherits this profile —
+          # checkpoint-snapshot.venom.yml covers the repo-local half of the same
+          # hole on a pre-existing repo. `git commit-tree` ignores
+          # commit.gpgsign outright, so the snapshot must be sealed unsigned.
           git config --global commit.gpgsign true
           git config --global tag.gpgsign true
           git config --global user.signingkey BOGUSKEYID
           git config --global gpg.program /bin/false
+          # Prove the injection bites: an ordinary commit in a repo born under
+          # this profile must fail. Without this the case would pass against an
+          # unsigned baseline and prove nothing about signing at all.
+          probe="${TEST_DIR}/probe"
+          git init -q "${probe}"
+          echo "probe" > "${probe}/f.txt"
+          git -C "${probe}" add f.txt
+          if git -C "${probe}" commit -qm probe >/dev/null 2>&1; then
+            echo "FIXTURE INVALID: forced signing did not break an ordinary commit — cannot exercise the unsigned-snapshot path" >&2
+            exit 1
+          fi
           echo "code" > "${WORK_DIR}/main.go"
           out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${WORK_DIR}" \
                  RIOTBOX_GIT_INIT=1 \
@@ -165,16 +188,19 @@ testcases:
           echo "${out}"
           echo "rc=${rc}"
           [ "${rc}" -eq 0 ]
-          sig="$(git -C "${WORK_DIR}" log --grep='checkpoint: pre-riotbox-' -1 --format='%G?')"
-          echo "commit_sig=${sig}"
-          [ "${sig}" = "N" ]
-          tag="$(git -C "${WORK_DIR}" tag -l 'riotbox-checkpoint/*' | head -1)"
-          [ "$(git -C "${WORK_DIR}" cat-file -t "${tag}")" = "commit" ]
+          ref="$(git -C "${WORK_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          echo "ref=${ref}"
+          [ -n "${ref}" ]
+          sigs="$(git -C "${WORK_DIR}" cat-file -p "${ref}" | grep -c '^gpgsig' || true)"
+          echo "snapshot_gpgsig_count=${sigs}"
+          [ "${sigs}" -eq 0 ]
+          git -C "${WORK_DIR}" show "${ref}:main.go" | grep -q 'code'
           echo "unsigned_init_ok=true"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "commit_sig=N"
+          - result.systemout ShouldContainSubstring "snapshot_gpgsig_count=0"
           - result.systemout ShouldContainSubstring "unsigned_init_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
 
   # -- Interactive prompt (driven under a pseudo-terminal) --
 
@@ -195,7 +221,11 @@ testcases:
           [ "${rc}" -eq 0 ]
           echo "${out}" | grep -q "Create one"        # the prompt was shown
           [ -d "${WORK_DIR}/.git" ]                    # default Yes created the repo
-          git -C "${WORK_DIR}" log --format='%s' | grep -q '^checkpoint: pre-riotbox-'
+          # ...and the new repo really was snapshotted, without any tag.
+          ref="$(git -C "${WORK_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          echo "ref=${ref}"
+          [ -n "${ref}" ]
+          [ -z "$(git -C "${WORK_DIR}" tag -l)" ]
           echo "prompt_default_yes_ok=true"
         assertions:
           - result.code ShouldEqual 0
