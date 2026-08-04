@@ -15,6 +15,8 @@ they turned out to be wrong.
 | [Should RiotBox adopt Context Mode?](context-mode-adoption.md) | 2026-07-28 | **Yes, opt-in** — one gate still open |
 | [Recording Context Mode savings across sessions](context-mode-ledger.md) | 2026-07-30 | **Ship a per-run JSON ledger** plus `riotbox ctx-stats` |
 | [Wiring Context Mode for opencode](context-mode-opencode.md) | 2026-07-31 | **Wire it via registry verbs** — no agent names in shared code |
+| [Should a pre-session checkpoint be a commit and a tag, or a ref?](checkpoint-snapshots-refs-not-tags.md) | 2026-08-04 | **A ref** — no automatic tags, on-demand `riotbox-snapshot/*` |
+| [Should the agent run in a git worktree instead of the user's checkout?](should-the-agent-run-in-a-worktree.md) | 2026-08-04 | **No** — it hides uncommitted work and shares the ref store anyway |
 
 For how the Context Mode integration actually behaves today, read
 [../context-mode.md](../context-mode.md) instead of any of the three records
