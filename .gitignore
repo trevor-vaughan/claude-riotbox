@@ -9,6 +9,10 @@ megalinter-reports/
 # Superpowers session artifacts
 docs/superpowers/
 
+# Git worktrees for isolated feature work. Must stay ignored: libexec/checkpoint.sh
+# runs `git add -A`, which would otherwise sweep an entire worktree into a snapshot.
+/.worktrees/
+
 # Test output
 .test-output/
 venom.log
