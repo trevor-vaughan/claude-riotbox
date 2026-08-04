@@ -1,0 +1,1323 @@
+name: Checkpoint snapshot discovery, tagging and pruning
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  helpers: "{{.root}}/tests/lib/git-test-helpers.sh"
+
+testcases:
+  # bin/riotbox dispatches with `exec "${LIBEXEC}/checkpoints.sh" ...`, so the
+  # exec bit and the shebang are part of the contract, not packaging trivia.
+  # Every other case here runs the script as `bash <path>`, which works fine on
+  # a file mode 644 — this case is the only one that exercises the way a user
+  # actually reaches it.
+  - name: The script is executable and runs from its shebang
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          script="{{.riotbox_dir}}/libexec/checkpoints.sh"
+          echo "mode=$(stat -c %a "${script}")"
+          [ -x "${script}" ]
+          [ "$(head -1 "${script}")" = "#!/usr/bin/env bash" ]
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 HEAD
+          # No `bash` prefix: this is exactly how the dispatcher invokes it.
+          out="$(ROOT_DIR="{{.riotbox_dir}}" "${script}" list "${REPO_DIR}" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          printf '%s\n' "${out}" | grep -q 'refs/riotbox/checkpoints/20260101-010101'
+          # ...and the other two verbs reach their dispatch the same way.
+          out="$(ROOT_DIR="{{.riotbox_dir}}" "${script}" tag 20260101-010101 "${REPO_DIR}" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "tag rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          out="$(ROOT_DIR="{{.riotbox_dir}}" "${script}" prune "${REPO_DIR}" --keep 0 --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "prune rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          echo "direct_invocation_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "direct_invocation_ok=true"
+          - result.systemout ShouldNotContainSubstring "Permission denied"
+
+  # The three shapes checkpoint.sh can produce are built by hand here so all
+  # three can coexist in one repo (a parentless snapshot needs an unborn HEAD,
+  # which rules out having a clean-tree snapshot in the same run). The next
+  # case pins the shapes against the real script.
+  - name: List shows dirty, clean and parentless snapshots newest first
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          head="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          tree="$(git -C "${REPO_DIR}" rev-parse 'HEAD^{tree}')"
+          # The subject is what tells a dirty snapshot from a clean one, so the
+          # hand-built shapes below have to carry checkpoint.sh's, verbatim. The
+          # next case pins that this is still the subject it writes.
+          # parentless — what an unborn HEAD produces
+          parentless="$(git -C "${REPO_DIR}" commit-tree "${tree}" -m 'checkpoint: pre-riotbox-20260101-010101')"
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 "${parentless}"
+          # dirty — two changed paths against HEAD, built in a throwaway index
+          printf 'dirty\n' >> "${REPO_DIR}/f.txt"
+          printf 'new\n' > "${REPO_DIR}/g.txt"
+          idx="${TEST_DIR}/tmp-index"
+          cp "${REPO_DIR}/.git/index" "${idx}"
+          GIT_INDEX_FILE="${idx}" git -C "${REPO_DIR}" add -A
+          dirty_tree="$(GIT_INDEX_FILE="${idx}" git -C "${REPO_DIR}" write-tree)"
+          dirty="$(git -C "${REPO_DIR}" commit-tree "${dirty_tree}" -p "${head}" -m 'checkpoint: pre-riotbox-20260102-020202')"
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260102-020202 "${dirty}"
+          # clean — the ref points straight at HEAD, keeping the user's subject
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260103-030303 "${head}"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" list "${REPO_DIR}" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          printf '%s\n' "${out}" | grep -Eq '20260103-030303 +clean +refs/riotbox/checkpoints/20260103-030303'
+          printf '%s\n' "${out}" | grep -Eq '20260102-020202 +2 files +refs/riotbox/checkpoints/20260102-020202'
+          printf '%s\n' "${out}" | grep -Eq '20260101-010101 +initial +refs/riotbox/checkpoints/20260101-010101'
+          # Newest first.
+          seq="$(printf '%s\n' "${out}" | awk '/refs\/riotbox\/checkpoints\//{printf "%s ", $1}')"
+          echo "seq=[${seq}]"
+          [ "${seq}" = "20260103-030303 20260102-020202 20260101-010101 " ]
+          # Restore hints, so a listing is actionable on its own.
+          printf '%s\n' "${out}" | grep -q "git -C ${REPO_DIR} restore --source=<ref> -- ."
+          printf '%s\n' "${out}" | grep -q "git -C ${REPO_DIR} diff <ref>"
+          echo "list_shapes_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "list_shapes_ok=true"
+
+  # Ties the ref namespace between the two scripts: if checkpoint.sh ever moves
+  # its refs, list must stop finding them here rather than in production.
+  - name: List finds the snapshot checkpoint.sh actually creates
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          # The subject is the listing's only way to tell a dirty snapshot from
+          # a clean one, and the hand-built fixtures in the case above hardcode
+          # it. Pin it against the real script here, so a change to the message
+          # goes red instead of silently relabelling every snapshot `clean`.
+          echo "subject=$(git -C "${REPO_DIR}" log -1 --format=%s "${ref}")"
+          git -C "${REPO_DIR}" log -1 --format=%s "${ref}" | grep -q '^checkpoint: pre-riotbox-'
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" list "${REPO_DIR}" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          printf '%s\n' "${out}" | grep -q "${ref}"
+          printf '%s\n' "${out}" | grep -Eq "${ref##*/} +1 file "
+          echo "list_integration_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "list_integration_ok=true"
+
+  - name: List flags legacy checkpoint tags with the reason and the fix
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          head="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          git -C "${REPO_DIR}" tag riotbox-checkpoint/20250101-000000 "${head}"
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 "${head}"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" list "${REPO_DIR}" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          printf '%s\n' "${out}" | grep -q 'refs/tags/riotbox-checkpoint/20250101-000000'
+          printf '%s\n' "${out}" | grep -qi 'legacy'
+          printf '%s\n' "${out}" | grep -q 'git describe --tags'
+          printf '%s\n' "${out}" | grep -q "git -C ${REPO_DIR} tag -d riotbox-checkpoint/<timestamp>"
+          # The modern snapshot is still listed, and is NOT mixed in with the
+          # legacy block — they need different actions from the user.
+          printf '%s\n' "${out}" | grep -q 'refs/riotbox/checkpoints/20260101-010101'
+          echo "legacy_listing_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "legacy_listing_ok=true"
+
+  - name: List of a project with no snapshots says so and exits 0
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" list "${REPO_DIR}" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          printf '%s\n' "${out}" | grep -q "${REPO_DIR}"
+          printf '%s\n' "${out}" | grep -q 'No checkpoint snapshots'
+          echo "empty_listing_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "empty_listing_ok=true"
+
+  - name: List of a non-git directory says so and exits 0
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" list "${WORK_DIR}" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          printf '%s\n' "${out}" | grep -q "${WORK_DIR}"
+          printf '%s\n' "${out}" | grep -q 'Not a git repository'
+          echo "non_git_listing_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "non_git_listing_ok=true"
+
+  # One unreadable row must not cost the user the rest of the listing — the
+  # listing is the only way to find a snapshot at all.
+  - name: A snapshot whose size cannot be computed does not abort the listing
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          head="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          tree="$(git -C "${REPO_DIR}" rev-parse 'HEAD^{tree}')"
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 "${head}"
+          # A ref pointing at a tree: it cannot be peeled to a commit, so every
+          # size computation against it fails.
+          git -C "${REPO_DIR}" update-ref refs/riotbox/checkpoints/20260102-020202 "${tree}"
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260103-030303 "${head}"
+          # Prove the injection took: on a git that quietly peels this, the case
+          # would pass while exercising nothing.
+          if git -C "${REPO_DIR}" rev-parse --verify --quiet 'refs/riotbox/checkpoints/20260102-020202^{commit}' >/dev/null 2>&1; then
+            echo "FIXTURE INVALID: a tree-valued ref peeled to a commit — cannot exercise the unreadable-size path" >&2
+            exit 1
+          fi
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" list "${REPO_DIR}" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # All three rows survive; the broken one reports an unknown size.
+          printf '%s\n' "${out}" | grep -Eq '20260103-030303 +clean '
+          printf '%s\n' "${out}" | grep -Eq '20260102-020202 +\? '
+          printf '%s\n' "${out}" | grep -Eq '20260101-010101 +clean '
+          echo "broken_row_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "broken_row_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  - name: Tag creates a lightweight riotbox-snapshot tag with restore and cleanup hints
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          head="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 "${head}"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" tag 20260101-010101 "${REPO_DIR}" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ "$(git -C "${REPO_DIR}" rev-parse refs/tags/riotbox-snapshot/20260101-010101)" = "${head}" ]
+          # Lightweight, not annotated: the tag ref IS the commit.
+          [ "$(git -C "${REPO_DIR}" cat-file -t refs/tags/riotbox-snapshot/20260101-010101)" = "commit" ]
+          printf '%s\n' "${out}" | grep -q "git -C ${REPO_DIR} restore --source=riotbox-snapshot/20260101-010101 -- ."
+          printf '%s\n' "${out}" | grep -q "git -C ${REPO_DIR} tag -d riotbox-snapshot/20260101-010101"
+          printf '%s\n' "${out}" | grep -q 'git describe --tags'
+          # The snapshot ref is untouched — tagging copies, it does not move.
+          [ "$(git -C "${REPO_DIR}" rev-parse refs/riotbox/checkpoints/20260101-010101)" = "${head}" ]
+          echo "tag_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tag_ok=true"
+
+  - name: Tagging a snapshot that does not exist fails
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" tag 20260101-010101 "${REPO_DIR}" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 1 ]
+          [ -z "$(git -C "${REPO_DIR}" tag -l)" ]
+          printf '%s\n' "${out}" | grep -q '20260101-010101'
+          echo "tag_missing_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tag_missing_ok=true"
+
+  - name: Tagging when the tag already exists fails and leaves it untouched
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          head="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          git -C "${REPO_DIR}" commit -q --allow-empty -m second
+          second="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          [ "${head}" != "${second}" ]
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 "${second}"
+          # An existing tag of the same name pointing somewhere else entirely.
+          git -C "${REPO_DIR}" tag riotbox-snapshot/20260101-010101 "${head}"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" tag 20260101-010101 "${REPO_DIR}" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 1 ]
+          [ "$(git -C "${REPO_DIR}" rev-parse refs/tags/riotbox-snapshot/20260101-010101)" = "${head}" ]
+          printf '%s\n' "${out}" | grep -q 'already exists'
+          echo "tag_exists_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tag_exists_ok=true"
+
+  - name: A malformed timestamp is a usage error and creates nothing
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          for bad in "2026-01-01" "20260101_010101" "20260101-01010" "../../etc" ""; do
+            out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                   bash "{{.riotbox_dir}}/libexec/checkpoints.sh" tag "${bad}" "${REPO_DIR}" 2>&1)" && rc=0 || rc=$?
+            echo "bad=[${bad}] rc=${rc}"
+            echo "${out}"
+            [ "${rc}" -eq 2 ]
+          done
+          [ -z "$(git -C "${REPO_DIR}" tag -l)" ]
+          echo "tag_malformed_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tag_malformed_ok=true"
+
+  - name: Prune without a selector deletes nothing and exits 2
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          head="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 "${head}"
+          # Bare, and with a project but still no selector, and with --force but
+          # no selector: none of these may delete anything.
+          for args in "" "${REPO_DIR}" "${REPO_DIR} --force"; do
+            # shellcheck disable=SC2086  # deliberate word splitting of the arg matrix
+            out="$(cd "${REPO_DIR}" && ROOT_DIR="{{.riotbox_dir}}" \
+                   bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune ${args} 2>&1)" && rc=0 || rc=$?
+            echo "args=[${args}] rc=${rc}"
+            echo "${out}"
+            [ "${rc}" -eq 2 ]
+            [ -n "$(git -C "${REPO_DIR}" rev-parse --verify --quiet refs/riotbox/checkpoints/20260101-010101)" ]
+          done
+          echo "prune_no_selector_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "prune_no_selector_ok=true"
+
+  - name: Prune --keep retains the newest N per project
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          other="${TEST_DIR}/other"
+          git init -q --initial-branch=main "${other}"
+          git -C "${other}" config user.name "Test Human"
+          git -C "${other}" config user.email "human@example.com"
+          echo base > "${other}/f.txt"
+          git -C "${other}" add f.txt
+          git -C "${other}" commit -qm initial
+          for ts in 20260102-020202 20260103-030303; do
+            git -C "${REPO_DIR}" update-ref --create-reflog "refs/riotbox/checkpoints/${ts}" HEAD
+          done
+          # The oldest ref — the one --keep 1 will delete — deliberately has no
+          # reflog. Refs outside refs/heads, refs/remotes and refs/notes get
+          # none unless asked, so a hand-made snapshot ref really can lack one,
+          # and expiring a missing reflog is an error rather than a no-op: the
+          # prune must neither warn nor fail over it.
+          git -C "${REPO_DIR}" update-ref refs/riotbox/checkpoints/20260101-010101 HEAD
+          if git -C "${REPO_DIR}" reflog exists refs/riotbox/checkpoints/20260101-010101; then
+            echo "FIXTURE INVALID: the reflog-less ref has a reflog after all — cannot exercise the missing-reflog path" >&2
+            exit 1
+          fi
+          for ts in 20260104-040404 20260105-050505; do
+            git -C "${other}" update-ref --create-reflog "refs/riotbox/checkpoints/${ts}" HEAD
+          done
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" "${other}" --keep 1 --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # Retention is per project, not global: each keeps its own newest.
+          [ "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" = "refs/riotbox/checkpoints/20260103-030303" ]
+          [ "$(git -C "${other}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" = "refs/riotbox/checkpoints/20260105-050505" ]
+          # The user is told the backup store was not touched.
+          printf '%s\n' "${out}" | grep -qi 'backup'
+          echo "prune_keep_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "prune_keep_ok=true"
+          - result.systemout ShouldNotContainSubstring "WARNING"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # A clean-tree snapshot points at HEAD, so its commit date is the USER's, not
+  # the session's: an --older-than that reads the commit date deletes today's
+  # snapshot of an old repo and keeps last month's snapshot of a busy one.
+  - name: Prune --older-than reads the age from the ref name, not the commit date
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          GIT_AUTHOR_DATE='2024-01-01T00:00:00 +0000' GIT_COMMITTER_DATE='2024-01-01T00:00:00 +0000' \
+            git -C "${REPO_DIR}" commit -qm "old work"
+          head="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          fresh_ts="$(date +%Y%m%d-%H%M%S)"
+          stale_ts="$(date -d '30 days ago' +%Y%m%d-%H%M%S)"
+          # Fresh NAME over an ancient commit (a clean-tree snapshot taken today).
+          git -C "${REPO_DIR}" update-ref --create-reflog "refs/riotbox/checkpoints/${fresh_ts}" "${head}"
+          # Stale NAME over a commit created just now.
+          recent="$(git -C "${REPO_DIR}" commit-tree "$(git -C "${REPO_DIR}" rev-parse 'HEAD^{tree}')" -p "${head}" -m recent)"
+          git -C "${REPO_DIR}" update-ref --create-reflog "refs/riotbox/checkpoints/${stale_ts}" "${recent}"
+          # Prove the inversion is real, so a commit-date implementation cannot
+          # pass this case by accident.
+          cutoff="$(date -d '7 days ago' +%s)"
+          fresh_cdate="$(git -C "${REPO_DIR}" log -1 --format=%ct "refs/riotbox/checkpoints/${fresh_ts}")"
+          stale_cdate="$(git -C "${REPO_DIR}" log -1 --format=%ct "refs/riotbox/checkpoints/${stale_ts}")"
+          if [ "${fresh_cdate}" -ge "${cutoff}" ] || [ "${stale_cdate}" -le "${cutoff}" ]; then
+            echo "FIXTURE INVALID: commit dates are not inverted against the ref names — the case cannot tell the two implementations apart" >&2
+            exit 1
+          fi
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" --older-than 7d --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -n "$(git -C "${REPO_DIR}" rev-parse --verify --quiet "refs/riotbox/checkpoints/${fresh_ts}")" ]
+          [ -z "$(git -C "${REPO_DIR}" rev-parse --verify --quiet "refs/riotbox/checkpoints/${stale_ts}" || true)" ]
+          echo "prune_older_than_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "prune_older_than_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  - name: A malformed --older-than value is rejected before any deletion
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/19700101-000000 HEAD
+          # 19700101 is old enough that ANY valid --older-than would delete it,
+          # so surviving proves the value was rejected before selection.
+          for bad in "7" "banana" "7days" "-1d" "d" "7D"; do
+            out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                   bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" --older-than "${bad}" --force 2>&1)" && rc=0 || rc=$?
+            echo "bad=[${bad}] rc=${rc}"
+            echo "${out}"
+            [ "${rc}" -eq 2 ]
+            [ -n "$(git -C "${REPO_DIR}" rev-parse --verify --quiet refs/riotbox/checkpoints/19700101-000000)" ]
+          done
+          # A missing value is a usage error too, not a silent no-op.
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" --older-than 2>&1)" && rc=0 || rc=$?
+          echo "missing value rc=${rc}"; echo "${out}"
+          [ "${rc}" -eq 2 ]
+          [ -n "$(git -C "${REPO_DIR}" rev-parse --verify --quiet refs/riotbox/checkpoints/19700101-000000)" ]
+          echo "prune_bad_age_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "prune_bad_age_ok=true"
+
+  - name: Prune --legacy deletes only legacy tags
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          head="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          git -C "${REPO_DIR}" tag riotbox-checkpoint/20250101-000000 "${head}"
+          git -C "${REPO_DIR}" tag -a riotbox-checkpoint/20250102-000000 -m "annotated legacy"
+          git -C "${REPO_DIR}" tag riotbox-snapshot/20260101-010101 "${head}"
+          git -C "${REPO_DIR}" tag v1.0.0 "${head}"
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 "${head}"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" --legacy --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -z "$(git -C "${REPO_DIR}" tag -l 'riotbox-checkpoint/*')" ]
+          # Everything else is somebody's deliberate tag or the live snapshot set.
+          [ "$(git -C "${REPO_DIR}" rev-parse refs/tags/riotbox-snapshot/20260101-010101)" = "${head}" ]
+          [ "$(git -C "${REPO_DIR}" rev-parse refs/tags/v1.0.0)" = "${head}" ]
+          [ -n "$(git -C "${REPO_DIR}" rev-parse --verify --quiet refs/riotbox/checkpoints/20260101-010101)" ]
+          echo "prune_legacy_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "prune_legacy_ok=true"
+
+  # Anything under refs/riotbox/checkpoints that is not a session timestamp was
+  # put there by a human or another tool. Deleting it is not ours to do.
+  - name: A non-timestamp ref is never deleted and is reported
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          head="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/keep-me-forever "${head}"
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 "${head}"
+          git -C "${REPO_DIR}" tag riotbox-checkpoint/hand-made "${head}"
+          # --keep 0 is the most aggressive selector there is.
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" --keep 0 --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -z "$(git -C "${REPO_DIR}" rev-parse --verify --quiet refs/riotbox/checkpoints/20260101-010101 || true)" ]
+          [ -n "$(git -C "${REPO_DIR}" rev-parse --verify --quiet refs/riotbox/checkpoints/keep-me-forever)" ]
+          printf '%s\n' "${out}" | grep -q 'refs/riotbox/checkpoints/keep-me-forever'
+          printf '%s\n' "${out}" | grep -qi 'unrecognised'
+          # ... and the same rule holds for the legacy tag namespace.
+          out2="$(ROOT_DIR="{{.riotbox_dir}}" \
+                  bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" --legacy --force 2>&1)" && rc2=0 || rc2=$?
+          echo "${out2}"; echo "rc2=${rc2}"
+          [ "${rc2}" -eq 0 ]
+          [ "$(git -C "${REPO_DIR}" rev-parse refs/tags/riotbox-checkpoint/hand-made)" = "${head}" ]
+          printf '%s\n' "${out2}" | grep -qi 'unrecognised'
+          echo "prune_unrecognised_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "prune_unrecognised_ok=true"
+
+  - name: Prune refuses to delete non-interactively without --force
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 HEAD
+          # Prove the environment really is non-interactive; with a tty this
+          # case would hang or answer itself and prove nothing.
+          if [ -t 0 ]; then
+            echo "FIXTURE INVALID: stdin is a tty — cannot exercise the non-interactive refusal" >&2
+            exit 1
+          fi
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" --keep 0 </dev/null 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 1 ]
+          [ -n "$(git -C "${REPO_DIR}" rev-parse --verify --quiet refs/riotbox/checkpoints/20260101-010101)" ]
+          printf '%s\n' "${out}" | grep -q -- '--force'
+          echo "prune_non_interactive_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "prune_non_interactive_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  - name: An interactive n aborts and an interactive y deletes
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 HEAD
+          export ROOT_DIR="{{.riotbox_dir}}"
+          out="$(run_under_pty "n" bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" --keep 0)" && rc=0 || rc=$?
+          echo "${out}"; echo "answer-n rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          printf '%s\n' "${out}" | grep -q 'Aborted'
+          [ -n "$(git -C "${REPO_DIR}" rev-parse --verify --quiet refs/riotbox/checkpoints/20260101-010101)" ]
+          out="$(run_under_pty "y" bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" --keep 0)" && rc=0 || rc=$?
+          echo "${out}"; echo "answer-y rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -z "$(git -C "${REPO_DIR}" rev-parse --verify --quiet refs/riotbox/checkpoints/20260101-010101 || true)" ]
+          echo "prune_confirm_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "prune_confirm_ok=true"
+
+  # _backup_project in checkpoint.sh returns 0 on every failure path, and a
+  # first run may never have created the store at all, so "this snapshot has no
+  # copy anywhere else" is an ordinary state. Prune must not assure the user
+  # otherwise at the moment of deletion.
+  - name: Prune marks the refs the backup store has no copy of
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          # A real checkpoint, which really is pushed to the backup store.
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          backed="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${backed}" ]
+          backup="$(backup_path "${REPO_DIR}")"
+          # Prove the store really holds it, or "unmarked" below would be
+          # meaningless — the marker would be absent for the wrong reason.
+          if ! git -C "${backup}" rev-parse --verify --quiet "${backed}" >/dev/null; then
+            echo "FIXTURE INVALID: the backup store has no copy of ${backed} — cannot tell a backed-up ref from an unbacked one" >&2
+            exit 1
+          fi
+          # A ref the store has never seen, in the same repo.
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 HEAD
+          # ...and a whole project with no backup store at all (fresh install).
+          fresh="${TEST_DIR}/fresh"
+          git init -q --initial-branch=main "${fresh}"
+          git -C "${fresh}" config user.name "Test Human"
+          git -C "${fresh}" config user.email "human@example.com"
+          echo base > "${fresh}/f.txt"
+          git -C "${fresh}" add f.txt
+          git -C "${fresh}" commit -qm initial
+          git -C "${fresh}" update-ref --create-reflog refs/riotbox/checkpoints/20260102-020202 HEAD
+          if [ -e "$(backup_path "${fresh}")" ]; then
+            echo "FIXTURE INVALID: the fresh project already has a backup store — cannot exercise the no-store path" >&2
+            exit 1
+          fi
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" "${fresh}" --keep 0 --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # The backed-up ref is NOT marked; the two unbacked ones are.
+          printf '%s\n' "${out}" | grep -- "${backed}" | grep -qv 'NO BACKUP COPY'
+          printf '%s\n' "${out}" | grep 'refs/riotbox/checkpoints/20260101-010101' | grep -q 'NO BACKUP COPY'
+          printf '%s\n' "${out}" | grep 'refs/riotbox/checkpoints/20260102-020202' | grep -q 'NO BACKUP COPY'
+          printf '%s\n' "${out}" | grep -q '2 of the 3 ref(s) above have no copy in the backup store'
+          printf '%s\n' "${out}" | grep -q 'irreversible'
+          # And the banner never claims a copy exists that was not checked.
+          printf '%s\n' "${out}" | grep -qv 'keeps its own copies'
+          # The store itself is untouched: prune deletes in the project only.
+          git -C "${backup}" rev-parse --verify --quiet "${backed}" >/dev/null
+          echo "backup_marker_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "backup_marker_ok=true"
+          - result.systemout ShouldNotContainSubstring "keeps its own copies"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # refs/riotbox/* is a shared, non-per-worktree namespace: a repo and its
+  # linked worktree are one set of snapshots under two canonical paths. The
+  # reported count is the only audit trail a prune leaves, and `update-ref -d`
+  # on an already-deleted ref exits 0, so a second pass would inflate it
+  # silently. This is the layout the RiotBox repo uses on itself.
+  - name: A repo and its worktree are pruned and counted once
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'git -C "${REPO_DIR}" worktree remove --force "${TEST_DIR}/wt" 2>/dev/null; rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          git -C "${REPO_DIR}" worktree add -q "${TEST_DIR}/wt" -b wt-branch
+          for ts in 20260101-010101 20260102-020202; do
+            git -C "${REPO_DIR}" update-ref --create-reflog "refs/riotbox/checkpoints/${ts}" HEAD
+          done
+          # Prove the premise: the worktree really does see the same refs, and
+          # really is a different canonical path.
+          seen_from_wt="$(git -C "${TEST_DIR}/wt" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | wc -l)"
+          echo "refs visible from the worktree: ${seen_from_wt}"
+          if [ "${seen_from_wt}" -ne 2 ] || [ "$(cd "${TEST_DIR}/wt" && pwd -P)" = "$(cd "${REPO_DIR}" && pwd -P)" ]; then
+            echo "FIXTURE INVALID: the worktree does not share the ref namespace under a distinct path — cannot exercise double counting" >&2
+            exit 1
+          fi
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" "${TEST_DIR}/wt" --keep 0 --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # Two refs existed, two were deleted, and the report says two.
+          printf '%s\n' "${out}" | grep -q 'Deleted 2 ref(s)'
+          [ -z "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          # One ref store, so one gc hint.
+          [ "$(printf '%s\n' "${out}" | grep -c 'gc --prune=now')" -eq 1 ]
+          # The same slip by hand: the same project named twice.
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260103-030303 HEAD
+          out2="$(ROOT_DIR="{{.riotbox_dir}}" \
+                  bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" "${REPO_DIR}" --keep 0 --force 2>&1)" && rc2=0 || rc2=$?
+          echo "${out2}"; echo "rc2=${rc2}"
+          [ "${rc2}" -eq 0 ]
+          printf '%s\n' "${out2}" | grep -q 'Deleted 1 ref(s)'
+          echo "worktree_dedupe_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "worktree_dedupe_ok=true"
+          - result.systemout ShouldNotContainSubstring "WARNING"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # The hints are advertised as copy-pasteable, and the path in them is the
+  # user's, not ours.
+  - name: Copy-pasteable hints survive a project path with shell metacharacters
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          odd="${TEST_DIR}/quote'sq"
+          git init -q --initial-branch=main "${odd}"
+          git -C "${odd}" config user.name "Test Human"
+          git -C "${odd}" config user.email "human@example.com"
+          echo base > "${odd}/f.txt"
+          git -C "${odd}" add f.txt
+          git -C "${odd}" commit -qm initial
+          git -C "${odd}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 HEAD
+          # Prove the raw path is NOT pasteable, so the assertions below are
+          # about the quoting and not about a harmless path.
+          if eval "git -C ${odd} rev-parse --git-dir" >/dev/null 2>&1; then
+            echo "FIXTURE INVALID: the raw path pastes cleanly — cannot exercise the quoting" >&2
+            exit 1
+          fi
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" list "${odd}" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # Take the emitted hint, fill in a real ref, and run it.
+          hint="$(printf '%s\n' "${out}" | grep -- 'diff <ref>' | sed 's/^ *//')"
+          echo "hint=[${hint}]"
+          [ -n "${hint}" ]
+          eval "${hint/<ref>/refs/riotbox/checkpoints/20260101-010101}" >/dev/null
+          # Same for the gc hint prune prints.
+          out2="$(ROOT_DIR="{{.riotbox_dir}}" \
+                  bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${odd}" --keep 0 --force 2>&1)" && rc2=0 || rc2=$?
+          echo "${out2}"; echo "rc2=${rc2}"
+          [ "${rc2}" -eq 0 ]
+          gc_hint="$(printf '%s\n' "${out2}" | grep -- 'gc --prune=now' | sed 's/^ *//')"
+          echo "gc_hint=[${gc_hint}]"
+          [ -n "${gc_hint}" ]
+          eval "${gc_hint}" >/dev/null
+          echo "quoted_hints_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "quoted_hints_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # The user confirms a list of shas. A ref that moves between the listing and
+  # the deletion is no longer the ref they agreed to lose, so it must be
+  # refused rather than deleted blind — and refusing must be visible in the
+  # exit code, not only in the count.
+  - name: A ref that moves after selection is refused, not deleted blind
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          original="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          git -C "${REPO_DIR}" commit -q --allow-empty -m second
+          moved_to="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          [ "${original}" != "${moved_to}" ]
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 "${original}"
+          # A git shim that repoints the ref at the last moment before the
+          # delete — the deterministic stand-in for a concurrent checkpoint or
+          # a hand edit while the confirmation prompt is up.
+          real_git="$(command -v git)"
+          shim="${TEST_DIR}/shim"
+          mkdir -p "${shim}"
+          cat > "${shim}/git" <<SHIM
+          #!/usr/bin/env bash
+          if [[ "\$*" == *"reflog expire"* ]]; then
+            "${real_git}" -C "${REPO_DIR}" update-ref refs/riotbox/checkpoints/20260101-010101 "${moved_to}"
+          fi
+          exec "${real_git}" "\$@"
+          SHIM
+          chmod +x "${shim}/git"
+          out="$(PATH="${shim}:${PATH}" ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" --keep 0 --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          # Prove the injection took: the ref really did move under the prune.
+          if [ "$(git -C "${REPO_DIR}" rev-parse refs/riotbox/checkpoints/20260101-010101 2>/dev/null || true)" != "${moved_to}" ]; then
+            echo "FIXTURE INVALID: the shim did not move the ref — nothing tested the expected-old-value guard" >&2
+            exit 1
+          fi
+          # Refused: the ref survives, the failure is reported, and the exit
+          # code says so rather than claiming a clean prune.
+          [ "${rc}" -eq 1 ]
+          printf '%s\n' "${out}" | grep -q 'not the ref that was listed'
+          printf '%s\n' "${out}" | grep -qv 'Deleted 1 ref(s)'
+          echo "stale_sha_refused_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "stale_sha_refused_ok=true"
+          - result.systemout ShouldNotContainSubstring "Deleted 1 ref(s)"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # The reflog must be emptied while the ref still exists. A reflog that
+  # outlives its ref cannot be cleaned up afterwards — `git reflog expire` on a
+  # deleted ref fails with "reflog could not be found" — and an orphaned reflog
+  # keeps its objects reachable for gc.reflogExpireUnreachable (30 days by
+  # default). git 2.52 happens to drop the reflog along with the ref, which
+  # hides the ordering from every end-state assertion, so pin it directly.
+  - name: The reflog is expired before the ref is deleted, not after
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 HEAD
+          # A recording git shim: logs every invocation, then delegates.
+          real_git="$(command -v git)"
+          shim="${TEST_DIR}/shim"
+          mkdir -p "${shim}"
+          calls="${TEST_DIR}/git-calls.log"
+          cat > "${shim}/git" <<SHIM
+          #!/usr/bin/env bash
+          printf '%s\n' "\$*" >> "${calls}"
+          exec "${real_git}" "\$@"
+          SHIM
+          chmod +x "${shim}/git"
+          out="$(PATH="${shim}:${PATH}" ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" --keep 0 --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # Prove the shim was actually used; without it the greps below would
+          # find nothing and the ordering check would be vacuous.
+          if [ ! -s "${calls}" ]; then
+            echo "FIXTURE INVALID: the git shim recorded no calls — PATH did not take" >&2
+            exit 1
+          fi
+          echo "--- recorded git calls"; cat "${calls}"
+          expire_at="$(grep -n 'reflog expire' "${calls}" | head -1 | cut -d: -f1)"
+          delete_at="$(grep -n 'update-ref -d' "${calls}" | head -1 | cut -d: -f1)"
+          echo "expire_at=${expire_at} delete_at=${delete_at}"
+          [ -n "${expire_at}" ]
+          [ -n "${delete_at}" ]
+          [ "${expire_at}" -lt "${delete_at}" ]
+          echo "reflog_order_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "reflog_order_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # checkpoint.sh creates snapshot refs with --create-reflog. A ref deletion
+  # that leaves the reflog behind keeps the objects reachable for
+  # gc.reflogExpireUnreachable (30 days by default), so a user pruning to
+  # reclaim disk space would reclaim nothing.
+  - name: Pruned snapshots are reclaimable by git gc
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          # A real checkpoint, so the reflog is created the way production does.
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          snap="$(git -C "${REPO_DIR}" rev-parse "${ref}")"
+          # Prove the pin exists before the prune: without a reflog here the
+          # case would prove nothing about reflog handling.
+          if ! git -C "${REPO_DIR}" reflog exists "${ref}"; then
+            echo "FIXTURE INVALID: ${ref} has no reflog — checkpoint.sh no longer uses --create-reflog, so this case cannot prove the pin is released" >&2
+            exit 1
+          fi
+          # The snapshot must be unreachable from any branch, or gc would keep
+          # it for reasons unrelated to the reflog.
+          [ "${snap}" != "$(git -C "${REPO_DIR}" rev-parse HEAD)" ]
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" --keep 0 --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -z "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          if git -C "${REPO_DIR}" reflog exists "${ref}"; then
+            echo "reflog survived the prune — objects stay pinned for gc.reflogExpireUnreachable"
+            exit 1
+          fi
+          git -C "${REPO_DIR}" gc --prune=now -q
+          if git -C "${REPO_DIR}" cat-file -e "${snap}" 2>/dev/null; then
+            echo "snapshot object ${snap} survived gc --prune=now — no space was reclaimed"
+            exit 1
+          fi
+          # And the user was told how to reclaim the space.
+          printf '%s\n' "${out}" | grep -q 'gc --prune=now'
+          echo "prune_reclaims_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "prune_reclaims_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # The middle column is how a user picks which snapshot to restore, so it has
+  # to mean the same thing tomorrow as it does today. Deciding "clean" by
+  # comparing the ref against HEAD made the label a property of where the
+  # branch happens to be rather than of the snapshot: one ordinary user commit
+  # later, the same ref at the same sha re-labelled itself as N files of
+  # captured work, or — on a root commit — as `initial`, which the README
+  # defines as "taken before the repo had any commits".
+  - name: Snapshot labels survive the user's next commit
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          list() {
+            ROOT_DIR="{{.riotbox_dir}}" \
+              bash "{{.riotbox_dir}}/libexec/checkpoints.sh" list "${REPO_DIR}" 2>&1
+          }
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          root="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          # A clean-tree snapshot on the ROOT commit, taken while HEAD is still
+          # on it. This is the shape that used to degrade to `initial`.
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 "${root}"
+          phase_a="$(list)"
+          echo "--- phase A (HEAD is the snapshotted root commit) ---"; echo "${phase_a}"
+          printf '%s\n' "${phase_a}" | grep -Eq '20260101-010101 +clean '
+
+          # The user commits. Two files, so a parent-relative count is visibly
+          # not "clean". Then a clean-tree snapshot on THAT commit, which is the
+          # shape that used to degrade to a file count.
+          echo one > "${REPO_DIR}/a.txt"
+          echo two > "${REPO_DIR}/b.txt"
+          git -C "${REPO_DIR}" add a.txt b.txt
+          git -C "${REPO_DIR}" commit -qm "two more files"
+          mid="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260102-020202 "${mid}"
+          # ...and a real dirty-tree snapshot from checkpoint.sh itself, whose
+          # count must stay put throughout as the control.
+          before_refs="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          echo wip >> "${REPO_DIR}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          dirty="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints \
+                   | grep -vxF "${before_refs}")"
+          [ -n "${dirty}" ]
+          # Prove the two shapes are actually distinguishable in this fixture:
+          # the dirty snapshot must carry checkpoint.sh's own subject and the
+          # clean ones must carry the user's. Without that the case would pass
+          # on a listing that guessed.
+          if [ "$(git -C "${REPO_DIR}" log -1 --format=%s "${dirty}")" = "$(git -C "${REPO_DIR}" log -1 --format=%s "${mid}")" ]; then
+            echo "FIXTURE INVALID: the dirty snapshot and the user's commit share a subject — the two shapes are indistinguishable" >&2
+            exit 1
+          fi
+          phase_b="$(list)"
+          echo "--- phase B (HEAD has moved past the root snapshot) ---"; echo "${phase_b}"
+          printf '%s\n' "${phase_b}" | grep -Eq '20260101-010101 +clean '
+          printf '%s\n' "${phase_b}" | grep -Eq '20260102-020202 +clean '
+          printf '%s\n' "${phase_b}" | grep -Eq "${dirty##*/} +1 file "
+
+          # One more ordinary user commit — the wip edit that was snapshotted.
+          git -C "${REPO_DIR}" add -A
+          git -C "${REPO_DIR}" commit -qm "an ordinary user commit"
+          if [ "$(git -C "${REPO_DIR}" rev-parse HEAD)" = "${mid}" ]; then
+            echo "FIXTURE INVALID: HEAD did not move — a HEAD-relative label could not drift here" >&2
+            exit 1
+          fi
+          phase_c="$(list)"
+          echo "--- phase C (HEAD has moved past every snapshot) ---"; echo "${phase_c}"
+          printf '%s\n' "${phase_c}" | grep -Eq '20260101-010101 +clean '
+          printf '%s\n' "${phase_c}" | grep -Eq '20260102-020202 +clean '
+          printf '%s\n' "${phase_c}" | grep -Eq "${dirty##*/} +1 file "
+          echo "labels_stable_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "labels_stable_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # `git log --all` means every ref under refs/, refs/riotbox included, so the
+  # snapshot commits DO show up in the near-universal `git log --all --graph
+  # --decorate`, in `gitk --all`, and in any GUI defaulting to all refs —
+  # undecorated, with no ref name attached. The listing used to say git log
+  # never shows them, which is exactly the wrong thing to have told a user who
+  # then meets an anonymous `checkpoint:` commit in their own graph.
+  - name: The listing does not claim git log hides snapshot commits
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          echo wip >> "${REPO_DIR}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          # Ground truth for the git in use. If this ever stops holding, the
+          # wording below is what has to change — so assert it, do not assume it.
+          if ! git -C "${REPO_DIR}" log --all --oneline | grep -q 'checkpoint: pre-riotbox-'; then
+            echo "git log --all no longer shows snapshot commits — recheck the wording in checkpoints.sh, README.md and the ADR" >&2
+            exit 1
+          fi
+          # ...and it really is anonymous there: no ref name is attached.
+          ! git -C "${REPO_DIR}" log --all --oneline --decorate | grep 'checkpoint: pre-riotbox-' | grep -q 'riotbox/checkpoints'
+          # The claims that ARE still true.
+          ! git -C "${REPO_DIR}" log --oneline | grep -q 'checkpoint: pre-riotbox-'
+          [ -z "$(git -C "${REPO_DIR}" tag)" ]
+          ! git -C "${REPO_DIR}" describe --all | grep -q riotbox
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" list "${REPO_DIR}" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # The listing must not put `git log` on the list of things that never
+          # show snapshots, and must say what git log --all actually does.
+          ! printf '%s\n' "${out}" | grep -q 'git tag, git log and git push never show'
+          printf '%s\n' "${out}" | grep -q 'git log --all'
+          echo "git_log_claim_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "git_log_claim_ok=true"
+          - result.systemout ShouldNotContainSubstring "git tag, git log and git push never show"
+
+  # Snapshot refs are per-REPOSITORY; a backup store is named after the project
+  # path checkpoint.sh was launched with. Prune used to conflate the two by
+  # deriving the store key from its own invocation path, so it announced
+  # "NO BACKUP COPY — this is the only one … Deleting those is irreversible"
+  # over refs the store was holding all along. Both shapes below were seen.
+  - name: Prune finds the backup store from a subdirectory and from a worktree
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          mkdir -p "${REPO_DIR}/sub"
+          echo deep > "${REPO_DIR}/sub/deep.txt"
+          git -C "${REPO_DIR}" add -A
+          git -C "${REPO_DIR}" commit -qm initial
+          echo wip >> "${REPO_DIR}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          store="$(backup_path "${REPO_DIR}")"
+          git -C "${store}" rev-parse --verify --quiet "${ref}" >/dev/null
+          # Prove the subdirectory really keys somewhere else — otherwise the
+          # case would pass on a lookup that never had to be fixed.
+          if [ "$(backup_path "${REPO_DIR}/sub")" = "${store}" ]; then
+            echo "FIXTURE INVALID: the subdirectory derives the same store key as the project — cannot exercise the mismatch" >&2
+            exit 1
+          fi
+          if [ -e "$(backup_path "${REPO_DIR}/sub")" ]; then
+            echo "FIXTURE INVALID: a store already exists under the subdirectory's key — the lookup could succeed for the wrong reason" >&2
+            exit 1
+          fi
+          # --keep 0 so the ref is actually selected and checked; no --force, so
+          # the selection is printed and then refused, leaving it for the
+          # worktree half below.
+          out="$(cd "${REPO_DIR}/sub" && ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune --keep 0 2>&1)" && rc=0 || rc=$?
+          echo "--- prune from a subdirectory ---"; echo "${out}"; echo "rc=${rc}"
+          printf '%s\n' "${out}" | grep -q "${ref}"
+          ! printf '%s\n' "${out}" | grep -q 'NO BACKUP COPY'
+          ! printf '%s\n' "${out}" | grep -q 'irreversible'
+
+          # Same conflation, other direction: riotbox ran against a linked
+          # worktree, so the store is keyed on the worktree; refs/riotbox is a
+          # shared namespace, so the main checkout sees the same snapshot.
+          wt="${TEST_DIR}/wt"
+          git -C "${REPO_DIR}" worktree add -q "${wt}" -b side
+          echo wt-wip > "${wt}/w.txt"
+          # Snapshot refs are named to one-second resolution and update-ref
+          # refuses to clobber one, so two checkpoints in the same second give
+          # the second run no ref at all.
+          sleep 1
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${wt}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          wt_store="$(backup_path "${wt}")"
+          wt_ref="$(git -C "${wt}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints \
+                    | grep -vxF "${ref}" || true)"
+          if [ -z "${wt_ref}" ]; then
+            echo "FIXTURE INVALID: the worktree checkpoint produced no new ref — cannot exercise the worktree lookup" >&2
+            exit 1
+          fi
+          if ! git -C "${wt_store}" rev-parse --verify --quiet "${wt_ref}" >/dev/null; then
+            echo "FIXTURE INVALID: the worktree's store has no copy of ${wt_ref} — cannot tell a backed-up ref from an unbacked one" >&2
+            exit 1
+          fi
+          if git -C "${store}" rev-parse --verify --quiet "${wt_ref}" >/dev/null 2>&1; then
+            echo "FIXTURE INVALID: the main checkout's own store already holds ${wt_ref} — the lookup could succeed without ever consulting the worktree's" >&2
+            exit 1
+          fi
+          # The main checkout can see the worktree's snapshot, which is what
+          # makes the false alarm reachable from here at all.
+          git -C "${REPO_DIR}" rev-parse --verify --quiet "${wt_ref}" >/dev/null
+          out="$(cd "${REPO_DIR}" && ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune --keep 0 2>&1)" && rc=0 || rc=$?
+          echo "--- prune from the main checkout ---"; echo "${out}"; echo "rc=${rc}"
+          printf '%s\n' "${out}" | grep -q "${wt_ref}"
+          ! printf '%s\n' "${out}" | grep -q 'NO BACKUP COPY'
+          ! printf '%s\n' "${out}" | grep -q 'irreversible'
+          echo "backup_lookup_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "backup_lookup_ok=true"
+          - result.systemout ShouldNotContainSubstring "NO BACKUP COPY"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # Widening the store lookup must not widen it past this repository. A store
+  # that holds a ref of the same name, at the same object, but belongs to some
+  # OTHER project is not a copy of what is about to be deleted here — deleting
+  # the store, or the other project, would take it with them. So the lookup
+  # keys on the repository the store records as its origin, not on the store
+  # merely being present.
+  - name: A store belonging to another project is never counted as this one's backup
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          echo wip >> "${REPO_DIR}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          # A second, unrelated project with its own store.
+          other="${TEST_DIR}/other"
+          git init -q --initial-branch=main "${other}"
+          git -C "${other}" config user.name "${HUMAN_NAME}"
+          git -C "${other}" config user.email "${HUMAN_EMAIL}"
+          echo base > "${other}/f.txt"
+          git -C "${other}" add f.txt
+          git -C "${other}" commit -qm initial
+          sleep 1
+          echo wip >> "${other}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${other}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          other_store="$(backup_path "${other}")"
+          [ -d "${other_store}" ]
+          # Put THIS project's snapshot into the OTHER project's store, at the
+          # same ref name and the same object, and take away this project's own.
+          git -C "${REPO_DIR}" push -q "${other_store}" "${ref}:${ref}"
+          rm -rf "$(backup_path "${REPO_DIR}")"
+          # Prove the trap is armed: the other store really is a byte-identical
+          # copy, so only the origin check can tell it is the wrong store.
+          if [ "$(git -C "${other_store}" rev-parse --verify --quiet "${ref}")" != "$(git -C "${REPO_DIR}" rev-parse "${ref}")" ]; then
+            echo "FIXTURE INVALID: the other project's store does not hold this snapshot — the origin check would be untested" >&2
+            exit 1
+          fi
+          if [ -e "$(backup_path "${REPO_DIR}")" ]; then
+            echo "FIXTURE INVALID: this project still has its own store — the lookup could succeed for the right reason by accident" >&2
+            exit 1
+          fi
+          out="$(ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune "${REPO_DIR}" --keep 0 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          printf '%s\n' "${out}" | grep "${ref}" | grep -q 'NO BACKUP COPY'
+          printf '%s\n' "${out}" | grep -q 'irreversible'
+          echo "foreign_store_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "foreign_store_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # `restore -- .` is relative to the directory `git -C` puts it in, so a hint
+  # naming a subdirectory restores only that subtree — silently, and while
+  # looking like it worked. The user pastes it in an emergency, sees files come
+  # back, and stops looking.
+  - name: The restore hint names the worktree top level, not the invocation directory
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo top > "${REPO_DIR}/top.txt"
+          mkdir -p "${REPO_DIR}/sub"
+          echo deep > "${REPO_DIR}/sub/deep.txt"
+          git -C "${REPO_DIR}" add -A
+          git -C "${REPO_DIR}" commit -qm initial
+          git -C "${REPO_DIR}" update-ref --create-reflog refs/riotbox/checkpoints/20260101-010101 HEAD
+          # Prove the hazard is real on this git before asserting the fix: a
+          # cwd-relative restore from the subdirectory leaves the top-level file
+          # missing.
+          rm "${REPO_DIR}/top.txt" "${REPO_DIR}/sub/deep.txt"
+          (cd "${REPO_DIR}/sub" && git restore --source=refs/riotbox/checkpoints/20260101-010101 -- .)
+          if [ -f "${REPO_DIR}/top.txt" ]; then
+            echo "FIXTURE INVALID: a cwd-relative restore reached the whole worktree — this git does not have the hazard the hint guards against" >&2
+            exit 1
+          fi
+          [ -f "${REPO_DIR}/sub/deep.txt" ]
+          git -C "${REPO_DIR}" restore --source=refs/riotbox/checkpoints/20260101-010101 -- .
+          # Now the listing, run from the subdirectory the way a user would.
+          out="$(cd "${REPO_DIR}/sub" && ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" list 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          printf '%s\n' "${out}" | grep -q "git -C ${REPO_DIR} restore --source=<ref> -- \."
+          if printf '%s\n' "${out}" | grep -q "git -C ${REPO_DIR}/sub restore"; then
+            echo "the restore hint names the subdirectory — pasting it restores only that subtree" >&2
+            exit 1
+          fi
+          if printf '%s\n' "${out}" | grep -q "git -C ${REPO_DIR}/sub diff"; then
+            echo "the diff hint names the subdirectory" >&2
+            exit 1
+          fi
+          # The same hint is printed by `tag`, and has the same hazard.
+          out="$(cd "${REPO_DIR}/sub" && ROOT_DIR="{{.riotbox_dir}}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoints.sh" tag 20260101-010101 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "tag rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          printf '%s\n' "${out}" | grep -q "git -C ${REPO_DIR} restore --source=riotbox-snapshot/20260101-010101 -- \."
+          echo "restore_hint_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "restore_hint_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # The backup-store key is hand-maintained in four places: _backup_project in
+  # checkpoint.sh writes it, _backup_stores_for in checkpoints.sh reads it,
+  # resolve_projects in mount-projects.sh mangles the same path the same way
+  # for the session key, and backup_path here re-derives it for the tests. A
+  # drift in any one of them is silent — checkpoints.sh would report every
+  # snapshot as unbacked, and the tests that use backup_path would go vacuous
+  # rather than red. This case makes the drift red.
+  - name: The backup-store key derivations agree across every copy
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          mkdir -p "${REPO_DIR}/sub"
+          echo deep > "${REPO_DIR}/sub/deep.txt"
+          git -C "${REPO_DIR}" add -A
+          git -C "${REPO_DIR}" commit -qm initial
+          echo wip >> "${REPO_DIR}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          # 1. What checkpoint.sh actually created — the ground truth, not a
+          #    re-derivation of it.
+          created="$(find "${XDG_DATA_HOME}/riotbox/backups" -maxdepth 1 -name '*.git' -type d)"
+          echo "created=${created}"
+          [ "$(printf '%s\n' "${created}" | wc -l)" -eq 1 ]
+          # 2. tests/lib/git-test-helpers.sh
+          echo "helper=$(backup_path "${REPO_DIR}")"
+          [ "$(backup_path "${REPO_DIR}")" = "${created}" ]
+          # 3. scripts/mount-projects.sh — the session key uses the same
+          #    mangling, so its basename plus .git must be the store's.
+          (
+            source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+            resolve_projects "${REPO_DIR}"
+            echo "session_key=$(basename "${RIOTBOX_SESSION_DIR}")"
+            [ "$(basename "${RIOTBOX_SESSION_DIR}").git" = "$(basename "${created}")" ]
+          )
+          # 4. libexec/checkpoints.sh — sourcing is safe, main() is guarded.
+          (
+            export ROOT_DIR="{{.riotbox_dir}}"
+            source "{{.riotbox_dir}}/libexec/checkpoints.sh"
+            resolve_projects "${REPO_DIR}"
+            first="$(_backup_stores_for "${REPO_DIR}" | head -1)"
+            echo "checkpoints_sh=${first}"
+            [ "${first}" = "${created}" ]
+            # ...and the derived key must survive being asked from a
+            # subdirectory, which is what resolving the top level first buys.
+            sub="$(_backup_stores_for "${REPO_DIR}/sub" | head -1)"
+            echo "checkpoints_sh_from_sub=${sub}"
+            [ "${sub}" = "${created}" ]
+          )
+          echo "key_derivations_agree=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "key_derivations_agree=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
