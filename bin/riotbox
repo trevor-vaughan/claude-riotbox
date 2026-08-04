@@ -80,6 +80,11 @@ Overlay commands (podman-only):
   overlay-accept [project]     Apply overlay changes to host project
   overlay-reject [project]     Discard overlay changes
 
+Checkpoint commands:
+  checkpoints [dir...]              List pre-session snapshots
+  checkpoint-tag <ts> [dir]         Tag a snapshot for rescue
+  checkpoint-prune [dir...] <sel>   Remove snapshots (--keep N | --older-than Nd | --legacy)
+
 Setup / maintenance:
   mounts                       Show what would be mounted from your home dir
   install-hooks [flags...]     Install the git pre-push identity hook
@@ -295,6 +300,10 @@ overlays) exec "${SCRIPTS}/overlay.sh" list ;;
 overlay-diff) exec "${SCRIPTS}/overlay.sh" diff "$@" ;;
 overlay-accept) exec "${SCRIPTS}/overlay.sh" accept "$@" ;;
 overlay-reject) exec "${SCRIPTS}/overlay.sh" reject "$@" ;;
+
+checkpoints) exec "${LIBEXEC}/checkpoints.sh" list "$@" ;;
+checkpoint-tag) exec "${LIBEXEC}/checkpoints.sh" tag "$@" ;;
+checkpoint-prune) exec "${LIBEXEC}/checkpoints.sh" prune "$@" ;;
 
 reown) exec "${SCRIPTS}/reown-commits.sh" "$@" ;;
 install-hooks) exec "${LIBEXEC}/install-hooks.sh" "$@" ;;
