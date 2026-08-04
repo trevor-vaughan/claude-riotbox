@@ -1,0 +1,1339 @@
+name: Checkpoint snapshots without mutating the project repo
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  helpers: "{{.root}}/tests/lib/git-test-helpers.sh"
+
+testcases:
+  - name: Snapshot leaves HEAD, branch, index and worktree untouched
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_staged_and_unstaged
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          head_before="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          branch_before="$(git -C "${REPO_DIR}" symbolic-ref --short HEAD)"
+          stage_before="$(git -C "${REPO_DIR}" ls-files --stage)"
+          status_before="$(git -C "${REPO_DIR}" status --porcelain)"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ "${head_before}" = "$(git -C "${REPO_DIR}" rev-parse HEAD)" ]
+          [ "${branch_before}" = "$(git -C "${REPO_DIR}" symbolic-ref --short HEAD)" ]
+          [ "${stage_before}" = "$(git -C "${REPO_DIR}" ls-files --stage)" ]
+          [ "${status_before}" = "$(git -C "${REPO_DIR}" status --porcelain)" ]
+          [ -z "$(git -C "${REPO_DIR}" log --format='%s' | grep '^checkpoint: pre-riotbox-' || true)" ]
+          [ -z "$(git -C "${REPO_DIR}" tag -l)" ]
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          git -C "${REPO_DIR}" ls-tree -r --name-only "${ref}" | grep -qx 'untracked.txt'
+          git -C "${REPO_DIR}" show "${ref}:tracked.txt" | grep -q 'unstaged'
+          echo "no_mutation_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "no_mutation_ok=true"
+          - result.systemout ShouldContainSubstring "refs/riotbox/checkpoints/"
+
+  # A safety net that reports success having written nothing is worse than one
+  # that fails loudly, so pin the failure path: an unwritable refs store must
+  # warn, leave no ref behind, and print no success line.
+  - name: A snapshot that cannot be written warns and claims no success
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_staged_and_unstaged
+          trap 'chmod u+w "${REPO_DIR}/.git/refs" 2>/dev/null; rm -rf "${TEST_DIR}"' EXIT
+          chmod a-w "${REPO_DIR}/.git/refs"
+          # Prove the failure injection actually took. As root, or on the
+          # reftable backend (which leaves .git/refs present but unused),
+          # chmod a-w is inert — without this probe the case would report a
+          # confusing assertion failure instead of naming the real problem.
+          if git -C "${REPO_DIR}" update-ref refs/riotbox/probe HEAD 2>/dev/null; then
+            echo "FIXTURE INVALID: .git/refs is still writable (running as root, or reftable backend) — cannot exercise the update-ref failure path" >&2
+            exit 1
+          fi
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          # No ref was created, and no success line was printed.
+          chmod u+w "${REPO_DIR}/.git/refs"
+          [ -z "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox)" ]
+          printf '%s\n' "${out}" | grep -q 'WARNING: project: snapshot failed at update-ref'
+          [ -z "$(printf '%s\n' "${out}" | grep 'checkpoint: project' || true)" ]
+          echo "write_failure_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "write_failure_ok=true"
+          - result.systemout ShouldContainSubstring "no checkpoint protection!"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  - name: Mid-merge is snapshotted without completing the merge
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_mid_merge
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          head_before="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          test -f "$(git -C "${REPO_DIR}" rev-parse --git-path MERGE_HEAD)"
+          [ "${head_before}" = "$(git -C "${REPO_DIR}" rev-parse HEAD)" ]
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          git -C "${REPO_DIR}" show "${ref}:f.txt" | grep -q '^<<<<<<<'
+          git -C "${REPO_DIR}" merge --abort
+          echo "merge_preserved_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "merge_preserved_ok=true"
+
+  - name: Mid-rebase is snapshotted without advancing the rebase
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_mid_rebase
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          topic_before="$(git -C "${REPO_DIR}" rev-parse topic)"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          test -d "$(git -C "${REPO_DIR}" rev-parse --git-path rebase-merge)"
+          [ "${topic_before}" = "$(git -C "${REPO_DIR}" rev-parse topic)" ]
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          echo "rebase_preserved_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "rebase_preserved_ok=true"
+
+  - name: A refusing pre-commit hook does not block the snapshot
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_with_hook pre-commit 1
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -n "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          echo "hook_bypassed_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "hook_bypassed_ok=true"
+          - result.systemout ShouldNotContainSubstring "hook refusing"
+
+  - name: Signing forced on with an unusable key still snapshots
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          git -C "${REPO_DIR}" config commit.gpgsign true
+          git -C "${REPO_DIR}" config user.signingkey DEADBEEFDEADBEEF
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          [ "$(git -C "${REPO_DIR}" cat-file -p "${ref}" | grep -c gpgsig)" -eq 0 ]
+          echo "unsigned_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "unsigned_ok=true"
+
+  - name: Clean tree points the ref at HEAD without a new commit
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          head="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ "$(git -C "${REPO_DIR}" rev-parse "${ref}")" = "${head}" ]
+          echo "clean_points_at_head_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "clean_points_at_head_ok=true"
+
+  - name: Unborn HEAD with content produces a parentless snapshot
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "fresh work" > "${REPO_DIR}/app.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          [ "$(git -C "${REPO_DIR}" cat-file -p "${ref}" | grep -c '^parent ')" -eq 0 ]
+          git -C "${REPO_DIR}" show "${ref}:app.txt" | grep -q 'fresh work'
+          ! git -C "${REPO_DIR}" rev-parse --verify HEAD 2>/dev/null
+          echo "parentless_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "parentless_ok=true"
+
+  - name: Snapshots never disturb git describe or git tag
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo v > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          git -C "${REPO_DIR}" tag -a v1.0.0 -m "release 1.0.0"
+          for i in 1 2 3; do
+            echo "wip ${i}" >> "${REPO_DIR}/f.txt"
+            ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+              RIOTBOX_CHECKPOINT_QUIET=1 \
+              bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+            sleep 1
+          done
+          [ "$(git -C "${REPO_DIR}" describe --tags)" = "v1.0.0" ]
+          [ "$(git -C "${REPO_DIR}" describe)" = "v1.0.0" ]
+          [ "$(git -C "${REPO_DIR}" tag -l | tr -d '[:space:]')" = "v1.0.0" ]
+          [ "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | wc -l)" -eq 3 ]
+          echo "describe_intact_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "describe_intact_ok=true"
+
+  - name: An empty git repo with no commits is skipped without creating a ref
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -z "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox)" ]
+          echo "empty_repo_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "empty_repo_ok=true"
+          - result.systemout ShouldContainSubstring "nothing to checkpoint"
+
+  # refs/riotbox/* does not propagate through `git clone --bare` nor through a
+  # default fetch/push, so the backup refspecs must name it explicitly. Without
+  # this case the safety net silently degrades to "prints success, stores
+  # nothing outside the mount tree".
+  #
+  # backup_path mirrors checkpoint.sh's derivation: the backup is keyed on the
+  # canonical project PATH, not the basename, so same-named projects in
+  # different parents cannot share (and clobber) one backup.
+  - name: Backup receives snapshot refs on the first and second run
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          backup="$(backup_path "${REPO_DIR}")"
+          echo "wip1" >> "${REPO_DIR}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          [ "$(git -C "${backup}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | wc -l)" -eq 1 ]
+          sleep 1
+          echo "wip2" >> "${REPO_DIR}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          [ "$(git -C "${backup}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | wc -l)" -eq 2 ]
+          git -C "${backup}" rev-parse --verify refs/heads/main >/dev/null
+          # No legacy backup: a clean start must not create the basename path.
+          [ ! -e "${XDG_DATA_HOME}/riotbox/backups/$(basename "${REPO_DIR}").git" ]
+          echo "backup_refspec_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "backup_refspec_ok=true"
+
+  - name: Broken backup warns with git stderr, names the exposure, and continues
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          # Occupy the backup destination with a plain directory: git can never
+          # clone into it, so this is the total-failure branch.
+          broken="$(backup_path "${REPO_DIR}")"
+          mkdir -p "${broken}"
+          printf 'not a git repo\n' > "${broken}/placeholder"
+          echo "broke: ${broken}"
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -n "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          echo "backup_failure_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NO protection outside the container mount tree"
+          - result.systemout ShouldContainSubstring "(local only — backup failed)"
+          - result.systemout ShouldNotContainSubstring "(backed up)"
+          - result.systemout ShouldContainSubstring "exists but is not a git repository"
+          - result.systemout ShouldContainSubstring "Remove or rename that path"
+          - result.systemout ShouldContainSubstring "backup_failure_ok=true"
+
+  - name: A broken first project does not stop the second
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          good="${TEST_DIR}/good"
+          git init -q --initial-branch=main "${good}"
+          git -C "${good}" config user.name "Test Human"
+          git -C "${good}" config user.email "human@example.com"
+          echo ok > "${good}/f.txt"
+          git -C "${good}" add f.txt
+          git -C "${good}" commit -qm initial
+          echo "wip" >> "${good}/f.txt"
+          bad="${TEST_DIR}/notarepo"
+          mkdir -p "${bad}"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${bad} ${good}" \
+                 RIOTBOX_GIT_INIT=0 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -n "$(git -C "${good}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          echo "isolation_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "isolation_ok=true"
+
+  # Stronger than the case above: a non-git dir is turned away by the loop's
+  # early `continue`, which never enters _snapshot_project. An unwritable refs
+  # store is only reached AFTER the tree has been written, so it exercises a
+  # mid-function abort — the path where a stray `set -e` or a missing
+  # `|| continue` would take the rest of the loop down with it.
+  - name: A mid-function snapshot failure does not stop a later project
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'chmod u+w "${REPO_DIR}/.git/refs" 2>/dev/null; rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          later="${TEST_DIR}/later"
+          git init -q --initial-branch=main "${later}"
+          git -C "${later}" config user.name "Test Human"
+          git -C "${later}" config user.email "human@example.com"
+          echo ok > "${later}/f.txt"
+          git -C "${later}" add f.txt
+          git -C "${later}" commit -qm initial
+          echo "wip" >> "${later}/f.txt"
+          chmod a-w "${REPO_DIR}/.git/refs"
+          # Prove the failure injection actually took. As root, or on the
+          # reftable backend, chmod a-w is inert and this case would pass for
+          # the wrong reason — both projects would simply succeed.
+          if git -C "${REPO_DIR}" update-ref refs/riotbox/probe HEAD 2>/dev/null; then
+            echo "FIXTURE INVALID: .git/refs is still writable (running as root, or reftable backend) — cannot exercise the update-ref failure path" >&2
+            exit 1
+          fi
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR} ${later}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          chmod u+w "${REPO_DIR}/.git/refs"
+          [ "${rc}" -eq 0 ]
+          [ -z "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox)" ]
+          [ -n "$(git -C "${later}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          echo "mid_function_isolation_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "mid_function_isolation_ok=true"
+          - result.systemout ShouldContainSubstring "snapshot failed at update-ref"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # A bare repo has no worktree, so `git ls-files --others` fails hard. Under
+  # `set -e` that aborted the entire loop and the launcher exited 128, leaving
+  # every later project with no checkpoint at all.
+  - name: A bare repo warns and does not abort the remaining projects
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${BARE_DIR} ${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -n "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          echo "bare_repo_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "bare_repo_ok=true"
+          - result.systemout ShouldContainSubstring "bare git repo"
+
+  # A local `git clone` HARDLINKS loose objects by default, so the "isolated"
+  # backup would share inodes with the read-write bind mount: the agent
+  # corrupts the backup in place by writing to .git/objects, never touching
+  # the backup directory at all. That would falsify this script's own header.
+  - name: Backup objects are not hardlinked to the project
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          backup="$(backup_path "${REPO_DIR}")"
+          # Pick a loose object present in both. Fail loudly if the backup has
+          # none — a packed backup would make the link-count assertion vacuous.
+          obj="$(cd "${backup}/objects" && find . -type f -path './??/*' | head -1)"
+          [ -n "${obj}" ]
+          obj="${obj#./}"
+          echo "object under test: ${obj}"
+          links="$(stat -c %h "${backup}/objects/${obj}")"
+          # Single token: venom splits assertion operands on whitespace.
+          echo "backup_object_link_count=${links}"
+          [ "${links}" -eq 1 ]
+          # Now prove it: corrupt the SOURCE object the way an agent with write
+          # access to the mount could, and the backup must still be intact.
+          src_obj="${REPO_DIR}/.git/objects/${obj}"
+          [ -f "${src_obj}" ]
+          chmod u+w "${src_obj}"
+          printf 'CORRUPT' > "${src_obj}"
+          ! git -C "${REPO_DIR}" fsck >/dev/null 2>&1
+          git -C "${backup}" fsck >/dev/null
+          echo "no_hardlink_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "backup_object_link_count=1"
+          - result.systemout ShouldContainSubstring "no_hardlink_ok=true"
+
+  # `git ls-files` exits 128 on a corrupt index. Unguarded at loop top level
+  # that killed the launcher outright and every later project went unchecked.
+  - name: A corrupt index warns and does not abort the remaining projects
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          later="${TEST_DIR}/later"
+          git init -q --initial-branch=main "${later}"
+          git -C "${later}" config user.name "Test Human"
+          git -C "${later}" config user.email "human@example.com"
+          echo ok > "${later}/f.txt"
+          git -C "${later}" add f.txt
+          git -C "${later}" commit -qm initial
+          echo "wip" >> "${later}/f.txt"
+          # Truncate the index and prove the injection took, so this case can
+          # never pass because the repo was merely healthy.
+          head -c 20 "${REPO_DIR}/.git/index" > "${TEST_DIR}/idx"
+          mv "${TEST_DIR}/idx" "${REPO_DIR}/.git/index"
+          if git -C "${REPO_DIR}" ls-files --others --exclude-standard >/dev/null 2>&1; then
+            echo "FIXTURE INVALID: truncated index still readable — cannot exercise the ls-files failure path" >&2
+            exit 1
+          fi
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR} ${later}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -n "$(git -C "${later}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          echo "corrupt_index_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "corrupt_index_ok=true"
+          - result.systemout ShouldContainSubstring "cannot list untracked files"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # Heads and tags are force-pushed because rewriting them is expected. Without
+  # the + on tags, a single `git tag -f` makes EVERY later launch claim the
+  # session is unprotected while snapshots are in fact landing — which trains
+  # the user to ignore the one warning that matters.
+  - name: A retagged tag and a rewritten branch still back up cleanly
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          git -C "${REPO_DIR}" tag -a v1.0.0 -m "release 1"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          backup="$(backup_path "${REPO_DIR}")"
+          # Rewrite both a branch and a tag — exactly what a rebase plus a
+          # corrected release tag looks like.
+          git -C "${REPO_DIR}" commit -q --amend -m "initial (amended)"
+          git -C "${REPO_DIR}" tag -f -a v1.0.0 -m "release 1 (retagged)" >/dev/null 2>&1
+          sleep 1
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ "$(git -C "${backup}" rev-parse v1.0.0)" = "$(git -C "${REPO_DIR}" rev-parse v1.0.0)" ]
+          [ "$(git -C "${backup}" rev-parse refs/heads/main)" = "$(git -C "${REPO_DIR}" rev-parse refs/heads/main)" ]
+          [ "$(git -C "${backup}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | wc -l)" -eq 2 ]
+          echo "retag_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "retag_ok=true"
+          - result.systemout ShouldContainSubstring "(backed up)"
+          - result.systemout ShouldContainSubstring "backup branch rewritten"
+          - result.systemout ShouldNotContainSubstring "NO protection outside the container mount tree"
+
+  # `git push` is not atomic. A tampered historical snapshot must not be
+  # reported as "you have no backup" when this launch's snapshot demonstrably
+  # landed — and the pristine backup copy of the tampered ref must survive.
+  - name: A tampered snapshot ref reports a partial push, not total failure
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          echo "wip1" >> "${REPO_DIR}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          backup="$(backup_path "${REPO_DIR}")"
+          ref1="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          pristine="$(git -C "${backup}" rev-parse "${ref1}")"
+          # Tamper: repoint the old snapshot at an unrelated root commit, so
+          # pushing it is a non-fast-forward the backup must refuse.
+          git -C "${REPO_DIR}" checkout -q --orphan tampered
+          git -C "${REPO_DIR}" commit -q --allow-empty -m "unrelated"
+          evil="$(git -C "${REPO_DIR}" rev-parse HEAD)"
+          git -C "${REPO_DIR}" checkout -q main
+          git -C "${REPO_DIR}" update-ref "${ref1}" "${evil}"
+          sleep 1
+          echo "wip2" >> "${REPO_DIR}/f.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # The warning must name the tampered ref (and so its timestamp).
+          printf '%s\n' "${out}" | grep -q "${ref1}"
+          # The pristine backup copy survived the tamper attempt.
+          [ "$(git -C "${backup}" rev-parse "${ref1}")" = "${pristine}" ]
+          # This launch's snapshot really did land.
+          ref2="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | grep -v "^${ref1}$")"
+          [ -n "${ref2}" ]
+          [ "$(git -C "${backup}" rev-parse "${ref2}")" = "$(git -C "${REPO_DIR}" rev-parse "${ref2}")" ]
+          echo "partial_push_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "partial_push_ok=true"
+          - result.systemout ShouldContainSubstring "this launch's snapshot IS backed up"
+          - result.systemout ShouldContainSubstring "(backed up; other refs rejected)"
+          - result.systemout ShouldNotContainSubstring "(local only — backup failed)"
+          - result.systemout ShouldNotContainSubstring "NO protection outside the container mount tree"
+
+  # Keying the backup on basename alone made ~/work/a/web and ~/work/b/web
+  # share one store: b force-overwrote a's branches, and their snapshot refs
+  # collided every launch, so one project was never really backed up.
+  - name: Same-basename projects get separate backups
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          for side in a b; do
+            d="${TEST_DIR}/${side}/web"
+            mkdir -p "${d}"
+            git init -q --initial-branch=main "${d}"
+            git -C "${d}" config user.name "Test Human"
+            git -C "${d}" config user.email "human@example.com"
+            echo "content-${side}" > "${d}/f.txt"
+            git -C "${d}" add f.txt
+            git -C "${d}" commit -qm "initial ${side}"
+            echo "wip-${side}" >> "${d}/f.txt"
+          done
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${TEST_DIR}/a/web ${TEST_DIR}/b/web" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          ba="$(backup_path "${TEST_DIR}/a/web")"
+          bb="$(backup_path "${TEST_DIR}/b/web")"
+          [ "${ba}" != "${bb}" ]
+          # Each backup holds its own project's content and its own snapshot.
+          git -C "${ba}" show "refs/heads/main:f.txt" | grep -qx 'content-a'
+          git -C "${bb}" show "refs/heads/main:f.txt" | grep -qx 'content-b'
+          for b in "${ba}" "${bb}"; do
+            [ "$(git -C "${b}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | wc -l)" -eq 1 ]
+          done
+          # And neither of them squatted the shared basename path.
+          [ ! -e "${XDG_DATA_HOME}/riotbox/backups/web.git" ]
+          echo "basename_collision_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "basename_collision_ok=true"
+
+  - name: A legacy basename backup belonging to this project is migrated
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          canon="$(cd "${REPO_DIR}" && pwd -P)"
+          legacy="${XDG_DATA_HOME}/riotbox/backups/$(basename "${REPO_DIR}").git"
+          mkdir -p "$(dirname "${legacy}")"
+          git clone -q --bare --no-hardlinks "${canon}" "${legacy}"
+          # A marker only the ORIGINAL store has: if it survives, the store was
+          # moved, not silently re-cloned (which would lose old checkpoints).
+          git -C "${legacy}" update-ref refs/riotbox/checkpoints/19700101-000000 HEAD
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          backup="$(backup_path "${REPO_DIR}")"
+          [ ! -e "${legacy}" ]
+          git -C "${backup}" rev-parse --verify refs/riotbox/checkpoints/19700101-000000 >/dev/null
+          [ "$(git -C "${backup}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | wc -l)" -eq 2 ]
+          echo "migration_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "migration_ok=true"
+          - result.systemout ShouldContainSubstring "migrated backup"
+          - result.systemout ShouldContainSubstring "(backed up)"
+
+  # The collision case: the legacy store is some OTHER project's history.
+  # Adopting it would hand this project a stranger's data and orphan the real
+  # owner's only off-mount copy.
+  - name: A legacy backup belonging to another project is left untouched
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          # A different project that happens to share the basename "project".
+          other="${TEST_DIR}/elsewhere/project"
+          mkdir -p "${other}"
+          git init -q --initial-branch=main "${other}"
+          git -C "${other}" config user.name "Test Human"
+          git -C "${other}" config user.email "human@example.com"
+          echo "someone-elses-work" > "${other}/f.txt"
+          git -C "${other}" add f.txt
+          git -C "${other}" commit -qm "other initial"
+          legacy="${XDG_DATA_HOME}/riotbox/backups/project.git"
+          mkdir -p "$(dirname "${legacy}")"
+          git clone -q --bare --no-hardlinks "${other}" "${legacy}"
+          legacy_head="$(git -C "${legacy}" rev-parse refs/heads/main)"
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # The stranger's store is untouched, contents and all.
+          [ -d "${legacy}" ]
+          [ "$(git -C "${legacy}" rev-parse refs/heads/main)" = "${legacy_head}" ]
+          git -C "${legacy}" show "refs/heads/main:f.txt" | grep -qx 'someone-elses-work'
+          [ -z "$(git -C "${legacy}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          # This project got its own store.
+          backup="$(backup_path "${REPO_DIR}")"
+          git -C "${backup}" show "refs/heads/main:f.txt" | grep -qx 'base'
+          [ -n "$(git -C "${backup}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          echo "no_false_migration_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "no_false_migration_ok=true"
+          - result.systemout ShouldContainSubstring "(backed up)"
+          - result.systemout ShouldNotContainSubstring "migrated backup"
+
+  # The migration probe must insist the legacy path is a repo before asking it
+  # anything — `git -C <plain dir> config` would answer from a parent repo.
+  - name: A non-repo directory at the legacy path is ignored
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          legacy="$(occupy_legacy_backup_path "${REPO_DIR}")"
+          echo "legacy junk at: ${legacy}"
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -f "${legacy}/placeholder" ]
+          backup="$(backup_path "${REPO_DIR}")"
+          [ -n "$(git -C "${backup}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          echo "legacy_junk_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "legacy_junk_ok=true"
+          - result.systemout ShouldContainSubstring "(backed up)"
+          - result.systemout ShouldNotContainSubstring "migrated backup"
+
+  # The backup holds full history plus every untracked file the snapshot swept
+  # in. _MANAGED_BLOCK keeps the obvious secrets out, but only the ones it can
+  # name — a credential file under any other name is still in there.
+  - name: Backup store and backup repo are not world-readable
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          # A store left at 0755 by an older version must be tightened, not
+          # just newly-created ones.
+          root="${XDG_DATA_HOME}/riotbox/backups"
+          mkdir -p "${root}"
+          chmod 755 "${root}"
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          backup="$(backup_path "${REPO_DIR}")"
+          echo "root mode:   $(stat -c %a "${root}")"
+          echo "backup mode: $(stat -c %a "${backup}")"
+          [ "$(stat -c %a "${root}")" = "700" ]
+          [ "$(stat -c %a "${backup}")" = "700" ]
+          echo "modes_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "modes_ok=true"
+
+  # Same class of hole as commit.gpgsign: a host that forces signing must not
+  # be able to break the safety net. The local transport has no push-cert
+  # support, so a signed push fails outright with rc=128.
+  - name: push.gpgSign forced on still backs up
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          git config --global push.gpgSign true
+          git -C "${REPO_DIR}" config user.signingkey DEADBEEFDEADBEEF
+          # Prove the injection bites: an unguarded push must fail.
+          git clone -q --bare --no-hardlinks "${REPO_DIR}" "${TEST_DIR}/probe.git"
+          if git -C "${REPO_DIR}" push --no-verify "${TEST_DIR}/probe.git" '+refs/heads/*:refs/heads/*' >/dev/null 2>&1; then
+            echo "FIXTURE INVALID: push.gpgSign=true did not break an unguarded push" >&2
+            exit 1
+          fi
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          backup="$(backup_path "${REPO_DIR}")"
+          [ -n "$(git -C "${backup}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          echo "push_gpgsign_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "push_gpgsign_ok=true"
+          - result.systemout ShouldContainSubstring "(backed up)"
+          - result.systemout ShouldNotContainSubstring "NO protection outside the container mount tree"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # A global core.hooksPath is inherited by the backup's own receive-pack, so
+  # an org-wide pre-receive hook would reject every backup push.
+  - name: An inherited pre-receive hook does not block the backup
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          # Set the org hooks dir only after the fixture's own commits, so this
+          # exercises the receive side and nothing else.
+          hooks="${TEST_DIR}/orghooks"
+          mkdir -p "${hooks}"
+          printf '#!/usr/bin/env bash\necho "org pre-receive refusing" >&2\nexit 1\n' > "${hooks}/pre-receive"
+          chmod +x "${hooks}/pre-receive"
+          git config --global core.hooksPath "${hooks}"
+          # Prove the injection bites: an unguarded push must be rejected.
+          git clone -q --bare --no-hardlinks "${REPO_DIR}" "${TEST_DIR}/probe.git"
+          git -C "${REPO_DIR}" commit -q --allow-empty -m probe
+          if git -C "${REPO_DIR}" push --no-verify "${TEST_DIR}/probe.git" '+refs/heads/*:refs/heads/*' >/dev/null 2>&1; then
+            echo "FIXTURE INVALID: the org pre-receive hook did not block an unguarded push" >&2
+            exit 1
+          fi
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          backup="$(backup_path "${REPO_DIR}")"
+          [ -n "$(git -C "${backup}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          echo "hookspath_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "hookspath_ok=true"
+          - result.systemout ShouldContainSubstring "(backed up)"
+          - result.systemout ShouldNotContainSubstring "org pre-receive refusing"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # --no-hardlinks alone is not isolation. A local clone stays local, so it
+  # copies objects/info/alternates verbatim: a project made with `git clone
+  # --shared` hands the backup a POINTER into a store riotbox does not own —
+  # and in a multi-project launch that borrowed store can itself be inside the
+  # mount, where the agent can delete it.
+  - name: A backup of a shared clone borrows no objects
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          upstream="${TEST_DIR}/upstream"
+          git init -q --initial-branch=main "${upstream}"
+          git -C "${upstream}" config user.name "Test Human"
+          git -C "${upstream}" config user.email "human@example.com"
+          echo one > "${upstream}/f.txt"
+          git -C "${upstream}" add f.txt
+          git -C "${upstream}" commit -qm one
+          echo two >> "${upstream}/f.txt"
+          git -C "${upstream}" commit -qam two
+          proj="${TEST_DIR}/shared"
+          git clone -q --shared "${upstream}" "${proj}"
+          git -C "${proj}" config user.name "Test Human"
+          git -C "${proj}" config user.email "human@example.com"
+          # Prove the fixture: the project really does borrow its objects.
+          if [ ! -s "${proj}/.git/objects/info/alternates" ]; then
+            echo "FIXTURE INVALID: --shared clone left no alternates file — cannot exercise the borrowed-store path" >&2
+            exit 1
+          fi
+          echo "project alternates: $(cat "${proj}/.git/objects/info/alternates")"
+          echo "wip" >> "${proj}/f.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${proj}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          backup="$(backup_path "${proj}")"
+          [ ! -s "${backup}/objects/info/alternates" ]
+          echo "backup_alternates=none"
+          # The borrowed store is exactly what an agent could delete. The
+          # backup must not care.
+          rm -rf "${upstream}"
+          git -C "${backup}" fsck >/dev/null
+          [ "$(git -C "${backup}" log --oneline refs/heads/main | wc -l)" -eq 2 ]
+          ref="$(git -C "${backup}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          git -C "${backup}" show "${ref}:f.txt" | grep -q 'wip'
+          echo "dissociated_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "backup_alternates=none"
+          - result.systemout ShouldContainSubstring "dissociated_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # An unreadable store is still a store. Telling the user to delete it to fix
+  # a permissions problem destroys every snapshot from every earlier session,
+  # so the wrong diagnosis here is worse than no diagnosis.
+  - name: An unreadable backup store is never diagnosed as deletable
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          backup="$(backup_path "${REPO_DIR}")"
+          trap 'chmod 755 "${backup}" 2>/dev/null; rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          mkdir -p "$(dirname "${backup}")"
+          git clone -q --bare --no-hardlinks "$(cd "${REPO_DIR}" && pwd -P)" "${backup}"
+          # A snapshot from an earlier session — the thing bad advice destroys.
+          git -C "${backup}" update-ref refs/riotbox/checkpoints/19700101-000000 HEAD
+          chmod 000 "${backup}"
+          if git -C "${backup}" rev-parse --git-dir >/dev/null 2>&1; then
+            echo "FIXTURE INVALID: mode 000 store is still readable (running as root?) — cannot exercise the unreadable-store path" >&2
+            exit 1
+          fi
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          chmod 755 "${backup}"
+          # The historical snapshot is still there — nothing was destroyed, and
+          # the user was not told to destroy it.
+          git -C "${backup}" rev-parse --verify refs/riotbox/checkpoints/19700101-000000 >/dev/null
+          echo "unreadable_store_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "unreadable_store_ok=true"
+          - result.systemout ShouldContainSubstring "could not be read as a git repository"
+          - result.systemout ShouldContainSubstring "Do NOT delete it"
+          - result.systemout ShouldContainSubstring "Permission denied"
+          - result.systemout ShouldNotContainSubstring "Remove or rename that path"
+          - result.systemout ShouldNotContainSubstring "is not a git repository, so it cannot receive"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # The path key matches mount-projects.sh character for character, but it is
+  # not injective: a '-' in a component aliases with '/'. Hyphenated
+  # directories are common, so this must refuse rather than silently
+  # force-overwrite the other project's branches.
+  - name: A colliding path key refuses instead of overwriting the other project
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          first="${TEST_DIR}/a-b/c"
+          second="${TEST_DIR}/a/b-c"
+          n=1
+          for d in "${first}" "${second}"; do
+            mkdir -p "${d}"
+            git init -q --initial-branch=main "${d}"
+            git -C "${d}" config user.name "Test Human"
+            git -C "${d}" config user.email "human@example.com"
+            echo "content-${n}" > "${d}/f.txt"
+            git -C "${d}" add f.txt
+            git -C "${d}" commit -qm "initial ${n}"
+            echo "wip-${n}" >> "${d}/f.txt"
+            n=$((n + 1))
+          done
+          # Prove the fixture: these two paths really do collide.
+          if [ "$(backup_path "${first}")" != "$(backup_path "${second}")" ]; then
+            echo "FIXTURE INVALID: the two paths do not share a backup key — cannot exercise the collision path" >&2
+            exit 1
+          fi
+          shared_key="$(backup_path "${first}")"
+          echo "colliding key: ${shared_key}"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${first} ${second}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # The first project owns the store and is untouched by the second.
+          git -C "${shared_key}" show "refs/heads/main:f.txt" | grep -qx 'content-1'
+          [ "$(git -C "${shared_key}" rev-parse refs/heads/main)" = "$(git -C "${first}" rev-parse refs/heads/main)" ]
+          [ "$(git -C "${shared_key}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | wc -l)" -eq 1 ]
+          # The second project still got LOCAL protection, and was told why.
+          [ -n "$(git -C "${second}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          echo "key_collision_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "key_collision_ok=true"
+          - result.systemout ShouldContainSubstring "already holds the backup for a different project"
+          - result.systemout ShouldContainSubstring "(local only — backup failed)"
+          - result.systemout ShouldNotContainSubstring "Remove or rename that path"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # A lost clone race must not skip the push: the winner's store is just as
+  # good. Deterministic — a git shim makes `clone` create the store the way a
+  # real winner would (a winner clones, so the store records its origin) and
+  # then fail, with no concurrency involved.
+  - name: A lost clone race still pushes to the winner's store
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          RIOTBOX_TEST_ORIGIN="$(cd "${REPO_DIR}" && pwd -P)"
+          export RIOTBOX_TEST_ORIGIN
+          git() {
+            if [ "${1:-}" = "clone" ]; then
+              dest="${@: -1}"
+              command git init --bare -q "${dest}"
+              command git -C "${dest}" remote add origin "${RIOTBOX_TEST_ORIGIN}"
+              echo "fatal: destination path '${dest}' already exists and is not an empty directory." >&2
+              return 128
+            fi
+            command git "$@"
+          }
+          export -f git
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          unset -f git
+          [ "${rc}" -eq 0 ]
+          backup="$(backup_path "${REPO_DIR}")"
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ "$(git -C "${backup}" rev-parse "${ref}")" = "$(git -C "${REPO_DIR}" rev-parse "${ref}")" ]
+          echo "lost_race_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "lost_race_ok=true"
+          - result.systemout ShouldContainSubstring "(backed up)"
+          - result.systemout ShouldNotContainSubstring "(local only — backup failed)"
+
+  # Negative control for the case above: when the clone fails and leaves
+  # nothing behind, the fall-through must NOT paper over it.
+  - name: A clone that fails and leaves nothing reports a failed backup
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          git() {
+            if [ "${1:-}" = "clone" ]; then
+              echo "fatal: could not create work tree dir: No space left on device" >&2
+              return 128
+            fi
+            command git "$@"
+          }
+          export -f git
+          echo "wip" >> "${REPO_DIR}/f.txt"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          unset -f git
+          [ "${rc}" -eq 0 ]
+          # Local protection survives even though the backup did not happen.
+          [ -n "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          echo "clone_failure_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "clone_failure_ok=true"
+          - result.systemout ShouldContainSubstring "No space left on device"
+          - result.systemout ShouldContainSubstring "(local only — backup failed)"
+          - result.systemout ShouldNotContainSubstring "(backed up)"
+
+  # The per-file cap deliberately omits user data, so it must announce exactly
+  # what it left out. A silent omission is the failure mode this whole script
+  # exists to prevent — it is not gated on RIOTBOX_CHECKPOINT_QUIET, and this
+  # case runs WITH that flag set to pin that decision.
+  - name: An oversized untracked file is skipped, named, and absent from snapshot and backup
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          mkdir -p "${REPO_DIR}/fixtures"
+          # 12 MiB — over the 10 MB default, and a round number in the report.
+          head -c 12582912 /dev/zero > "${REPO_DIR}/fixtures/dump.iso"
+          # Control: an untracked file under the cap must still be captured, so
+          # a cap that swallowed every untracked file could not pass this case.
+          echo "keep me" > "${REPO_DIR}/notes.txt"
+          # Prove the fixture: the file really is over the default cap, and
+          # really is an untracked candidate. Without both, "absent from the
+          # snapshot" would be true for reasons that have nothing to do with
+          # the cap.
+          bytes="$(stat -c %s "${REPO_DIR}/fixtures/dump.iso")"
+          echo "fixture bytes=${bytes}"
+          if [ "${bytes}" -le 10485760 ]; then
+            echo "FIXTURE INVALID: fixtures/dump.iso is ${bytes} bytes, not over the 10 MB default cap" >&2
+            exit 1
+          fi
+          git -C "${REPO_DIR}" ls-files --others --exclude-standard | grep -qx 'fixtures/dump.iso' || {
+            echo "FIXTURE INVALID: fixtures/dump.iso is not an untracked candidate — the cap would never see it" >&2
+            exit 1
+          }
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          tree_out="$(git -C "${REPO_DIR}" ls-tree -r --name-only "${ref}")"
+          echo "snapshot tree: ${tree_out}"
+          if printf '%s\n' "${tree_out}" | grep -qx 'fixtures/dump.iso'; then
+            echo "FAIL: the oversized file is in the snapshot"; exit 1
+          fi
+          printf '%s\n' "${tree_out}" | grep -qx 'notes.txt'
+          # The report claims it is not in the backup either — check, do not trust.
+          backup="$(backup_path "${REPO_DIR}")"
+          if git -C "${backup}" ls-tree -r --name-only "${ref}" | grep -qx 'fixtures/dump.iso'; then
+            echo "FAIL: the oversized file reached the backup"; exit 1
+          fi
+          # And it is still on disk: the cap omits, it never deletes.
+          [ -f "${REPO_DIR}/fixtures/dump.iso" ]
+          echo "size_cap_skip_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "size_cap_skip_ok=true"
+          - result.systemout ShouldContainSubstring "snapshot skipped 1 untracked file(s) over 10 MB"
+          - result.systemout ShouldContainSubstring "fixtures/dump.iso"
+          - result.systemout ShouldContainSubstring "(12 MB)"
+          - result.systemout ShouldContainSubstring "These are NOT in the snapshot and NOT in the backup."
+          - result.systemout ShouldContainSubstring "Raise the limit with RIOTBOX_SNAPSHOT_MAX_MB."
+          - result.systemout ShouldContainSubstring "(backed up)"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # Tracked files are never capped. They are already in git, so re-snapshotting
+  # one costs nothing, and dropping it would delete committed work from the
+  # safety net — a regression far worse than the disk it saves.
+  - name: An oversized tracked file is still captured with its modification
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          head -c 12582912 /dev/urandom > "${REPO_DIR}/fixtures.bin"
+          git -C "${REPO_DIR}" add fixtures.bin
+          git -C "${REPO_DIR}" commit -qm initial
+          # Modify it, so the snapshot must build a NEW tree containing it and
+          # cannot pass by merely pointing the ref at an untouched HEAD.
+          printf 'MODIFIED' >> "${REPO_DIR}/fixtures.bin"
+          bytes="$(stat -c %s "${REPO_DIR}/fixtures.bin")"
+          echo "fixture bytes=${bytes}"
+          if [ "${bytes}" -le 10485760 ]; then
+            echo "FIXTURE INVALID: fixtures.bin is ${bytes} bytes, not over the 10 MB default cap — nothing to exempt" >&2
+            exit 1
+          fi
+          git -C "${REPO_DIR}" ls-files --error-unmatch fixtures.bin >/dev/null 2>&1 || {
+            echo "FIXTURE INVALID: fixtures.bin is not tracked — this case tests the untracked path instead" >&2
+            exit 1
+          }
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          [ "$(git -C "${REPO_DIR}" rev-parse "${ref}")" != "$(git -C "${REPO_DIR}" rev-parse HEAD)" ]
+          blob_bytes="$(git -C "${REPO_DIR}" cat-file -s "$(git -C "${REPO_DIR}" rev-parse "${ref}:fixtures.bin")")"
+          echo "snapshot blob bytes=${blob_bytes}"
+          [ "${blob_bytes}" = "${bytes}" ]
+          git -C "${REPO_DIR}" show "${ref}:fixtures.bin" | tail -c 8 | grep -q 'MODIFIED'
+          echo "tracked_oversized_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tracked_oversized_ok=true"
+          - result.systemout ShouldNotContainSubstring "snapshot skipped"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # The cap is a default, not a policy. A project that genuinely wants its big
+  # untracked fixtures protected must be able to raise it, and one on a tight
+  # backup volume must be able to lower it.
+  - name: RIOTBOX_SNAPSHOT_MAX_MB moves the threshold in both directions
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          # 5 MiB: under the 10 MB default, over a 1 MB override.
+          head -c 5242880 /dev/zero > "${REPO_DIR}/mid.bin"
+
+          # Baseline at the default — proves the file is capturable at all, so
+          # a later "absent" result can only be the threshold's doing.
+          out1="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                  RIOTBOX_CHECKPOINT_QUIET=1 \
+                  bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)"
+          echo "default run: ${out1}"
+          ref1="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          git -C "${REPO_DIR}" ls-tree -r --name-only "${ref1}" | grep -qx 'mid.bin' || {
+            echo "FIXTURE INVALID: mid.bin is absent from the snapshot at the DEFAULT cap — the override assertions below would prove nothing" >&2
+            exit 1
+          }
+          echo "default_keeps_mid=true"
+
+          # Lower the cap: the same file must now be skipped and reported.
+          sleep 1
+          out2="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                  RIOTBOX_CHECKPOINT_QUIET=1 RIOTBOX_SNAPSHOT_MAX_MB=1 \
+                  bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)"
+          echo "lowered run: ${out2}"
+          ref2="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | grep -v "^${ref1}$")"
+          [ -n "${ref2}" ]
+          if git -C "${REPO_DIR}" ls-tree -r --name-only "${ref2}" | grep -qx 'mid.bin'; then
+            echo "FAIL: RIOTBOX_SNAPSHOT_MAX_MB=1 did not skip a 5 MiB file"; exit 1
+          fi
+          printf '%s\n' "${out2}" | grep -q 'over 1 MB' \
+            || { echo "FAIL: the report did not name the overridden limit"; exit 1; }
+
+          # Raise it above the default: a 12 MiB file that the default would
+          # skip must be captured.
+          head -c 12582912 /dev/zero > "${REPO_DIR}/large.bin"
+          sleep 1
+          out3="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                  RIOTBOX_CHECKPOINT_QUIET=1 RIOTBOX_SNAPSHOT_MAX_MB=100 \
+                  bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)"
+          echo "raised run: ${out3}"
+          ref3="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints \
+                  | grep -v "^${ref1}$" | grep -v "^${ref2}$")"
+          [ -n "${ref3}" ]
+          git -C "${REPO_DIR}" ls-tree -r --name-only "${ref3}" | grep -qx 'large.bin'
+          printf '%s\n' "${out3}" | grep -q 'snapshot skipped' \
+            && { echo "FAIL: RIOTBOX_SNAPSHOT_MAX_MB=100 still skipped something"; exit 1; }
+
+          echo "max_mb_override_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "default_keeps_mid=true"
+          - result.systemout ShouldContainSubstring "max_mb_override_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # The cap turned the snapshot's `git add -A` into `git add -A` plus
+  # `:(exclude)` pathspecs. When nothing is over the cap the two must be the
+  # same operation, not merely a similar one: a tree that differs by a mode
+  # bit, a staged-but-reverted entry or a missed deletion is a snapshot that
+  # does not match what the user actually had.
+  - name: With nothing skipped the snapshot tree is byte-identical to git add -A
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # Every shape the two add paths could disagree on.
+          mkdir -p "${REPO_DIR}/a/b/c"
+          echo t1 > "${REPO_DIR}/a/b/c/tracked.txt"
+          echo t2 > "${REPO_DIR}/will-delete.txt"
+          echo t3 > "${REPO_DIR}/will-stage.txt"
+          echo t4 > "${REPO_DIR}/will-untrack.txt"
+          printf '#!/bin/sh\n' > "${REPO_DIR}/exec.sh"; chmod +x "${REPO_DIR}/exec.sh"
+          git -C "${REPO_DIR}" add -A
+          git -C "${REPO_DIR}" commit -qm initial
+          echo mod >> "${REPO_DIR}/a/b/c/tracked.txt"          # tracked modification
+          rm "${REPO_DIR}/will-delete.txt"                     # tracked deletion
+          echo staged > "${REPO_DIR}/will-stage.txt"
+          git -C "${REPO_DIR}" add will-stage.txt              # staged change
+          git -C "${REPO_DIR}" rm -q --cached will-untrack.txt # index removal, file still on disk
+          mkdir -p "${REPO_DIR}/deep/nest/ed"
+          echo u1 > "${REPO_DIR}/deep/nest/ed/untracked.txt"   # untracked, nested
+          printf 'sp' > "${REPO_DIR}/un tracked space.txt"     # space in the name
+          nl_name="$(printf 'un\ntracked-newline.txt')"        # newline in the name
+          printf 'nl' > "${REPO_DIR}/${nl_name}"
+          ln -s /nonexistent/huge.iso "${REPO_DIR}/danglink"   # dangling symlink
+
+          # Run first: the checkpoint installs the managed exclude block, and
+          # the reference `git add -A` below must see the SAME exclude file so
+          # the only variable between the two trees is the add method itself.
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # Nothing may have been skipped, or the comparison is not testing the
+          # equivalence claim at all.
+          if printf '%s\n' "${out}" | grep -q 'snapshot skipped'; then
+            echo "FIXTURE INVALID: the cap skipped a file — this case must compare the nothing-skipped path" >&2
+            exit 1
+          fi
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          new_tree="$(git -C "${REPO_DIR}" rev-parse "${ref}^{tree}")"
+
+          # The old path, verbatim: seed a throwaway index from the real one
+          # and `git add -A` into it.
+          old_index="${TEST_DIR}/old.index"
+          cp "${REPO_DIR}/.git/index" "${old_index}"
+          old_tree="$(GIT_INDEX_FILE="${old_index}" git -C "${REPO_DIR}" add -A \
+                      && GIT_INDEX_FILE="${old_index}" git -C "${REPO_DIR}" write-tree)"
+
+          echo "old_tree=${old_tree}"
+          echo "new_tree=${new_tree}"
+          # Prove the fixture is not trivially equal: a clean repo would make
+          # both trees HEAD's tree and the comparison vacuous.
+          head_tree="$(git -C "${REPO_DIR}" rev-parse "HEAD^{tree}")"
+          if [ "${old_tree}" = "${head_tree}" ]; then
+            echo "FIXTURE INVALID: the worktree is clean — both trees would equal HEAD's and prove nothing" >&2
+            exit 1
+          fi
+          [ "${old_tree}" = "${new_tree}" ] \
+            || { echo "FAIL: trees diverge"; git -C "${REPO_DIR}" diff-tree -r --name-status "${old_tree}" "${new_tree}"; exit 1; }
+          echo "add_equivalence_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "add_equivalence_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
