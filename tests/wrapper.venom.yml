@@ -463,6 +463,27 @@ testcases:
           - result.systemout ShouldContainSubstring "CALL overlay.sh reject /"
           - result.systemout ShouldContainSubstring "/projects/foo"
 
+  # -- Checkpoint snapshot commands --
+
+  - name: Checkpoint verbs route to checkpoints.sh with the matching subcommand
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          "${TEST_DIR}/app/bin/riotbox" checkpoints
+          "${TEST_DIR}/app/bin/riotbox" checkpoint-tag 20260101-000000
+          "${TEST_DIR}/app/bin/riotbox" checkpoint-prune --keep 5
+          print_capture
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CALL checkpoints.sh list"
+          - result.systemout ShouldContainSubstring "CALL checkpoints.sh tag 20260101-000000"
+          - result.systemout ShouldContainSubstring "CALL checkpoints.sh prune --keep 5"
+
   # -- mounts command --
 
   - name: Mounts lists the auto-detected paths and the project/session group

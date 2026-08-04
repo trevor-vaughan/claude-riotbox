@@ -209,6 +209,9 @@ the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent na
 | `riotbox overlay-diff [project]`      | Show overlay changes vs host project                                                                                                        |
 | `riotbox overlay-accept [project]`    | Apply overlay changes to host project                                                                                                       |
 | `riotbox overlay-reject [project]`    | Discard overlay changes                                                                                                                     |
+| `riotbox checkpoints [dir...]`        | List the pre-session snapshots RiotBox holds for a project (read-only; defaults to the current directory) — see [Recovery](#recovery)       |
+| `riotbox checkpoint-tag <ts> [dir]`   | Promote snapshot `<ts>` to a real tag `riotbox-snapshot/<ts>` that ordinary git commands can see                                            |
+| `riotbox checkpoint-prune [dir...]`   | Delete snapshot refs; needs one selector: `--keep <N>`, `--older-than <N>d`, or `--legacy` (old `riotbox-checkpoint/*` tags)                |
 | `riotbox audit "<task>" [dir]`        | Read-only session for inspecting untrusted code (workspace mounted RO)                                                                      |
 | `riotbox install-hooks [global]`      | Install the pre-push hook that blocks container-identity commits ([details](#reclaiming-authorship))                                        |
 | `riotbox agents`                      | List registered agents (riotbox name + binary)                                                                                              |
@@ -992,27 +995,181 @@ The agent runs autonomously with full write access to your project directory and
 
 RiotBox includes several layers of protection, but none are foolproof:
 
-- **Local bare backup**: Before every `run`, all refs and tags are pushed to a bare clone at `~/.local/share/riotbox/backups/<project>.git`. This backup lives outside the container's mount tree — the agent cannot access or modify it. Even if the agent deletes every file and rewrites all history, the backup is intact.
-- **Checkpoint tags**: A git tag (`riotbox-checkpoint/<timestamp>`) is created on the current HEAD before each run. Tags survive history rewrites inside the container.
+- **Local bare backup**: Before every read-write session (`run`, `shell`, `resume`, and the `nested-`/`socket-` variants), every branch, tag and checkpoint snapshot is pushed to a bare clone under `~/.local/share/riotbox/backups/`. The store is named after the project's full path with each `/` turned into `-`, so `/home/you/work/my-project` is backed up to `home-you-work-my-project.git` and two projects that share a basename never share a store. It is cloned with `--no-hardlinks --dissociate`, so it shares no objects with the project, and it lives outside the container's mount tree — the agent cannot access or modify it. Even if the agent deletes every file and rewrites all history, the backup is intact.
+- **Checkpoint snapshots**: Before each session RiotBox writes a snapshot of the project — tracked, staged, unstaged and untracked files alike — to `refs/riotbox/checkpoints/<timestamp>`. It is built in a throwaway index and sealed with `git commit-tree`, so **nothing is committed to your branch, no tag is created, and your working tree, index and HEAD are left exactly as they were.** Because the ref lives outside `refs/heads` and `refs/tags`, it never appears in `git tag`, never affects `git describe`, and is never published by `git push --tags` (or `git push --all`). One place git does surface it: `--all` means every ref under `refs/`, so `git log --all`, `gitk --all` and any GUI defaulting to all refs show the snapshot *commits* — undecorated, with no ref name attached, because no branch or tag points at them. Nothing in git names the snapshots, which is what `riotbox checkpoints` is for. See [Recovery](#recovery).
 - **Session branches**: On `shell` sessions, the container offers to create a `riotbox/<id>` branch. The agent works there; on exit the branch is fast-forward merged back so the full commit history lands seamlessly on your branch. See [Session branches](#session-branches).
 - **Git repo bootstrapping**: If a project directory isn't a git repo, RiotBox offers to create one so the checkpoint mechanism has something to protect. Empty repos (no commits yet) are handled gracefully — see [Initializing a git repo](#initializing-a-git-repo).
-- **Managed `.git/info/exclude` block**: Before each checkpoint commit, RiotBox injects a managed block into the project's `.git/info/exclude` file that excludes common runtime artifacts — `.headroom/`, `.codegraph/`, `.claude/settings.local.json`, `CLAUDE.local.md`, `venom.log`, and `venom.*.log` — so they're never swept into history. This file is per-clone and never reaches collaborators (it lives in `.git/`, which is not tracked). You can add your own exclusion patterns anywhere outside the `>>> riotbox managed excludes <<<` markers; RiotBox only ever touches content between them.
+- **Managed `.git/info/exclude` block**: Before each snapshot, RiotBox injects a managed block into the project's `.git/info/exclude` file so three classes of file are never swept into a snapshot or pushed to the backup:
+  - **Runtime artifacts** — `.headroom/`, `.codegraph/`, `.claude/settings.local.json`, `CLAUDE.local.md`, `venom.log`, `venom.*.log`.
+  - **Dependency and build trees** — `node_modules/`, `.venv/`, `venv/`, `__pycache__/`, `target/`, `.next/`, `.nuxt/`, `vendor/`, `.gradle/`, `.m2/`, `Pods/`, `.terraform/`, `*.egg-info/`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`. These are reproducible from a lockfile and cost real time and disk: one unignored `node_modules` measured 3.4 s and an 83 MB backup on *every* launch, against 70 ms and 8 KB with it excluded. `dist/` and `build/` are deliberately **not** excluded — they are real source directories often enough that guessing would be worse.
+  - **Secrets** — `.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `.npmrc`, `.netrc`, `*.p12`, `*.pfx`. A snapshot is copied to the off-host backup, so a credential the project forgot to gitignore would otherwise be copied out of the project on every launch.
+
+  These patterns affect **untracked files only**. Anything you have already committed keeps being snapshotted with its edits — a tracked `vendor/lib/dep.go` or a deliberately committed `.env` template is captured exactly as before. Nothing in the list can drop committed work out of the safety net.
+
+  This file is per-clone and never reaches collaborators (it lives in `.git/`, which is not tracked). You can add your own exclusion patterns anywhere outside the `>>> riotbox managed excludes <<<` markers; RiotBox only ever touches content between them.
+- **Per-file size cap on untracked files**: An untracked file larger than **10 MB** is left out of the snapshot, because it would otherwise be hashed and copied into the backup on every launch. Tracked files are never capped — they are already in git, so re-snapshotting one costs nothing. Every skipped file is reported by name and size on stderr; that report is **not** silenced by `RIOTBOX_CHECKPOINT_QUIET`, because it names data that is deliberately left unprotected:
+
+  ```
+    WARNING: my-project: snapshot skipped 1 untracked file(s) over 10 MB:
+               fixtures/dump.iso        (1.4 GB)
+             These are NOT in the snapshot and NOT in the backup.
+             Add them to .gitignore, or `git add` them to include them.
+             Raise the limit with RIOTBOX_SNAPSHOT_MAX_MB.
+  ```
+
+  A skipped file **is not protected**: it stays on disk in the project the agent is handed read-write, and no copy of it exists in the checkpoint or the backup. Set `RIOTBOX_SNAPSHOT_MAX_MB` to change the threshold (for example `RIOTBOX_SNAPSHOT_MAX_MB=500`), or `git add` the file so it is tracked and therefore always captured.
 - **Git guardrails**: Inside the container, `receive.denyNonFastForwards` and `receive.denyDeletes` are enabled to prevent the most destructive git operations.
 - **Container isolation**: The agent can't access your SSH keys, cloud credentials, or anything outside the mounted directories.
 
 ### Recovery
 
-If the agent makes a mess, you have several recovery options:
+Every read-write session starts by snapshotting the whole project — tracked,
+staged, unstaged and untracked files — into
+`refs/riotbox/checkpoints/<timestamp>`, in the project repo and in the bare
+backup. Recovery is finding the right snapshot and putting it back. The
+commands below need **git 2.23 or newer** for `git restore`.
+
+**1. Find the snapshot.** No git command lists these refs by name, so ask
+RiotBox:
 
 ```sh
-# Fetch everything from the backup into your project
 cd /path/to/my-project
-git fetch ~/.local/share/riotbox/backups/my-project.git --all --tags
-git reset --hard riotbox-checkpoint/<timestamp>
-
-# Or clone a fresh copy from the backup
-git clone ~/.local/share/riotbox/backups/my-project.git my-project-restored
+riotbox checkpoints
 ```
+
+```
+Project: /path/to/my-project
+  Snapshots (in refs/riotbox/checkpoints — no branch, no tag, so git tag, git describe
+  and git push never show them; git log --all shows the commits, unnamed):
+    20260804-144825  2 files    refs/riotbox/checkpoints/20260804-144825
+  Restore one into the working tree (HEAD and your branches do not move):
+    git -C /path/to/my-project restore --source=<ref> -- .
+  See what it would change first (git diff never looks at untracked files,
+  so a file the snapshot captured that is untracked today shows as a deletion):
+    git -C /path/to/my-project diff <ref>
+```
+
+The middle column says how much each snapshot holds, and it is decided from the
+snapshot itself, so it does not change meaning as you keep committing:
+
+- `clean` — the tree was clean, so the ref points straight at the commit HEAD
+  was on. Nothing uncommitted was captured, because there was nothing to
+  capture.
+- `initial` — the snapshot has no parent: it was taken on a repo with no
+  commits yet, so it holds uncommitted work and nothing else.
+- `N files` — the number of paths that differ between the snapshot and the
+  commit it was taken on: how much uncommitted work it is holding.
+
+The paths it names are always the worktree top level, even when you run
+`riotbox checkpoints` from a subdirectory — `restore ... -- .` is relative to
+the directory `git -C` puts it in, so a hint naming a subdirectory would
+quietly restore only that subtree.
+
+**2. See what the snapshot would change.**
+
+```sh
+git diff refs/riotbox/checkpoints/20260804-144825
+```
+
+This diffs the snapshot against your current working tree. One thing to know:
+`git diff` never looks at untracked files, so a file that the snapshot captured
+and that is untracked in your tree today shows up as a deletion even when it is
+sitting on disk.
+
+**3. Put the files back** — the non-destructive option:
+
+```sh
+git restore --source=refs/riotbox/checkpoints/20260804-144825 -- .
+```
+
+This overwrites your working-tree files with the snapshot's and recreates the
+ones that are missing, including files that were only ever untracked. It does
+**not** move HEAD or any branch, does not touch the index, and does not delete
+files created after the snapshot — so anything the agent added is still there
+for you to review and remove.
+
+**4. Or reset the branch to the snapshot** — the destructive option:
+
+```sh
+git reset --hard refs/riotbox/checkpoints/20260804-144825
+```
+
+This throws away everything since and makes the snapshot commit your branch
+tip, so its whole tree becomes committed history — including files that were
+merely untracked when the snapshot was taken. Prefer step 3 unless you want the
+branch moved.
+
+**If the repository itself is gone**, restore from the bare backup. Snapshot
+refs live outside `refs/heads` and `refs/tags`, so they need an explicit
+refspec: a plain `git clone`, a default `git fetch`, and `git fetch --tags` all
+bring back branches and tags and **zero** snapshots.
+
+```sh
+# Find your store — it is the project's full path with '/' turned into '-'.
+# /home/you/work/my-project → home-you-work-my-project.git
+ls ~/.local/share/riotbox/backups/
+
+# Into the existing project:
+git fetch ~/.local/share/riotbox/backups/home-you-work-my-project.git \
+    'refs/riotbox/checkpoints/*:refs/riotbox/checkpoints/*'
+
+# Or into a fresh clone — the clone brings the branches, the fetch brings the snapshots:
+git clone ~/.local/share/riotbox/backups/home-you-work-my-project.git my-project-restored
+cd my-project-restored
+git fetch ~/.local/share/riotbox/backups/home-you-work-my-project.git \
+    'refs/riotbox/checkpoints/*:refs/riotbox/checkpoints/*'
+```
+
+Then go back to step 1 — `riotbox checkpoints` now lists the recovered
+snapshots.
+
+**Keeping one around.** `riotbox checkpoint-tag <timestamp>` promotes a
+snapshot to a real tag, `riotbox-snapshot/<timestamp>`, when you want ordinary
+git commands to see it. That tag *is* a real tag: until you delete it, it
+appears in `git tag`, it changes what `git describe --tags` reports, and
+`git push --tags` publishes it. `riotbox checkpoint-prune` deletes snapshots
+when you no longer want them; it needs an explicit selector (`--keep <N>`,
+`--older-than <N>d`, or `--legacy`), it never writes to the backup store, and
+it marks any ref the store has no copy of before asking you to confirm.
+
+### Upgrading from checkpoint tags
+
+Earlier versions of RiotBox committed uncommitted work to your branch and
+tagged it `riotbox-checkpoint/<timestamp>`. If you used one of those versions:
+
+- **`riotbox build` is required.** `container/session-branch.sh` is baked into
+  the image and sourced by the entrypoint, so upgrading the package alone
+  leaves the old copy running inside the container.
+- **Old `riotbox-checkpoint/*` tags are inert but not harmless.** Nothing
+  creates or reads them any more, and they still change what
+  `git describe --tags` reports. `riotbox checkpoints` lists them separately;
+  `riotbox checkpoint-prune --legacy` removes them all.
+- **Old `checkpoint:` commits in your history are left alone.** They are
+  ordinary commits on your branch and RiotBox never rewrites your history;
+  removing them is yours to do, or not.
+- **Backups made before this change were cloned with hardlinks**, so they share
+  object files with the project the agent is handed read-write and are not
+  actually isolated from it. RiotBox does not re-clone a store that already
+  exists, so force a fresh one:
+
+  ```sh
+  # 1. Pull any snapshots that exist only in the old store back into the project
+  git -C /path/to/my-project fetch ~/.local/share/riotbox/backups/home-you-work-my-project.git \
+      'refs/riotbox/checkpoints/*:refs/riotbox/checkpoints/*'
+  # 2. Move the old store aside (do not delete it until step 4 checks out)
+  mv ~/.local/share/riotbox/backups/home-you-work-my-project.git \
+     ~/.local/share/riotbox/backups/home-you-work-my-project.git.hardlinked
+  # 3. Relaunch — the next checkpoint clones a fresh, fully isolated backup
+  riotbox shell /path/to/my-project
+  # 4. Confirm the new store has your branches and snapshots, then remove the old one
+  git -C ~/.local/share/riotbox/backups/home-you-work-my-project.git for-each-ref
+  ```
+
+- **Backup stores have moved** from `<basename>.git` to the path-derived name
+  above. When RiotBox can prove an old basename store belongs to the project it
+  is backing up — the store's recorded origin URL is that project — it renames
+  it in place and says so. When it cannot, it leaves it alone: on a basename
+  collision that store is some other project's history.
 
 ### Session branches
 
@@ -1032,6 +1189,8 @@ If you say yes, the agent works on `riotbox/<id>` instead of your current branch
 ```
 
 **If the fast-forward fails** (the base branch has diverged since the session started): the session branch is preserved and a recovery hint is printed. No data is lost.
+
+**If the working tree still has uncommitted edits** that checking out the base branch would overwrite: the switch back is refused, so the merge is skipped and the session branch stays checked out. The container says so and prints the resolution (`git stash`, switch, `git merge --ff-only`, `git stash pop`). This one is sticky — until you resolve it, later sessions just continue on that branch, because setup sees it is already a session branch and neither creates nor merges a new one. Untracked scratch files and edits to files that are identical on both branches do not trigger this; git only refuses when the checkout would destroy work.
 
 **If the container is hard-killed** (SIGKILL, OOM): teardown doesn't run, but the session branch persists on disk and can be merged manually:
 
@@ -1059,7 +1218,7 @@ Session branching is automatically disabled for `riotbox run` (non-interactive) 
 
 Checkpoint protection needs a git repo. RiotBox handles the two "missing repo" cases so a session never errors out:
 
-- **Empty repo (no commits yet):** Starting in a freshly `git init`'d directory is fine. There's nothing to back up until the first commit, so the checkpoint step prints `empty git repo (no commits yet) — nothing to checkpoint` and the session continues. (If the directory has uncommitted files, the checkpoint commits them and tags that first commit as usual.)
+- **Empty repo (no commits yet):** Starting in a freshly `git init`'d directory is fine. A repo with no commits *and* no files has nothing to capture, so the checkpoint step prints `empty git repo (no commits yet) — nothing to checkpoint` and the session continues. If the directory does have files in it, they are snapshotted as a parentless commit in `refs/riotbox/checkpoints/<timestamp>` — still nothing committed to a branch and no tag created, so the repo has no commits and no branch when the session starts, exactly as you left it.
 
 - **Not a git repo:** In an interactive session (`shell`, `resume`), RiotBox asks before creating one:
 
@@ -1068,7 +1227,7 @@ Checkpoint protection needs a git repo. RiotBox handles the two "missing repo" c
     Create one so your work can be checkpointed? [Y/n]
   ```
 
-  Answer yes (the default) and the directory is initialized, any existing files are committed, and a checkpoint tag is created. Answer no and the session continues without checkpoint protection (you'll see the no-protection warning).
+  Answer yes (the default) and the directory is initialized and immediately snapshotted to `refs/riotbox/checkpoints/<timestamp>`; nothing is committed to a branch and no tag is created. Answer no and the session continues without checkpoint protection (you'll see the no-protection warning).
 
 **Controlling repo creation** via environment variable:
 
@@ -1089,7 +1248,7 @@ Non-interactive callers (`riotbox run`, CI, scripts) never block on the prompt: 
 
 - **Always use git repos.** The checkpoint and backup mechanisms are your primary safety net.
 - **Push to a remote before running the agent.** Belt and suspenders.
-- **Review changes before merging.** Use `git diff riotbox-checkpoint/<tag>..HEAD` to see everything the agent did.
+- **Review changes before merging.** Run `riotbox checkpoints` for the pre-session snapshot, then `git diff refs/riotbox/checkpoints/<timestamp>` to see everything the agent did — committed and uncommitted alike.
 - **Use branches.** Run the agent on a feature branch, not main. Session branching automates this.
 
 ## Security model

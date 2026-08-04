@@ -7,26 +7,6 @@ vars:
 testcases:
   # -- Checkpoint creation --
 
-  - name: Checkpoint commits dirty tracked files
-    steps:
-      - type: exec
-        script: |
-          source "{{.helpers}}"
-          init_test_repo
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          human_commit "initial"
-          echo "dirty work" >> dirty.txt
-          # Simulate checkpoint logic
-          git add -A
-          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
-              commit -m "checkpoint: pre-riotbox-test" >/dev/null
-          git log --format='%s' | grep -q "^checkpoint: pre-riotbox-"
-          git show HEAD -- dirty.txt | grep -q "dirty work"
-          echo "checkpoint_created=true"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "checkpoint_created=true"
-
   - name: Checkpoint does NOT create empty commit when repo is clean
     steps:
       - type: exec
@@ -36,37 +16,28 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
           head_before="$(git rev-parse HEAD)"
-          # Simulate new checkpoint logic — only commit if dirty
-          if ! git diff --quiet || ! git diff --cached --quiet || \
-             [ -n "$(git ls-files --others --exclude-standard)" ]; then
-              git add -A
-              git commit -m "checkpoint: pre-riotbox-test" >/dev/null
-          fi
+          count_before="$(git rev-list --count HEAD)"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
           head_after="$(git rev-parse HEAD)"
           echo "before=${head_before} after=${head_after}"
           [ "${head_before}" = "${head_after}" ]
+          [ "${count_before}" = "$(git rev-list --count HEAD)" ]
+          # The clean-tree contract: the snapshot ref points AT HEAD, so no new
+          # commit object was created anywhere — not on the branch, not off it.
+          ref="$(git for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          echo "ref=${ref}"
+          [ -n "${ref}" ]
+          [ "$(git rev-parse "${ref}")" = "${head_before}" ]
+          echo "clean_no_commit=true"
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "clean_no_commit=true"
 
-  - name: Checkpoint stages and includes untracked files
-    steps:
-      - type: exec
-        script: |
-          source "{{.helpers}}"
-          init_test_repo
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          human_commit "initial"
-          echo "brand new file" > newfile.txt
-          git add -A
-          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
-              commit -m "checkpoint: pre-riotbox-test" >/dev/null
-          git show HEAD -- newfile.txt | grep -q "brand new file"
-          echo "untracked_staged=true"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "untracked_staged=true"
-
-  - name: Checkpoint commit is authored by the human identity
+  # The snapshot is attributable to the user, not to the container: it is the
+  # user's own pre-session state and the object never leaves their machine.
+  - name: Checkpoint snapshot is authored by the human identity
     steps:
       - type: exec
         script: |
@@ -75,35 +46,27 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           human_commit "initial"
           echo "dirty" >> dirty.txt
-          git add -A
-          git -c "user.name=${HUMAN_NAME}" -c "user.email=${HUMAN_EMAIL}" \
-              commit -m "checkpoint: pre-riotbox-test" >/dev/null
-          author="$(git log --grep='checkpoint: pre-riotbox' -1 --format='%ae')"
-          echo "author=${author}"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          ref="$(git for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          # The tree is dirty, so commit-tree really did seal a NEW object —
+          # otherwise this would be reading HEAD's identity, not the snapshot's.
+          [ "$(git rev-parse "${ref}")" != "$(git rev-parse HEAD)" ]
+          author="$(git log -1 --format='%ae' "${ref}")"
+          committer="$(git log -1 --format='%ce' "${ref}")"
+          echo "author=${author} committer=${committer}"
           [ "${author}" = "${HUMAN_EMAIL}" ]
+          [ "${committer}" = "${HUMAN_EMAIL}" ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "author=human@example.com"
+          - result.systemout ShouldContainSubstring "author=human@example.com committer=human@example.com"
 
-  - name: Checkpoint creates tag pointing to HEAD
-    steps:
-      - type: exec
-        script: |
-          source "{{.helpers}}"
-          init_test_repo
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          human_commit "initial"
-          ts="$(date +%Y%m%d-%H%M%S)-1"
-          CHECKPOINT_TAG="riotbox-checkpoint/${ts}"
-          git tag "${CHECKPOINT_TAG}"
-          tag_ref="$(git rev-parse "${CHECKPOINT_TAG}")"
-          head_ref="$(git rev-parse HEAD)"
-          echo "tag_matches_head=$( [ "${tag_ref}" = "${head_ref}" ] && echo true || echo false )"
-          [ "${tag_ref}" = "${head_ref}" ]
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "tag_matches_head=true"
-
+  # The backup push names three refspecs. Only refs/riotbox/checkpoints/* is
+  # load-bearing for the safety net, and it is the one that does NOT travel by
+  # default — so a regression to --all/--tags would back up the branches and
+  # silently store no snapshot at all.
   - name: Checkpoint pushes to a bare backup repo
     steps:
       - type: exec
@@ -111,19 +74,28 @@ testcases:
           source "{{.helpers}}"
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          BACKUP_BASE="${TEST_DIR}/backups"
-          mkdir -p "${BACKUP_BASE}"
           human_commit "initial"
-          ts="$(date +%Y%m%d-%H%M%S)-1"
-          CHECKPOINT_TAG="riotbox-checkpoint/${ts}"
-          git tag "${CHECKPOINT_TAG}"
-          backup_dir="${BACKUP_BASE}/project.git"
-          git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
-          test -d "${backup_dir}"
-          git -C "${backup_dir}" tag -l 'riotbox-checkpoint/*' | grep -q 'riotbox-checkpoint/'
+          git tag v1.0.0
+          echo "dirty" >> dirty.txt
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          # The store is keyed on the canonical project PATH, not the basename.
+          backup="$(backup_path "${REPO_DIR}")"
+          echo "backup=${backup}"
+          test -d "${backup}"
+          snap_count="$(git -C "${backup}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | wc -l | tr -d ' ')"
+          echo "backup_snapshots=${snap_count}"
+          [ "${snap_count}" -eq 1 ]
+          ref="$(git for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ "$(git -C "${backup}" rev-parse "${ref}")" = "$(git rev-parse "${ref}")" ]
+          # ...and the head and tag refspecs landed too.
+          [ "$(git -C "${backup}" rev-parse refs/heads/main)" = "$(git rev-parse refs/heads/main)" ]
+          [ "$(git -C "${backup}" rev-parse refs/tags/v1.0.0)" = "$(git rev-parse refs/tags/v1.0.0)" ]
           echo "backup_created=true"
         assertions:
           - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "backup_snapshots=1"
           - result.systemout ShouldContainSubstring "backup_created=true"
 
   - name: Second checkpoint pushes to existing backup repo
@@ -133,65 +105,29 @@ testcases:
           source "{{.helpers}}"
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          BACKUP_BASE="${TEST_DIR}/backups"
-          mkdir -p "${BACKUP_BASE}"
-          backup_dir="${BACKUP_BASE}/project.git"
-
           human_commit "initial"
-          # First checkpoint
-          ts1="$(date +%Y%m%d-%H%M%S)-1"
-          git tag "riotbox-checkpoint/${ts1}"
-          git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
-
+          echo "wip1" >> dirty.txt
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          backup="$(backup_path "${REPO_DIR}")"
+          [ "$(git -C "${backup}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | wc -l)" -eq 1 ]
+          # The snapshot ref carries a one-second timestamp, so a second run
+          # inside the same second would collide instead of accumulating.
+          sleep 1
           human_commit "more human work"
-          # Second checkpoint
-          ts2="$(date +%Y%m%d-%H%M%S)-2"
-          git tag "riotbox-checkpoint/${ts2}"
-          git push --no-verify --force "${backup_dir}" --all >/dev/null 2>&1
-          git push --no-verify --force "${backup_dir}" --tags >/dev/null 2>&1
-
-          tag_count="$(git -C "${backup_dir}" tag -l 'riotbox-checkpoint/*' | wc -l | tr -d ' ')"
-          echo "tag_count=${tag_count}"
-          [ "${tag_count}" -eq 2 ]
+          echo "wip2" >> dirty.txt
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          snap_count="$(git -C "${backup}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | wc -l | tr -d ' ')"
+          echo "backup_snapshots=${snap_count}"
+          [ "${snap_count}" -eq 2 ]
+          # The second run also carried the branch that moved between them.
+          [ "$(git -C "${backup}" rev-parse refs/heads/main)" = "$(git rev-parse refs/heads/main)" ]
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "tag_count=2"
-
-  - name: Checkpoint commit and tag are unsigned even when signing is enabled
-    steps:
-      - type: exec
-        script: |
-          source "{{.helpers}}"
-          init_test_repo
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          human_commit "initial"
-          # Force GPG signing on with a signing program that always fails.
-          # The container has no signing key, so without per-command signing
-          # overrides checkpoint.sh would abort here instead of committing.
-          git config commit.gpgsign true
-          git config tag.gpgsign true
-          git config user.signingkey BOGUSKEYID
-          git config gpg.program /bin/false
-          # Make the repo dirty so the checkpoint commit path runs.
-          echo "uncommitted" >> dirty.txt
-          ROOT_DIR="{{.riotbox_dir}}" \
-          RIOTBOX_PROJECTS="${REPO_DIR}" \
-          RIOTBOX_DATA_DIR="${TEST_DIR}/data" \
-              "{{.riotbox_dir}}/libexec/checkpoint.sh"
-          # The checkpoint commit must exist and be unsigned (%G? = N).
-          sig="$(git log --grep='checkpoint: pre-riotbox-' -1 --format='%G?')"
-          echo "commit_sig=${sig}"
-          [ "${sig}" = "N" ]
-          # The tag must be lightweight: it resolves directly to a commit
-          # object, not a signed/annotated tag object.
-          tag="$(git tag -l 'riotbox-checkpoint/*' | head -1)"
-          echo "tag=${tag} type=$(git cat-file -t "${tag}")"
-          [ "$(git cat-file -t "${tag}")" = "commit" ]
-          echo "unsigned_checkpoint_ok=true"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "commit_sig=N"
-          - result.systemout ShouldContainSubstring "unsigned_checkpoint_ok=true"
+          - result.systemout ShouldContainSubstring "backup_snapshots=2"
 
   # -- Full workflow: checkpoint -> LLM commits -> reown --
 
@@ -327,25 +263,43 @@ testcases:
           source "{{.helpers}}"
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          BACKUP_BASE="${TEST_DIR}/backups"
-          mkdir -p "${BACKUP_BASE}"
           human_commit "precious work"
-          ts="$(date +%Y%m%d-%H%M%S)-1"
-          CHECKPOINT_TAG="riotbox-checkpoint/${ts}"
-          git tag "${CHECKPOINT_TAG}"
-          backup_dir="${BACKUP_BASE}/project.git"
-          git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
+          echo "unsaved work" >> dirty.txt
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          backup="$(backup_path "${REPO_DIR}")"
+          ref="$(git for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          snapshot="$(git rev-parse "${ref}")"
 
+          # The agent rewrites history and deletes the local snapshot ref — the
+          # snapshot lives in the project it is handed read-write, so this is
+          # exactly what the off-mount copy exists to survive.
           llm_commit "llm work"
-          # Simulate llm wiping history
-          git reset --hard HEAD~1
-          # Verify backup still has the checkpoint tag
-          git -C "${backup_dir}" tag -l "${CHECKPOINT_TAG}" | grep -q "${CHECKPOINT_TAG}"
+          git reset --hard HEAD~1 >/dev/null
+          git update-ref -d "${ref}"
+          git reflog expire --expire=now --all
+          git gc --prune=now --quiet
+          # Prove the destruction took, or "the backup still has it" is empty.
+          if git cat-file -e "${snapshot}" 2>/dev/null; then
+            echo "FIXTURE INVALID: the snapshot object survived locally — nothing was actually destroyed" >&2
+            exit 1
+          fi
+
+          # The pristine copy is intact, content and history alike.
+          [ "$(git -C "${backup}" rev-parse "${ref}")" = "${snapshot}" ]
+          git -C "${backup}" show "${ref}:dirty.txt" | grep -q "unsaved work"
+          git -C "${backup}" log --format='%s' "${ref}" | grep -q "precious work"
           echo "backup_survived=true"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "backup_survived=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
 
+  # The end-to-end recovery proof, following the flow `riotbox checkpoints`
+  # prints: fetch with an EXPLICIT refspec (refs/riotbox/* travels with neither
+  # a default fetch nor a clone), then `git restore --source=<ref> -- .`.
   - name: Project is recoverable from backup after history destruction
     steps:
       - type: exec
@@ -353,28 +307,57 @@ testcases:
           source "{{.helpers}}"
           init_test_repo
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          BACKUP_BASE="${TEST_DIR}/backups"
-          mkdir -p "${BACKUP_BASE}"
           human_commit "precious work"
-          ts="$(date +%Y%m%d-%H%M%S)-1"
-          CHECKPOINT_TAG="riotbox-checkpoint/${ts}"
-          git tag "${CHECKPOINT_TAG}"
-          backup_dir="${BACKUP_BASE}/project.git"
-          git clone --bare "${REPO_DIR}" "${backup_dir}" >/dev/null 2>&1
+          echo "precious uncommitted work" > precious.txt
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1
+          backup="$(backup_path "${REPO_DIR}")"
+          ref="$(git for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          snapshot="$(git rev-parse "${ref}")"
 
+          # Total destruction of everything inside the mount: the branch, the
+          # snapshot ref, the reflogs, the objects and the working tree.
           llm_commit "llm work"
-          original_head="$(git rev-parse "${CHECKPOINT_TAG}")"
-          # Simulate llm wiping everything
-          git reset --hard HEAD~1
-          # Recover via backup
-          git fetch "${backup_dir}" "refs/tags/${CHECKPOINT_TAG}:refs/tags/${CHECKPOINT_TAG}" >/dev/null 2>&1
-          git reset --hard "${CHECKPOINT_TAG}"
-          git log --format='%s' | grep -q "precious work"
-          [ "$(git rev-parse HEAD)" = "${original_head}" ]
+          git checkout -q --orphan wiped
+          git rm -q -rf . >/dev/null
+          git update-ref -d refs/heads/main
+          git update-ref -d "${ref}"
+          git reflog expire --expire=now --all
+          git gc --prune=now --quiet
+          if [ -e precious.txt ] || [ -e history.txt ]; then
+            echo "FIXTURE INVALID: the working tree survived the destruction" >&2
+            exit 1
+          fi
+          if git cat-file -e "${snapshot}" 2>/dev/null; then
+            echo "FIXTURE INVALID: the snapshot object survived locally — the backup would not be what recovers it" >&2
+            exit 1
+          fi
+
+          # A DEFAULT fetch does not bring snapshot refs across. That is why the
+          # documented recovery names the refspec, and why asserting it here
+          # keeps the next step from passing for the wrong reason.
+          git fetch "${backup}" >/dev/null 2>&1
+          if git cat-file -e "${snapshot}" 2>/dev/null; then
+            echo "FIXTURE INVALID: a default fetch already restored the snapshot — the explicit refspec proves nothing" >&2
+            exit 1
+          fi
+
+          # The documented recovery flow.
+          git fetch "${backup}" 'refs/riotbox/checkpoints/*:refs/riotbox/checkpoints/*'
+          [ "$(git rev-parse "${ref}")" = "${snapshot}" ]
+          git restore --source="${ref}" -- .
+
+          # Both halves are back: the uncommitted file and the committed history.
+          grep -q "precious uncommitted work" precious.txt
+          grep -q "precious work" history.txt
+          git log --format='%s' "${ref}" | grep -q "precious work"
           echo "recovered=true"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "recovered=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
 
   - name: Reown backup tag allows restore to pre-reown state
     steps:

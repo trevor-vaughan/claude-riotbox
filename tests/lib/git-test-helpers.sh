@@ -185,3 +185,142 @@ count_by_author() {
 	shift
 	git log "$@" --author="${email}" --format='%H' | wc -l | tr -d ' '
 }
+
+# Repo left mid-merge with a conflict. Layers on init_test_repo, so the
+# isolated signing-disabled profile is active.
+# Sets: TEST_DIR, REPO_DIR, BARE_DIR (from init_test_repo)
+init_test_repo_mid_merge() {
+	init_test_repo
+	printf 'line1\n' >"${REPO_DIR}/f.txt"
+	git -C "${REPO_DIR}" add f.txt
+	git -C "${REPO_DIR}" commit -qm initial
+	git -C "${REPO_DIR}" checkout -qb feature
+	printf 'feature\n' >"${REPO_DIR}/f.txt"
+	git -C "${REPO_DIR}" commit -qam feature
+	git -C "${REPO_DIR}" checkout -q main
+	printf 'mainline\n' >"${REPO_DIR}/f.txt"
+	git -C "${REPO_DIR}" commit -qam mainline
+	git -C "${REPO_DIR}" merge feature >/dev/null 2>&1 || true
+
+	# The merge is expected to conflict; if it did not (e.g. a future git
+	# version or config change resolves it cleanly), fail loudly rather than
+	# silently handing back a quiescent repo under a "mid-merge" name.
+	git -C "${REPO_DIR}" rev-parse -q --verify MERGE_HEAD >/dev/null || {
+		echo "init_test_repo_mid_merge: expected merge conflict did not occur" >&2
+		return 1
+	}
+}
+
+# Repo left mid-rebase with a conflict (detached HEAD, .git/rebase-merge present).
+# Sets: TEST_DIR, REPO_DIR, BARE_DIR (from init_test_repo)
+init_test_repo_mid_rebase() {
+	init_test_repo
+	printf 'a\n' >"${REPO_DIR}/f.txt"
+	git -C "${REPO_DIR}" add f.txt
+	git -C "${REPO_DIR}" commit -qm initial
+	git -C "${REPO_DIR}" checkout -qb topic
+	printf 'topic\n' >"${REPO_DIR}/f.txt"
+	git -C "${REPO_DIR}" commit -qam topic
+	git -C "${REPO_DIR}" checkout -q main
+	printf 'main\n' >"${REPO_DIR}/f.txt"
+	git -C "${REPO_DIR}" commit -qam main
+	git -C "${REPO_DIR}" checkout -q topic
+	git -C "${REPO_DIR}" rebase main >/dev/null 2>&1 || true
+
+	# The rebase is expected to conflict; if it did not, fail loudly rather
+	# than silently handing back a quiescent repo under a "mid-rebase" name.
+	# rev-parse --git-path may return a path relative to REPO_DIR or an
+	# absolute path; canonicalise the same way ensure_managed_excludes does
+	# in checkpoint.sh.
+	local raw_path rebase_state_dir
+	raw_path="$(git -C "${REPO_DIR}" rev-parse --git-path rebase-merge)"
+	if [[ "${raw_path}" = /* ]]; then
+		rebase_state_dir="${raw_path}"
+	else
+		rebase_state_dir="${REPO_DIR}/${raw_path}"
+	fi
+	test -d "${rebase_state_dir}" || {
+		echo "init_test_repo_mid_rebase: expected rebase conflict did not occur" >&2
+		return 1
+	}
+}
+
+# init_test_repo_with_hook <hook-name> <exit-code>
+# Repo with one commit and a hook that exits as directed.
+# Sets: TEST_DIR, REPO_DIR, BARE_DIR (from init_test_repo)
+init_test_repo_with_hook() {
+	local hook="${1}" code="${2}"
+	init_test_repo
+	printf 'base\n' >"${REPO_DIR}/f.txt"
+	git -C "${REPO_DIR}" add f.txt
+	git -C "${REPO_DIR}" commit -qm initial
+
+	# rev-parse --git-path may return a path relative to REPO_DIR or an
+	# absolute path (e.g. worktrees); canonicalise the same way
+	# ensure_managed_excludes does in checkpoint.sh.
+	local raw_path hook_path
+	raw_path="$(git -C "${REPO_DIR}" rev-parse --git-path "hooks/${hook}")"
+	if [[ "${raw_path}" = /* ]]; then
+		hook_path="${raw_path}"
+	else
+		hook_path="${REPO_DIR}/${raw_path}"
+	fi
+	mkdir -p "$(dirname "${hook_path}")"
+	cat >"${hook_path}" <<HOOK
+#!/usr/bin/env bash
+echo "${hook} hook refusing" >&2
+exit ${code}
+HOOK
+	chmod +x "${hook_path}"
+}
+
+# backup_path <project-dir>
+# Echo the bare backup store checkpoint.sh will use for a project:
+#   ${XDG_DATA_HOME}/riotbox/backups/<canonical-path-with-slashes-mangled>.git
+# Mirrors _backup_project's derivation in libexec/checkpoint.sh character for
+# character. The key is the CANONICAL PROJECT PATH, not the basename, so
+# ~/work/a/web and ~/work/b/web cannot share (and clobber) one store — a test
+# that re-derives this by hand and drifts goes vacuous rather than red.
+# Requires XDG_DATA_HOME, which setup_git_test_profile exports.
+# Usage: backup="$(backup_path "${REPO_DIR}")"
+backup_path() {
+	local project="${1}"
+	local canonical key
+	canonical="$(cd "${project}" && pwd -P)"
+	# shellcheck disable=SC2312  # printf into sed cannot fail for a non-empty path
+	key="$(printf '%s\n' "${canonical}" | sed 's|/|-|g; s|^-||')"
+	printf '%s/riotbox/backups/%s.git\n' "${XDG_DATA_HOME}" "${key}"
+}
+
+# occupy_legacy_backup_path <project-dir>
+# Occupy the LEGACY, basename-keyed backup path with a plain (non-repo)
+# directory containing a `placeholder` file:
+#   ${XDG_DATA_HOME}/riotbox/backups/<basename>.git
+# checkpoint.sh no longer backs up there — it keys the store on the canonical
+# project path (see backup_path) and only probes the legacy path to decide
+# whether a pre-existing store should be migrated. So this does NOT break the
+# backup: it fixtures the "legacy path exists but is not a repo" case, where the
+# migration probe must refuse and the real backup must still succeed.
+# Echoes the path it occupied.
+occupy_legacy_backup_path() {
+	local project="${1}"
+	local base
+	base="$(basename "${project}")"
+	local path="${XDG_DATA_HOME}/riotbox/backups/${base}.git"
+	mkdir -p "${path}"
+	printf 'not a git repo\n' >"${path}/placeholder"
+	printf '%s\n' "${path}"
+}
+
+# Repo with one staged file, one unstaged edit, and one untracked file.
+# Sets: TEST_DIR, REPO_DIR, BARE_DIR (from init_test_repo)
+init_test_repo_staged_and_unstaged() {
+	init_test_repo
+	printf 'orig\n' >"${REPO_DIR}/tracked.txt"
+	git -C "${REPO_DIR}" add tracked.txt
+	git -C "${REPO_DIR}" commit -qm initial
+	printf 'staged\n' >>"${REPO_DIR}/tracked.txt"
+	git -C "${REPO_DIR}" add tracked.txt
+	printf 'unstaged\n' >>"${REPO_DIR}/tracked.txt"
+	printf 'new\n' >"${REPO_DIR}/untracked.txt"
+}

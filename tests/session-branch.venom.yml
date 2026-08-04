@@ -1,0 +1,365 @@
+name: Session branch setup and teardown
+# container/session-branch.sh runs inside the container against /workspace.
+# Every git call goes through ${_SB_WORKSPACE}, which defaults to /workspace
+# and is overridden here so the real functions run against a temp repo. Each
+# case drives session_branch_setup for real — nothing sets _SB_BRANCH_NAME or
+# _SB_BASE_BRANCH by hand — so the state teardown consumes is the state setup
+# actually produced.
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  helpers: "{{.root}}/tests/lib/git-test-helpers.sh"
+
+testcases:
+  - name: Teardown fast-forwards the session commits onto the base branch
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          printf 'base\n' >"${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          base_sha="$(git -C "${REPO_DIR}" rev-parse main)"
+
+          _SB_WORKSPACE="${REPO_DIR}"
+          source "{{.riotbox_dir}}/container/session-branch.sh"
+          SESSION_BRANCH=1 SESSION_ID=20260101-000000 \
+            session_branch_setup >"${TEST_DIR}/setup.out" 2>&1
+          cat "${TEST_DIR}/setup.out"
+
+          # Prove setup really created and checked out the session branch. If it
+          # bailed out (wrong workspace, guard hit), teardown would no-op and
+          # this case would pass having exercised nothing.
+          if [ "$(git -C "${REPO_DIR}" symbolic-ref --short HEAD)" != "riotbox/20260101-000000" ]; then
+            echo "FIXTURE INVALID: setup did not check out riotbox/20260101-000000" >&2
+            exit 1
+          fi
+          printf 'session work\n' >>"${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" commit -qam "session commit"
+          if [ "$(git -C "${REPO_DIR}" rev-list --count main..riotbox/20260101-000000)" != "1" ]; then
+            echo "FIXTURE INVALID: no commit to fast-forward" >&2
+            exit 1
+          fi
+
+          session_branch_teardown >"${TEST_DIR}/td.out" 2>&1 && rc=0 || rc=$?
+          cat "${TEST_DIR}/td.out"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # Base advanced to the session commit, session branch gone, HEAD back
+          # on the base branch.
+          [ "$(git -C "${REPO_DIR}" symbolic-ref --short HEAD)" = "main" ]
+          [ "$(git -C "${REPO_DIR}" rev-parse main)" != "${base_sha}" ]
+          [ "$(git -C "${REPO_DIR}" log -1 --format='%s' main)" = "session commit" ]
+          [ -z "$(git -C "${REPO_DIR}" branch --list 'riotbox/*')" ]
+          echo "clean_ff_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "clean_ff_ok=true"
+          - result.systemout ShouldContainSubstring "Fast-forward complete"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # git only refuses the checkout when uncommitted changes would be
+  # OVERWRITTEN. A gate that refused to merge whenever the tree was dirty would
+  # strand the session branch here for no reason, so pin that it does not.
+  - name: Teardown fast-forwards with untracked scratch files in the tree
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          printf 'base\n' >"${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+
+          _SB_WORKSPACE="${REPO_DIR}"
+          source "{{.riotbox_dir}}/container/session-branch.sh"
+          SESSION_BRANCH=1 SESSION_ID=20260101-000000 \
+            session_branch_setup >"${TEST_DIR}/setup.out" 2>&1
+          cat "${TEST_DIR}/setup.out"
+          if [ "$(git -C "${REPO_DIR}" symbolic-ref --short HEAD)" != "riotbox/20260101-000000" ]; then
+            echo "FIXTURE INVALID: setup did not check out riotbox/20260101-000000" >&2
+            exit 1
+          fi
+          printf 'session work\n' >>"${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" commit -qam "session commit"
+
+          # The dirt: untracked only. Prove both halves — that something is
+          # there, and that it is invisible to a tracked-files status — so this
+          # case cannot pass against an accidentally pristine tree.
+          printf 'scratch\n' >"${REPO_DIR}/notes.txt"
+          mkdir -p "${REPO_DIR}/scratchdir"
+          printf 'more\n' >"${REPO_DIR}/scratchdir/tmp.log"
+          if ! git -C "${REPO_DIR}" status --porcelain | grep -q '^??'; then
+            echo "FIXTURE INVALID: no untracked files in the working tree" >&2
+            exit 1
+          fi
+          if [ -n "$(git -C "${REPO_DIR}" status --porcelain --untracked-files=no)" ]; then
+            echo "FIXTURE INVALID: tracked files are dirty too — not an untracked-only fixture" >&2
+            exit 1
+          fi
+
+          session_branch_teardown >"${TEST_DIR}/td.out" 2>&1 && rc=0 || rc=$?
+          cat "${TEST_DIR}/td.out"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ "$(git -C "${REPO_DIR}" symbolic-ref --short HEAD)" = "main" ]
+          [ "$(git -C "${REPO_DIR}" log -1 --format='%s' main)" = "session commit" ]
+          # The scratch files are the user's; the merge must not have eaten them.
+          [ -f "${REPO_DIR}/notes.txt" ]
+          [ -f "${REPO_DIR}/scratchdir/tmp.log" ]
+          echo "untracked_dirt_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "untracked_dirt_ok=true"
+          - result.systemout ShouldContainSubstring "Fast-forward complete"
+          - result.systemout ShouldNotContainSubstring "MERGE SKIPPED"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # The sharper version of the case above: the tree is dirty in TRACKED files,
+  # but the edited file is identical on both branches, so git checks out fine.
+  # A `status --porcelain` pre-gate would have refused this one.
+  - name: Teardown fast-forwards with edits to files identical across branches
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          printf 'base\n' >"${REPO_DIR}/f.txt"
+          printf 'shared\n' >"${REPO_DIR}/shared.txt"
+          git -C "${REPO_DIR}" add f.txt shared.txt
+          git -C "${REPO_DIR}" commit -qm initial
+
+          _SB_WORKSPACE="${REPO_DIR}"
+          source "{{.riotbox_dir}}/container/session-branch.sh"
+          SESSION_BRANCH=1 SESSION_ID=20260101-000000 \
+            session_branch_setup >"${TEST_DIR}/setup.out" 2>&1
+          cat "${TEST_DIR}/setup.out"
+          if [ "$(git -C "${REPO_DIR}" symbolic-ref --short HEAD)" != "riotbox/20260101-000000" ]; then
+            echo "FIXTURE INVALID: setup did not check out riotbox/20260101-000000" >&2
+            exit 1
+          fi
+          # The session commit touches f.txt only; shared.txt stays identical on
+          # both branches, so an uncommitted edit to it survives the checkout.
+          printf 'session work\n' >>"${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" commit -qam "session commit"
+          printf 'uncommitted\n' >>"${REPO_DIR}/shared.txt"
+          if [ -z "$(git -C "${REPO_DIR}" status --porcelain --untracked-files=no)" ]; then
+            echo "FIXTURE INVALID: no tracked-file modification — the over-broad-gate case is not being exercised" >&2
+            exit 1
+          fi
+
+          session_branch_teardown >"${TEST_DIR}/td.out" 2>&1 && rc=0 || rc=$?
+          cat "${TEST_DIR}/td.out"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ "$(git -C "${REPO_DIR}" symbolic-ref --short HEAD)" = "main" ]
+          [ "$(git -C "${REPO_DIR}" log -1 --format='%s' main)" = "session commit" ]
+          grep -q 'uncommitted' "${REPO_DIR}/shared.txt"
+          echo "harmless_tracked_dirt_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "harmless_tracked_dirt_ok=true"
+          - result.systemout ShouldContainSubstring "Fast-forward complete"
+          - result.systemout ShouldNotContainSubstring "MERGE SKIPPED"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  - name: Teardown blocked by a conflicting edit names the uncommitted changes
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          printf 'base\n' >"${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          base_sha="$(git -C "${REPO_DIR}" rev-parse main)"
+
+          _SB_WORKSPACE="${REPO_DIR}"
+          source "{{.riotbox_dir}}/container/session-branch.sh"
+          SESSION_BRANCH=1 SESSION_ID=20260101-000000 \
+            session_branch_setup >"${TEST_DIR}/setup.out" 2>&1
+          cat "${TEST_DIR}/setup.out"
+          if [ "$(git -C "${REPO_DIR}" symbolic-ref --short HEAD)" != "riotbox/20260101-000000" ]; then
+            echo "FIXTURE INVALID: setup did not check out riotbox/20260101-000000" >&2
+            exit 1
+          fi
+          # f.txt now differs between the two branches AND has an uncommitted
+          # edit, which is the one shape git refuses to check out over.
+          printf 'session\n' >"${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" commit -qam "session commit"
+          printf 'wip\n' >"${REPO_DIR}/f.txt"
+
+          # Prove the block is real, in a throwaway copy so the fixture the
+          # real teardown sees is untouched. Without this probe a fixture that
+          # checked out cleanly would report the wrong branch as broken.
+          cp -a "${REPO_DIR}" "${TEST_DIR}/probe"
+          if git -C "${TEST_DIR}/probe" checkout main >/dev/null 2>&1; then
+            echo "FIXTURE INVALID: git checkout main succeeded — the checkout is not blocked" >&2
+            exit 1
+          fi
+
+          session_branch_teardown >"${TEST_DIR}/td.out" 2>&1 && rc=0 || rc=$?
+          cat "${TEST_DIR}/td.out"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 1 ]
+          # Nothing moved: still on the session branch, base where it was, the
+          # session branch and the user's edit both intact.
+          [ "$(git -C "${REPO_DIR}" symbolic-ref --short HEAD)" = "riotbox/20260101-000000" ]
+          [ "$(git -C "${REPO_DIR}" rev-parse main)" = "${base_sha}" ]
+          [ -n "$(git -C "${REPO_DIR}" branch --list 'riotbox/20260101-000000')" ]
+          grep -qx 'wip' "${REPO_DIR}/f.txt"
+          echo "dirty_block_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "dirty_block_ok=true"
+          - result.systemout ShouldContainSubstring "MERGE SKIPPED — UNCOMMITTED CHANGES block the switch to 'main'"
+          - 'result.systemout ShouldContainSubstring "Branch preserved: riotbox/20260101-000000 (still checked out)."'
+          - result.systemout ShouldContainSubstring "future sessions will continue on it"
+          - result.systemout ShouldContainSubstring "git stash && git checkout main && git merge --ff-only riotbox/20260101-000000 && git stash pop"
+          - result.systemout ShouldNotContainSubstring "MERGE FAILED"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # Not every blocked checkout is an uncommitted-changes problem: an untracked
+  # file that the base branch tracks blocks it too, with a clean tracked status.
+  # That case must keep the old MERGE FAILED wording and show git's own reason.
+  - name: Teardown blocked with a clean tracked tree reports git's own error
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          printf 'base\n' >"${REPO_DIR}/f.txt"
+          printf 'on main only\n' >"${REPO_DIR}/only-on-main.txt"
+          git -C "${REPO_DIR}" add f.txt only-on-main.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          base_sha="$(git -C "${REPO_DIR}" rev-parse main)"
+
+          _SB_WORKSPACE="${REPO_DIR}"
+          source "{{.riotbox_dir}}/container/session-branch.sh"
+          SESSION_BRANCH=1 SESSION_ID=20260101-000000 \
+            session_branch_setup >"${TEST_DIR}/setup.out" 2>&1
+          cat "${TEST_DIR}/setup.out"
+          if [ "$(git -C "${REPO_DIR}" symbolic-ref --short HEAD)" != "riotbox/20260101-000000" ]; then
+            echo "FIXTURE INVALID: setup did not check out riotbox/20260101-000000" >&2
+            exit 1
+          fi
+          # Drop the file on the session branch, then recreate it untracked:
+          # checking out main would overwrite it, so git refuses — with nothing
+          # dirty among the tracked files.
+          git -C "${REPO_DIR}" rm -q only-on-main.txt
+          git -C "${REPO_DIR}" commit -qm "session commit"
+          printf 'unsaved scratch\n' >"${REPO_DIR}/only-on-main.txt"
+
+          if [ -n "$(git -C "${REPO_DIR}" status --porcelain --untracked-files=no)" ]; then
+            echo "FIXTURE INVALID: tracked files are dirty — this would take the uncommitted-changes branch" >&2
+            exit 1
+          fi
+          cp -a "${REPO_DIR}" "${TEST_DIR}/probe"
+          if git -C "${TEST_DIR}/probe" checkout main >/dev/null 2>&1; then
+            echo "FIXTURE INVALID: git checkout main succeeded — the checkout is not blocked" >&2
+            exit 1
+          fi
+
+          session_branch_teardown >"${TEST_DIR}/td.out" 2>&1 && rc=0 || rc=$?
+          cat "${TEST_DIR}/td.out"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 1 ]
+          [ "$(git -C "${REPO_DIR}" symbolic-ref --short HEAD)" = "riotbox/20260101-000000" ]
+          [ "$(git -C "${REPO_DIR}" rev-parse main)" = "${base_sha}" ]
+          [ -n "$(git -C "${REPO_DIR}" branch --list 'riotbox/20260101-000000')" ]
+          # git's own explanation is forwarded rather than swallowed.
+          grep -qi 'untracked working tree files would be overwritten' "${TEST_DIR}/td.out"
+          echo "clean_block_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "clean_block_ok=true"
+          - result.systemout ShouldContainSubstring "MERGE FAILED — could not switch to 'main'"
+          - result.systemout ShouldNotContainSubstring "MERGE SKIPPED"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # The diagnostic tells the user that future sessions stop branching until
+  # they resolve it. Pin that claim against the code so the message cannot go
+  # on saying it after the behaviour changes.
+  - name: A blocked teardown leaves later sessions on the session branch
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          printf 'base\n' >"${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          base_sha="$(git -C "${REPO_DIR}" rev-parse main)"
+
+          _SB_WORKSPACE="${REPO_DIR}"
+          source "{{.riotbox_dir}}/container/session-branch.sh"
+          SESSION_BRANCH=1 SESSION_ID=20260101-000000 \
+            session_branch_setup >"${TEST_DIR}/setup.out" 2>&1
+          printf 'session\n' >"${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" commit -qam "session commit"
+          printf 'wip\n' >"${REPO_DIR}/f.txt"
+          session_branch_teardown >"${TEST_DIR}/td.out" 2>&1 && rc=0 || rc=$?
+          cat "${TEST_DIR}/td.out"
+          if [ "${rc}" -ne 1 ] || [ "$(git -C "${REPO_DIR}" symbolic-ref --short HEAD)" != "riotbox/20260101-000000" ]; then
+            echo "FIXTURE INVALID: teardown did not leave HEAD stuck on the session branch (rc=${rc})" >&2
+            exit 1
+          fi
+
+          # A later session starts a fresh process: same file, no state.
+          _SB_BRANCH_NAME=""
+          _SB_BASE_BRANCH=""
+          SESSION_BRANCH=1 SESSION_ID=20260202-000000 \
+            session_branch_setup >"${TEST_DIR}/setup2.out" 2>&1
+          cat "${TEST_DIR}/setup2.out"
+          # No second session branch, and no base recorded — so its teardown
+          # has nothing to merge and returns 0 having done nothing.
+          [ -z "$(git -C "${REPO_DIR}" branch --list 'riotbox/20260202-000000')" ]
+          [ -z "${_SB_BRANCH_NAME}" ]
+          session_branch_teardown >"${TEST_DIR}/td2.out" 2>&1 && rc2=0 || rc2=$?
+          cat "${TEST_DIR}/td2.out"
+          echo "rc2=${rc2}"
+          [ "${rc2}" -eq 0 ]
+          [ ! -s "${TEST_DIR}/td2.out" ]
+          [ "$(git -C "${REPO_DIR}" rev-parse main)" = "${base_sha}" ]
+          echo "sticky_degradation_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "sticky_degradation_ok=true"
+          - 'result.systemout ShouldContainSubstring "Already on session branch: riotbox/20260101-000000"'
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  - name: Setup skips a workspace that is not a git repository
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          _SB_WORKSPACE="${WORK_DIR}"
+          source "{{.riotbox_dir}}/container/session-branch.sh"
+          # Prove the seam points somewhere real but repo-less, so a pass here
+          # means the guard fired rather than the path simply being absent.
+          if [ ! -d "${WORK_DIR}" ] || [ -d "${WORK_DIR}/.git" ]; then
+            echo "FIXTURE INVALID: ${WORK_DIR} is not a non-repo directory" >&2
+            exit 1
+          fi
+          SESSION_BRANCH=1 SESSION_ID=20260101-000000 \
+            session_branch_setup >"${TEST_DIR}/setup.out" 2>&1 && rc=0 || rc=$?
+          cat "${TEST_DIR}/setup.out"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ ! -s "${TEST_DIR}/setup.out" ]
+          [ -z "${_SB_BRANCH_NAME}" ]
+          echo "non_repo_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "non_repo_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"

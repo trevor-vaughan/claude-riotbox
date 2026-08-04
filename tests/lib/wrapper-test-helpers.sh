@@ -48,7 +48,7 @@ setup_wrapper_test() {
 	# identity, args, and the exported env into ${CAPTURE}. The capture path is
 	# baked in at write time (unquoted heredoc) so each stub is self-contained.
 	local libexec_stubs=(
-		run.sh launch.sh checkpoint.sh resume.sh audit.sh
+		run.sh launch.sh checkpoint.sh checkpoints.sh resume.sh audit.sh
 		list-sessions.sh remove-session.sh reset-session.sh install-hooks.sh
 	)
 	local scripts_stubs=(

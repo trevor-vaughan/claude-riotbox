@@ -14,13 +14,17 @@
 #   _SB_BRANCH_NAME — the session branch we created (e.g. riotbox/20260309-...)
 #   _SB_BASE_BRANCH — the branch we were on before (merge target on exit)
 
+# Workspace root. Overridable so the functions below can be tested against a
+# temp repo; the container always uses the default.
+_SB_WORKSPACE="${_SB_WORKSPACE:-/workspace}"
+
 _SB_BRANCH_PREFIX="riotbox"
 _SB_BRANCH_NAME=""
 _SB_BASE_BRANCH=""
 
 session_branch_setup() {
-	# Only applies to single-project workspaces (single repo at /workspace)
-	if [[ ! -d /workspace/.git ]]; then
+	# Only applies to single-project workspaces (a single repo at the root)
+	if [[ ! -d "${_SB_WORKSPACE}/.git" ]]; then
 		return 0
 	fi
 
@@ -30,7 +34,7 @@ session_branch_setup() {
 
 	# Skip if HEAD is unborn (empty repo with no commits) — session branching
 	# needs an existing commit to branch from.
-	if ! git -C /workspace rev-parse --verify HEAD &>/dev/null; then
+	if ! git -C "${_SB_WORKSPACE}" rev-parse --verify HEAD &>/dev/null; then
 		echo "  [session-branch] Empty repo (no commits) — skipping session branch."
 		echo "  Tip: make an initial commit first, then restart to get session branching:"
 		echo "    git add <files> && git commit -m \"Initial commit\""
@@ -39,7 +43,7 @@ session_branch_setup() {
 
 	# Detect current branch (fails on detached HEAD)
 	local current_branch
-	if ! current_branch="$(git -C /workspace symbolic-ref --short HEAD 2>/dev/null)"; then
+	if ! current_branch="$(git -C "${_SB_WORKSPACE}" symbolic-ref --short HEAD 2>/dev/null)"; then
 		echo "  [session-branch] Detached HEAD — skipping session branch."
 		return 0
 	fi
@@ -71,7 +75,7 @@ session_branch_setup() {
 	fi
 
 	if [[ "${do_branch}" == true ]]; then
-		if git -C /workspace checkout -b "${branch_name}"; then
+		if git -C "${_SB_WORKSPACE}" checkout -b "${branch_name}"; then
 			_SB_BRANCH_NAME="${branch_name}"
 			_SB_BASE_BRANCH="${current_branch}"
 			echo "  [session-branch] Created branch: ${branch_name}"
@@ -91,33 +95,55 @@ session_branch_teardown() {
 
 	# Count commits on the session branch not yet in the base
 	local commit_count
-	commit_count="$(git -C /workspace rev-list --count "${_SB_BASE_BRANCH}..${_SB_BRANCH_NAME}" 2>/dev/null || echo 0)"
+	commit_count="$(git -C "${_SB_WORKSPACE}" rev-list --count "${_SB_BASE_BRANCH}..${_SB_BRANCH_NAME}" 2>/dev/null || echo 0)"
 
 	if [[ "${commit_count}" == "0" ]]; then
 		echo "  [session-branch] No new commits — removing empty session branch."
-		git -C /workspace checkout "${_SB_BASE_BRANCH}" 2>/dev/null || true
-		git -C /workspace branch -d "${_SB_BRANCH_NAME}" 2>/dev/null || true
+		git -C "${_SB_WORKSPACE}" checkout "${_SB_BASE_BRANCH}" 2>/dev/null || true
+		git -C "${_SB_WORKSPACE}" branch -d "${_SB_BRANCH_NAME}" 2>/dev/null || true
 		return 0
 	fi
 
 	echo "  [session-branch] ${commit_count} commit(s) to fast-forward."
 
-	# Switch back to base branch
-	if ! git -C /workspace checkout "${_SB_BASE_BRANCH}" 2>/dev/null; then
-		echo "  [session-branch] MERGE FAILED — could not switch to '${_SB_BASE_BRANCH}'."
-		echo "  Branch preserved: ${_SB_BRANCH_NAME}"
-		echo "  Resolve manually: git checkout ${_SB_BASE_BRANCH} && git merge --ff-only ${_SB_BRANCH_NAME}"
+	# Switch back to base branch. Attempt it first and diagnose afterwards
+	# rather than pre-gating on a dirty tree: git only refuses the checkout
+	# when uncommitted changes would be overwritten, so untracked scratch
+	# files and edits to files identical across the two branches switch fine
+	# and must not be reported as a problem.
+	#
+	# A failure here is sticky, which is why the wording says so. HEAD stays
+	# on the session branch, so the next session's setup takes the
+	# "Already on session branch" path in session_branch_setup without
+	# recording a base, and that session's teardown returns at the
+	# empty-_SB_BRANCH_NAME guard at the top of session_branch_teardown.
+	# Session branching silently stops happening until the user acts.
+	local checkout_err
+	if ! checkout_err="$(git -C "${_SB_WORKSPACE}" checkout "${_SB_BASE_BRANCH}" 2>&1)"; then
+		if [[ -n "$(git -C "${_SB_WORKSPACE}" status --porcelain --untracked-files=no)" ]]; then
+			echo "  [session-branch] MERGE SKIPPED — UNCOMMITTED CHANGES block the switch to '${_SB_BASE_BRANCH}'."
+			echo "  Your working tree has edits that would be overwritten by checking out ${_SB_BASE_BRANCH}."
+			echo "  Branch preserved: ${_SB_BRANCH_NAME} (still checked out)."
+			echo "  Until you resolve this, future sessions will continue on it and will not"
+			echo "  create or merge a new session branch."
+			echo "  Resolve with: git stash && git checkout ${_SB_BASE_BRANCH} && git merge --ff-only ${_SB_BRANCH_NAME} && git stash pop"
+		else
+			echo "  [session-branch] MERGE FAILED — could not switch to '${_SB_BASE_BRANCH}'."
+			printf '  %s\n' "${checkout_err}"
+			echo "  Branch preserved: ${_SB_BRANCH_NAME}"
+			echo "  Resolve manually: git checkout ${_SB_BASE_BRANCH} && git merge --ff-only ${_SB_BRANCH_NAME}"
+		fi
 		return 1
 	fi
 
 	# Fast-forward merge: all session commits land on the base branch as-is
-	if ! git -C /workspace merge --ff-only "${_SB_BRANCH_NAME}" 2>/dev/null; then
+	if ! git -C "${_SB_WORKSPACE}" merge --ff-only "${_SB_BRANCH_NAME}" 2>/dev/null; then
 		echo "  [session-branch] FAST-FORWARD FAILED — base branch has diverged since session started."
 		echo "  Branch preserved: ${_SB_BRANCH_NAME}"
 		echo "  Resolve manually: git rebase ${_SB_BASE_BRANCH} ${_SB_BRANCH_NAME} && git checkout ${_SB_BASE_BRANCH} && git merge --ff-only ${_SB_BRANCH_NAME}"
 		return 1
 	fi
 
-	git -C /workspace branch -d "${_SB_BRANCH_NAME}" 2>/dev/null || true
+	git -C "${_SB_WORKSPACE}" branch -d "${_SB_BRANCH_NAME}" 2>/dev/null || true
 	echo "  [session-branch] Fast-forward complete. ${commit_count} commit(s) on ${_SB_BASE_BRANCH}, session branch removed."
 }
