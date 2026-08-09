@@ -59,7 +59,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "SPAWN_OK"
           - result.systemout ShouldContainSubstring "FAKE_REAL_opencode_INVOKED"
-          - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
+          - result.systemout ShouldContainSubstring "arg=--auto"
           - result.systemout ShouldContainSubstring "arg=do work"
 
   - name: reuse path — listening proxy is not respawned, injection still applied
@@ -103,6 +103,8 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "REUSE_OK"
           - result.systemout ShouldContainSubstring "FAKE_REAL_opencode_INVOKED"
+          - result.systemout ShouldContainSubstring "arg=--auto"
+          - result.systemout ShouldContainSubstring "arg=do work"
           - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_INVOKED"
 
   - name: proxy dies at startup — warn, config untouched, runs unwrapped

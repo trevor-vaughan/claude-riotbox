@@ -415,7 +415,7 @@ All RiotBox paths follow the [XDG Base Directory Specification](https://specific
 
 ## Agent wrapper
 
-Inside the container, each agent binary is shadowed by a single generic wrapper (`container/agent-wrapper.sh`) that injects the agent's autonomy flags (for Claude Code, `--dangerously-skip-permissions`) — this is safe here because the container **is** RiotBox. The agent can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
+Inside the container, each agent binary is shadowed by a single generic wrapper (`container/agent-wrapper.sh`) that injects the agent's autonomy flags (Claude Code: `--dangerously-skip-permissions`; opencode: `--auto`) — this is safe here because the container **is** RiotBox. The agent can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
 
 The system prompt is pre-rendered at build time into `/etc/claude-code/CLAUDE.md` (the managed policy path). This location is loaded automatically by Claude Code, cannot be excluded, and survives context compression. Build-time rendering avoids SELinux AVC denials that occur when `container_t` writes to `etc_t` paths in the overlay filesystem. The `RIOTBOX_PROMPT` env var can override the
 template at runtime if needed. Using the managed policy path frees `~/.claude/CLAUDE.md` for the user's own instructions — personal CLAUDE.md and rules from the host are synced into the session directory at launch.

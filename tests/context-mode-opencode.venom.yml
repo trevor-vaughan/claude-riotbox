@@ -773,8 +773,8 @@ testcases:
           [ "${#argv[@]}" -eq 4 ] \
             || { echo "FAIL: ${#argv[@]} argv elements, want 4: $(printf '<%s>' "${argv[@]}")"; exit 1; }
           [ "${argv[0]}" = "run" ] || { echo "FAIL: argv[0]='${argv[0]}', want 'run'"; exit 1; }
-          [ "${argv[1]}" = "--dangerously-skip-permissions" ] \
-            || { echo "FAIL: argv[1]='${argv[1]}', want '--dangerously-skip-permissions'"; exit 1; }
+          [ "${argv[1]}" = "--auto" ] \
+            || { echo "FAIL: argv[1]='${argv[1]}', want '--auto'"; exit 1; }
           [ "${argv[2]}" = "--pure" ] || { echo "FAIL: argv[2]='${argv[2]}', want '--pure'"; exit 1; }
           [ "${argv[3]}" = "hi" ] || { echo "FAIL: argv[3]='${argv[3]}', want 'hi'"; exit 1; }
           echo "PURE_ARGV_INTACT_OK"
@@ -863,7 +863,7 @@ testcases:
               || { echo "FAIL (${state}): warned with the feature off: $(cat "${TEST_DIR}/err")"; exit 1; }
             [ "${#argv[@]}" -eq 4 ] \
               || { echo "FAIL (${state}): ${#argv[@]} argv elements, want 4"; exit 1; }
-            [ "${argv[0]}" = "run" ] && [ "${argv[1]}" = "--dangerously-skip-permissions" ] \
+            [ "${argv[0]}" = "run" ] && [ "${argv[1]}" = "--auto" ] \
               && [ "${argv[2]}" = "--pure" ] && [ "${argv[3]}" = "hi" ] \
               || { echo "FAIL (${state}): argv is $(printf '<%s>' "${argv[@]}")"; exit 1; }
           done
