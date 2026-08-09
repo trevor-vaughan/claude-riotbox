@@ -108,9 +108,19 @@ agent_<name>_wrapper_inject() {
 This is the only function with non-trivial logic. It's called by
 `container/agent-wrapper.sh` to decide:
 
-- **What flags to inject** (e.g. `--dangerously-skip-permissions`)
-- **Where to inject them** (claude: at the root; opencode: after the
-  `run` subcommand only)
+- **What flags to inject** (claude: `--dangerously-skip-permissions`;
+  opencode: `--auto`)
+- **Where to inject them** (claude: at the root; opencode: immediately
+  after the `run` subcommand, or at the root only when argv carries no
+  positional token at all — `--auto` is registered on `run` and on the
+  default `[project]` command, not globally, so injecting it ahead of a
+  subcommand stops that subcommand from being dispatched at all. The rule
+  keys on "is there a positional?" rather than on a list of subcommand
+  names, because a list that fell behind upstream would inject in front
+  of a subcommand it did not recognise. The cost is that a bare
+  positional gets nothing even when it is really the TUI's project path:
+  `opencode /workspace` runs ask-first. The position is per-CLI, which is
+  exactly why this is a hook and not a constant)
 - **When to set `CI=true`** (claude: when `-p`/`--prompt` is present;
   opencode: when `run` is present)
 
@@ -127,6 +137,31 @@ The contract is:
   after the function returns.
 - Stderr is reserved for user-facing diagnostics; nothing on stderr is
   parsed by the wrapper.
+
+Two different failures live here, and they are loud in different ways.
+
+A flag this function never emits is **quiet**. Nothing downstream can
+observe that the agent is running without auto-approval, and the agent
+does not treat it as an error: opencode's headless `run` answers each
+request with `permission requested: <tool>; auto-rejecting` on stderr
+and carries on, and the TUI simply starts in its normal ask-first mode.
+That is the case the symptom table in `adding-an-agent.md` troubleshoots.
+
+A flag the CLI no longer recognises is **loud but late**. opencode's
+parser is strict, so an unknown flag exits 1 with usage: an upstream
+rename does not degrade the session, it breaks it, at the moment the
+user tries to work. So the `Containerfile` asserts the flag at build
+time — it requires opencode >= 1.18.0 (the release that added `--auto`)
+*and* greps the installed binary's help for the flag at both sites the
+wrapper injects into, `opencode run --help` and root `--help`. That
+moves the failure from the user's session to the image build, where it
+names what moved. Same reasoning as
+`agent_<name>_context_mode_build_assert` below.
+
+For opencode the injected flag is not the only thing granting autonomy —
+`agents/opencode/setup.sh` also forces `permission = "allow"` into the
+merged config on every container start. `THREAT_MODEL.md` records how the
+two divide the work and why neither replaces the other.
 
 See `agents/claude/manifest.sh` and `agents/opencode/manifest.sh` for two
 complete implementations.

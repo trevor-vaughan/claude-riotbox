@@ -720,10 +720,62 @@ print(encode_claude_project_path(Path(sys.argv[1])))" "${SMOKE}/work")/memory" &
 # binary into the existing user-local bin dir so no extra PATH entry is
 # needed. The .opencode/bin directory itself is left in place — empty after
 # the move and harmless.
+#
+# Deliberately unpinned: the installer resolves the latest GitHub release, and
+# we want opencode to track upstream. The 1.18.0 floor is the version that
+# introduced --auto, the flag agents/opencode/manifest.sh injects for
+# autonomous runs. opencode's parser is strict, so a build without --auto
+# would fail loudly — but it would fail in the user's session, at the moment
+# they tried to work. Assert it here instead, where the failure names what
+# moved and costs a rebuild rather than a debugging session.
+#
+# sort -VC compares whole lines, so any --version output that is not a bare
+# X.Y.Z (a `v` prefix, a banner) sorts above the floor and passes the check
+# vacuously. Pull the bare version out first and fail the build when there
+# isn't one, so a change in upstream's output format cannot silently retire
+# the guard.
+#
+# The floor alone only catches a downgrade, and downgrades cannot happen while
+# the install is unpinned — opencode only moves forward. The move that CAN
+# happen is upstream renaming or dropping --auto in a release well above the
+# floor, which sails past the version check. So also probe the installed
+# binary for the flag itself. `--help` is written to STDERR, hence the 2>&1.
+#
+# Probe BOTH sites the wrapper injects into, because --auto is registered per
+# command, not globally: `run` (every headless riotbox run/resume/audit) and
+# the default [project] command (the TUI). Root help documents the default
+# command, so it says nothing about `run` — a release that kept --auto on the
+# TUI and dropped it from `run` would pass a root-only probe and then break
+# every non-interactive session.
+#
+# Each probe captures its output first rather than piping straight into grep,
+# so a crashing `--help` is reported as a crash instead of being misread as a
+# missing flag, and the help text itself lands in the build log where whoever
+# hits this can see what upstream actually renamed it to.
 RUN bash -o pipefail -c '\
-    curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path && \
-    mv /home/llm/.opencode/bin/opencode /home/llm/.local/bin/opencode && \
-    /home/llm/.local/bin/opencode --version'
+    set -e; \
+    curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path; \
+    mv /home/llm/.opencode/bin/opencode /home/llm/.local/bin/opencode; \
+    v_raw="$(/home/llm/.local/bin/opencode --version)"; \
+    echo "installed opencode ${v_raw}"; \
+    v="$(printf "%s\n" "${v_raw}" | grep -xE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)" || true; \
+    [ -n "${v}" ] || { \
+        echo "cannot read a bare X.Y.Z version out of opencode --version: ${v_raw}" >&2; \
+        exit 1; }; \
+    printf "1.18.0\n%s\n" "${v}" | sort -VC || { \
+        echo "opencode ${v} predates the --auto flag (need >= 1.18.0)" >&2; \
+        exit 1; }; \
+    for scope in "run" ""; do \
+        h="$(/home/llm/.local/bin/opencode ${scope} --help 2>&1)" || { \
+            echo "opencode ${scope} --help failed; cannot verify --auto" >&2; \
+            printf "%s\n" "${h}" >&2; \
+            exit 1; }; \
+        printf "%s\n" "${h}" \
+            | grep -qE "(^|[[:space:]])--auto([[:space:]]|$)" || { \
+            echo "opencode ${v} does not register --auto on \"opencode ${scope}\"; the flag agents/opencode/manifest.sh injects would break every session" >&2; \
+            printf "%s\n" "${h}" >&2; \
+            exit 1; }; \
+    done'
 
 # ── Claude Code (LAST — changes most frequently, preserves layer cache) ─────
 RUN bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && claude --version'

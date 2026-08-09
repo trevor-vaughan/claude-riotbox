@@ -24,8 +24,8 @@ agent_opencode_real_binary() {
 }
 
 # Argv for non-interactive "run with prompt" mode. opencode uses a cobra-style
-# subcommand layout: `opencode run <prompt>`. The wrapper injects
-# --dangerously-skip-permissions after `run` (see agent_opencode_wrapper_inject).
+# subcommand layout: `opencode run <prompt>`. The wrapper injects --auto
+# immediately after `run` (see agent_opencode_wrapper_inject).
 #
 # Argv tokens are emitted NUL-terminated (`printf '%s\0'`) so multi-line
 # prompts survive the round-trip through `mapfile -d ''`. NUL is safe —
@@ -49,20 +49,61 @@ agent_opencode_audit_argv() {
 	printf '%s\0' opencode run "${prompt}"
 }
 
-# Wrapper injection rules. opencode rejects --dangerously-skip-permissions at
-# the root level — it must follow the `run` subcommand. When `run` is absent
-# (e.g. `opencode auth login`, `opencode --version`) we leave argv untouched.
+# Wrapper injection rules. opencode auto-approves permissions with --auto,
+# which is registered on the `run` command and on the default `[project]`
+# (TUI) command — NOT globally. It shows up under root `--help` only because
+# root help documents the default command.
+#
+# Position therefore matters, and getting it wrong breaks opencode outright.
+# Verified against 1.18.13:
+#
+#   opencode --auto run "hi"   -> exit 1, prints root help
+#   opencode run --auto "hi"   -> parses
+#   opencode --auto            -> parses (default [project] command)
+#
+# The root parser consumes --auto for the default command and then treats
+# `run` as that command's [project] positional, so the subcommand is never
+# dispatched. Every sibling subcommand (`models`, `auth`, ...) breaks the same
+# way, including ones upstream adds after this comment was written.
+#
+# That last point sets the rule. We cannot ask "is there a subcommand?" without
+# tracking upstream's command list, and a list that falls behind would inject
+# at the root in front of a subcommand we do not know — the exact breakage this
+# guards against. So the test is "does argv carry a POSITIONAL token?":
+#
+#   no positional (bare, `--pure`, `--print-logs`)  -> root, TUI takes it
+#   `run` present                                   -> immediately after `run`
+#   any other positional (`models`, `/workspace`)   -> inject nothing
+#
+# The bias is deliberate. Injecting where we should not breaks the session;
+# declining to inject only forfeits auto-approval. So a bare positional gets
+# nothing even when it is really the TUI's [project] path — `opencode
+# /workspace` runs ask-first rather than risk a subcommand we cannot recognise.
+#
+# opencode's parser is strict: an unknown flag exits 1 with usage
+# (`opencode run --bogus hi` -> exit 1). A stale flag name here fails LOUDLY
+# at session start, not silently. The Containerfile still asserts --auto
+# exists at build time so the failure names what moved, rather than surfacing
+# as a broken session.
 agent_opencode_wrapper_inject() {
 	local saw_run=0
+	local saw_positional=0
 	local arg
 	for arg in "$@"; do
+		if [[ "${arg}" != -* ]]; then
+			saw_positional=1
+			break
+		fi
+	done
+	if [[ "${saw_positional}" -eq 0 ]]; then
+		printf '%s\0' --auto
+	fi
+	for arg in "$@"; do
+		printf '%s\0' "${arg}"
 		if [[ "${saw_run}" -eq 0 ]] && [[ "${arg}" = "run" ]]; then
 			saw_run=1
-			printf '%s\0' "${arg}"
-			printf '%s\0' --dangerously-skip-permissions
-			continue
+			printf '%s\0' --auto
 		fi
-		printf '%s\0' "${arg}"
 	done
 	# `opencode --pure` runs without external plugins, so the Context Mode
 	# plugin shim never loads. Say so: the session would otherwise report the

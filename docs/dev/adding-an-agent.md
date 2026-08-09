@@ -188,7 +188,8 @@ That's the whole change. No edits to:
 | `--agent=<new>` rejected with "must be one of"       | Does `agents/<new>/manifest.sh` exist? The host wrapper sources the registry at runtime, so no re-install is needed. |
 | `riotbox run` exits with "unknown verb"              | Manifest is missing `agent_<name>_run_argv`                                                                          |
 | Wrapper invokes wrong binary                         | Check `agent_<name>_real_binary` and PATH order                                                                      |
-| `--dangerously-skip-permissions` in wrong place      | Bug in `agent_<name>_wrapper_inject`; see opencode for subcommand-local injection                                    |
+| Autonomy flag in the wrong place                     | Bug in `agent_<name>_wrapper_inject`. Check whether the flag is root-level or subcommand-local for that CLI — a subcommand-local flag injected at the root can stop the subcommand being dispatched at all, so the CLI exits non-zero with usage instead of running |
+| Session ran without auto-approval, nothing errored   | The flag never reached the CLI. Check `agent_<name>_wrapper_inject` still emits it for that argv shape — for opencode it injects after `run`, or at the root only when argv has no positional, so `opencode /workspace` deliberately gets nothing. Confirm the binary still registers the flag where it is injected: `opencode run --help 2>&1` and `opencode --help 2>&1` must both list `--auto` |
 | Container fails to start with "no agents discovered" | The `COPY agents/` in the Containerfile didn't run, or every subdirectory is missing `manifest.sh`                      |
 | Host config not synced                               | `agent_<name>_host_sync` is a no-op or its sync script is missing                                                    |
 

@@ -61,7 +61,18 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "REAL_BIN=[]"
 
-  - name: agent-wrapper appends --dangerously-skip-permissions for opencode run
+  # `--auto` is registered on opencode's `run` command and on the default
+  # `[project]` (TUI) command — NOT globally. Verified against opencode 1.18.13:
+  # a root-position `--auto` makes the root parser treat the following
+  # subcommand as the default command's [project] positional, so the subcommand
+  # is never dispatched (`opencode --auto run --help` prints ROOT help;
+  # `opencode run --auto --help` prints run's). The same holds for every
+  # sibling subcommand, including ones upstream may add later — which is why
+  # the rule keys on "argv carries a positional token" rather than on a
+  # hardcoded list of subcommand names. Injecting where we should not breaks
+  # the session; not injecting only costs auto-approval, so the rule is
+  # deliberately biased toward not injecting.
+  - name: agent-wrapper appends --auto after run for opencode
     steps:
       - type: exec
         script: |
@@ -70,17 +81,16 @@ testcases:
           setup_opencode_path_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           install_generic_opencode_wrapper
-          # `--dangerously-skip-permissions` is a `run`-subcommand-local flag,
-          # so the wrapper must inject it AFTER `run`, not before.
           opencode run "do work"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "FAKE_REAL_OPENCODE_INVOKED"
           - result.systemout ShouldContainSubstring "arg=run"
-          - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
+          - result.systemout ShouldContainSubstring "arg=--auto"
           - result.systemout ShouldContainSubstring "arg=do work"
+          - result.systemout ShouldNotContainSubstring "arg=--dangerously-skip-permissions"
 
-  - name: agent-wrapper does NOT inject the run flag for opencode non-run invocations
+  - name: agent-wrapper does not inject --auto for opencode non-run subcommands
     steps:
       - type: exec
         script: |
@@ -89,37 +99,302 @@ testcases:
           setup_opencode_path_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           install_generic_opencode_wrapper
-          # --version is a root-level invocation; injecting --dangerously-skip-permissions
-          # there would cause opencode to error with "unknown flag".
-          opencode --version
+          # `models` is a sibling subcommand: a root-position --auto would make
+          # the root parser swallow it as the TUI's [project] positional.
+          opencode models
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "FAKE_REAL_OPENCODE_INVOKED"
-          - result.systemout ShouldContainSubstring "arg=--version"
+          - result.systemout ShouldContainSubstring "arg=models"
+          - result.systemout ShouldNotContainSubstring "arg=--auto"
           - result.systemout ShouldNotContainSubstring "arg=--dangerously-skip-permissions"
 
-  - name: agent-wrapper injects opencode flag immediately after run (subcommand-local position)
+  - name: agent-wrapper injects --auto for a flag-only opencode TUI launch
     steps:
       - type: exec
         script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          setup_opencode_path_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # `opencode --pure` is a documented user action (README) and carries no
+          # subcommand, so it is the default [project] command and takes --auto
+          # at the root. Verified on 1.18.13: `opencode --auto --pure --help`
+          # produces byte-identical output to `opencode --pure --help`.
+          mapfile -d '' -t argv < <(agent_call opencode wrapper_inject --pure 2>/dev/null)
+          [ "${#argv[@]}" -eq 2 ] \
+            || { echo "FAIL: ${#argv[@]} argv elements, want 2: $(printf '<%s>' "${argv[@]}")"; exit 1; }
+          [ "${argv[0]}" = "--auto" ] && [ "${argv[1]}" = "--pure" ] \
+            || { echo "FAIL: argv is $(printf '<%s>' "${argv[@]}")"; exit 1; }
+          echo "FLAG_ONLY_TUI_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FLAG_ONLY_TUI_OK"
+
+  - name: agent-wrapper does not inject --auto when argv carries a positional
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          setup_opencode_path_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # A bare positional is either the TUI's [project] path or a subcommand
+          # this wrapper has never heard of. The wrapper cannot tell them apart
+          # without tracking upstream's command list, and guessing wrong breaks
+          # dispatch — so it leaves argv alone and forfeits auto-approval.
+          for pos in /workspace some-future-subcommand; do
+            mapfile -d '' -t argv < <(agent_call opencode wrapper_inject "${pos}")
+            [ "${#argv[@]}" -eq 1 ] && [ "${argv[0]}" = "${pos}" ] \
+              || { echo "FAIL (${pos}): argv is $(printf '<%s>' "${argv[@]}")"; exit 1; }
+          done
+          echo "POSITIONAL_UNTOUCHED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "POSITIONAL_UNTOUCHED_OK"
+
+  - name: agent-wrapper injects --auto for the bare opencode TUI invocation
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          setup_opencode_path_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # No subcommand: the default [project] command accepts --auto at the
+          # root, so the TUI runs auto-approved like `run` does.
+          mapfile -d '' -t argv < <(agent_call opencode wrapper_inject)
+          [ "${#argv[@]}" -eq 1 ] \
+            || { echo "FAIL: ${#argv[@]} argv elements, want 1: $(printf '<%s>' "${argv[@]}")"; exit 1; }
+          [ "${argv[0]}" = "--auto" ] \
+            || { echo "FAIL: argv[0]='${argv[0]}', want '--auto'"; exit 1; }
+          echo "BARE_TUI_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BARE_TUI_OK"
+
+  - name: agent-wrapper injects opencode --auto immediately after run (subcommand-local position)
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           source "{{.opencode_helpers}}"
           setup_opencode_path_test
           trap 'rm -rf "${TEST_DIR}"' EXIT
           install_generic_opencode_wrapper
-          # The flag must appear after `run` and before the user's positional
-          # prompt, so opencode's run subparser sees it.
+          # The flag must follow `run` so opencode's run subparser sees it, and
+          # the user's own argv must keep its relative order.
           out="$(opencode run --continue 2>&1)"
-          # Verify positional ordering: run first, then flag, then --continue
           run_line=$(echo "${out}" | grep -n "^arg=run$" | cut -d: -f1)
-          flag_line=$(echo "${out}" | grep -n "^arg=--dangerously-skip-permissions$" | cut -d: -f1)
+          flag_line=$(echo "${out}" | grep -n "^arg=--auto$" | cut -d: -f1)
           continue_line=$(echo "${out}" | grep -n "^arg=--continue$" | cut -d: -f1)
-          test "${run_line}" -lt "${flag_line}"
-          test "${flag_line}" -lt "${continue_line}"
+          for v in run_line flag_line continue_line; do
+            [ -n "${!v}" ] || { echo "FAIL: ${v} not found in: ${out}"; exit 1; }
+          done
+          [ "${run_line}" -lt "${flag_line}" ] \
+            || { echo "FAIL: run at ${run_line}, --auto at ${flag_line}; --auto must follow run"; exit 1; }
+          [ "${flag_line}" -lt "${continue_line}" ] \
+            || { echo "FAIL: --auto at ${flag_line}, --continue at ${continue_line}"; exit 1; }
           echo "ORDER_OK"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "ORDER_OK"
+
+  - name: agent-wrapper injects --auto only once when run appears as a prompt word
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          setup_opencode_path_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # A bare "run" as the prompt is a second exact match for the token.
+          # Only the subcommand position may take the flag.
+          mapfile -d '' -t argv < <(agent_call opencode wrapper_inject run run)
+          [ "${#argv[@]}" -eq 3 ] \
+            || { echo "FAIL: ${#argv[@]} argv elements, want 3: $(printf '<%s>' "${argv[@]}")"; exit 1; }
+          [ "${argv[0]}" = "run" ] && [ "${argv[1]}" = "--auto" ] && [ "${argv[2]}" = "run" ] \
+            || { echo "FAIL: argv is $(printf '<%s>' "${argv[@]}")"; exit 1; }
+          echo "SINGLE_INJECT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SINGLE_INJECT_OK"
+
+  # The wrapper injects --auto, and opencode's parser is strict, so an image
+  # whose opencode has no --auto breaks every session the moment it starts.
+  # The Containerfile's version floor and its --auto capability probes move that
+  # failure to build time, where it names what moved. That makes the guards'
+  # own failure modes worth testing. This case runs the guard text verbatim out
+  # of the Containerfile against a fake `opencode`, so it exercises what ships
+  # rather than a copy of it — including the shell options the RUN line sets,
+  # which are asserted rather than assumed.
+  - name: Containerfile opencode guard fails closed on bad versions and on a missing --auto
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          CF="${RIOTBOX_DIR}/Containerfile"
+
+          # The shell the guard runs under is part of the guard. Assert the RUN
+          # line ships it instead of synthesising it below and hoping.
+          grep -q "RUN bash -o pipefail -c" "${CF}" \
+            || { echo "FAIL: opencode RUN no longer sets -o pipefail"; exit 1; }
+          grep -qE '^    set -e; \\$' "${CF}" \
+            || { echo "FAIL: opencode RUN no longer starts with set -e"; exit 1; }
+
+          # Lift the guard out of the RUN block: from the `--version` capture to
+          # the end of the backslash continuation. Point it at a fake binary and
+          # drop the trailing quote that closes the RUN so the text stands alone.
+          awk '/opencode --version/,/[^\\]$/' "${CF}" \
+            | sed -e "s#/home/llm/.local/bin/opencode#${TEST_DIR}/opencode#" \
+                  -e "s/'\$//" > "${TEST_DIR}/guard-body.sh"
+          for needle in 'sort -VC' '--help' 'run'; do
+            grep -q -- "${needle}" "${TEST_DIR}/guard-body.sh" \
+              || { echo "FAIL: extracted guard is missing '${needle}' — check the awk range"; exit 1; }
+          done
+          # `set -e` lives on the RUN's first line, above the extracted range;
+          # pipefail comes from the RUN's own `bash -o pipefail`, asserted above.
+          { echo 'set -e'; cat "${TEST_DIR}/guard-body.sh"; } > "${TEST_DIR}/guard.sh"
+
+          # The real opencode writes --help to STDERR and exits 0, so the fake
+          # does too: a probe that reads stdout only would match nothing and
+          # break every build, and this fake is what catches that. --auto is
+          # registered per command, so the fake gates `run --help` and root
+          # `--help` independently.
+          cat > "${TEST_DIR}/opencode" <<'FAKE'
+          #!/usr/bin/env bash
+          if [ "${1:-}" = "run" ] && [ "${2:-}" = "--help" ]; then
+            printf '%s\n' "      --continue      continue the last session" >&2
+            [ "${FAKE_RUN_HAS_AUTO}" = "1" ] && \
+              printf '%s\n' "      --auto          auto-approve permissions (dangerous!)" >&2
+            exit "${FAKE_RUN_HELP_RC:-0}"
+          fi
+          if [ "${1:-}" = "--help" ]; then
+            printf '%s\n' "      --print-logs    print logs to stderr" >&2
+            [ "${FAKE_ROOT_HAS_AUTO}" = "1" ] && \
+              printf '%s\n' "      --auto          auto-approve permissions (dangerous!)" >&2
+            exit 0
+          fi
+          printf '%s\n' "${FAKE_OPENCODE_VERSION}"
+          FAKE
+          chmod +x "${TEST_DIR}/opencode"
+
+          # version|run --help lists --auto|root --help lists --auto|want rc|expected message
+          rc=0
+          while IFS='|' read -r version runauto rootauto want msg; do
+            [ -n "${version}${runauto}${rootauto}${want}${msg}" ] || continue
+            got=0
+            FAKE_OPENCODE_VERSION="${version}" FAKE_RUN_HAS_AUTO="${runauto}" \
+              FAKE_ROOT_HAS_AUTO="${rootauto}" \
+              bash "${TEST_DIR}/guard.sh" >"${TEST_DIR}/err" 2>&1 || got=$?
+            label="version='${version}' run_auto=${runauto} root_auto=${rootauto}"
+            [ "${got}" -eq "${want}" ] \
+              || { echo "FAIL: ${label} exited ${got}, want ${want}"; rc=1; continue; }
+            # A guard that fails for the wrong reason is not the guard we think
+            # we shipped, so pin which diagnostic fired, not just the status.
+            # stdout+stderr are merged above: the success line goes to stdout,
+            # every failure diagnostic to stderr.
+            grep -qF -- "${msg}" "${TEST_DIR}/err" \
+              || { echo "FAIL: ${label} output lacked '${msg}': $(cat "${TEST_DIR}/err")"; rc=1; }
+          done <<'CASES'
+          1.18.13|1|1|0|installed opencode 1.18.13
+          1.18.0|1|1|0|installed opencode 1.18.0
+          1.17.9|1|1|1|predates the --auto flag
+          |1|1|1|cannot read a bare X.Y.Z version
+          v1.17.0|1|1|1|cannot read a bare X.Y.Z version
+          opencode 1.17.0|1|1|1|cannot read a bare X.Y.Z version
+          1.19.0|0|1|1|does not register --auto on "opencode run"
+          1.19.0|1|0|1|does not register --auto on "opencode "
+          1.19.0|1|1|0|installed opencode 1.19.0
+          CASES
+          [ "${rc}" -eq 0 ] || exit 1
+
+          # A crashing --help must be reported as a crash, not misread as a
+          # renamed flag.
+          crash=0
+          FAKE_OPENCODE_VERSION="1.19.0" FAKE_RUN_HAS_AUTO="1" FAKE_ROOT_HAS_AUTO="1" \
+            FAKE_RUN_HELP_RC=3 bash "${TEST_DIR}/guard.sh" >"${TEST_DIR}/err" 2>&1 || crash=$?
+          [ "${crash}" -eq 1 ] \
+            || { echo "FAIL: crashing run --help exited ${crash}, want 1"; exit 1; }
+          grep -qF -- "--help failed" "${TEST_DIR}/err" \
+            || { echo "FAIL: crash not named as a crash: $(cat "${TEST_DIR}/err")"; exit 1; }
+          echo "OPENCODE_GUARD_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OPENCODE_GUARD_OK"
+
+  # Every other injection case here asserts against a fake `opencode` that
+  # echoes its argv. Those prove the wrapper is self-consistent — which was
+  # already true when root-position injection shipped and silently broke
+  # `opencode run`. Only the real parser can catch a wrong flag POSITION, so
+  # when a real binary is on the box, hand it the argv the wrapper actually
+  # builds and confirm the subcommand still dispatches. Skips (does not fail)
+  # where opencode is not installed, e.g. CI runners without the image.
+  - name: real opencode accepts the argv the wrapper builds
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "${RIOTBOX_DIR}/agents/registry.sh"
+
+          # Never resolve through .riotbox/bin — that is the wrapper itself.
+          bin=""
+          for cand in /home/llm/.local/bin/opencode /usr/local/bin/opencode; do
+            [ -x "${cand}" ] && { bin="${cand}"; break; }
+          done
+          if [ -z "${bin}" ]; then
+            # Skipping is the right default (CI runs venom in an image that
+            # installs no opencode), but a silent always-skip would let this
+            # whole class of regression through unnoticed. REQUIRE_REAL_OPENCODE=1
+            # turns the skip into a failure for at-least-once-per-release runs.
+            if [ "${REQUIRE_REAL_OPENCODE:-0}" = "1" ]; then
+              echo "FAIL: REQUIRE_REAL_OPENCODE=1 but no real opencode binary was found"
+              exit 1
+            fi
+            echo "REAL_OPENCODE_ABSENT_SKIP"
+            exit 0
+          fi
+
+          # The real binary writes config, state and logs under HOME on startup.
+          # Every other wrapper case sandboxes HOME via setup_opencode_path_test;
+          # this one builds argv straight from the registry, so sandbox it here.
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}/home"
+          mkdir -p "${HOME}"
+
+          # Promptless argv plus --help: `run --auto --help` reaches run's own
+          # parser without depending on help short-circuiting behind a prompt,
+          # and without starting a real session.
+          mapfile -d '' -t argv < <(agent_call opencode wrapper_inject run 2>/dev/null)
+          out="$("${bin}" "${argv[@]}" --help 2>&1)" || {
+            echo "FAIL: real opencode rejected argv $(printf '<%s>' "${argv[@]}")"
+            echo "${out}"
+            exit 1
+          }
+          # Root help lists every subcommand under "Commands:". Seeing it means
+          # the root parser swallowed the flag and never dispatched `run`.
+          if echo "${out}" | grep -qE '^Commands:'; then
+            echo "FAIL: argv $(printf '<%s>' "${argv[@]}") printed ROOT help — run was not dispatched"
+            exit 1
+          fi
+          echo "REAL_ARGV_DISPATCHES_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "REAL_ARGV_DISPATCHES_OK|REAL_OPENCODE_ABSENT_SKIP"
 
   - name: agent-wrapper sets CI=true for opencode when run subcommand is present
     steps:

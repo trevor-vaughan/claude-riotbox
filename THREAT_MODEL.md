@@ -187,6 +187,8 @@ Credential-file env vars listed in `RIOTBOX_CREDFILE_VARS` get a different treat
 
 opencode's session-share feature is enforced disabled inside the container regardless of host config. At session start the runtime merges `~/.config/opencode/opencode.json` and `opencode.jsonc` and forces `share = "disabled"`, `permission = "allow"`, `autoupdate = false`, and ensures `~/.config/opencode/AGENTS.md` is in `instructions`. A host `opencode.json` with `share: "enabled"` is overridden during the merge — the host file is removed and the merged `opencode.jsonc` is the single source of truth opencode loads.
 
+Auto-approval reaches opencode through two mechanisms that sit at different layers, and neither replaces the other. The forced `permission = "allow"` is config-side: opencode normalises the bare string to the rule `{"*": "allow"}` and merges it over its built-in per-agent defaults, so the permission evaluator resolves every tool call to `allow` and no approval request is raised at all. The `--auto` flag the wrapper injects (`agents/opencode/manifest.sh`) is client-side, and covers what that key cannot reach: an agent-scoped `permission` block is merged *after* the top-level value and wins over it, so an agent configured to ask still raises a request — and headless `opencode run` answers a request it was not told to approve by **rejecting** it (`permission requested: <tool>; auto-rejecting`), mid-session and without failing. Dropping the config key would route every tool call through a request; dropping the flag would leave agent-scoped `ask` rules silently auto-rejected. Both are load-bearing.
+
 ## Headroom compression cache (opt-in feature)
 
 When `RIOTBOX_HEADROOM=1`, headroom's reversible-compression cache (CCR) stores
