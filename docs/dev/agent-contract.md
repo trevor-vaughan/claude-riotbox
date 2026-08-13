@@ -28,6 +28,10 @@ Function names are mechanical: `agent_<name>_<verb>`.
 | [`context_mode_wire`](#agent_name_context_mode_wire) | no | session start |
 | [`context_mode_strip`](#agent_name_context_mode_strip) | no | session start |
 | [`context_mode_build_assert`](#agent_name_context_mode_build_assert) | no | image build |
+| [`github_mcp_wire`](#agent_name_github_mcp_wire) | no | `enable_github_mcp` |
+| [`github_mcp_strip`](#agent_name_github_mcp_strip) | no | `disable_github_mcp` |
+| [`gitlab_mcp_wire`](#agent_name_gitlab_mcp_wire) | no | `enable_gitlab_mcp` |
+| [`gitlab_mcp_strip`](#agent_name_gitlab_mcp_strip) | no | `disable_gitlab_mcp` |
 
 ## Required verbs
 
@@ -518,3 +522,264 @@ path, plus the strip-every-other-agent rule),
 foreign-file refusal and the `--pure` warning), and
 `tests/doctor-context-mode.venom.yml` (the preflight check for an agent
 with no support).
+
+## Optional verbs: forge MCP servers
+
+Four optional verbs attach the GitHub and GitLab MCP servers to an agent.
+None of them runs on its own: they fire only when a user runs one of the
+four commands the [`riotbox-gh-glab`](../../README.md#github-and-gitlab-the-riotbox-gh-glab-flavor)
+image puts on `PATH`.
+
+| Verb | When | Contract |
+|------|------|----------|
+| `github_mcp_wire "$token_var"` | `enable_github_mcp` | Register `github-mcp-server` as a stdio server, with `$token_var` written as an environment-variable *reference*. Warn before replacing an entry riotbox did not write. Return 0 only if the entry landed. |
+| `github_mcp_strip` | `disable_github_mcp` | Remove the entry **only if riotbox wrote it**; warn and leave anything else alone. Idempotent and silent when there is nothing to remove. An unparseable config warns and returns 0; every other give-up path returns non-zero. |
+| `gitlab_mcp_wire "$url" "$token_var"` | `enable_gitlab_mcp` | Register `$url` as an HTTP server authenticating with `Bearer` + a reference to `$token_var`. **Reject a `$url` that is not an `http(s)` `/api/v4/mcp` endpoint** — anything else is a server `gitlab_mcp_strip` will not recognise as riotbox's. Same ownership warning as `github_mcp_wire`. Return 0 only if the entry landed. |
+| `gitlab_mcp_strip` | `disable_gitlab_mcp` | As `github_mcp_strip`, for the GitLab entry. |
+
+`container/forge-mcp.sh` probes with `declare -F agent_<name>_<verb>` and
+skips an agent that implements none of them, saying so on stderr. Silence
+would read as "wired" for an agent that is not.
+
+Unlike the Context Mode verbs, these are **two independent pairs**. An agent
+may implement the GitHub pair and not the GitLab one; the two servers are
+enabled by separate commands and share no state. Within a pair, `wire`
+obliges `strip`: `disable_*` is the only way a user turns a server back off
+without hand-editing JSON.
+
+### What the verbs are handed, and what they must not do
+
+Both `wire` verbs take the **name** of an environment variable, never its
+value, and write a reference the agent expands when it spawns the server —
+`${NAME}` for Claude Code, `{env:NAME}` for opencode.
+
+This is not a style preference and must not be "simplified" away. The agent
+config directories resolve into the session directory, which is a bind mount
+from the host: a token written there outlives the container, survives the
+agent exiting, and stays readable by anything on the host that can read the
+session directory. `tests/forge-mcp.venom.yml` asserts the property directly
+by wiring with sentinel token values and grepping the whole tree for them.
+
+Deciding *which* variable holds the token is the caller's job, not the
+agent's. `container/forge-mcp.sh` resolves it once — `GITHUB_PERSONAL_ACCESS_TOKEN`
+then `GITHUB_TOKEN` for GitHub, `GITLAB_TOKEN` for GitLab — and hands the
+same answer to every agent, so two agents can never disagree about which one
+won. It also resolves `GITLAB_HOST` into a full endpoint URL before calling,
+and refuses to call at all when no candidate variable is set.
+
+The GitLab URL, unlike the token, is written **literally**. It is not a
+secret, and an unexpanded `${GITLAB_HOST}` inside a URL would produce a
+malformed endpoint instead of an honest failure.
+
+Put the bodies in `agents/<name>/forge-mcp.sh` and have `manifest.sh` source
+it:
+
+```bash
+# GitHub/GitLab MCP verbs (optional contract — see docs/dev/agent-contract.md).
+# shellcheck source=./forge-mcp.sh
+source "${_AGENT_<NAME>_DIR}/forge-mcp.sh"
+```
+
+Both forges share one file per agent because they share a destination —
+each agent reads all its MCP servers from one place — and nothing else. They
+do not share an entry shape, and no abstraction is forced over the
+difference:
+
+- **GitHub** is a local stdio process. The image bakes in `github-mcp-server`
+  and the entry names it, with the credential in the server's own environment
+  block. That block exists solely to bridge `GITHUB_TOKEN` to the
+  `GITHUB_PERSONAL_ACCESS_TOKEN` the server actually reads; a stdio child
+  already inherits the agent's environment.
+- **GitLab** is not a program. It is an endpoint on the user's own instance
+  (`<host>/api/v4/mcp`, streamable HTTP), so the entry is a URL and the
+  credential rides in an `Authorization` header. A personal access token
+  carrying GitLab's `mcp` scope authenticates there; browser OAuth, which
+  GitLab documents as the default, is unusable in a headless container.
+
+### Whose entry is it
+
+The server key alone does not make an entry riotbox's. `agents/claude/sync-settings.sh`
+copies the host's `~/.claude.json` into the session at every launch, and
+`opencode_setup` regenerates `opencode.jsonc` from the host's opencode config
+at every session start, so a `github` or `gitlab` entry the user configured on
+the host is sitting in the very file these verbs write. A third agent will have
+its own version of the same problem.
+
+So both verbs decide ownership on the entry's **shape** — a predicate over the
+entry, kept beside the code that builds it:
+
+| Forge | Ours when |
+|---|---|
+| GitHub, claude | `type` is `stdio`, `command` is `github-mcp-server`, `args` is exactly `["stdio"]`, and `env` is an object whose only key is `GITHUB_PERSONAL_ACCESS_TOKEN`, holding a bare `${VAR}` reference |
+| GitHub, opencode | `type` is `local`, `command` is exactly `["github-mcp-server", "stdio"]`, and `environment` is an object whose only key is `GITHUB_PERSONAL_ACCESS_TOKEN`, holding a bare `{env:VAR}` reference |
+| GitLab, claude | `type` is `http`, `url` ends in `/api/v4/mcp`, and `headers` has exactly one key, `Authorization`, matching `Bearer ${VAR}` |
+| GitLab, opencode | `type` is `remote`, `url` ends in `/api/v4/mcp`, and `headers` has exactly one key, `Authorization`, matching `Bearer {env:VAR}` |
+
+Write the shape out in full, as an exact statement of what the wire verb
+produces. **Every field a shape omits is a field a user can differ on and lose
+their entry over**, so omit only what riotbox genuinely cannot pin:
+
+- **The credential's variable NAME.** A session may export
+  `GITHUB_PERSONAL_ACCESS_TOKEN` on one run and only `GITHUB_TOKEN` on the
+  next; both wrote riotbox's entry. A strip that did not recognise the first
+  would leave a server registered that the user asked to revoke. The *block*
+  holding the credential is not omitted with it — `github-mcp-server` reads
+  `GITHUB_TOOLSETS` and `GITHUB_HOST` from that same block, so an extra key
+  there is a user's narrowing and must not be claimed.
+- **The GitLab URL's host**, for the same reason: `GITLAB_HOST` can change
+  between the wire call and the strip. Its *path* is pinned — `container/forge-mcp.sh`
+  always builds `<host>/api/v4/mcp` — so an entry pointing elsewhere on a
+  GitLab instance is not riotbox's.
+- **opencode's `enabled`.** A user who flipped riotbox's entry to `false` still
+  has riotbox's entry, and `disable_github_mcp` should still take it away.
+- **The entry's top-level key set.** Every block the shape names is checked
+  exactly, but an *unrecognised sibling key* does not disqualify an entry.
+  This one cuts the other way from the rest: an agent release that normalises
+  configs by adding a field would otherwise strand riotbox's own entry
+  permanently, which is worse than the case pinning it would catch. Accepting
+  an entry riotbox may not have written is recoverable — the wire warning and
+  a hand edit; refusing to remove one riotbox did write is not.
+
+The wire verb owes the shape a **precondition**: it must refuse to write
+anything the shape would disown. `gitlab_mcp_wire` rejecting a URL that is not
+an `/api/v4/mcp` endpoint is that rule in practice. A verb pair that can write
+what it cannot revoke strands the user in the state this whole rule exists to
+prevent, so enforce it in the wire verb rather than trusting the caller.
+
+Do not identify the entry with a marker key instead. The config document's
+schema belongs to the agent, which is free to reject or drop a field it does
+not know, and ownership would then hinge on whether some unrelated release
+tolerated it.
+
+The check has **three** answers, not two: ours, provably not ours, and *cannot
+tell* — the predicate failed to evaluate. Do not fold the third into the
+second. On the strip side an entry riotbox did write would then be reported as
+foreign, stay registered, and be announced as removed. `strip` must take its
+non-zero `could not clean` path instead; `wire`, which is about to overwrite
+the entry either way, simply stays quiet.
+
+If the shape is expressed as a query the implementation splices into a program
+(the two shipped agents splice a jq predicate), it must be a literal defined in
+the agent's own file — never derived from a config file, an environment
+variable, or anything else a session can influence.
+
+From that rule, two obligations:
+
+- **`wire`** replaces a foreign entry — a user who runs `enable_github_mcp`
+  asked for riotbox's server — but warns on stderr first, naming the key and
+  saying that whatever the entry restricted is not preserved. It stays
+  idempotent and still returns 0. Re-wiring riotbox's own entry is silent, and
+  so is re-wiring it under a different token variable: shape, not equality.
+- **`strip`** deletes only an entry matching the shape. Anything else it leaves
+  in place, warns about, and reports as **success** — the user's config is
+  intact, which is what they wanted. It also says riotbox had no entry of its
+  own to remove, because `container/forge-mcp.sh` prints `<forge> MCP cleanup
+  complete` on a 0 return and a user reading stdout alone would otherwise have
+  nothing telling them their own entry is still there.
+
+`tests/forge-mcp.venom.yml` covers these behaviours for both agents and both
+forges, including a GitHub entry narrowed through its environment block, a
+GitLab entry on a different endpoint, and riotbox's own GitLab entry stripped
+after the host it was wired against changed.
+
+### `agent_<name>_github_mcp_wire`
+
+```bash
+agent_<name>_github_mcp_wire() {
+    local token_var="${1:?github_mcp_wire requires the name of the token variable}"
+    ...
+}
+```
+
+Register `github-mcp-server` under the server name `github`, invoked as
+`github-mcp-server stdio`, passing `GITHUB_PERSONAL_ACCESS_TOKEN` to it as a
+reference to `$token_var`.
+
+Validate that `$token_var` is a shell identifier before using it. `jq --arg`
+quotes its input, so this is a typo guard rather than an injection guard: a
+malformed name would otherwise land in the config as a reference the agent
+cannot resolve, presenting as a server that authenticates as nobody.
+
+Parse, build and format everything *before* writing, so a failure that can
+be seen at all is seen while the config is untouched. Skip the write when the
+document already matches — that is what makes re-running an enable command
+free. Return non-zero on every give-up path, leaving the config as found. Warn
+before overwriting an entry riotbox did not write, per
+[Whose entry is it](#whose-entry-is-it).
+
+Do not write `GITHUB_HOST` or `GITHUB_TOOLSETS`. The server reads both from
+the environment it inherits, so a session that exports them already has them,
+and writing an opinion would be one the user did not ask for.
+
+### `agent_<name>_github_mcp_strip`
+
+Delete the `github` entry, and only if riotbox wrote it — see
+[Whose entry is it](#whose-entry-is-it) for how that is decided and why a
+foreign entry is left alone with a warning and a 0 return. Silent and
+successful when there is nothing to remove — it runs against sessions that
+never had the feature.
+
+A malformed config **warns and still returns 0**, unlike the wire verb. The
+disable commands are how a user gets out of a bad state; refusing to finish
+because another tool corrupted the file would strand them with nothing to do
+but hand-edit the file that cannot be parsed. An unparseable config is not
+loaded by the agent either, so nothing is left running.
+
+**Every other give-up path returns non-zero** — an edit that could not be
+built as much as a write that did not land. In each the entry is provably
+still registered, and on a 0 return `container/forge-mcp.sh` prints
+`<agent>: <forge> MCP cleanup complete.` on stdout and exits 0 — telling a
+user who asked to revoke an agent's forge access that the command did its
+job when it did not.
+
+That status line says "cleanup complete" rather than "server removed"
+because a strip returns 0 on four paths where nothing was removed: no
+config file, no entry present, a config too malformed to edit, and a
+foreign entry left in place. The verb itself is what reports an actual
+deletion, with `Removed the <server> MCP server from <config>.` on
+stderr.
+
+### `agent_<name>_gitlab_mcp_wire`
+
+```bash
+agent_<name>_gitlab_mcp_wire() {
+    local api_url="${1:?gitlab_mcp_wire requires the MCP endpoint URL}"
+    local token_var="${2:?gitlab_mcp_wire requires the name of the token variable}"
+    ...
+}
+```
+
+Register `$api_url` under the server name `gitlab` as an HTTP/remote server,
+with the header `Authorization: Bearer <reference to $token_var>`. Reject a
+`$api_url` that is not `http://` or `https://`, and reject one that does not
+end in `/api/v4/mcp` — the ownership shape requires that endpoint, so writing
+any other would register a server `gitlab_mcp_strip` then refuses to remove.
+Same write discipline and same return contract as the GitHub verb.
+
+### `agent_<name>_gitlab_mcp_strip`
+
+Delete the `gitlab` entry, under the same rules as `github_mcp_strip`.
+
+### Where each agent writes
+
+| Agent | File | Key | Lifetime |
+|---|---|---|---|
+| claude | `${CLAUDE_CONFIG_DIR}/.claude.json` | `.mcpServers` | persists across sessions |
+| opencode | `${OPENCODE_CONFIG_DIR}/opencode.jsonc` | `.mcp` | **one session** |
+
+The opencode row is not an oversight. `opencode_setup`
+(`agents/opencode/setup.sh`) regenerates `opencode.jsonc` from host config on
+every container start, so an entry written there survives until the next
+session start and no longer. Writing somewhere more durable would mean
+editing the user's real config on the host, which a session-scoped enable
+command has no business doing. The documented answer is to re-run the enable
+command after a restart.
+
+An opencode implementation must also preserve the file's `//` banner:
+`agents/opencode/headroom-exec.sh` splits the file on it with line-level
+grep, and `opencode_setup` regenerates it from a template.
+
+Contract coverage lives in `tests/forge-mcp.venom.yml` — the verbs for both
+agents, the four commands end to end, credential-variable precedence,
+`GITLAB_HOST` normalization, entry ownership, and the no-secrets-on-disk
+assertion.

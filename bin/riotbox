@@ -21,7 +21,7 @@ VERSION="$(cat "${RIOTBOX_DIR}/VERSION" 2>/dev/null || echo "unknown")"
 # ── Shared environment exported to every helper ───────────────────────────
 CONTAINER_CMD="$(command -v podman 2>/dev/null || echo docker)"
 export CONTAINER_CMD
-export IMAGE_NAME="${IMAGE_NAME:-riotbox}"
+# IMAGE_NAME is resolved after the verb is known — see the dispatch below.
 
 # Agent registry: validates --agent and powers `agents`. Sourced at runtime so
 # newly added agents are picked up without reinstalling.
@@ -139,6 +139,23 @@ cmd="${1:-}"
 	exit 0
 }
 
+# ── Image tag ─────────────────────────────────────────────────────────────
+# scripts/build.sh picks the tag for the build verbs: it is the only thing
+# that knows the build flavors, and a flavor tags its image differently from
+# the base one. So the build verbs must receive a tag the user set explicitly
+# and nothing at all when they did not — anything this dispatcher puts in
+# IMAGE_NAME first is a tag build.sh can no longer choose. The `export` with
+# no `=` is what delivers that: it marks the attribute without creating the
+# variable, so an IMAGE_NAME the user never set stays out of build.sh's
+# environment and build.sh's own default fires. Every verb that does need a
+# tag reaches ensure-image.sh or launch.sh (run.sh and libexec/audit.sh exec
+# into launch.sh), both of which read ${IMAGE_NAME} bare under set -u and
+# would abort on an unbound variable, so the default has to be applied here.
+case "${cmd}" in
+build | rebuild | update) export IMAGE_NAME ;;
+*) export IMAGE_NAME="${IMAGE_NAME:-riotbox}" ;;
+esac
+
 # Per-command --help / -h. Lifted out of the dispatch case so every verb
 # gets the same treatment without having to remember the pattern. Help
 # routes either to a subcommand's own usage block (when it has one) or
@@ -167,6 +184,8 @@ print_command_help() {
 		echo "Environment knobs:"
 		echo "  NODE_VERSIONS_MAX=<N>|all  Cap baked-in Node versions (default 3)"
 		echo "  RIOTBOX_DIAGRAMS=1         Include Chromium + mmdc"
+		echo "  RIOTBOX_GH_GLAB=1          Include gh, glab + the GitHub MCP server;"
+		echo "                             tags 'riotbox-gh-glab', not 'riotbox'"
 		echo "  RIOTBOX_NONINTERACTIVE_BUILD=1  Skip the proceed prompt"
 		echo "  IMAGE_NAME=<tag>           Override the image tag"
 		;;

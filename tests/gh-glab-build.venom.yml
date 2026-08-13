@@ -1,0 +1,429 @@
+name: riotbox-gh-glab build flavor
+vars:
+  root: "."
+
+# The gh/glab flavor is one build-arg on the existing Containerfile, tagged
+# riotbox-gh-glab. These cases run the real build.sh against a stubbed
+# container runtime in a throwaway project tree, so no image is built and the
+# repo's own configs/ directory is never touched.
+#
+# The Containerfile cases below are structural. They exist because the two
+# properties they pin are invisible in a passing build and expensive to lose:
+# an ARG consumed too early silently costs an hour per flavor build, and an
+# unpinned download silently costs the supply-chain guarantee.
+
+testcases:
+  - name: build.sh tags riotbox-gh-glab and passes the flavor build-arg
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+
+          # Minimal project tree: build.sh needs a writable root, a VERSION
+          # and a Containerfile. Copying the whole repo would be slow and
+          # would drag in a .git it has no use for.
+          mkdir -p "${TMP}/proj/scripts" "${TMP}/bin" "${TMP}/home"
+          cp "{{.root}}/scripts/build.sh" "${TMP}/proj/scripts/build.sh"
+          echo "0.0.0-test" >"${TMP}/proj/VERSION"
+          : >"${TMP}/proj/Containerfile"
+
+          # Stub runtime: record argv, succeed.
+          cat >"${TMP}/bin/podman" <<'STUB'
+          #!/usr/bin/env bash
+          printf '%s\n' "$@" >>"${STUB_LOG}"
+          exit 0
+          STUB
+          chmod +x "${TMP}/bin/podman"
+
+          export STUB_LOG="${TMP}/argv.log"
+          export PATH="${TMP}/bin:${PATH}"
+          export HOME="${TMP}/home"
+          export RIOTBOX_NONINTERACTIVE_BUILD=1
+          export RIOTBOX_GH_GLAB=1
+          # Without this the caller's environment, not build.sh, could be what
+          # satisfies the tag assertion below.
+          unset IMAGE_NAME || true
+
+          "${TMP}/proj/scripts/build.sh" >"${TMP}/out.txt" 2>&1 || {
+            cat "${TMP}/out.txt" >&2
+            exit 1
+          }
+
+          # `-t <name>` arrives as two adjacent lines in the recorded argv.
+          grep -A1 -x -- '-t' "${TMP}/argv.log" | tail -n 1 | sed 's/^/tag=/'
+          grep -x -- 'RIOTBOX_GH_GLAB=1' "${TMP}/argv.log" | sed 's/^/arg=/'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tag=riotbox-gh-glab"
+          - result.systemout ShouldContainSubstring "arg=RIOTBOX_GH_GLAB=1"
+
+  - name: build.sh leaves the base image name and flavor off by default
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/proj/scripts" "${TMP}/bin" "${TMP}/home"
+          cp "{{.root}}/scripts/build.sh" "${TMP}/proj/scripts/build.sh"
+          echo "0.0.0-test" >"${TMP}/proj/VERSION"
+          : >"${TMP}/proj/Containerfile"
+          cat >"${TMP}/bin/podman" <<'STUB'
+          #!/usr/bin/env bash
+          printf '%s\n' "$@" >>"${STUB_LOG}"
+          exit 0
+          STUB
+          chmod +x "${TMP}/bin/podman"
+
+          export STUB_LOG="${TMP}/argv.log"
+          export PATH="${TMP}/bin:${PATH}"
+          export HOME="${TMP}/home"
+          export RIOTBOX_NONINTERACTIVE_BUILD=1
+          unset RIOTBOX_GH_GLAB || true
+          unset IMAGE_NAME || true
+
+          "${TMP}/proj/scripts/build.sh" >/dev/null 2>&1
+
+          grep -A1 -x -- '-t' "${TMP}/argv.log" | tail -n 1 | sed 's/^/tag=/'
+          grep -x -- 'RIOTBOX_GH_GLAB=0' "${TMP}/argv.log" | sed 's/^/arg=/'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tag=riotbox"
+          - result.systemout ShouldNotContainSubstring "tag=riotbox-gh-glab"
+          - result.systemout ShouldContainSubstring "arg=RIOTBOX_GH_GLAB=0"
+
+  - name: an explicit IMAGE_NAME still wins over the flavor default
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/proj/scripts" "${TMP}/bin" "${TMP}/home"
+          cp "{{.root}}/scripts/build.sh" "${TMP}/proj/scripts/build.sh"
+          echo "0.0.0-test" >"${TMP}/proj/VERSION"
+          : >"${TMP}/proj/Containerfile"
+          cat >"${TMP}/bin/podman" <<'STUB'
+          #!/usr/bin/env bash
+          printf '%s\n' "$@" >>"${STUB_LOG}"
+          exit 0
+          STUB
+          chmod +x "${TMP}/bin/podman"
+
+          export STUB_LOG="${TMP}/argv.log"
+          export PATH="${TMP}/bin:${PATH}"
+          export HOME="${TMP}/home"
+          export RIOTBOX_NONINTERACTIVE_BUILD=1
+          export RIOTBOX_GH_GLAB=1
+          export IMAGE_NAME="my-own-tag"
+
+          "${TMP}/proj/scripts/build.sh" >/dev/null 2>&1
+
+          grep -A1 -x -- '-t' "${TMP}/argv.log" | tail -n 1 | sed 's/^/tag=/'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tag=my-own-tag"
+
+  # `riotbox build` is the documented way to build the flavor, so the three
+  # cases below drive the CLI rather than build.sh. The CLI exports the shared
+  # environment every helper reads; if it also picks the tag, build.sh's flavor
+  # default can never fire and the flavor lands on top of the base image.
+  - name: riotbox build with the flavor knob tags riotbox-gh-glab
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+
+          # bin/riotbox self-locates from its own path and sources the agent
+          # registry, so the throwaway tree needs bin/ and agents/ on top of
+          # what build.sh alone requires.
+          mkdir -p "${TMP}/proj/bin" "${TMP}/proj/scripts" "${TMP}/bin" "${TMP}/home"
+          cp "{{.root}}/bin/riotbox" "${TMP}/proj/bin/riotbox"
+          cp "{{.root}}/scripts/build.sh" "${TMP}/proj/scripts/build.sh"
+          cp -r "{{.root}}/agents" "${TMP}/proj/agents"
+          echo "0.0.0-test" >"${TMP}/proj/VERSION"
+          : >"${TMP}/proj/Containerfile"
+
+          cat >"${TMP}/bin/podman" <<'STUB'
+          #!/usr/bin/env bash
+          printf '%s\n' "$@" >>"${STUB_LOG}"
+          exit 0
+          STUB
+          chmod +x "${TMP}/bin/podman"
+
+          export STUB_LOG="${TMP}/argv.log"
+          export PATH="${TMP}/bin:${PATH}"
+          export HOME="${TMP}/home"
+          # HOME alone does not isolate a caller whose XDG_CONFIG_HOME points
+          # somewhere outside it.
+          unset XDG_CONFIG_HOME || true
+          export RIOTBOX_NONINTERACTIVE_BUILD=1
+          export RIOTBOX_GH_GLAB=1
+          unset IMAGE_NAME || true
+          # An ambient agent name the registry does not know exits the CLI 2
+          # before it ever reaches the build verb.
+          unset RIOTBOX_AGENT || true
+
+          "${TMP}/proj/bin/riotbox" build >"${TMP}/out.txt" 2>&1 || {
+            cat "${TMP}/out.txt" >&2
+            exit 1
+          }
+
+          grep -A1 -x -- '-t' "${TMP}/argv.log" | tail -n 1 | sed 's/^/tag=/'
+          grep -x -- 'RIOTBOX_GH_GLAB=1' "${TMP}/argv.log" | sed 's/^/arg=/'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tag=riotbox-gh-glab"
+          - result.systemout ShouldContainSubstring "arg=RIOTBOX_GH_GLAB=1"
+
+  - name: riotbox build without the flavor knob tags riotbox
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/proj/bin" "${TMP}/proj/scripts" "${TMP}/bin" "${TMP}/home"
+          cp "{{.root}}/bin/riotbox" "${TMP}/proj/bin/riotbox"
+          cp "{{.root}}/scripts/build.sh" "${TMP}/proj/scripts/build.sh"
+          cp -r "{{.root}}/agents" "${TMP}/proj/agents"
+          echo "0.0.0-test" >"${TMP}/proj/VERSION"
+          : >"${TMP}/proj/Containerfile"
+          cat >"${TMP}/bin/podman" <<'STUB'
+          #!/usr/bin/env bash
+          printf '%s\n' "$@" >>"${STUB_LOG}"
+          exit 0
+          STUB
+          chmod +x "${TMP}/bin/podman"
+
+          export STUB_LOG="${TMP}/argv.log"
+          export PATH="${TMP}/bin:${PATH}"
+          export HOME="${TMP}/home"
+          unset XDG_CONFIG_HOME || true
+          export RIOTBOX_NONINTERACTIVE_BUILD=1
+          unset RIOTBOX_GH_GLAB || true
+          unset IMAGE_NAME || true
+          unset RIOTBOX_AGENT || true
+
+          "${TMP}/proj/bin/riotbox" build >"${TMP}/out.txt" 2>&1 || {
+            cat "${TMP}/out.txt" >&2
+            exit 1
+          }
+
+          grep -A1 -x -- '-t' "${TMP}/argv.log" | tail -n 1 | sed 's/^/tag=/'
+          grep -x -- 'RIOTBOX_GH_GLAB=0' "${TMP}/argv.log" | sed 's/^/arg=/'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tag=riotbox"
+          - result.systemout ShouldNotContainSubstring "tag=riotbox-gh-glab"
+          - result.systemout ShouldContainSubstring "arg=RIOTBOX_GH_GLAB=0"
+
+  - name: an explicit IMAGE_NAME still wins on the riotbox CLI path
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/proj/bin" "${TMP}/proj/scripts" "${TMP}/bin" "${TMP}/home"
+          cp "{{.root}}/bin/riotbox" "${TMP}/proj/bin/riotbox"
+          cp "{{.root}}/scripts/build.sh" "${TMP}/proj/scripts/build.sh"
+          cp -r "{{.root}}/agents" "${TMP}/proj/agents"
+          echo "0.0.0-test" >"${TMP}/proj/VERSION"
+          : >"${TMP}/proj/Containerfile"
+          cat >"${TMP}/bin/podman" <<'STUB'
+          #!/usr/bin/env bash
+          printf '%s\n' "$@" >>"${STUB_LOG}"
+          exit 0
+          STUB
+          chmod +x "${TMP}/bin/podman"
+
+          export STUB_LOG="${TMP}/argv.log"
+          export PATH="${TMP}/bin:${PATH}"
+          export HOME="${TMP}/home"
+          unset XDG_CONFIG_HOME || true
+          export RIOTBOX_NONINTERACTIVE_BUILD=1
+          export RIOTBOX_GH_GLAB=1
+          unset RIOTBOX_AGENT || true
+          export IMAGE_NAME="my-tag"
+
+          "${TMP}/proj/bin/riotbox" build >"${TMP}/out.txt" 2>&1 || {
+            cat "${TMP}/out.txt" >&2
+            exit 1
+          }
+
+          grep -A1 -x -- '-t' "${TMP}/argv.log" | tail -n 1 | sed 's/^/tag=/'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tag=my-tag"
+          - result.systemout ShouldNotContainSubstring "tag=riotbox"
+
+  # The other half of the per-verb tag resolution above. The build verbs get
+  # IMAGE_NAME exported without a value so build.sh can still choose the flavor
+  # tag; every other verb has to get a real one, because ensure-image.sh and
+  # launch.sh read ${IMAGE_NAME} bare under `set -u` and abort the launch on an
+  # unbound variable. Nothing else pins that, and the failure only shows up at
+  # runtime.
+  #
+  # `riotbox shell` runs ensure-image.sh, checkpoint.sh and launch.sh in that
+  # order, and all three are stubbed here — checkpoint.sh not incidentally: the
+  # real one writes git refs and a backup directory for whatever repository it
+  # is run against.
+  - name: a runtime verb reaches the launch helpers with the default and the explicit tag
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/proj/bin" "${TMP}/proj/libexec" "${TMP}/home"
+          cp "{{.root}}/bin/riotbox" "${TMP}/proj/bin/riotbox"
+          cp -r "{{.root}}/agents" "${TMP}/proj/agents"
+          echo "0.0.0-test" >"${TMP}/proj/VERSION"
+
+          # These two read IMAGE_NAME the way the real helpers do — bare,
+          # under set -u — so an unbound variable aborts here exactly as it
+          # would in production.
+          # The brackets are what make the assertions exact: a bare
+          # IMAGE_NAME=riotbox would also be satisfied by riotbox-gh-glab.
+          for helper in ensure-image launch; do
+            cat >"${TMP}/proj/libexec/${helper}.sh" <<STUB
+          #!/usr/bin/env bash
+          set -euo pipefail
+          echo "${helper} IMAGE_NAME=[\${IMAGE_NAME}]"
+          STUB
+            chmod +x "${TMP}/proj/libexec/${helper}.sh"
+          done
+          cat >"${TMP}/proj/libexec/checkpoint.sh" <<'STUB'
+          #!/usr/bin/env bash
+          # Stubbed to keep the real one away from this repository's git refs.
+          exit 0
+          STUB
+          chmod +x "${TMP}/proj/libexec/checkpoint.sh"
+
+          export HOME="${TMP}/home"
+          # Nothing here writes an agent config, but a caller's ambient
+          # CLAUDE_CONFIG_DIR / OPENCODE_CONFIG_DIR beats the redirected HOME,
+          # and this case must not be the one that discovers that changed.
+          export CLAUDE_CONFIG_DIR="${TMP}/home/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/home/.config/opencode"
+          unset XDG_CONFIG_HOME || true
+          unset IMAGE_NAME || true
+          unset RIOTBOX_AGENT || true
+
+          "${TMP}/proj/bin/riotbox" shell >"${TMP}/out.txt" 2>&1 || {
+            cat "${TMP}/out.txt" >&2
+            exit 1
+          }
+          sed 's/^/default /' "${TMP}/out.txt"
+
+          # README documents `IMAGE_NAME=riotbox-gh-glab riotbox shell` as the
+          # way to run the flavor, and the same `*)` arm is what carries it:
+          # a default that ignored what the user set would strand the flavor
+          # image as unrunnable while every assertion above still passed.
+          export IMAGE_NAME="riotbox-gh-glab"
+          "${TMP}/proj/bin/riotbox" shell >"${TMP}/flavor.txt" 2>&1 || {
+            cat "${TMP}/flavor.txt" >&2
+            exit 1
+          }
+          sed 's/^/explicit /' "${TMP}/flavor.txt"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "default ensure-image IMAGE_NAME=[riotbox]"
+          - result.systemout ShouldContainSubstring "default launch IMAGE_NAME=[riotbox]"
+          - result.systemout ShouldContainSubstring "explicit ensure-image IMAGE_NAME=[riotbox-gh-glab]"
+          - result.systemout ShouldContainSubstring "explicit launch IMAGE_NAME=[riotbox-gh-glab]"
+
+  # The flavor's whole cost model rests on this. ARG invalidates the layer
+  # cache from the point it is USED, so consuming RIOTBOX_GH_GLAB anywhere but
+  # the tail makes riotbox and riotbox-gh-glab share nothing and turns a
+  # two-package flavor into a full rebuild — 15-60 minutes and gigabytes.
+  # RIOTBOX_DIAGRAMS is the pattern being followed but NOT the placement: it
+  # sits at the top because it gates a base system package.
+  - name: the flavor ARG is consumed in the last tenth of the Containerfile
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          total="$(wc -l <Containerfile)"
+          first_use="$(grep -n 'RIOTBOX_GH_GLAB' Containerfile | head -n 1 | cut -d: -f1)"
+          threshold=$(( total * 9 / 10 ))
+          echo "total=${total} first_use=${first_use} threshold=${threshold}"
+          if [ "${first_use}" -lt "${threshold}" ]; then
+            echo "FAIL: RIOTBOX_GH_GLAB first used at line ${first_use}, before line ${threshold}." >&2
+            echo "      The flavor would fork the layer cache there and rebuild everything after it." >&2
+            exit 1
+          fi
+          echo "ARG_IS_LATE"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ARG_IS_LATE"
+
+  - name: github-mcp-server is version-pinned and checksum-verified for both arches
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          grep -E '^ARG GITHUB_MCP_SERVER_VERSION=v[0-9]+\.[0-9]+\.[0-9]+$' Containerfile
+          grep -E '^ARG GITHUB_MCP_SERVER_SHA256_AMD64=[0-9a-f]{64}$' Containerfile
+          grep -E '^ARG GITHUB_MCP_SERVER_SHA256_ARM64=[0-9a-f]{64}$' Containerfile
+          grep -q 'sha256sum -c -' Containerfile
+          echo "PINNED_AND_VERIFIED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PINNED_AND_VERIFIED"
+
+  - name: the four forge commands are copied into the image
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          for c in enable_github_mcp enable_gitlab_mcp disable_github_mcp disable_gitlab_mcp; do
+            test -x "container/${c}" || { echo "FAIL: container/${c} is not executable" >&2; exit 1; }
+            grep -q "container/${c}" Containerfile || { echo "FAIL: ${c} is never COPYed" >&2; exit 1; }
+          done
+          grep -q 'container/forge-mcp.sh' Containerfile
+          echo "COMMANDS_SHIPPED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "COMMANDS_SHIPPED"
+
+  # `task build` and `task build:gh-glab` are the developer-facing pair. --dry
+  # resolves and prints each one without running it, which proves the task
+  # exists and points somewhere — a --list substring match would still pass if
+  # the task resolved to nothing.
+  - name: task build and task build:gh-glab both resolve
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          task --list | grep -E 'build:gh-glab' | sed 's/^/listed=/'
+          task --dry build >/dev/null && echo "resolves=build"
+          task --dry build:gh-glab >/dev/null && echo "resolves=build:gh-glab"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "listed="
+          - result.systemout ShouldContainSubstring "resolves=build"
+          - result.systemout ShouldContainSubstring "resolves=build:gh-glab"
+
+  - name: the gh-glab task sets the flavor build-arg rather than relying on the caller
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          # The env assignment is what makes `task build:gh-glab` differ from
+          # `task build`; without it the task would build the base image under
+          # a flavor name.
+          grep -rn 'RIOTBOX_GH_GLAB' .taskfiles/
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RIOTBOX_GH_GLAB"

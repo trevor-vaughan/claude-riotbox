@@ -21,6 +21,8 @@ tasks:
         {{.ROOT_DIR}}/scripts/*.sh \
         {{.ROOT_DIR}}/scripts/lib/*.sh \
         {{.ROOT_DIR}}/container/*.sh \
+        {{.ROOT_DIR}}/container/enable_*_mcp \
+        {{.ROOT_DIR}}/container/disable_*_mcp \
         {{.ROOT_DIR}}/.taskfiles/scripts/*.sh \
         {{.ROOT_DIR}}/agents/*.sh \
         {{.ROOT_DIR}}/agents/*/*.sh \

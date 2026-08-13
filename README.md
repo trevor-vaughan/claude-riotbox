@@ -248,6 +248,12 @@ The image comes with a broad set of tools pre-installed so the agent can start w
 
 - podman, fuse-overlayfs, slirp4netns (for nested container support)
 
+**Forge CLIs** (only in the `riotbox-gh-glab` image — see [GitHub and GitLab](#github-and-gitlab-the-riotbox-gh-glab-flavor)):
+
+- [`gh`](https://github.com/cli/cli) — GitHub CLI
+- [`glab`](https://gitlab.com/gitlab-org/cli) — GitLab CLI
+- [`github-mcp-server`](https://github.com/github/github-mcp-server) — GitHub's MCP server (registered on demand, never by default)
+
 ## Plugins
 
 Claude Code [plugins](https://docs.anthropic.com/en/docs/claude-code/plugins) are managed by `container/plugin-setup.sh`, which runs at every container startup. Plugins are loaded in order of precedence (lowest to highest):
@@ -935,6 +941,148 @@ Details worth knowing:
 - **On unowned project directories** (podman `:O` mounts — see [Unowned project
   directories](#unowned-project-directories)), all writes are ephemeral, so the index is
   discarded when the container exits and `codegraph init` runs again next session.
+
+## GitHub and GitLab (the riotbox-gh-glab flavor)
+
+A second image, `riotbox-gh-glab`, adds the `gh` and `glab` CLIs and can attach the
+GitHub and GitLab MCP servers to your agents. Neither MCP server is registered by
+default — you turn each one on per session, with a command.
+
+```sh
+# Build it. Tags riotbox-gh-glab; the base riotbox image is untouched.
+RIOTBOX_GH_GLAB=1 riotbox build
+
+# From a repo checkout, the same thing:
+task build:gh-glab
+```
+
+The base image and the flavor share every layer but the last, so if you already have
+`riotbox` built this takes about a minute rather than the usual 15–60.
+
+Run it by pointing `IMAGE_NAME` at the flavor:
+
+```sh
+IMAGE_NAME=riotbox-gh-glab riotbox shell
+```
+
+Prefer the environment over `~/.config/riotbox/config` for this one. A forcing
+`IMAGE_NAME=riotbox-gh-glab` in that file does reach the launch — but not the
+check in front of it. `riotbox` verifies the tag exists before `launch.sh`
+sources the config, so the check always runs against `riotbox` while the
+container runs on the flavor. That splits two ways, both bad:
+
+- The base image is missing but the flavor is built: `riotbox shell` stops with
+  `ERROR: Image 'riotbox' not found. Run 'riotbox build' first.` — a tag you
+  never asked for, blocking a launch that did not need it.
+- The flavor is missing but the base is built: the check passes, and the
+  failure comes from podman or docker complaining about `riotbox-gh-glab`,
+  without riotbox's build hint.
+
+The `: "${IMAGE_NAME:=riotbox-gh-glab}"` default form the config file uses
+elsewhere does nothing at all here — `riotbox` has already set `IMAGE_NAME` by
+the time the file is read, so `:=` never assigns.
+
+`riotbox doctor` is the exception: its preflight reads the config before it
+reads the variable, so a forcing assignment there does probe the flavor. From
+the environment it works the same way:
+
+```sh
+IMAGE_NAME=riotbox-gh-glab riotbox doctor
+```
+
+### Refreshing and removing the flavor
+
+`riotbox rebuild`, `riotbox update` and `task container:clean` all default to the
+base `riotbox` tag. The build verbs need `RIOTBOX_GH_GLAB=1`, the same knob the
+first build took; `container:clean` needs the tag:
+
+```sh
+# Re-pull the LLM CLI tools in the flavor (same knob as the build)
+RIOTBOX_GH_GLAB=1 riotbox update
+RIOTBOX_GH_GLAB=1 task update       # from a repo checkout
+
+# Rebuild it from scratch
+RIOTBOX_GH_GLAB=1 riotbox rebuild
+
+# Delete the flavor image, leaving the base one alone
+IMAGE_NAME=riotbox-gh-glab task container:clean
+
+# Without a checkout, go through your container runtime directly
+podman rmi riotbox-gh-glab          # or: docker rmi riotbox-gh-glab
+```
+
+### Getting your tokens into the session
+
+The MCP servers authenticate with tokens from the environment, and those have to
+reach the container. They are deliberately **not** forwarded by default — that would
+push your forge credentials into every riotbox session, including ones with no forge
+tooling and no reason to hold a token.
+
+```sh
+# ~/.config/riotbox/config
+RIOTBOX_PASSTHROUGH_EXTRA_VARS="GITHUB_TOKEN GITLAB_TOKEN GITLAB_HOST"
+```
+
+| Variable | Used by | Notes |
+|---|---|---|
+| `GITHUB_TOKEN` | GitHub MCP server, `gh` | `GITHUB_PERSONAL_ACCESS_TOKEN` is used instead when both are set |
+| `GITLAB_TOKEN` | GitLab MCP server, `glab` | needs GitLab's `mcp` token scope |
+| `GITLAB_HOST` | GitLab MCP server, `glab` | bare host or full URL; defaults to `gitlab.com` |
+
+### Turning the servers on and off
+
+Inside the container:
+
+```sh
+enable_github_mcp      # register the GitHub MCP server with every agent
+enable_gitlab_mcp      # register the GitLab MCP server with every agent
+
+disable_github_mcp     # take it back out
+disable_gitlab_mcp
+```
+
+Each command prints one status line per agent and exits non-zero if any agent
+failed. The detail is on stderr — which entry was removed, and which one was
+left alone because you wrote it rather than riotbox — so keep both streams if
+you are redirecting. If no token variable is set it tells you which ones it
+looked for and writes nothing.
+
+Three things worth knowing:
+
+- **Start or restart your agent afterwards.** MCP servers are read when an agent
+  starts, so a `claude` already running in another pane will not see the change.
+- **Re-run these after a container restart if you use opencode.** riotbox rebuilds
+  opencode's config from your host config at every session start, so opencode wiring
+  lasts one session. Claude Code's persists.
+- **Your token is never written to disk.** What lands in the agent config is a
+  *reference* to the environment variable — `${GITHUB_TOKEN}` for Claude Code,
+  `{env:GITHUB_TOKEN}` for opencode — which the agent expands when it launches the
+  server. Session directories live on your host and outlast the container, so a token
+  written into one would outlast it too.
+
+### GitLab specifics
+
+GitLab's MCP server is not a separate program: it is an endpoint on your own GitLab
+instance at `https://<host>/api/v4/mcp`, and `enable_gitlab_mcp` points your agents
+at it. Your instance has to have it switched on — see
+[GitLab's MCP server documentation](https://docs.gitlab.com/user/model_context_protocol/mcp_server/)
+for the instance and group settings involved.
+
+Create a personal access token with the **`mcp`** scope and export it as
+`GITLAB_TOKEN`. GitLab documents browser-based OAuth as the usual way to connect,
+which is no use in a headless container; a token in the `Authorization` header is the
+path that works here.
+
+### `gh` and `glab` themselves
+
+Both are on `PATH` and read their own environment variables (`GITHUB_TOKEN`,
+`GITLAB_TOKEN`, `GITLAB_HOST`), so once those are passed through they work with no
+further setup. Neither is touched by the enable commands — those are only about MCP.
+
+> **A word on prompt injection.** Pointing an autonomous agent at issues, pull
+> requests and merge requests means feeding it text written by anyone who can open
+> one. Treat MCP tool output as untrusted input; enable these servers for work on
+> repositories whose contributors you trust. See [Security model](#security-model).
 
 ## Overlay mode (podman-only)
 

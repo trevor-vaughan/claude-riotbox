@@ -19,6 +19,12 @@ _AGENT_CLAUDE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./context-mode.sh
 source "${_AGENT_CLAUDE_DIR}/context-mode.sh"
 
+# GitHub/GitLab MCP verbs (optional contract — see docs/dev/agent-contract.md).
+# Only the riotbox-gh-glab image ships the commands that call these; the verbs
+# themselves are harmless everywhere else, since nothing invokes them unasked.
+# shellcheck source=./forge-mcp.sh
+source "${_AGENT_CLAUDE_DIR}/forge-mcp.sh"
+
 # Name of the binary on PATH inside the container.
 agent_claude_real_binary() {
 	printf 'claude\n'

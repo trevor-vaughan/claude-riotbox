@@ -1,0 +1,2550 @@
+name: forge MCP wiring (GitHub + GitLab)
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# The GitHub and GitLab MCP servers are wired on demand by the
+# enable_github_mcp / enable_gitlab_mcp commands in the riotbox-gh-glab
+# image, never at build or session start. These tests cover the agent
+# verbs those commands dispatch to.
+#
+# The load-bearing property, asserted directly in "no credential value is
+# ever written to disk": what lands in an agent config is a REFERENCE to an
+# environment variable, never the token itself. The session directory is a
+# host bind mount, so a token written there outlives the container.
+#
+# ── Where things are ────────────────────────────────────────────────────────
+#
+# The file is long. Every section below is introduced by a banner comment of
+# the form `# ── <title> ──`, in this order:
+#
+#   the verbs, one agent at a time    what wire and strip write, preserve,
+#                                     refuse and return, for both agents
+#   whose entry is it                 the ownership rule, then a section per
+#                                     forge, then the entry it cannot classify
+#   wire input guards                 the token-variable and URL checks the
+#                                     shipped commands cannot reach
+#   the enable_* / disable_* commands the four real entry points, end to end
+#   the dispatcher when an agent      forge_mcp_apply's skip, partial-failure
+#     cannot deliver                  and no-support paths, via a stub agent
+
+testcases:
+  # ── the verbs, one agent at a time ────────────────────────────────────────
+  #
+  # What each verb writes and what it leaves alone, then every way it can give
+  # up: a malformed config, a config directory it cannot write, and a document
+  # that parses but cannot be indexed. The rule these share is that a give-up
+  # path leaves the file byte-identical, and only a strip against an
+  # unparseable config both warns and returns 0.
+  - name: claude github wire writes a stdio entry naming the token variable
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          agent_claude_github_mcp_wire GITHUB_TOKEN
+
+          jq -r '
+            .mcpServers.github
+            | "type=" + .type
+            + " command=" + .command
+            + " args=" + (.args | join(","))
+            + " token=" + .env.GITHUB_PERSONAL_ACCESS_TOKEN
+          ' "${CLAUDE_CONFIG_DIR}/.claude.json"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "type=stdio"
+          - result.systemout ShouldContainSubstring "command=github-mcp-server"
+          - result.systemout ShouldContainSubstring "args=stdio"
+          - result.systemout ShouldContainSubstring "token=${GITHUB_TOKEN}"
+
+  - name: claude gitlab wire writes an http entry with a bearer header
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          agent_claude_gitlab_mcp_wire "https://gitlab.example.com/api/v4/mcp" GITLAB_TOKEN
+
+          jq -r '
+            .mcpServers.gitlab
+            | "type=" + .type
+            + " url=" + .url
+            + " auth=" + .headers.Authorization
+          ' "${CLAUDE_CONFIG_DIR}/.claude.json"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "type=http"
+          - result.systemout ShouldContainSubstring "url=https://gitlab.example.com/api/v4/mcp"
+          - result.systemout ShouldContainSubstring "auth=Bearer ${GITLAB_TOKEN}"
+
+  - name: claude wire preserves unrelated MCP servers and account metadata
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+          cat >"${CLAUDE_CONFIG_DIR}/.claude.json" <<'JSON'
+          {
+            "someAccountKey": "keep-me",
+            "mcpServers": {
+              "codegraph": {"type": "stdio", "command": "codegraph", "args": ["mcp"]}
+            }
+          }
+          JSON
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          agent_claude_github_mcp_wire GITHUB_TOKEN
+
+          jq -r '
+            "account=" + .someAccountKey
+            + " codegraph=" + .mcpServers.codegraph.command
+            + " github=" + .mcpServers.github.command
+          ' "${CLAUDE_CONFIG_DIR}/.claude.json"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "account=keep-me"
+          - result.systemout ShouldContainSubstring "codegraph=codegraph"
+          - result.systemout ShouldContainSubstring "github=github-mcp-server"
+
+  - name: claude wire is idempotent — a second identical call changes nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          agent_claude_github_mcp_wire GITHUB_TOKEN
+          first="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+          agent_claude_github_mcp_wire GITHUB_TOKEN
+          second="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+          if [ "${first}" = "${second}" ]; then
+            echo "STABLE"
+          else
+            echo "CHANGED: ${first} -> ${second}" >&2
+            exit 1
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "STABLE"
+
+  - name: claude wire re-run with a different token variable updates the reference
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          agent_claude_github_mcp_wire GITHUB_TOKEN
+          agent_claude_github_mcp_wire GITHUB_PERSONAL_ACCESS_TOKEN
+
+          jq -r '.mcpServers.github.env.GITHUB_PERSONAL_ACCESS_TOKEN' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+
+  - name: claude strip removes only riotbox entries
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+          cat >"${CLAUDE_CONFIG_DIR}/.claude.json" <<'JSON'
+          {
+            "mcpServers": {
+              "codegraph": {"type": "stdio", "command": "codegraph", "args": ["mcp"]}
+            }
+          }
+          JSON
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          agent_claude_github_mcp_wire GITHUB_TOKEN
+          agent_claude_gitlab_mcp_wire "https://gitlab.com/api/v4/mcp" GITLAB_TOKEN
+          agent_claude_github_mcp_strip
+          agent_claude_gitlab_mcp_strip
+
+          jq -r '"remaining=" + (.mcpServers | keys | join(","))' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "remaining=codegraph"
+
+  - name: claude strip on a config that never had the entry is a silent no-op
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+          printf '{"mcpServers":{"codegraph":{"command":"codegraph"}}}\n' \
+            >"${CLAUDE_CONFIG_DIR}/.claude.json"
+          before="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          out="$(agent_claude_github_mcp_strip 2>&1)"
+          after="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+          if [ "${before}" != "${after}" ]; then
+            echo "FAIL: file was rewritten" >&2
+            exit 1
+          fi
+          if [ -n "${out}" ]; then
+            echo "FAIL: expected silence, got: ${out}" >&2
+            exit 1
+          fi
+          echo "SILENT_NOOP"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SILENT_NOOP"
+
+  - name: claude strip with no config file at all returns 0 and creates nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          agent_claude_gitlab_mcp_strip
+          if [ -e "${CLAUDE_CONFIG_DIR}/.claude.json" ]; then
+            echo "FAIL: strip created a config file" >&2
+            exit 1
+          fi
+          echo "NOTHING_CREATED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NOTHING_CREATED"
+
+  - name: opencode github wire writes a local server naming the token variable
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${OPENCODE_CONFIG_DIR}"
+          printf '// generated banner line\n{"share":"disabled"}\n' \
+            >"${OPENCODE_CONFIG_DIR}/opencode.jsonc"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          agent_opencode_github_mcp_wire GITHUB_TOKEN
+
+          grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | jq -r '
+            .mcp.github
+            | "type=" + .type
+            + " command=" + (.command | join(","))
+            + " enabled=" + (.enabled | tostring)
+            + " token=" + .environment.GITHUB_PERSONAL_ACCESS_TOKEN
+          '
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "type=local"
+          - result.systemout ShouldContainSubstring "command=github-mcp-server,stdio"
+          - result.systemout ShouldContainSubstring "enabled=true"
+          - result.systemout ShouldContainSubstring "token={env:GITHUB_TOKEN}"
+
+  - name: opencode gitlab wire writes a remote server with a bearer header
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          agent_opencode_gitlab_mcp_wire "https://gitlab.example.com/api/v4/mcp" GITLAB_TOKEN
+
+          grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | jq -r '
+            .mcp.gitlab
+            | "type=" + .type
+            + " url=" + .url
+            + " auth=" + .headers.Authorization
+          '
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "type=remote"
+          - result.systemout ShouldContainSubstring "url=https://gitlab.example.com/api/v4/mcp"
+          - result.systemout ShouldContainSubstring "auth=Bearer {env:GITLAB_TOKEN}"
+
+  # headroom-exec.sh splits this file into banner and body with line-level
+  # grep, and opencode_setup regenerates it from a banner template. A writer
+  # that dropped the banner would break the first and silently disagree with
+  # the second.
+  - name: opencode wire preserves the generated banner and unrelated config keys
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${OPENCODE_CONFIG_DIR}"
+          cat >"${OPENCODE_CONFIG_DIR}/opencode.jsonc" <<'JSONC'
+          // This file is generated by riotbox at session start.
+          // Edit your host opencode.json/opencode.jsonc to change anything else.
+          {"permission":"allow","share":"disabled","mcp":{"other":{"type":"local","command":["x"]}}}
+          JSONC
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          agent_opencode_github_mcp_wire GITHUB_TOKEN
+
+          echo "banner=$(grep -c '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc")"
+          head -n 1 "${OPENCODE_CONFIG_DIR}/opencode.jsonc"
+          grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | jq -r '
+            "permission=" + .permission
+            + " other=" + (.mcp.other.command | join(","))
+            + " github=" + (.mcp.github.command | join(","))
+          '
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "banner=2"
+          - result.systemout ShouldContainSubstring "// This file is generated by riotbox at session start."
+          - result.systemout ShouldContainSubstring "permission=allow"
+          - result.systemout ShouldContainSubstring "other=x"
+          - result.systemout ShouldContainSubstring "github=github-mcp-server,stdio"
+
+  - name: opencode strip removes only riotbox entries and keeps the banner
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${OPENCODE_CONFIG_DIR}"
+          cat >"${OPENCODE_CONFIG_DIR}/opencode.jsonc" <<'JSONC'
+          // generated banner line
+          {"mcp":{"other":{"type":"local","command":["x"]}}}
+          JSONC
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          agent_opencode_github_mcp_wire GITHUB_TOKEN
+          agent_opencode_gitlab_mcp_wire "https://gitlab.com/api/v4/mcp" GITLAB_TOKEN
+          agent_opencode_github_mcp_strip
+          agent_opencode_gitlab_mcp_strip
+
+          echo "banner=$(grep -c '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc")"
+          grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | jq -r \
+            '"remaining=" + (.mcp | keys | join(","))'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "banner=1"
+          - result.systemout ShouldContainSubstring "remaining=other"
+
+  - name: opencode strip on a config that never had the entry is a silent no-op
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${OPENCODE_CONFIG_DIR}"
+          printf '// banner\n{"share":"disabled"}\n' \
+            >"${OPENCODE_CONFIG_DIR}/opencode.jsonc"
+          before="$(sha256sum "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | awk '{print $1}')"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          out="$(agent_opencode_gitlab_mcp_strip 2>&1)"
+          after="$(sha256sum "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | awk '{print $1}')"
+
+          if [ "${before}" != "${after}" ]; then
+            echo "FAIL: file was rewritten" >&2
+            exit 1
+          fi
+          if [ -n "${out}" ]; then
+            echo "FAIL: expected silence, got: ${out}" >&2
+            exit 1
+          fi
+          echo "SILENT_NOOP"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SILENT_NOOP"
+
+  - name: opencode wire refuses a malformed body and leaves the file byte-identical
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${OPENCODE_CONFIG_DIR}"
+          printf '// banner\n{ not json at all\n' \
+            >"${OPENCODE_CONFIG_DIR}/opencode.jsonc"
+          before="$(sha256sum "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | awk '{print $1}')"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          rc=0
+          agent_opencode_github_mcp_wire GITHUB_TOKEN 2>/dev/null || rc=$?
+          after="$(sha256sum "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | awk '{print $1}')"
+
+          if [ "${rc}" -eq 0 ]; then
+            echo "FAIL: wire returned 0 on a malformed body" >&2
+            exit 1
+          fi
+          if [ "${before}" != "${after}" ]; then
+            echo "FAIL: malformed config was overwritten" >&2
+            exit 1
+          fi
+          echo "REFUSED_AND_UNCHANGED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REFUSED_AND_UNCHANGED"
+
+  # A strip that could not write must not be reported as a success: the caller
+  # prints "<forge> MCP cleanup complete" on a 0 return, and the user asked to
+  # revoke the agent's forge access. Making the config file's DIRECTORY
+  # read-only is what fails json_write_atomic — it stages a temp file beside
+  # the target, so the directory is the write it needs.
+  - name: claude strip returns non-zero when the config cannot be written
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          # The mode has to come back before rm -rf can clear the tree. Single
+          # quotes, so this reads the exports below at EXIT rather than now.
+          trap 'chmod u+w "${CLAUDE_CONFIG_DIR}" 2>/dev/null || true; rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          agent_claude_github_mcp_wire GITHUB_TOKEN
+          chmod a-w "${CLAUDE_CONFIG_DIR}"
+          # touch, not `: >`: a redirection failure on a special builtin would
+          # abort this script instead of taking the branch below.
+          if touch "${CLAUDE_CONFIG_DIR}/probe" 2>/dev/null; then
+            echo "FAIL: the config directory is still writable, this proves nothing" >&2
+            exit 1
+          fi
+
+          # Without this, a renamed verb would return 127 and read as a pass.
+          if ! declare -F agent_claude_github_mcp_strip >/dev/null; then
+            echo "FAIL: agent_claude_github_mcp_strip is not defined" >&2
+            exit 1
+          fi
+          rc=0
+          err="$(agent_claude_github_mcp_strip 2>&1 >/dev/null)" || rc=$?
+
+          if [ "${rc}" -eq 0 ]; then
+            echo "FAIL: strip returned 0 after the write failed" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"could not write"*) : ;;
+          *)
+            echo "FAIL: expected a write warning, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if ! jq -e '.mcpServers | has("github")' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null; then
+            echo "FAIL: the github entry is gone — the write did not fail" >&2
+            exit 1
+          fi
+          echo "FAILED_LOUDLY_ENTRY_KEPT"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAILED_LOUDLY_ENTRY_KEPT"
+
+  # The deliberate asymmetry with the wire verbs: an unparseable config is not
+  # loaded by the agent either, and the disable commands are how a user gets
+  # out of that state, so strip warns and still reports success.
+  - name: claude strip warns and returns 0 on a malformed config
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+          printf '{ this is not json' >"${CLAUDE_CONFIG_DIR}/.claude.json"
+          before="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          if ! declare -F agent_claude_github_mcp_strip >/dev/null; then
+            echo "FAIL: agent_claude_github_mcp_strip is not defined" >&2
+            exit 1
+          fi
+          rc=0
+          err="$(agent_claude_github_mcp_strip 2>&1 >/dev/null)" || rc=$?
+          after="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+          if [ "${rc}" -ne 0 ]; then
+            echo "FAIL: strip returned ${rc} on a malformed config" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"is not valid JSON"*) : ;;
+          *)
+            echo "FAIL: expected a parse warning, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if [ "${before}" != "${after}" ]; then
+            echo "FAIL: malformed config was rewritten" >&2
+            exit 1
+          fi
+          echo "WARNED_AND_UNCHANGED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "WARNED_AND_UNCHANGED"
+
+  # A document that parses but is not an object reaches the branch between the
+  # two above: jq cannot index an array with .mcpServers, so the entry can be
+  # neither found nor deleted. Same consequence as a failed write — the entry
+  # is still registered — so the same non-zero return.
+  - name: claude strip returns non-zero when the entry cannot be edited out
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+          printf '[1, 2, 3]\n' >"${CLAUDE_CONFIG_DIR}/.claude.json"
+          before="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          if ! declare -F agent_claude_github_mcp_strip >/dev/null; then
+            echo "FAIL: agent_claude_github_mcp_strip is not defined" >&2
+            exit 1
+          fi
+          rc=0
+          err="$(agent_claude_github_mcp_strip 2>&1 >/dev/null)" || rc=$?
+          after="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+          if [ "${rc}" -eq 0 ]; then
+            echo "FAIL: strip returned 0 after the edit failed" >&2
+            exit 1
+          fi
+          # Names the branch: the parse succeeded, the edit is what gave up.
+          case "${err}" in
+          *"could not clean"*) : ;;
+          *)
+            echo "FAIL: expected an edit warning, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if [ "${before}" != "${after}" ]; then
+            echo "FAIL: the config was rewritten" >&2
+            exit 1
+          fi
+          echo "FAILED_LOUDLY_CONFIG_UNCHANGED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAILED_LOUDLY_CONFIG_UNCHANGED"
+
+  # Same mechanism, probe and declare -F guard as the claude twin above, which
+  # is where they are explained.
+  - name: opencode strip returns non-zero when the config cannot be written
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'chmod u+w "${OPENCODE_CONFIG_DIR}" 2>/dev/null || true; rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          agent_opencode_github_mcp_wire GITHUB_TOKEN
+          chmod a-w "${OPENCODE_CONFIG_DIR}"
+          if touch "${OPENCODE_CONFIG_DIR}/probe" 2>/dev/null; then
+            echo "FAIL: the config directory is still writable, this proves nothing" >&2
+            exit 1
+          fi
+
+          if ! declare -F agent_opencode_github_mcp_strip >/dev/null; then
+            echo "FAIL: agent_opencode_github_mcp_strip is not defined" >&2
+            exit 1
+          fi
+          rc=0
+          err="$(agent_opencode_github_mcp_strip 2>&1 >/dev/null)" || rc=$?
+
+          if [ "${rc}" -eq 0 ]; then
+            echo "FAIL: strip returned 0 after the write failed" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"could not write"*) : ;;
+          *)
+            echo "FAIL: expected a write warning, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if ! grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" |
+            jq -e '.mcp | has("github")' >/dev/null; then
+            echo "FAIL: the github entry is gone — the write did not fail" >&2
+            exit 1
+          fi
+          echo "FAILED_LOUDLY_ENTRY_KEPT"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAILED_LOUDLY_ENTRY_KEPT"
+
+  # The claude twin above documents the contract this asserts.
+  - name: opencode strip warns and returns 0 on a malformed config
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${OPENCODE_CONFIG_DIR}"
+          printf '// banner\n{ not json at all\n' \
+            >"${OPENCODE_CONFIG_DIR}/opencode.jsonc"
+          before="$(sha256sum "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | awk '{print $1}')"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          if ! declare -F agent_opencode_github_mcp_strip >/dev/null; then
+            echo "FAIL: agent_opencode_github_mcp_strip is not defined" >&2
+            exit 1
+          fi
+          rc=0
+          err="$(agent_opencode_github_mcp_strip 2>&1 >/dev/null)" || rc=$?
+          after="$(sha256sum "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | awk '{print $1}')"
+
+          if [ "${rc}" -ne 0 ]; then
+            echo "FAIL: strip returned ${rc} on a malformed config" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"is not a valid JSON object"*) : ;;
+          *)
+            echo "FAIL: expected a parse warning, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if [ "${before}" != "${after}" ]; then
+            echo "FAIL: malformed config was rewritten" >&2
+            exit 1
+          fi
+          echo "WARNED_AND_UNCHANGED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "WARNED_AND_UNCHANGED"
+
+  # ── whose entry is it ─────────────────────────────────────────────────────
+  #
+  # agents/claude/sync-settings.sh copies the host's ~/.claude.json into the
+  # session at every launch, so a `github` entry the user configured on the
+  # host is present in the very file these verbs write. Owning the key by name
+  # would mean silently discarding a user's own narrowing (a --read-only
+  # server, a restricted toolset) on wire, and deleting it on strip.
+  #
+  # Ownership is decided on the entry's SHAPE: transport, argv, the GitLab
+  # endpoint path, and a credential block holding one variable reference and
+  # nothing else. The token variable's NAME is deliberately not part of it —
+  # one session may export GITHUB_PERSONAL_ACCESS_TOKEN and the next only
+  # GITHUB_TOKEN, and both wrote riotbox's entry — but the block holding it is,
+  # because github-mcp-server reads its restrictions from there.
+  #
+  # The cases below run that rule past both agents and both forges: argv and
+  # environment narrowings, foreign endpoints and extra headers, riotbox's own
+  # entry recognised across a changed token variable and a changed GITLAB_HOST,
+  # the wire guard that keeps the two verbs in agreement, and the third answer
+  # the check can give — "cannot tell", which is not "not ours".
+
+  # ── ownership: github ─────────────────────────────────────────────────────
+
+  - name: claude wire warns before replacing a github entry it did not write
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+          cat >"${CLAUDE_CONFIG_DIR}/.claude.json" <<'JSON'
+          {
+            "mcpServers": {
+              "github": {
+                "type": "stdio",
+                "command": "github-mcp-server",
+                "args": ["stdio", "--read-only"],
+                "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"}
+              }
+            }
+          }
+          JSON
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          if ! declare -F agent_claude_github_mcp_wire >/dev/null; then
+            echo "FAIL: agent_claude_github_mcp_wire is not defined" >&2
+            exit 1
+          fi
+          rc=0
+          err="$(agent_claude_github_mcp_wire GITHUB_TOKEN 2>&1 >/dev/null)" || rc=$?
+
+          if [ "${rc}" -ne 0 ]; then
+            echo "FAIL: wire returned ${rc}, it must still wire" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"github"*"not written by riotbox"*) : ;;
+          *)
+            echo "FAIL: expected a warning naming the key, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          case "${err}" in
+          *"not preserved"*) : ;;
+          *)
+            echo "FAIL: expected the warning to say restrictions are lost, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if ! jq -e '.mcpServers.github.args == ["stdio"]' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null; then
+            echo "FAIL: riotbox's entry did not land" >&2
+            exit 1
+          fi
+          echo "WARNED_AND_REPLACED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "WARNED_AND_REPLACED"
+
+  # The regression guard on the warning above: it fires on a foreign entry, not
+  # on every re-run. The third call changes the token variable, which changes
+  # the entry without changing whose it is — shape, not equality.
+  - name: claude wire is silent when it replaces its own entry
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          if ! declare -F agent_claude_github_mcp_wire >/dev/null; then
+            echo "FAIL: agent_claude_github_mcp_wire is not defined" >&2
+            exit 1
+          fi
+          agent_claude_github_mcp_wire GITHUB_TOKEN
+
+          again="$(agent_claude_github_mcp_wire GITHUB_TOKEN 2>&1 >/dev/null)"
+          if [ -n "${again}" ]; then
+            echo "FAIL: re-wiring our own entry said: ${again}" >&2
+            exit 1
+          fi
+
+          renamed="$(agent_claude_github_mcp_wire GITHUB_PERSONAL_ACCESS_TOKEN 2>&1 >/dev/null)"
+          if [ -n "${renamed}" ]; then
+            echo "FAIL: re-wiring with another token variable said: ${renamed}" >&2
+            exit 1
+          fi
+          echo "SILENT_ON_OUR_OWN"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SILENT_ON_OUR_OWN"
+
+  - name: claude strip leaves a github entry it did not write
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+          cat >"${CLAUDE_CONFIG_DIR}/.claude.json" <<'JSON'
+          {
+            "mcpServers": {
+              "github": {
+                "type": "stdio",
+                "command": "github-mcp-server",
+                "args": ["stdio", "--read-only"],
+                "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"}
+              }
+            }
+          }
+          JSON
+          before="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          if ! declare -F agent_claude_github_mcp_strip >/dev/null; then
+            echo "FAIL: agent_claude_github_mcp_strip is not defined" >&2
+            exit 1
+          fi
+          rc=0
+          err="$(agent_claude_github_mcp_strip 2>&1 >/dev/null)" || rc=$?
+          after="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+          # The user's config is exactly what they asked for, so this is a
+          # success, not a give-up path.
+          if [ "${rc}" -ne 0 ]; then
+            echo "FAIL: strip returned ${rc} on someone else's entry" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"github"*"not written by riotbox"*) : ;;
+          *)
+            echo "FAIL: expected an ownership warning, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if [ "${before}" != "${after}" ]; then
+            echo "FAIL: someone else's entry was rewritten or deleted" >&2
+            exit 1
+          fi
+          echo "LEFT_IN_PLACE"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEFT_IN_PLACE"
+
+  - name: claude strip removes its own entry regardless of which token variable it references
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          if ! declare -F agent_claude_github_mcp_strip >/dev/null; then
+            echo "FAIL: agent_claude_github_mcp_strip is not defined" >&2
+            exit 1
+          fi
+          for var in GITHUB_PERSONAL_ACCESS_TOKEN GITHUB_TOKEN; do
+            agent_claude_github_mcp_wire "${var}"
+            agent_claude_github_mcp_strip
+            if jq -e '.mcpServers | has("github")' \
+              "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null; then
+              echo "FAIL: our entry survived a strip after wiring with ${var}" >&2
+              exit 1
+            fi
+          done
+          echo "REMOVED_EITHER_WAY"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REMOVED_EITHER_WAY"
+
+  # The claude twins above carry the reasoning; opencode's entry shape differs
+  # (argv array, not command plus args), so the rule is stated in its dialect.
+  - name: opencode wire warns before replacing a github entry it did not write
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${OPENCODE_CONFIG_DIR}"
+          cat >"${OPENCODE_CONFIG_DIR}/opencode.jsonc" <<'JSONC'
+          // generated banner line
+          {"mcp":{"github":{"type":"local","command":["github-mcp-server","stdio","--read-only"],"enabled":true}}}
+          JSONC
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          if ! declare -F agent_opencode_github_mcp_wire >/dev/null; then
+            echo "FAIL: agent_opencode_github_mcp_wire is not defined" >&2
+            exit 1
+          fi
+          rc=0
+          err="$(agent_opencode_github_mcp_wire GITHUB_TOKEN 2>&1 >/dev/null)" || rc=$?
+
+          if [ "${rc}" -ne 0 ]; then
+            echo "FAIL: wire returned ${rc}, it must still wire" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"github"*"not written by riotbox"*) : ;;
+          *)
+            echo "FAIL: expected a warning naming the key, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          case "${err}" in
+          *"not preserved"*) : ;;
+          *)
+            echo "FAIL: expected the warning to say restrictions are lost, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if ! grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" |
+            jq -e '.mcp.github.command == ["github-mcp-server", "stdio"]' >/dev/null; then
+            echo "FAIL: riotbox's entry did not land" >&2
+            exit 1
+          fi
+          echo "WARNED_AND_REPLACED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "WARNED_AND_REPLACED"
+
+  - name: opencode wire is silent when it replaces its own entry
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          if ! declare -F agent_opencode_github_mcp_wire >/dev/null; then
+            echo "FAIL: agent_opencode_github_mcp_wire is not defined" >&2
+            exit 1
+          fi
+          agent_opencode_github_mcp_wire GITHUB_TOKEN
+
+          again="$(agent_opencode_github_mcp_wire GITHUB_TOKEN 2>&1 >/dev/null)"
+          if [ -n "${again}" ]; then
+            echo "FAIL: re-wiring our own entry said: ${again}" >&2
+            exit 1
+          fi
+
+          renamed="$(agent_opencode_github_mcp_wire GITHUB_PERSONAL_ACCESS_TOKEN 2>&1 >/dev/null)"
+          if [ -n "${renamed}" ]; then
+            echo "FAIL: re-wiring with another token variable said: ${renamed}" >&2
+            exit 1
+          fi
+          echo "SILENT_ON_OUR_OWN"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SILENT_ON_OUR_OWN"
+
+  - name: opencode strip leaves a github entry it did not write
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${OPENCODE_CONFIG_DIR}"
+          cat >"${OPENCODE_CONFIG_DIR}/opencode.jsonc" <<'JSONC'
+          // generated banner line
+          {"mcp":{"github":{"type":"local","command":["github-mcp-server","stdio","--read-only"],"enabled":true}}}
+          JSONC
+          before="$(sha256sum "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | awk '{print $1}')"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          if ! declare -F agent_opencode_github_mcp_strip >/dev/null; then
+            echo "FAIL: agent_opencode_github_mcp_strip is not defined" >&2
+            exit 1
+          fi
+          rc=0
+          err="$(agent_opencode_github_mcp_strip 2>&1 >/dev/null)" || rc=$?
+          after="$(sha256sum "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | awk '{print $1}')"
+
+          if [ "${rc}" -ne 0 ]; then
+            echo "FAIL: strip returned ${rc} on someone else's entry" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"github"*"not written by riotbox"*) : ;;
+          *)
+            echo "FAIL: expected an ownership warning, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if [ "${before}" != "${after}" ]; then
+            echo "FAIL: someone else's entry was rewritten or deleted" >&2
+            exit 1
+          fi
+          echo "LEFT_IN_PLACE"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEFT_IN_PLACE"
+
+  - name: opencode strip removes its own entry regardless of which token variable it references
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          if ! declare -F agent_opencode_github_mcp_strip >/dev/null; then
+            echo "FAIL: agent_opencode_github_mcp_strip is not defined" >&2
+            exit 1
+          fi
+          for var in GITHUB_PERSONAL_ACCESS_TOKEN GITHUB_TOKEN; do
+            agent_opencode_github_mcp_wire "${var}"
+            agent_opencode_github_mcp_strip
+            if grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" |
+              jq -e '.mcp | has("github")' >/dev/null; then
+              echo "FAIL: our entry survived a strip after wiring with ${var}" >&2
+              exit 1
+            fi
+          done
+          echo "REMOVED_EITHER_WAY"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REMOVED_EITHER_WAY"
+
+  # github-mcp-server takes its restrictions from the environment as well as
+  # from argv — GITHUB_TOOLSETS and GITHUB_HOST are environment-only, which is
+  # why riotbox refuses to write them. An ownership rule that read argv alone
+  # would hand a user's toolset-narrowed server to riotbox to overwrite and
+  # then delete.
+  - name: claude strip leaves a github entry narrowed through its environment block
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          if ! declare -F agent_claude_github_mcp_strip >/dev/null; then
+            echo "FAIL: agent_claude_github_mcp_strip is not defined" >&2
+            exit 1
+          fi
+
+          # Seeds an entry, strips, and insists the file came through it
+          # untouched with an ownership warning on stderr.
+          must_survive() {
+            local label="$1" entry="$2" before after err rc=0
+            printf '{"mcpServers":{"github":%s}}\n' "${entry}" \
+              >"${CLAUDE_CONFIG_DIR}/.claude.json"
+            before="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+            err="$(agent_claude_github_mcp_strip 2>&1 >/dev/null)" || rc=$?
+            after="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+            if [ "${rc}" -ne 0 ]; then
+              echo "FAIL[${label}]: strip returned ${rc} on someone else's entry" >&2
+              exit 1
+            fi
+            case "${err}" in
+            *"github"*"not written by riotbox"*) : ;;
+            *)
+              echo "FAIL[${label}]: expected an ownership warning, got: ${err}" >&2
+              exit 1
+              ;;
+            esac
+            if [ "${before}" != "${after}" ]; then
+              echo "FAIL[${label}]: the entry was rewritten or deleted" >&2
+              exit 1
+            fi
+          }
+
+          must_survive toolsets '{"type":"stdio","command":"github-mcp-server","args":["stdio"],"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"${GH_RO}","GITHUB_TOOLSETS":"repos,issues"}}'
+          must_survive literal-token '{"type":"stdio","command":"github-mcp-server","args":["stdio"],"env":{"GITHUB_PERSONAL_ACCESS_TOKEN":"ghp_a_real_looking_secret"}}'
+          must_survive no-env '{"type":"stdio","command":"github-mcp-server","args":["stdio"]}'
+          echo "LEFT_IN_PLACE"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEFT_IN_PLACE"
+
+  - name: opencode strip leaves a github entry narrowed through its environment block
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${OPENCODE_CONFIG_DIR}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          if ! declare -F agent_opencode_github_mcp_strip >/dev/null; then
+            echo "FAIL: agent_opencode_github_mcp_strip is not defined" >&2
+            exit 1
+          fi
+
+          must_survive() {
+            local label="$1" entry="$2" before after err rc=0
+            printf '// generated banner line\n{"mcp":{"github":%s}}\n' "${entry}" \
+              >"${OPENCODE_CONFIG_DIR}/opencode.jsonc"
+            before="$(sha256sum "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | awk '{print $1}')"
+
+            err="$(agent_opencode_github_mcp_strip 2>&1 >/dev/null)" || rc=$?
+            after="$(sha256sum "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | awk '{print $1}')"
+
+            if [ "${rc}" -ne 0 ]; then
+              echo "FAIL[${label}]: strip returned ${rc} on someone else's entry" >&2
+              exit 1
+            fi
+            case "${err}" in
+            *"github"*"not written by riotbox"*) : ;;
+            *)
+              echo "FAIL[${label}]: expected an ownership warning, got: ${err}" >&2
+              exit 1
+              ;;
+            esac
+            if [ "${before}" != "${after}" ]; then
+              echo "FAIL[${label}]: the entry was rewritten or deleted" >&2
+              exit 1
+            fi
+          }
+
+          must_survive toolsets '{"type":"local","command":["github-mcp-server","stdio"],"enabled":true,"environment":{"GITHUB_PERSONAL_ACCESS_TOKEN":"{env:GH_RO}","GITHUB_TOOLSETS":"repos,issues"}}'
+          must_survive literal-token '{"type":"local","command":["github-mcp-server","stdio"],"enabled":true,"environment":{"GITHUB_PERSONAL_ACCESS_TOKEN":"ghp_a_real_looking_secret"}}'
+          must_survive no-environment '{"type":"local","command":["github-mcp-server","stdio"],"enabled":true}'
+          echo "LEFT_IN_PLACE"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEFT_IN_PLACE"
+
+  # ── ownership: gitlab ─────────────────────────────────────────────────────
+  #
+  # The GitLab entry is a URL and a header, so those are what identify it. The
+  # host comes from GITLAB_HOST and is not ours to pin, but the path is:
+  # container/forge-mcp.sh always builds <host>/api/v4/mcp.
+  - name: claude strip leaves a gitlab entry it did not write
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          if ! declare -F agent_claude_gitlab_mcp_strip >/dev/null; then
+            echo "FAIL: agent_claude_gitlab_mcp_strip is not defined" >&2
+            exit 1
+          fi
+
+          must_survive() {
+            local label="$1" entry="$2" before after err rc=0
+            printf '{"mcpServers":{"gitlab":%s}}\n' "${entry}" \
+              >"${CLAUDE_CONFIG_DIR}/.claude.json"
+            before="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+            err="$(agent_claude_gitlab_mcp_strip 2>&1 >/dev/null)" || rc=$?
+            after="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+            if [ "${rc}" -ne 0 ]; then
+              echo "FAIL[${label}]: strip returned ${rc} on someone else's entry" >&2
+              exit 1
+            fi
+            case "${err}" in
+            *"gitlab"*"not written by riotbox"*) : ;;
+            *)
+              echo "FAIL[${label}]: expected an ownership warning, got: ${err}" >&2
+              exit 1
+              ;;
+            esac
+            if [ "${before}" != "${after}" ]; then
+              echo "FAIL[${label}]: the entry was rewritten or deleted" >&2
+              exit 1
+            fi
+          }
+
+          must_survive other-endpoint '{"type":"http","url":"https://gitlab.example.com/some/other/endpoint","headers":{"Authorization":"Bearer ${MY_OWN_TOKEN}"}}'
+          must_survive extra-header '{"type":"http","url":"https://gitlab.example.com/api/v4/mcp","headers":{"Authorization":"Bearer ${MY_OWN_TOKEN}","X-Scope":"read"}}'
+          must_survive literal-token '{"type":"http","url":"https://gitlab.example.com/api/v4/mcp","headers":{"Authorization":"Bearer glpat-a-real-looking-secret"}}'
+          echo "LEFT_IN_PLACE"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEFT_IN_PLACE"
+
+  - name: opencode strip leaves a gitlab entry it did not write
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${OPENCODE_CONFIG_DIR}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          if ! declare -F agent_opencode_gitlab_mcp_strip >/dev/null; then
+            echo "FAIL: agent_opencode_gitlab_mcp_strip is not defined" >&2
+            exit 1
+          fi
+
+          must_survive() {
+            local label="$1" entry="$2" before after err rc=0
+            printf '// generated banner line\n{"mcp":{"gitlab":%s}}\n' "${entry}" \
+              >"${OPENCODE_CONFIG_DIR}/opencode.jsonc"
+            before="$(sha256sum "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | awk '{print $1}')"
+
+            err="$(agent_opencode_gitlab_mcp_strip 2>&1 >/dev/null)" || rc=$?
+            after="$(sha256sum "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | awk '{print $1}')"
+
+            if [ "${rc}" -ne 0 ]; then
+              echo "FAIL[${label}]: strip returned ${rc} on someone else's entry" >&2
+              exit 1
+            fi
+            case "${err}" in
+            *"gitlab"*"not written by riotbox"*) : ;;
+            *)
+              echo "FAIL[${label}]: expected an ownership warning, got: ${err}" >&2
+              exit 1
+              ;;
+            esac
+            if [ "${before}" != "${after}" ]; then
+              echo "FAIL[${label}]: the entry was rewritten or deleted" >&2
+              exit 1
+            fi
+          }
+
+          must_survive other-endpoint '{"type":"remote","url":"https://gitlab.example.com/some/other/endpoint","enabled":true,"headers":{"Authorization":"Bearer {env:MY_OWN_TOKEN}"}}'
+          must_survive extra-header '{"type":"remote","url":"https://gitlab.example.com/api/v4/mcp","enabled":true,"headers":{"Authorization":"Bearer {env:MY_OWN_TOKEN}","X-Scope":"read"}}'
+          must_survive literal-token '{"type":"remote","url":"https://gitlab.example.com/api/v4/mcp","enabled":true,"headers":{"Authorization":"Bearer glpat-a-real-looking-secret"}}'
+          echo "LEFT_IN_PLACE"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEFT_IN_PLACE"
+
+  # The wire side of the same rule. A user's GitLab entry is replaced — someone
+  # who runs enable_gitlab_mcp asked for riotbox's server — but the header they
+  # put beside the credential is gone, and only this warning says so.
+  - name: claude wire warns before replacing a gitlab entry it did not write
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+          cat >"${CLAUDE_CONFIG_DIR}/.claude.json" <<'JSON'
+          {
+            "mcpServers": {
+              "gitlab": {
+                "type": "http",
+                "url": "https://gitlab.example.com/api/v4/mcp",
+                "headers": {
+                  "Authorization": "Bearer ${MY_OWN_TOKEN}",
+                  "X-Scope": "read"
+                }
+              }
+            }
+          }
+          JSON
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          if ! declare -F agent_claude_gitlab_mcp_wire >/dev/null; then
+            echo "FAIL: agent_claude_gitlab_mcp_wire is not defined" >&2
+            exit 1
+          fi
+          rc=0
+          err="$(agent_claude_gitlab_mcp_wire "https://gitlab.example.com/api/v4/mcp" GITLAB_TOKEN 2>&1 >/dev/null)" || rc=$?
+
+          if [ "${rc}" -ne 0 ]; then
+            echo "FAIL: wire returned ${rc}, it must still wire" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"gitlab"*"not written by riotbox"*) : ;;
+          *)
+            echo "FAIL: expected a warning naming the key, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          case "${err}" in
+          *"not preserved"*) : ;;
+          *)
+            echo "FAIL: expected the warning to say restrictions are lost, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if ! jq -e '.mcpServers.gitlab.headers == {"Authorization": "Bearer ${GITLAB_TOKEN}"}' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null; then
+            echo "FAIL: riotbox's entry did not land" >&2
+            exit 1
+          fi
+          echo "WARNED_AND_REPLACED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "WARNED_AND_REPLACED"
+
+  - name: opencode wire warns before replacing a gitlab entry it did not write
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+          mkdir -p "${OPENCODE_CONFIG_DIR}"
+          cat >"${OPENCODE_CONFIG_DIR}/opencode.jsonc" <<'JSONC'
+          // generated banner line
+          {"mcp":{"gitlab":{"type":"remote","url":"https://gitlab.example.com/api/v4/mcp","enabled":true,"headers":{"Authorization":"Bearer {env:MY_OWN_TOKEN}","X-Scope":"read"}}}}
+          JSONC
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          if ! declare -F agent_opencode_gitlab_mcp_wire >/dev/null; then
+            echo "FAIL: agent_opencode_gitlab_mcp_wire is not defined" >&2
+            exit 1
+          fi
+          rc=0
+          err="$(agent_opencode_gitlab_mcp_wire "https://gitlab.example.com/api/v4/mcp" GITLAB_TOKEN 2>&1 >/dev/null)" || rc=$?
+
+          if [ "${rc}" -ne 0 ]; then
+            echo "FAIL: wire returned ${rc}, it must still wire" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"gitlab"*"not written by riotbox"*) : ;;
+          *)
+            echo "FAIL: expected a warning naming the key, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          case "${err}" in
+          *"not preserved"*) : ;;
+          *)
+            echo "FAIL: expected the warning to say restrictions are lost, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if ! grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" |
+            jq -e '.mcp.gitlab.headers == {"Authorization": "Bearer {env:GITLAB_TOKEN}"}' >/dev/null; then
+            echo "FAIL: riotbox's entry did not land" >&2
+            exit 1
+          fi
+          echo "WARNED_AND_REPLACED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "WARNED_AND_REPLACED"
+
+  # The other half of the URL rule: the host is a session's business, not
+  # riotbox's, so a GITLAB_HOST that changed between the enable and the disable
+  # must not strand the entry.
+  - name: claude strip removes its own gitlab entry whatever host it was wired against
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          if ! declare -F agent_claude_gitlab_mcp_strip >/dev/null; then
+            echo "FAIL: agent_claude_gitlab_mcp_strip is not defined" >&2
+            exit 1
+          fi
+
+          for url in "https://gitlab.com/api/v4/mcp" "https://gitlab.example.com/api/v4/mcp" "http://gl.internal:8080/api/v4/mcp"; do
+            agent_claude_gitlab_mcp_wire "${url}" GITLAB_TOKEN
+            agent_claude_gitlab_mcp_strip
+            if jq -e '.mcpServers | has("gitlab")' \
+              "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null; then
+              echo "FAIL: our entry survived a strip after wiring against ${url}" >&2
+              exit 1
+            fi
+          done
+          echo "REMOVED_EVERY_HOST"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REMOVED_EVERY_HOST"
+
+  - name: opencode strip removes its own gitlab entry whatever host it was wired against
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          if ! declare -F agent_opencode_gitlab_mcp_strip >/dev/null; then
+            echo "FAIL: agent_opencode_gitlab_mcp_strip is not defined" >&2
+            exit 1
+          fi
+
+          for url in "https://gitlab.com/api/v4/mcp" "https://gitlab.example.com/api/v4/mcp" "http://gl.internal:8080/api/v4/mcp"; do
+            agent_opencode_gitlab_mcp_wire "${url}" GITLAB_TOKEN
+            agent_opencode_gitlab_mcp_strip
+            if grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" |
+              jq -e '.mcp | has("gitlab")' >/dev/null; then
+              echo "FAIL: our entry survived a strip after wiring against ${url}" >&2
+              exit 1
+            fi
+          done
+          echo "REMOVED_EVERY_HOST"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REMOVED_EVERY_HOST"
+
+  # wire must never write something strip cannot revoke. Ownership requires the
+  # /api/v4/mcp endpoint, so the wire verb has to refuse every other path
+  # rather than register a server the disable command would then disown. The
+  # four shipped commands cannot reach this — container/forge-mcp.sh builds the
+  # path itself — but a direct caller or a third agent can.
+  - name: claude gitlab wire refuses a URL its own strip would not recognise
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          if ! declare -F agent_claude_gitlab_mcp_wire >/dev/null; then
+            echo "FAIL: agent_claude_gitlab_mcp_wire is not defined" >&2
+            exit 1
+          fi
+
+          must_refuse() {
+            local url="$1" err rc=0
+            err="$(agent_claude_gitlab_mcp_wire "${url}" GITLAB_TOKEN 2>&1 >/dev/null)" || rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "FAIL[${url}]: wire accepted a URL its strip would disown" >&2
+              exit 1
+            fi
+            case "${err}" in
+            *"/api/v4/mcp"*) : ;;
+            *)
+              echo "FAIL[${url}]: expected the endpoint named in the warning, got: ${err}" >&2
+              exit 1
+              ;;
+            esac
+            if [ -e "${CLAUDE_CONFIG_DIR}/.claude.json" ]; then
+              echo "FAIL[${url}]: a refused wire still wrote a config" >&2
+              exit 1
+            fi
+          }
+
+          must_refuse "https://gl.example.com/mcp"
+          must_refuse "https://gitlab.example.com/api/v4"
+          must_refuse "https://gitlab.example.com/api/v4/mcp/extra"
+
+          # The other half of the guard: the endpoint it does accept round-trips.
+          agent_claude_gitlab_mcp_wire "https://gitlab.example.com/api/v4/mcp" GITLAB_TOKEN
+          agent_claude_gitlab_mcp_strip
+          if jq -e '.mcpServers | has("gitlab")' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null; then
+            echo "FAIL: the accepted endpoint wired an entry strip would not remove" >&2
+            exit 1
+          fi
+          echo "WIRE_AND_STRIP_AGREE"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "WIRE_AND_STRIP_AGREE"
+
+  - name: opencode gitlab wire refuses a URL its own strip would not recognise
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          if ! declare -F agent_opencode_gitlab_mcp_wire >/dev/null; then
+            echo "FAIL: agent_opencode_gitlab_mcp_wire is not defined" >&2
+            exit 1
+          fi
+
+          must_refuse() {
+            local url="$1" err rc=0
+            err="$(agent_opencode_gitlab_mcp_wire "${url}" GITLAB_TOKEN 2>&1 >/dev/null)" || rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "FAIL[${url}]: wire accepted a URL its strip would disown" >&2
+              exit 1
+            fi
+            case "${err}" in
+            *"/api/v4/mcp"*) : ;;
+            *)
+              echo "FAIL[${url}]: expected the endpoint named in the warning, got: ${err}" >&2
+              exit 1
+              ;;
+            esac
+            if [ -e "${OPENCODE_CONFIG_DIR}/opencode.jsonc" ]; then
+              echo "FAIL[${url}]: a refused wire still wrote a config" >&2
+              exit 1
+            fi
+          }
+
+          must_refuse "https://gl.example.com/mcp"
+          must_refuse "https://gitlab.example.com/api/v4"
+          must_refuse "https://gitlab.example.com/api/v4/mcp/extra"
+
+          agent_opencode_gitlab_mcp_wire "https://gitlab.example.com/api/v4/mcp" GITLAB_TOKEN
+          agent_opencode_gitlab_mcp_strip
+          if grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" |
+            jq -e '.mcp | has("gitlab")' >/dev/null; then
+            echo "FAIL: the accepted endpoint wired an entry strip would not remove" >&2
+            exit 1
+          fi
+          echo "WIRE_AND_STRIP_AGREE"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "WIRE_AND_STRIP_AGREE"
+
+  # ── wire input guards ─────────────────────────────────────────────────────
+  #
+  # Two guards the four shipped commands cannot trip — container/forge-mcp.sh
+  # picks the token variable's name from a fixed list and builds the URL
+  # itself — but which the verbs are contractually required to enforce, because
+  # they are also what a third agent and any direct caller implement against.
+  #
+  # Both failures are silent if unguarded rather than loud. A malformed
+  # variable name lands in the config as a reference the agent cannot resolve
+  # and presents as a server authenticating as nobody; a non-http(s) URL
+  # presents as a connection error nothing explains. The endpoint-path guard
+  # has its own cases above, under ownership.
+
+  - name: claude wire verbs refuse input their config could not resolve
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          # A renamed or deleted verb returns 127, which every check below
+          # would read as a refusal.
+          for fn in agent_claude_github_mcp_wire agent_claude_gitlab_mcp_wire; do
+            if ! declare -F "${fn}" >/dev/null; then
+              echo "FAIL: ${fn} is not defined" >&2
+              exit 1
+            fi
+          done
+
+          # Runs a wire verb that must refuse, and insists on both the reason
+          # and an untouched config: a guard that rejects the input only after
+          # writing has not guarded anything.
+          must_refuse() {
+            local label="$1" expected="$2"
+            shift 2
+            local err rc=0
+            err="$("$@" 2>&1 >/dev/null)" || rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "FAIL[${label}]: the verb accepted it" >&2
+              exit 1
+            fi
+            case "${err}" in
+            *"${expected}"*) : ;;
+            *)
+              echo "FAIL[${label}]: expected '${expected}', got: ${err}" >&2
+              exit 1
+              ;;
+            esac
+            # The whole tree, not just the config path: a refusal that leaked
+            # a temp file or a staged write beside it is still a write.
+            local written
+            written="$(find "${TMP}" -type f | wc -l)"
+            if [ "${written}" -ne 0 ]; then
+              echo "FAIL[${label}]: a refused wire wrote ${written} file(s)" >&2
+              find "${TMP}" -type f >&2
+              exit 1
+            fi
+          }
+
+          must_refuse github-token-var "is not a valid environment variable name" \
+            agent_claude_github_mcp_wire 'GITHUB TOKEN'
+          must_refuse gitlab-scheme "is not an http(s) URL" \
+            agent_claude_gitlab_mcp_wire 'ftp://gitlab.example.com/api/v4/mcp' GITLAB_TOKEN
+          must_refuse gitlab-token-var "is not a valid environment variable name" \
+            agent_claude_gitlab_mcp_wire 'https://gitlab.example.com/api/v4/mcp' 'GITLAB TOKEN'
+          echo "ALL_REFUSED_NOTHING_WRITTEN"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ALL_REFUSED_NOTHING_WRITTEN"
+
+  # The claude twin above carries the reasoning.
+  - name: opencode wire verbs refuse input their config could not resolve
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          for fn in agent_opencode_github_mcp_wire agent_opencode_gitlab_mcp_wire; do
+            if ! declare -F "${fn}" >/dev/null; then
+              echo "FAIL: ${fn} is not defined" >&2
+              exit 1
+            fi
+          done
+
+          must_refuse() {
+            local label="$1" expected="$2"
+            shift 2
+            local err rc=0
+            err="$("$@" 2>&1 >/dev/null)" || rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "FAIL[${label}]: the verb accepted it" >&2
+              exit 1
+            fi
+            case "${err}" in
+            *"${expected}"*) : ;;
+            *)
+              echo "FAIL[${label}]: expected '${expected}', got: ${err}" >&2
+              exit 1
+              ;;
+            esac
+            # See the claude twin: the whole tree, not just the config path.
+            local written
+            written="$(find "${TMP}" -type f | wc -l)"
+            if [ "${written}" -ne 0 ]; then
+              echo "FAIL[${label}]: a refused wire wrote ${written} file(s)" >&2
+              find "${TMP}" -type f >&2
+              exit 1
+            fi
+          }
+
+          must_refuse github-token-var "is not a valid environment variable name" \
+            agent_opencode_github_mcp_wire 'GITHUB TOKEN'
+          must_refuse gitlab-scheme "is not an http(s) URL" \
+            agent_opencode_gitlab_mcp_wire 'ftp://gitlab.example.com/api/v4/mcp' GITLAB_TOKEN
+          must_refuse gitlab-token-var "is not a valid environment variable name" \
+            agent_opencode_gitlab_mcp_wire 'https://gitlab.example.com/api/v4/mcp' 'GITLAB TOKEN'
+          echo "ALL_REFUSED_NOTHING_WRITTEN"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ALL_REFUSED_NOTHING_WRITTEN"
+
+  # ── ownership: an entry that cannot be classified ─────────────────────────
+  #
+  # "Cannot tell" is not "not ours". Reported as foreign, an entry riotbox did
+  # write would stay registered while the caller printed "MCP cleanup complete"
+  # and exited 0 — the one thing the strip contract says must never happen on a
+  # path that gave up. Driven through the remove helper with a predicate that
+  # fails to evaluate, because nothing an agent can write reaches this branch
+  # through the verbs.
+  - name: claude strip refuses to guess when it cannot classify the entry
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          if ! declare -F _agent_claude_forge_remove >/dev/null; then
+            echo "FAIL: _agent_claude_forge_remove is not defined" >&2
+            exit 1
+          fi
+          agent_claude_github_mcp_wire GITHUB_TOKEN
+
+          rc=0
+          err="$(_agent_claude_forge_remove "${_AGENT_CLAUDE_FORGE_GITHUB_SERVER}" 'error("unclassifiable")' 2>&1 >/dev/null)" || rc=$?
+
+          if [ "${rc}" -eq 0 ]; then
+            echo "FAIL: strip reported success without classifying the entry" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"could not clean"*) : ;;
+          *)
+            echo "FAIL: expected the could-not-clean warning, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if ! jq -e '.mcpServers | has("github")' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null; then
+            echo "FAIL: the entry was deleted on a path that gave up" >&2
+            exit 1
+          fi
+          echo "FAILED_LOUDLY_ENTRY_KEPT"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAILED_LOUDLY_ENTRY_KEPT"
+
+  - name: opencode strip refuses to guess when it cannot classify the entry
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/opencode"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/opencode/forge-mcp.sh"
+
+          if ! declare -F _agent_opencode_forge_remove >/dev/null; then
+            echo "FAIL: _agent_opencode_forge_remove is not defined" >&2
+            exit 1
+          fi
+          agent_opencode_github_mcp_wire GITHUB_TOKEN
+
+          rc=0
+          err="$(_agent_opencode_forge_remove "${_AGENT_OPENCODE_FORGE_GITHUB_SERVER}" 'error("unclassifiable")' 2>&1 >/dev/null)" || rc=$?
+
+          if [ "${rc}" -eq 0 ]; then
+            echo "FAIL: strip reported success without classifying the entry" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"could not clean"*) : ;;
+          *)
+            echo "FAIL: expected the could-not-clean warning, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if ! grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" |
+            jq -e '.mcp | has("github")' >/dev/null; then
+            echo "FAIL: the entry was deleted on a path that gave up" >&2
+            exit 1
+          fi
+          echo "FAILED_LOUDLY_ENTRY_KEPT"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAILED_LOUDLY_ENTRY_KEPT"
+
+  # ── the enable_* / disable_* commands ──────────────────────────────────────
+  #
+  # These run the real entry points from container/. Each case points HOME and
+  # both agent config dirs at a throwaway tree, so nothing touches the caller's
+  # own configuration.
+
+  - name: enable_github_mcp wires every registered agent
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/.config/opencode"
+          export GITHUB_TOKEN="ignored-by-design"
+
+          "{{.riotbox_dir}}/container/enable_github_mcp"
+
+          echo "claude=$(jq -r '.mcpServers.github.command' "${CLAUDE_CONFIG_DIR}/.claude.json")"
+          echo "opencode=$(grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | jq -r '.mcp.github.command[0]')"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude=github-mcp-server"
+          - result.systemout ShouldContainSubstring "opencode=github-mcp-server"
+
+  - name: enable_github_mcp prefers GITHUB_PERSONAL_ACCESS_TOKEN over GITHUB_TOKEN
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/.config/opencode"
+          export GITHUB_TOKEN="a"
+          export GITHUB_PERSONAL_ACCESS_TOKEN="b"
+
+          "{{.riotbox_dir}}/container/enable_github_mcp"
+
+          jq -r '.mcpServers.github.env.GITHUB_PERSONAL_ACCESS_TOKEN' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+
+  - name: enable_github_mcp falls back to GITHUB_TOKEN when it is the only one set
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/.config/opencode"
+          unset GITHUB_PERSONAL_ACCESS_TOKEN || true
+          export GITHUB_TOKEN="a"
+
+          "{{.riotbox_dir}}/container/enable_github_mcp"
+
+          jq -r '.mcpServers.github.env.GITHUB_PERSONAL_ACCESS_TOKEN' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "${GITHUB_TOKEN}"
+
+  - name: enable_github_mcp refuses when no token variable is set and writes nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/.config/opencode"
+          unset GITHUB_TOKEN GITHUB_PERSONAL_ACCESS_TOKEN || true
+
+          rc=0
+          out="$("{{.riotbox_dir}}/container/enable_github_mcp" 2>&1)" || rc=$?
+
+          if [ "${rc}" -eq 0 ]; then
+            echo "FAIL: expected a non-zero exit, got 0" >&2
+            exit 1
+          fi
+          written="$(find "${TMP}" -type f | wc -l)"
+          if [ "${written}" -ne 0 ]; then
+            echo "FAIL: ${written} file(s) written on refusal" >&2
+            find "${TMP}" -type f >&2
+            exit 1
+          fi
+          echo "REFUSED_WROTE_NOTHING"
+          echo "${out}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REFUSED_WROTE_NOTHING"
+          - result.systemout ShouldContainSubstring "GITHUB_TOKEN"
+
+  - name: enable_gitlab_mcp refuses when GITLAB_TOKEN is unset and writes nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/.config/opencode"
+          unset GITLAB_TOKEN || true
+
+          rc=0
+          out="$("{{.riotbox_dir}}/container/enable_gitlab_mcp" 2>&1)" || rc=$?
+
+          if [ "${rc}" -eq 0 ]; then
+            echo "FAIL: expected a non-zero exit, got 0" >&2
+            exit 1
+          fi
+          written="$(find "${TMP}" -type f | wc -l)"
+          if [ "${written}" -ne 0 ]; then
+            echo "FAIL: ${written} file(s) written on refusal" >&2
+            exit 1
+          fi
+          echo "REFUSED_WROTE_NOTHING"
+          # The refusal has to name the variable to set, or it tells a user
+          # only that something went wrong.
+          echo "${out}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REFUSED_WROTE_NOTHING"
+          - result.systemout ShouldContainSubstring "GITLAB_TOKEN"
+
+  - name: enable_gitlab_mcp normalizes every usable GITLAB_HOST form and refuses the rest
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export GITLAB_TOKEN="ignored-by-design"
+
+          # host value -> expected endpoint
+          check() {
+            local host_value="$1" expected="$2" label="$3"
+            local dir="${TMP}/${label}"
+            export HOME="${dir}"
+            export CLAUDE_CONFIG_DIR="${dir}/.claude"
+            export OPENCODE_CONFIG_DIR="${dir}/.config/opencode"
+            if [ "${host_value}" = "__UNSET__" ]; then
+              unset GITLAB_HOST || true
+            else
+              export GITLAB_HOST="${host_value}"
+            fi
+            "{{.riotbox_dir}}/container/enable_gitlab_mcp" >/dev/null
+            local got
+            got="$(jq -r '.mcpServers.gitlab.url' "${CLAUDE_CONFIG_DIR}/.claude.json")"
+            if [ "${got}" != "${expected}" ]; then
+              echo "FAIL: ${label}: got ${got}, expected ${expected}" >&2
+              return 1
+            fi
+            echo "OK ${label} -> ${got}"
+          }
+
+          # A GITLAB_HOST that names no host. Every form below, accepted,
+          # builds an endpoint pointing at nothing that STILL satisfies the
+          # wire verbs' http(s) and /api/v4/mcp guards — a scheme other than
+          # http(s) survives as part of the "host" and gets https:// prefixed
+          # in front of it — so this is the only place they can be caught, and
+          # they have to be caught before any agent config is opened.
+          #
+          # This is where a wrong scheme is refused end to end. The verb-level
+          # case above ("gitlab wire refuses a URL its own strip would not
+          # recognise") cannot cover it: an ftp:// GITLAB_HOST never reaches a
+          # verb as ftp://, it reaches it as https://ftp://…
+          reject() {
+            local host_value="$1" label="$2"
+            local dir="${TMP}/${label}" out rc=0
+            export HOME="${dir}"
+            export CLAUDE_CONFIG_DIR="${dir}/.claude"
+            export OPENCODE_CONFIG_DIR="${dir}/.config/opencode"
+            export GITLAB_HOST="${host_value}"
+            out="$("{{.riotbox_dir}}/container/enable_gitlab_mcp" 2>&1)" || rc=$?
+            if [ "${rc}" -eq 0 ]; then
+              echo "FAIL: ${label}: GITLAB_HOST='${host_value}' was accepted" >&2
+              return 1
+            fi
+            case "${out}" in
+            *"does not name a host"*) : ;;
+            *)
+              echo "FAIL: ${label}: expected a host warning, got: ${out}" >&2
+              return 1
+              ;;
+            esac
+            if [ -d "${dir}" ] && [ "$(find "${dir}" -type f | wc -l)" -ne 0 ]; then
+              echo "FAIL: ${label}: a refused run wrote a config" >&2
+              find "${dir}" -type f >&2
+              return 1
+            fi
+            echo "OK ${label} refused"
+          }
+
+          check "__UNSET__"                    "https://gitlab.com/api/v4/mcp"          default
+          check "gitlab.example.com"           "https://gitlab.example.com/api/v4/mcp"  bare
+          check "https://gitlab.example.com"   "https://gitlab.example.com/api/v4/mcp"  scheme
+          check "https://gitlab.example.com/"  "https://gitlab.example.com/api/v4/mcp"  trailing
+          check "http://gitlab.internal"       "http://gitlab.internal/api/v4/mcp"      plain_http
+          # URI schemes are case-insensitive (RFC 3986 §3.1), so this is a
+          # value a user can reasonably type. Matched exactly, it would look
+          # like a bare host and get a second scheme prefixed onto it.
+          check "HTTPS://gitlab.example.com"   "https://gitlab.example.com/api/v4/mcp"  upper_scheme
+          check "HTTP://gl.internal:8080"      "http://gl.internal:8080/api/v4/mcp"     upper_scheme_port
+
+          reject "https://"                    scheme_only
+          reject "/"                           slash_only
+          reject "https:///gitlab.example.com" empty_authority
+          reject "ftp://gitlab.example.com"    wrong_scheme
+          reject "git://gitlab.example.com"    unknown_scheme
+          reject "https:"                      bare_scheme
+          reject "   "                         whitespace_only
+          echo "ALL_HOSTS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ALL_HOSTS_OK"
+          - result.systemout ShouldContainSubstring "OK upper_scheme -> https://gitlab.example.com/api/v4/mcp"
+          - result.systemout ShouldContainSubstring "OK scheme_only refused"
+          - result.systemout ShouldContainSubstring "OK slash_only refused"
+          - result.systemout ShouldContainSubstring "OK empty_authority refused"
+          - result.systemout ShouldContainSubstring "OK wrong_scheme refused"
+          - result.systemout ShouldContainSubstring "OK unknown_scheme refused"
+          - result.systemout ShouldContainSubstring "OK bare_scheme refused"
+          - result.systemout ShouldContainSubstring "OK whitespace_only refused"
+
+  # Issue #9: "If the scripts are re-run, they will reload the MCP servers and
+  # use whatever environment variables are set at the time." Re-running in the
+  # SAME session directory, not a fresh one, is what that means in practice.
+  - name: re-running an enable command picks up a changed environment in place
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/.config/opencode"
+          export GITLAB_TOKEN="ignored-by-design"
+
+          export GITLAB_HOST="gitlab.example.com"
+          "{{.riotbox_dir}}/container/enable_gitlab_mcp" >/dev/null
+          echo "first=$(jq -r '.mcpServers.gitlab.url' "${CLAUDE_CONFIG_DIR}/.claude.json")"
+
+          # Same session directory, different environment, run it again.
+          export GITLAB_HOST="https://gitlab.internal.example"
+          "{{.riotbox_dir}}/container/enable_gitlab_mcp" >/dev/null
+          echo "second=$(jq -r '.mcpServers.gitlab.url' "${CLAUDE_CONFIG_DIR}/.claude.json")"
+          echo "opencode=$(grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | jq -r '.mcp.gitlab.url')"
+
+          # And the github side: swap which variable holds the token.
+          export GITHUB_TOKEN="ignored-by-design"
+          "{{.riotbox_dir}}/container/enable_github_mcp" >/dev/null
+          export GITHUB_PERSONAL_ACCESS_TOKEN="ignored-by-design"
+          "{{.riotbox_dir}}/container/enable_github_mcp" >/dev/null
+          echo "github=$(jq -r '.mcpServers.github.env.GITHUB_PERSONAL_ACCESS_TOKEN' "${CLAUDE_CONFIG_DIR}/.claude.json")"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "first=https://gitlab.example.com/api/v4/mcp"
+          - result.systemout ShouldContainSubstring "second=https://gitlab.internal.example/api/v4/mcp"
+          - result.systemout ShouldContainSubstring "opencode=https://gitlab.internal.example/api/v4/mcp"
+          - result.systemout ShouldContainSubstring "github=${GITHUB_PERSONAL_ACCESS_TOKEN}"
+
+  # The property the whole design exists for. If someone later "simplifies"
+  # a reference into a value, this is the test that stops it.
+  - name: no credential value is ever written to disk
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/.config/opencode"
+          export GITHUB_TOKEN="ghp_SENTINELdeadbeefSENTINEL"
+          export GITLAB_TOKEN="glpat_SENTINELdeadbeefSENTINEL"
+          export GITLAB_HOST="gitlab.example.com"
+
+          "{{.riotbox_dir}}/container/enable_github_mcp"
+          "{{.riotbox_dir}}/container/enable_gitlab_mcp"
+
+          # Every file the commands could have touched, searched for either
+          # secret. grep -r over the tree, not just the two configs we expect:
+          # a leak into some other file is still a leak.
+          if grep -rlF "SENTINELdeadbeefSENTINEL" "${TMP}" 2>/dev/null | grep -q .; then
+            echo "FAIL: a token value reached disk:" >&2
+            grep -rlF "SENTINELdeadbeefSENTINEL" "${TMP}" >&2
+            exit 1
+          fi
+
+          # ...and prove the wiring actually happened, so this cannot pass by
+          # writing nothing at all.
+          jq -e '.mcpServers.github and .mcpServers.gitlab' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null
+          echo "NO_SECRETS_ON_DISK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NO_SECRETS_ON_DISK"
+
+  - name: disable commands remove what the enable commands wrote, for every agent
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/.config/opencode"
+          export GITHUB_TOKEN="ignored-by-design"
+          export GITLAB_TOKEN="ignored-by-design"
+
+          "{{.riotbox_dir}}/container/enable_github_mcp"
+          "{{.riotbox_dir}}/container/enable_gitlab_mcp"
+          "{{.riotbox_dir}}/container/disable_github_mcp"
+          "{{.riotbox_dir}}/container/disable_gitlab_mcp"
+
+          echo "claude=$(jq -r '.mcpServers | keys | length' "${CLAUDE_CONFIG_DIR}/.claude.json")"
+          echo "opencode=$(grep -v '^//' "${OPENCODE_CONFIG_DIR}/opencode.jsonc" | jq -r '.mcp | keys | length')"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude=0"
+          - result.systemout ShouldContainSubstring "opencode=0"
+
+  - name: disable commands are safe to run when nothing was ever enabled
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/.config/opencode"
+
+          "{{.riotbox_dir}}/container/disable_github_mcp"
+          "{{.riotbox_dir}}/container/disable_gitlab_mcp"
+
+          written="$(find "${TMP}" -type f | wc -l)"
+          if [ "${written}" -ne 0 ]; then
+            echo "FAIL: disable created ${written} file(s)" >&2
+            exit 1
+          fi
+          echo "CLEAN_NOOP"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CLEAN_NOOP"
+
+  # BASH_SOURCE[0] is never symlink-resolved. The image puts the four commands
+  # on PATH only as symlinks under ~/.local/bin, pointing at the real files
+  # under ~/.riotbox — the layout every other case in this file bypasses by
+  # invoking container/<cmd> directly out of the source tree. This case is the
+  # only one that reproduces the image layout: library and commands copied
+  # into one directory that is NOT on PATH, reachable only through symlinks
+  # from a directory that is.
+  - name: the four commands work when invoked through a PATH symlink
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          mkdir -p "${HOME}" "${TMP}/lib" "${TMP}/bin"
+
+          # Mirror the image: forge-mcp.sh, agents/ and lib/ sit beside the
+          # commands (the layout forge-mcp.sh probes for first), and that
+          # directory is reachable only through the bin/ symlinks.
+          cp "{{.riotbox_dir}}/container/forge-mcp.sh" "${TMP}/lib/"
+          cp -r "{{.riotbox_dir}}/agents" "${TMP}/lib/agents"
+          mkdir -p "${TMP}/lib/lib"
+          cp "{{.riotbox_dir}}/scripts/lib/json-write.sh" "${TMP}/lib/lib/"
+          for c in enable_github_mcp enable_gitlab_mcp disable_github_mcp disable_gitlab_mcp; do
+            cp "{{.riotbox_dir}}/container/${c}" "${TMP}/lib/${c}"
+            chmod +x "${TMP}/lib/${c}"
+            ln -sf "${TMP}/lib/${c}" "${TMP}/bin/${c}"
+          done
+
+          export PATH="${TMP}/bin:${PATH}"
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export GITHUB_TOKEN="ignored-by-design"
+          export GITLAB_TOKEN="ignored-by-design"
+          unset GITLAB_HOST || true
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+
+          enable_github_mcp
+          jq -r '.mcpServers.github.command' "${CLAUDE_CONFIG_DIR}/.claude.json"
+          disable_github_mcp
+          echo "github_present=$(jq -r '.mcpServers | has("github")' "${CLAUDE_CONFIG_DIR}/.claude.json")"
+
+          enable_gitlab_mcp
+          jq -r '.mcpServers.gitlab.url' "${CLAUDE_CONFIG_DIR}/.claude.json"
+          disable_gitlab_mcp
+          echo "gitlab_present=$(jq -r '.mcpServers | has("gitlab")' "${CLAUDE_CONFIG_DIR}/.claude.json")"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring github-mcp-server
+          - result.systemout ShouldContainSubstring "https://gitlab.com/api/v4/mcp"
+          - result.systemout ShouldContainSubstring "github_present=false"
+          - result.systemout ShouldContainSubstring "gitlab_present=false"
+
+  - name: claude wire refuses a malformed config and leaves it byte-identical
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+          printf '{ this is not json' >"${CLAUDE_CONFIG_DIR}/.claude.json"
+          before="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/claude/forge-mcp.sh"
+
+          rc=0
+          agent_claude_github_mcp_wire GITHUB_TOKEN 2>/dev/null || rc=$?
+          after="$(sha256sum "${CLAUDE_CONFIG_DIR}/.claude.json" | awk '{print $1}')"
+
+          if [ "${rc}" -eq 0 ]; then
+            echo "FAIL: wire returned 0 on a malformed config" >&2
+            exit 1
+          fi
+          if [ "${before}" != "${after}" ]; then
+            echo "FAIL: malformed config was overwritten" >&2
+            exit 1
+          fi
+          echo "REFUSED_AND_UNCHANGED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REFUSED_AND_UNCHANGED"
+
+  # ── the dispatcher when an agent cannot deliver ────────────────────────────
+  #
+  # The forge verbs are the OPTIONAL part of the agent contract, and
+  # forge_mcp_apply has three answers for a registry that does not fully
+  # implement them: skip one agent, fail after some succeeded, and refuse when
+  # none can. Both shipped agents implement all four verbs and both succeed, so
+  # no case above can reach any of them.
+  #
+  # Each case below builds the image layout — forge-mcp.sh with agents/ and
+  # lib/ beside it — in a throwaway tree, with a stub agent added to or
+  # standing in for the real registry. Nothing here edits the real agents/
+  # directory; the registry discovers agents by globbing, which is exactly what
+  # makes a temp tree enough. The same shape as the zztest stub in
+  # tests/agents.venom.yml.
+
+  - name: forge_mcp_apply skips an agent without the verbs and still succeeds
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          mkdir -p "${TMP}/lib/agents/zzstub" "${TMP}/lib/lib" "${TMP}/home"
+          cp "{{.riotbox_dir}}/container/forge-mcp.sh" "${TMP}/lib/"
+          cp "{{.riotbox_dir}}/agents/registry.sh" "${TMP}/lib/agents/"
+          cp -r "{{.riotbox_dir}}/agents/claude" "{{.riotbox_dir}}/agents/opencode" \
+            "${TMP}/lib/agents/"
+          cp "{{.riotbox_dir}}/scripts/lib/json-write.sh" "${TMP}/lib/lib/"
+          cp "{{.riotbox_dir}}/container/enable_github_mcp" "${TMP}/lib/"
+          chmod +x "${TMP}/lib/enable_github_mcp"
+
+          # The three cases in this section each build their own tree, and the
+          # duplication is deliberate: what each proves IS its registry, so
+          # hoisting the setup into one shared fixture would couple three
+          # different registries to one shape. The third case in particular
+          # must keep a registry holding NOTHING but this stub — copy claude
+          # and opencode into it and it silently stops testing anything.
+
+          # A registered agent with no forge verbs at all — the state every
+          # agent was in before issue #9, and the state a third agent starts
+          # in.
+          cat >"${TMP}/lib/agents/zzstub/manifest.sh" <<'EOF'
+          agent_zzstub_real_binary() { printf 'zzstub\n'; }
+          EOF
+
+          export HOME="${TMP}/home"
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export GITHUB_TOKEN="ignored-by-design"
+
+          rc=0
+          err="$("${TMP}/lib/enable_github_mcp" 2>&1 >/dev/null)" || rc=$?
+
+          # Skipping is not failing: the agents that can be wired were.
+          if [ "${rc}" -ne 0 ]; then
+            echo "FAIL: exit ${rc} when one agent of three lacks the verbs" >&2
+            echo "${err}" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"zzstub: no github MCP support — skipped."*) : ;;
+          *)
+            echo "FAIL: expected the skip line for zzstub, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          if ! jq -e '.mcpServers | has("github")' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null; then
+            echo "FAIL: the agents that do support github were not wired" >&2
+            exit 1
+          fi
+          echo "SKIPPED_OUT_LOUD"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SKIPPED_OUT_LOUD"
+
+  # A partial success is a failure. The user asked for every agent, one of them
+  # did not deliver, and reporting 0 would leave that discoverable only by
+  # reading stderr — which on the strip side means an agent keeping forge
+  # access the user asked to revoke.
+  - name: forge_mcp_apply exits non-zero when an agent's verb fails
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          mkdir -p "${TMP}/lib/agents/zzstub" "${TMP}/lib/lib" "${TMP}/home"
+          cp "{{.riotbox_dir}}/container/forge-mcp.sh" "${TMP}/lib/"
+          cp "{{.riotbox_dir}}/agents/registry.sh" "${TMP}/lib/agents/"
+          cp -r "{{.riotbox_dir}}/agents/claude" "{{.riotbox_dir}}/agents/opencode" \
+            "${TMP}/lib/agents/"
+          cp "{{.riotbox_dir}}/scripts/lib/json-write.sh" "${TMP}/lib/lib/"
+          cp "{{.riotbox_dir}}/container/disable_github_mcp" "${TMP}/lib/"
+          chmod +x "${TMP}/lib/disable_github_mcp"
+
+          # Implements the verb and gives up, the way a real one does when the
+          # config cannot be written. Driven through the DISABLE command on
+          # purpose: the per-agent failure line interpolates the action, and
+          # the wire half of it is already exercised by every other path.
+          cat >"${TMP}/lib/agents/zzstub/manifest.sh" <<'EOF'
+          agent_zzstub_real_binary() { printf 'zzstub\n'; }
+          agent_zzstub_github_mcp_strip() { echo "  [forge-mcp] WARN: could not clean zzstub config — the github entry is still registered." >&2; return 1; }
+          EOF
+
+          export HOME="${TMP}/home"
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+
+          rc=0
+          err="$("${TMP}/lib/disable_github_mcp" 2>&1 >/dev/null)" || rc=$?
+
+          if [ "${rc}" -eq 0 ]; then
+            echo "FAIL: exit 0 with one agent failed" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"zzstub: github MCP strip FAILED."*) : ;;
+          *)
+            echo "FAIL: expected the per-agent failure line, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          # The count is what tells a user this was partial rather than total.
+          case "${err}" in
+          *"1 agent(s) failed; 2 succeeded."*) : ;;
+          *)
+            echo "FAIL: expected the failed/succeeded tally, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          echo "FAILED_LOUDLY_WITH_A_TALLY"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAILED_LOUDLY_WITH_A_TALLY"
+
+  # Skipping every agent is not "nothing to do", it is a command that cannot do
+  # what it was asked. Exiting 0 here would report success for a forge no agent
+  # in the session can reach.
+  - name: forge_mcp_apply exits non-zero when no registered agent has the verbs
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          mkdir -p "${TMP}/lib/agents/zzstub" "${TMP}/lib/lib" "${TMP}/home"
+          cp "{{.riotbox_dir}}/container/forge-mcp.sh" "${TMP}/lib/"
+          cp "{{.riotbox_dir}}/agents/registry.sh" "${TMP}/lib/agents/"
+          cp "{{.riotbox_dir}}/scripts/lib/json-write.sh" "${TMP}/lib/lib/"
+          cp "{{.riotbox_dir}}/container/enable_github_mcp" "${TMP}/lib/"
+          chmod +x "${TMP}/lib/enable_github_mcp"
+
+          # The only agent in this registry, and it has no forge verbs.
+          cat >"${TMP}/lib/agents/zzstub/manifest.sh" <<'EOF'
+          agent_zzstub_real_binary() { printf 'zzstub\n'; }
+          EOF
+
+          export HOME="${TMP}/home"
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export GITHUB_TOKEN="ignored-by-design"
+
+          rc=0
+          err="$("${TMP}/lib/enable_github_mcp" 2>&1 >/dev/null)" || rc=$?
+
+          if [ "${rc}" -eq 0 ]; then
+            echo "FAIL: exit 0 with no agent able to wire github" >&2
+            exit 1
+          fi
+          case "${err}" in
+          *"no registered agent supports the github MCP server."*) : ;;
+          *)
+            echo "FAIL: expected the no-support error, got: ${err}" >&2
+            exit 1
+            ;;
+          esac
+          written="$(find "${TMP}/home" -type f | wc -l)"
+          if [ "${written}" -ne 0 ]; then
+            echo "FAIL: ${written} file(s) written when nothing could be wired" >&2
+            find "${TMP}/home" -type f >&2
+            exit 1
+          fi
+          echo "REFUSED_NO_SUPPORT"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REFUSED_NO_SUPPORT"
+
+  # The dispatcher's own status line, on the path where a strip removed
+  # nothing. It says "cleanup complete" rather than "server removed" because
+  # strip returns 0 on four non-removal paths — no config, no entry, a config
+  # too malformed to edit, and an entry riotbox did not write — and announcing
+  # a removal there contradicts the stderr line explaining why there was none.
+  - name: a strip that removed nothing does not report a removal
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          unset XDG_CONFIG_HOME
+          export HOME="${TMP}"
+          export CLAUDE_CONFIG_DIR="${TMP}/.claude"
+          export OPENCODE_CONFIG_DIR="${TMP}/.config/opencode"
+
+          # No config file anywhere: nothing to remove, and the command still
+          # succeeds.
+          rc=0
+          out="$("{{.riotbox_dir}}/container/disable_github_mcp" 2>/dev/null)" || rc=$?
+          if [ "${rc}" -ne 0 ]; then
+            echo "FAIL: disable returned ${rc} with nothing to remove" >&2
+            exit 1
+          fi
+          # The exact retired string, not the bare word: some future status
+          # line may legitimately contain "removed" without claiming this one.
+          case "${out}" in
+          *"MCP server removed."*)
+            echo "FAIL: reported a removal when nothing was removed: ${out}" >&2
+            exit 1
+            ;;
+          esac
+          case "${out}" in
+          *"claude: github MCP cleanup complete."*) : ;;
+          *)
+            echo "FAIL: expected the cleanup status line, got: ${out}" >&2
+            exit 1
+            ;;
+          esac
+          echo "NO_FALSE_REMOVAL"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NO_FALSE_REMOVAL"
