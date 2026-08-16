@@ -5,7 +5,18 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-IMAGE_NAME="${IMAGE_NAME:-riotbox}"
+# Build flavor. RIOTBOX_GH_GLAB=1 adds the gh and glab CLIs and the GitHub MCP
+# server binary, and names the result riotbox-gh-glab so it sits alongside the
+# base image rather than replacing it. An IMAGE_NAME the caller set explicitly
+# still wins — it is the documented knob every launcher and preflight check
+# already reads, and a flavor default that overrode it would break `IMAGE_NAME=
+# my-tag riotbox build` for no gain.
+RIOTBOX_GH_GLAB="${RIOTBOX_GH_GLAB:-0}"
+if [[ "${RIOTBOX_GH_GLAB}" = "1" ]]; then
+	IMAGE_NAME="${IMAGE_NAME:-riotbox-gh-glab}"
+else
+	IMAGE_NAME="${IMAGE_NAME:-riotbox}"
+fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 VERSION="$(cat "${PROJECT_DIR}/VERSION" 2>/dev/null || echo "unknown")"
@@ -282,6 +293,12 @@ else
 	_diagrams="(skipped — set RIOTBOX_DIAGRAMS=1 to include)"
 fi
 echo "  Diagram tools:   ${_diagrams}"
+if [[ "${RIOTBOX_GH_GLAB}" = "1" ]]; then
+	_gh_glab="gh + glab + github-mcp-server"
+else
+	_gh_glab="(skipped — set RIOTBOX_GH_GLAB=1 to include)"
+fi
+echo "  Forge CLIs:      ${_gh_glab}"
 echo ""
 echo "  Expected runtime: 15–60 min on a clean host. Heavier with many"
 echo "  Node versions, full Rust toolchains, or RVM Ruby builds (compiled"
@@ -326,6 +343,7 @@ ${CONTAINER_CMD} build \
 	--build-arg "RUBY_VERSIONS=${RUBY_VERSIONS}" \
 	--build-arg "RUBY_DEFAULT=${RUBY_DEFAULT}" \
 	--build-arg "RIOTBOX_DIAGRAMS=${RIOTBOX_DIAGRAMS:-0}" \
+	--build-arg "RIOTBOX_GH_GLAB=${RIOTBOX_GH_GLAB}" \
 	--build-arg "LLM_TOOL_UPDATE=${LLM_TOOL_UPDATE:-0}" \
 	--progress=plain \
 	-t "${IMAGE_NAME}" \

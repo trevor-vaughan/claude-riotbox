@@ -1,4 +1,4 @@
-# riotbox-config-version: 7
+# riotbox-config-version: 8
 # ~/.config/riotbox/config — Persistent defaults for riotbox.
 #
 # This file is *sourced* as a bash script by the launcher, so each setting is
@@ -79,9 +79,32 @@
 # : "${RIOTBOX_EXTRA_ARGS_ACK:=1}"
 
 # ── Container image name ─────────────────────────────────────────────────
-# Override if you maintain multiple RiotBox images (e.g. per-project).
+# Set IMAGE_NAME in the ENVIRONMENT, not here, to run a different image (a
+# per-project build, or the riotbox-gh-glab flavor):
 #
-# : "${IMAGE_NAME:=riotbox}"
+#   IMAGE_NAME=riotbox-gh-glab riotbox shell
+#
+# Setting it in this file half-works, which is worse than not working:
+#
+#   * The `:=` default form used everywhere else in this file does NOTHING for
+#     IMAGE_NAME. `riotbox` sets the variable before launch.sh sources this
+#     file, so `: "${IMAGE_NAME:=other}"` never assigns.
+#   * A forcing `IMAGE_NAME=other` DOES change which image launches — but not
+#     the "does that image exist?" check, which runs before this file is read
+#     and therefore tests the tag `riotbox` picked ('riotbox' by default). You
+#     get the check on one tag and the container on another: a missing base
+#     image aborts a launch that never needed it, and a missing `other` slips
+#     past the check to fail in podman/docker without riotbox's build hint.
+#   * Builds ignore this file entirely — scripts/build.sh does not source it.
+#     Choose a build's tag with RIOTBOX_GH_GLAB=1 or an environment IMAGE_NAME.
+#
+# `riotbox doctor` is the one verb a forcing assignment here would serve
+# correctly — its preflight sources this file before it reads IMAGE_NAME — but
+# that is not a reason to write one: the same line breaks `shell` and `run` as
+# above. To probe another tag, pass it on the command line and leave this file
+# alone:
+#
+#   IMAGE_NAME=riotbox-gh-glab riotbox doctor
 
 # ── Agent selection ──────────────────────────────────────────────────────
 # Choose between Claude Code and opencode for `run`/`resume`/`shell`
@@ -148,7 +171,8 @@
 #     export the variable in this file as a separate statement and pass
 #     it by bare name.
 #
-# Excluded from the default by design — uncomment in your shell to opt in:
+# Excluded from the default by design — name them in
+# RIOTBOX_PASSTHROUGH_EXTRA_VARS (below) to opt in:
 #   * AWS access keys (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
 #     AWS_SESSION_TOKEN) — long-lived static keys in an autonomous
 #     container is a security regression. Prefer AWS_PROFILE +
@@ -156,6 +180,13 @@
 #   * SSH_AUTH_SOCK — Unix socket forwarding has a different mount
 #     model and gives the container live signing access for the host
 #     SSH agent's lifetime; out of scope here.
+#   * Forge credentials — GITHUB_TOKEN, GITHUB_PERSONAL_ACCESS_TOKEN,
+#     GITLAB_TOKEN, plus GITLAB_HOST for a self-managed instance.
+#     Forwarding them by default would put a token that can push code
+#     and open merge requests into every session, including the ones
+#     with no forge tooling in the image. Only the riotbox-gh-glab
+#     flavor has anything that uses them. See "GitHub and GitLab (the
+#     riotbox-gh-glab flavor)" in the README.
 #
 # Examples:
 #

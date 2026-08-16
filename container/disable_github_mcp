@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# disable_github_mcp — Remove the GitHub MCP server for every riotbox agent.
+# Logic lives in forge-mcp.sh beside this file; see there for the contract.
+set -euo pipefail
+# BASH_SOURCE[0] is not symlink-resolved, and the image reaches this command
+# only through a ~/.local/bin symlink; readlink -f follows it to the real file.
+_forge_mcp_self="$(readlink -f "${BASH_SOURCE[0]}")"
+# shellcheck source=./forge-mcp.sh disable=SC1091  # resolved at runtime from this script's own directory
+source "$(dirname "${_forge_mcp_self}")/forge-mcp.sh"
+forge_mcp_apply github strip

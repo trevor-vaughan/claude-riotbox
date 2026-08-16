@@ -213,7 +213,12 @@ testcases:
           cfg="{{.riotbox_dir}}/scripts/configs/config"
           ( set -u; unset RIOTBOX_EXTRA_ARGS RIOTBOX_EXTRA_ARGS_ACK; source "${cfg}"
             [ -z "${RIOTBOX_EXTRA_ARGS:-}" ] || { echo "BAD: default not empty" >&2; exit 1; } )
-          grep -q "riotbox-config-version: 7" "${cfg}" || { echo "BAD: version not bumped to 7" >&2; exit 1; }
+          # RIOTBOX_EXTRA_ARGS shipped in config v7. Assert >= 7 rather than
+          # pinning the number: every later content change to the template
+          # bumps it again, and an equality check turns each bump into a
+          # spurious failure here.
+          ver="$(grep -m1 '^# riotbox-config-version:' "${cfg}" | awk '{print $NF}')"
+          [ "${ver}" -ge 7 ] 2>/dev/null || { echo "BAD: config version '${ver}' is below 7" >&2; exit 1; }
           grep -q "RIOTBOX_EXTRA_ARGS_ACK" "${cfg}" || { echo "BAD: ack not documented" >&2; exit 1; }
           echo "OK"
         assertions:

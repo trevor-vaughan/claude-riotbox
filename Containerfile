@@ -1059,3 +1059,105 @@ RUN STAGING_DIR=/home/llm/.riotbox/plugins-staging/.claude && \
         security-guidance claude-code-setup claude-md-management; do \
         CLAUDE_CONFIG_DIR="${STAGING_DIR}" claude plugin install "$p" || true; \
     done
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Build flavor: riotbox-gh-glab (opt-in, RIOTBOX_GH_GLAB=1)
+# ═════════════════════════════════════════════════════════════════════════════
+# Adds the gh and glab CLIs plus the GitHub MCP server binary, and ships the
+# four commands that wire the GitHub and GitLab MCP servers into every agent on
+# demand. Build it with `task container:build-gh-glab`, which tags the result
+# riotbox-gh-glab so it sits beside the base image rather than replacing it.
+#
+# ── Why this block is at the very bottom of the file ────────────────────────
+#
+# ARG invalidates the layer cache from the point it is USED, and everything
+# after that point rebuilds. RIOTBOX_DIAGRAMS (near the top) is the pattern this
+# follows but deliberately not the placement: it gates a base system package, so
+# it has to be consumed early and a diagrams build genuinely does rebuild the
+# world. This flavor is two rpms and one static binary. Consumed last, the base
+# image and the flavor share every layer up to this one, and building the flavor
+# after the base costs a minute instead of an hour.
+#
+# tests/gh-glab-build.venom.yml asserts this ARG stays in the last tenth of the
+# file, because losing the property costs an hour per build and is invisible in
+# a build that otherwise succeeds.
+
+# The commands are copied unconditionally — COPY cannot be made conditional, and
+# they are inert here. ~/.riotbox is a library directory: nothing runs anything
+# from it unprompted, and only the flavor below puts these on PATH. Copying them
+# in every image keeps one COPY instead of a duplicated conditional one.
+COPY --chown=llm:llm container/forge-mcp.sh /home/llm/.riotbox/forge-mcp.sh
+COPY --chown=llm:llm container/enable_github_mcp /home/llm/.riotbox/enable_github_mcp
+COPY --chown=llm:llm container/enable_gitlab_mcp /home/llm/.riotbox/enable_gitlab_mcp
+COPY --chown=llm:llm container/disable_github_mcp /home/llm/.riotbox/disable_github_mcp
+COPY --chown=llm:llm container/disable_gitlab_mcp /home/llm/.riotbox/disable_gitlab_mcp
+
+ARG RIOTBOX_GH_GLAB=0
+
+# github-mcp-server — GitHub's own MCP server (https://github.com/github/github-mcp-server)
+# Pinned per supply-chain review, same treatment as venom in the tools stage.
+# Upstream DOES publish a checksums file, but fetching it at build time would
+# authenticate the download against a file from the same unauthenticated place,
+# which proves nothing. The digests are therefore pinned here, transcribed once
+# from that file at review time. To refresh:
+#   1. Pick a new tag at https://github.com/github/github-mcp-server/releases
+#   2. Read the Linux digests out of the release's checksums file:
+#        curl -sL "https://github.com/github/github-mcp-server/releases/download/<TAG>/github-mcp-server_<VER>_checksums.txt" \
+#          | grep -E 'Linux_(x86_64|arm64)'
+#   3. Update the three ARGs below (VERSION carries the leading v, the
+#      tarball name does not)
+ARG GITHUB_MCP_SERVER_VERSION=v1.9.0
+ARG GITHUB_MCP_SERVER_SHA256_AMD64=cbf38bd3364518ccf80b6a25587d5ef11655b15d63cbb48bc066384d0b5b5964
+ARG GITHUB_MCP_SERVER_SHA256_ARM64=11e14ce34492b6a07ae4bc567d8773fc4cd3dd77e91daf3f9cacc88b15d840ea
+
+# Root for the rpm install and for writing to /usr/local/bin; back to llm at the
+# end, since the entrypoint and every agent run as llm.
+#
+# gh and glab both come from EPEL, which is already enabled in the system
+# packages layer. One provenance model, distro-signed, no checksum table to
+# maintain by hand — at the cost of trailing upstream by a few releases.
+#
+# hadolint ignore=DL3041
+USER root
+RUN if [ "${RIOTBOX_GH_GLAB}" = "1" ]; then \
+        dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+            gh glab \
+        && dnf clean all \
+        && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc /usr/share/info \
+        && bash -o pipefail -c '\
+            ARCH=$(uname -m | sed "s/aarch64/arm64/") && \
+            case "${ARCH}" in \
+                x86_64) EXPECTED_SHA="'"${GITHUB_MCP_SERVER_SHA256_AMD64}"'" ;; \
+                arm64)  EXPECTED_SHA="'"${GITHUB_MCP_SERVER_SHA256_ARM64}"'" ;; \
+                *) echo "unsupported arch: ${ARCH}" >&2; exit 1 ;; \
+            esac && \
+            VER="'"${GITHUB_MCP_SERVER_VERSION}"'" && \
+            curl -fsSLo /tmp/gh-mcp.tar.gz \
+                "https://github.com/github/github-mcp-server/releases/download/${VER}/github-mcp-server_Linux_${ARCH}.tar.gz" && \
+            echo "${EXPECTED_SHA}  /tmp/gh-mcp.tar.gz" | sha256sum -c - && \
+            tar -xzf /tmp/gh-mcp.tar.gz -C /tmp github-mcp-server && \
+            install -m 0755 /tmp/github-mcp-server /usr/local/bin/github-mcp-server && \
+            rm -f /tmp/gh-mcp.tar.gz /tmp/github-mcp-server' \
+        && for c in enable_github_mcp enable_gitlab_mcp disable_github_mcp disable_gitlab_mcp; do \
+               ln -sf "/home/llm/.riotbox/${c}" "/home/llm/.local/bin/${c}"; \
+           done; \
+    fi
+USER llm
+
+# Fail the build, not a user session, when the flavor did not come out whole.
+# Each of these is something a user would otherwise discover as a missing
+# command halfway through a task: an EPEL package renamed, a release asset gone,
+# a symlink pointing at a file that was never copied. The final disable_github_mcp
+# call is an execution probe, not just a PATH probe: a command can resolve on
+# PATH and still fail to find its own library, which command -v and -x cannot
+# catch (see the four commands' BASH_SOURCE-vs-symlink history).
+RUN if [ "${RIOTBOX_GH_GLAB}" = "1" ]; then \
+        gh --version && \
+        glab --version && \
+        github-mcp-server --version && \
+        for c in enable_github_mcp enable_gitlab_mcp disable_github_mcp disable_gitlab_mcp; do \
+            command -v "${c}" >/dev/null || { echo "${c} is not on PATH" >&2; exit 1; }; \
+            [ -x "/home/llm/.riotbox/${c}" ] || { echo "${c} is not executable" >&2; exit 1; }; \
+        done && \
+        { disable_github_mcp || { echo "disable_github_mcp failed when invoked through PATH" >&2; exit 1; }; }; \
+    fi

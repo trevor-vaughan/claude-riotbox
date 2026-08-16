@@ -1,6 +1,8 @@
 version: "3"
 
 includes:
+  build:
+    taskfile: .taskfiles/build.yml
   container:
     taskfile: .taskfiles/container.yml
   lint:
@@ -20,11 +22,6 @@ tasks:
     silent: true
     cmd: |
       task --list 2>/dev/null
-  build:
-    desc: "Build the RiotBox image (alias for container:build)"
-    cmds:
-      - task: container:build
-
   rebuild:
     desc: "Rebuild from scratch (alias for container:rebuild)"
     cmds:
