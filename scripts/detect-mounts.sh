@@ -11,7 +11,8 @@
 # Separates mounts into:
 #   1. Functional dirs (settings, scripts) — bind mounts with :z (rw or ro)
 #   2. Package caches — named volumes (rw, no SELinux relabeling needed)
-#   3. User-defined mounts from mounts.conf — bind mounts, always ro
+#   3. User-defined mounts from mounts.conf — bind mounts, ro unless the
+#      entry opts in with a trailing `:rw`
 #
 # Sensitive directories (.ssh, .gnupg, .kube, .aws, etc.) are NEVER mounted
 # by the auto-detection. Users can explicitly mount files via mounts.conf.
@@ -24,6 +25,33 @@ RIOTBOX_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox"
 # installs and tests. mounts.conf entries from here are unioned with the
 # user's XDG file below.
 RIOTBOX_SYSCONF_DIR="${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}"
+
+# Source the config layer for the toggles this script honours (today:
+# RIOTBOX_READONLY, which downgrades `:rw` entries in mounts.conf). The files
+# use `: "${VAR:=default}"`, so sourcing user (XDG) before system (/etc) yields
+# env > $XDG_CONFIG_HOME/riotbox > /etc/riotbox > built-in default. This mirrors
+# launch.sh and the script-mode block of mount-projects.sh: `riotbox mounts`
+# invokes this script directly, with no launch.sh above it, and the preview it
+# prints has to match what a real launch would mount.
+#
+# Unlike launch.sh, this script's stdout IS the mount list — launch.sh
+# word-splits it straight into the podman argv. The config layer is arbitrary
+# user shell (the shipped stub demonstrates `$(cmd)` usage), so each source
+# runs with stdout redirected to stderr: a stray echo in someone's config
+# stays a diagnostic instead of becoming a container argument. A config that
+# ends on a non-zero status is reported and tolerated rather than killing the
+# launch at launch.sh's `MOUNTS=` assignment with no explanation.
+_dm_source_config() {
+	local file="$1"
+	[[ -f "${file}" ]] || return 0
+	# shellcheck disable=SC1090,SC1091  # user-provided path, resolved at run time
+	if ! { source "${file}"; } >&2; then
+		echo "WARN: ${file}: config exited non-zero; continuing without it" >&2
+	fi
+}
+_dm_source_config "${RIOTBOX_CONFIG_DIR}/config"
+_dm_source_config "${RIOTBOX_SYSCONF_DIR}/config"
+unset -f _dm_source_config
 
 # ── Output format ───────────────────────────────────────────────────────────
 OUTPUT_FORMAT="podman"
@@ -158,7 +186,7 @@ done
 #   - Lines starting with # are comments; blank lines are ignored
 #   - Paths starting with / or ~ are absolute
 #   - Other paths are relative to $HOME
-#   - All user mounts are read-only (:ro,z)
+#   - Mounts are read-only (:ro,z) unless the entry ends in `:rw`
 #   - Mounted to the same path under /home/llm
 #
 # Example mounts.conf:
@@ -168,7 +196,13 @@ done
 #   .yarnrc.yml
 #   # Maven settings
 #   .m2/settings.xml
+#   # A scratch directory the session is meant to write back to
+#   .cache/mytool:rw
 #
+# Counters for the two stderr summaries emitted after both files are read.
+RW_MOUNT_COUNT=0
+RO_DOWNGRADED=()
+
 for MOUNTS_CONF in "${RIOTBOX_SYSCONF_DIR}/mounts.conf" "${RIOTBOX_CONFIG_DIR}/mounts.conf"; do
 	[[ -f "${MOUNTS_CONF}" ]] || continue
 	while IFS= read -r line || [[ -n "${line}" ]]; do
@@ -176,6 +210,31 @@ for MOUNTS_CONF in "${RIOTBOX_SYSCONF_DIR}/mounts.conf" "${RIOTBOX_CONFIG_DIR}/m
 		line="${line%%#*}"
 		line="$(echo "${line}" | xargs)" # trim whitespace
 		[[ -z "${line}" ]] && continue
+
+		# Split the optional mode suffix off before the path form is
+		# resolved, so `~/dir:rw` still takes the tilde branch below.
+		# Only the exact lowercase tokens are recognised: a typo like
+		# `:RW` stays part of the path, which then does not exist and is
+		# skipped. That failure direction is deliberate — a malformed
+		# mode can drop a mount or leave it read-only, never widen it.
+		mode="ro"
+		case "${line}" in
+		*:rw)
+			mode="rw"
+			line="${line%:rw}"
+			;;
+		*:ro) line="${line%:ro}" ;;
+		esac
+
+		# A line of nothing but a mode suffix must not fall through: the
+		# relative branch below resolves an empty entry to ${HOME}, which
+		# would bind-mount the user's whole home directory into the
+		# container. The blank-line check above runs before the suffix is
+		# stripped, so it cannot catch this.
+		if [[ -z "${line}" ]]; then
+			echo "WARN: ${MOUNTS_CONF}: mode suffix with no path — skipping entry" >&2
+			continue
+		fi
 
 		# Resolve host and container paths. Use [[ == "~/"* ]] (quoted
 		# tilde) rather than a `case ~/*` glob: bash tilde-expands an
@@ -197,7 +256,53 @@ for MOUNTS_CONF in "${RIOTBOX_SYSCONF_DIR}/mounts.conf" "${RIOTBOX_CONFIG_DIR}/m
 		fi
 
 		if [[ -e "${src}" ]]; then
-			emit_mount "${src}" "${dst}" ro z
+			# A read-write mount of $HOME, of an ancestor of it, or of /
+			# hands the agent the run of the host. Entries reaching those
+			# survive the empty-path check above — `~/`, `.`, `./`, `..`
+			# and `/` are all non-empty — so this has to test the resolved
+			# source rather than the text of the entry.
+			#
+			# Read-only entries are deliberately left alone: their reach is
+			# what it was before per-entry modes existed, and narrowing it
+			# here would break configs that work today.
+			if [[ "${mode}" == "rw" ]] && [[ -d "${src}" ]]; then
+				canon_src="$(cd "${src}" 2>/dev/null && pwd -P)" || canon_src="${src}"
+				canon_home="$(cd "${HOME}" 2>/dev/null && pwd -P)" || canon_home="${HOME}"
+				if [[ "${canon_src}" == "/" ]] ||
+					[[ "${canon_src}" == "${canon_home}" ]] ||
+					[[ "${canon_home}" == "${canon_src}/"* ]]; then
+					echo "WARN: ${MOUNTS_CONF}: refusing read-write mount of ${canon_src} — it is the home directory, an ancestor of it, or the filesystem root. Name a narrower path." >&2
+					continue
+				fi
+			fi
+
+			# RIOTBOX_READONLY=1 is the session-wide "the host does not
+			# get written to" switch — mount-projects.sh honours it for
+			# the workspace and withholds the Context Mode ledger under
+			# it. An rw entry that survived it would make the flag mean
+			# less than its name. Downgraded paths are named once, after
+			# both config files have been read.
+			if [[ "${mode}" == "rw" ]] && [[ "${RIOTBOX_READONLY:-}" == "1" ]]; then
+				mode="ro"
+				RO_DOWNGRADED+=("${src}")
+			fi
+			if [[ "${mode}" == "rw" ]]; then
+				RW_MOUNT_COUNT=$((RW_MOUNT_COUNT + 1))
+			fi
+			emit_mount "${src}" "${dst}" "${mode}" z
 		fi
 	done <"${MOUNTS_CONF}"
 done
+
+# Both summaries go to stderr: stdout is consumed verbatim by launch.sh and
+# `riotbox mounts`, and neither should have to filter prose out of the mount
+# list.
+if [[ ${#RO_DOWNGRADED[@]} -gt 0 ]]; then
+	{
+		echo "WARN: RIOTBOX_READONLY=1 downgrades these read-write mounts.conf entries to read-only:"
+		printf '        %s\n' "${RO_DOWNGRADED[@]}"
+	} >&2
+fi
+if [[ ${RW_MOUNT_COUNT} -gt 0 ]]; then
+	echo "NOTE: ${RW_MOUNT_COUNT} host path(s) mounted read-write from mounts.conf" >&2
+fi

@@ -82,3 +82,139 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "UNION_OK"
+
+  - name: detect-mounts.sh reads RIOTBOX_READONLY from the config layer on its own
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset XDG_CONFIG_HOME
+          unset RIOTBOX_READONLY
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/scratch.d" "${TMP}/etc"
+          # `riotbox mounts` runs detect-mounts.sh directly, with no launch.sh
+          # above it to forward the config layer. mount-projects.sh sources the
+          # layer itself for exactly this reason; without the same treatment the
+          # two halves of `riotbox mounts` would disagree about the mode of a
+          # :rw entry in a read-only session.
+          printf ': "${RIOTBOX_READONLY:=1}"\n' > "${TMP}/etc/config"
+          echo "~/scratch.d:rw" > "${HOME}/.config/riotbox/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
+          echo "OUT=${out}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/scratch.d:/home/llm/scratch.d:ro"
+          - result.systemout ShouldNotContainSubstring "/scratch.d:/home/llm/scratch.d:rw"
+
+  - name: detect-mounts.sh reads RIOTBOX_READONLY from the user XDG config too
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export XDG_CONFIG_HOME="${TMP}/xdg"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset RIOTBOX_READONLY
+          mkdir -p "${XDG_CONFIG_HOME}/riotbox" "${HOME}/scratch.d" "${TMP}/etc"
+          # The XDG file is the layer nearly every user actually edits; the
+          # /etc case above does not prove this one, since they are two
+          # separate source calls.
+          printf ': "${RIOTBOX_READONLY:=1}"\n' > "${XDG_CONFIG_HOME}/riotbox/config"
+          echo "~/scratch.d:rw" > "${XDG_CONFIG_HOME}/riotbox/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
+          echo "OUT=${out}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/scratch.d:/home/llm/scratch.d:ro"
+          - result.systemout ShouldNotContainSubstring "/scratch.d:/home/llm/scratch.d:rw"
+
+  - name: config-file output cannot leak into the mount list on stdout
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export XDG_CONFIG_HOME="${TMP}/xdg"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset RIOTBOX_READONLY
+          mkdir -p "${XDG_CONFIG_HOME}/riotbox" "${TMP}/etc" "${HOME}"
+          # detect-mounts.sh stdout is word-split straight into the podman
+          # argv by launch.sh. The config layer is arbitrary user shell and
+          # the shipped stub teaches $(cmd) usage, so anything it prints —
+          # a stray echo, an unredirected command — would become a container
+          # argument if the source shared this script's stdout.
+          printf 'echo "STRAY_CONFIG_OUTPUT"\n' > "${XDG_CONFIG_HOME}/riotbox/config"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" 2>"${TMP}/err.log")"
+          if printf '%s\n' "${out}" | grep -q "STRAY_CONFIG_OUTPUT"; then
+              echo "LEAKED_TO_STDOUT"
+          else
+              echo "STDOUT_CLEAN"
+          fi
+          cat "${TMP}/err.log" >&2
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "STDOUT_CLEAN"
+          - result.systemerr ShouldContainSubstring "STRAY_CONFIG_OUTPUT"
+
+  - name: a config file that exits non-zero does not abort mount detection
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export XDG_CONFIG_HOME="${TMP}/xdg"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset RIOTBOX_READONLY
+          mkdir -p "${XDG_CONFIG_HOME}/riotbox" "${TMP}/etc" "${HOME}/keep.d"
+          echo "~/keep.d" > "${XDG_CONFIG_HOME}/riotbox/mounts.conf"
+          # `set -euo pipefail` is active while the config is sourced. A config
+          # whose last statement returns non-zero would otherwise kill this
+          # script, which kills launch.sh at its `MOUNTS=` assignment with no
+          # diagnostic at all.
+          printf 'command -v definitely-not-a-real-binary\n' > "${XDG_CONFIG_HOME}/riotbox/config"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>"${TMP}/err.log")"
+          echo "OUT=${out}"
+          cat "${TMP}/err.log" >&2
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/keep.d:/home/llm/keep.d:ro"
+          - result.systemerr ShouldContainSubstring "exited non-zero"
+
+  - name: RIOTBOX_READONLY from the config layer survives a full launch.sh run
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/home" \
+                   "${TMP}/proj" "${TMP}/scratch"
+          # End-to-end guard over the unit cases above: launch.sh sources the
+          # config into shell variables, not exported ones, so detect-mounts.sh
+          # as its subprocess has to reach the layer itself. Without that a
+          # read-only session would still hand the container a writable host
+          # path from mounts.conf.
+          printf ': "${RIOTBOX_READONLY:=1}"\n' > "${TMP}/etc/config"
+          echo "${TMP}/scratch:rw" > "${TMP}/etc/mounts.conf"
+          out="$(RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" \
+              XDG_DATA_HOME="${TMP}/data" HOME="${TMP}/home" \
+              RIOTBOX_PROJECTS="${TMP}/proj" \
+              ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD=/bin/false IMAGE_NAME=riotbox \
+              bash "{{.riotbox_dir}}/libexec/launch.sh" bash 2>&1 || true)"
+          echo "${out}"
+          case "${out}" in
+            *"RIOTBOX_READONLY=1 downgrades"*) echo "DOWNGRADE_OK" ;;
+            *) echo "BAD: rw mount survived a read-only session" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DOWNGRADE_OK"

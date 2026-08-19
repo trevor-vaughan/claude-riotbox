@@ -7,8 +7,9 @@ vars:
 #   ~/foo    → ${HOME}/foo on host  → /home/llm/foo  in container
 #   /abs/x   → /abs/x  on host       → /abs/x           in container
 #   rel/y    → ${HOME}/rel/y on host → /home/llm/rel/y in container
-# Each entry produces a `-v host:container:ro,z` flag; missing source
-# files are silently skipped (existing behaviour we want to preserve).
+# An entry defaults to read-only and may carry a trailing `:rw` or `:ro`
+# to set the mode explicitly; missing source files are silently skipped
+# (existing behaviour we want to preserve).
 
 testcases:
   - name: mounts.conf tilde-prefixed entry resolves to HOME on host and /home/llm in container
@@ -118,3 +119,349 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "COUNT=1"
+
+  # ── Read-write entries (issue #12) ────────────────────────────────────
+  # A trailing `:rw` opts one entry out of the read-only default. The
+  # cases below pin the mode token in both output formats, the interaction
+  # with RIOTBOX_READONLY, and the parser guard that keeps a malformed
+  # entry from resolving to $HOME.
+
+  - name: mounts.conf entry with a :rw suffix is mounted read-write
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset XDG_CONFIG_HOME
+          unset RIOTBOX_READONLY
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/scratch.d" "${TMP}/etc"
+          echo "~/scratch.d:rw" > "${HOME}/.config/riotbox/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
+          echo "OUT=${out}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/scratch.d:/home/llm/scratch.d:rw"
+          - result.systemout ShouldNotContainSubstring "/scratch.d:/home/llm/scratch.d:ro"
+
+  - name: a :rw entry emits a bare :z podman flag rather than :ro,z
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset XDG_CONFIG_HOME
+          unset RIOTBOX_READONLY
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/scratch.d" "${TMP}/etc"
+          echo "~/scratch.d:rw" > "${HOME}/.config/riotbox/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" 2>/dev/null)"
+          echo "OUT=${out}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/scratch.d:/home/llm/scratch.d:z"
+          - result.systemout ShouldNotContainSubstring "/scratch.d:/home/llm/scratch.d:ro,z"
+
+  - name: an explicit :ro suffix mounts read-only, same as no suffix
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset XDG_CONFIG_HOME
+          unset RIOTBOX_READONLY
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/explicit.d" "${TMP}/etc"
+          echo "~/explicit.d:ro" > "${HOME}/.config/riotbox/mounts.conf"
+          triple="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
+          podman="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" 2>/dev/null)"
+          echo "TRIPLE=${triple}"
+          echo "PODMAN=${podman}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/explicit.d:/home/llm/explicit.d:ro"
+          - result.systemout ShouldContainSubstring "/explicit.d:/home/llm/explicit.d:ro,z"
+
+  - name: the mode suffix is split off before the path form is resolved
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset XDG_CONFIG_HOME
+          unset RIOTBOX_READONLY
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/tilde.d" "${HOME}/rel.d" \
+                   "${TMP}/abs.d" "${TMP}/etc"
+          cat >"${HOME}/.config/riotbox/mounts.conf" <<EOF
+          ~/tilde.d:rw
+          ${TMP}/abs.d:rw
+          rel.d:rw
+          EOF
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
+          echo "OUT=${out}"
+          # The absolute form carries the temp dir, which venom cannot
+          # interpolate into an assertion — probe it here and emit a sentinel.
+          if printf '%s\n' "${out}" | grep -qE "^${TMP}/abs.d:${TMP}/abs.d:rw\$"; then
+              echo "ABS_RW_MATCH"
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/tilde.d:/home/llm/tilde.d:rw"
+          - result.systemout ShouldContainSubstring "/rel.d:/home/llm/rel.d:rw"
+          - result.systemout ShouldContainSubstring "ABS_RW_MATCH"
+
+  - name: an entry that is only a mode suffix is rejected instead of mounting HOME
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset XDG_CONFIG_HOME
+          unset RIOTBOX_READONLY
+          mkdir -p "${HOME}/.config/riotbox" "${TMP}/etc"
+          echo ":rw" > "${HOME}/.config/riotbox/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>"${TMP}/err.log")"
+          echo "OUT=${out}"
+          cat "${TMP}/err.log" >&2
+          # $HOME must not appear as the source of any mount. The functional
+          # mounts use $HOME-relative sources, so match the container path
+          # /home/llm exactly rather than the host side.
+          if printf '%s\n' "${out}" | grep -qE ":/home/llm:(rw|ro)\$"; then
+              echo "HOME_MOUNTED"
+          else
+              echo "HOME_NOT_MOUNTED"
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "HOME_NOT_MOUNTED"
+          - result.systemerr ShouldContainSubstring "mode suffix with no path"
+
+  - name: a :rw entry that resolves to HOME, its parent, or / is refused
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset XDG_CONFIG_HOME
+          unset RIOTBOX_READONLY
+          mkdir -p "${HOME}/.config/riotbox" "${TMP}/etc"
+          # Each of these survives the "empty after stripping the suffix"
+          # check but still resolves to $HOME, the directory above it, or
+          # the host root. Read-write access to any of them hands the agent
+          # the whole home directory or filesystem.
+          cat >"${HOME}/.config/riotbox/mounts.conf" <<'EOF'
+          ~/:rw
+          .:rw
+          ./:rw
+          ..:rw
+          /:rw
+          EOF
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>"${TMP}/err.log")"
+          echo "OUT=${out}"
+          cat "${TMP}/err.log" >&2
+          # No mounts.conf entry may be emitted rw. The cache volumes are rw
+          # by design, so match on the mounts.conf sources instead: every one
+          # of them lives under the temp dir.
+          if printf '%s\n' "${out}" | grep -qE "^(${TMP}|/):.*:rw\$"; then
+              echo "OVERBROAD_MOUNT_EMITTED"
+          else
+              echo "ALL_REFUSED"
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ALL_REFUSED"
+          - result.systemerr ShouldContainSubstring "refusing read-write mount"
+          - result.systemerr ShouldNotContainSubstring "NOTE:"
+
+  - name: the overbroad-path guard still allows an ordinary rw directory under HOME
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset XDG_CONFIG_HOME
+          unset RIOTBOX_READONLY
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/nested/scratch.d" "${TMP}/etc"
+          echo "nested/scratch.d:rw" > "${HOME}/.config/riotbox/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>"${TMP}/err.log")"
+          echo "OUT=${out}"
+          cat "${TMP}/err.log" >&2
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/nested/scratch.d:/home/llm/nested/scratch.d:rw"
+          - result.systemerr ShouldNotContainSubstring "refusing read-write mount"
+
+  - name: an uppercase or unknown mode suffix is treated as path text, never as rw
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset XDG_CONFIG_HOME
+          unset RIOTBOX_READONLY
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/typo.d" "${TMP}/etc"
+          # Only lowercase :rw and :ro are modes. These four must fall through
+          # to the path, which then does not exist and is skipped — a typo can
+          # drop a mount, never widen one. A case-insensitive match here would
+          # silently break that property with the rest of the suite still green.
+          cat >"${HOME}/.config/riotbox/mounts.conf" <<'EOF'
+          ~/typo.d:RW
+          ~/typo.d:Rw
+          ~/typo.d:rwx
+          ~/typo.d:rw,z
+          EOF
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>"${TMP}/err.log")"
+          echo "OUT=${out}"
+          cat "${TMP}/err.log" >&2
+          if printf '%s\n' "${out}" | grep -q "typo.d"; then
+              echo "TYPO_MOUNTED"
+          else
+              echo "TYPO_DROPPED"
+          fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "TYPO_DROPPED"
+          - result.systemerr ShouldNotContainSubstring "NOTE:"
+
+  - name: RIOTBOX_READONLY=1 downgrades a :rw entry to read-only and names it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          export RIOTBOX_READONLY=1
+          unset XDG_CONFIG_HOME
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/scratch.d" "${TMP}/etc"
+          echo "~/scratch.d:rw" > "${HOME}/.config/riotbox/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>"${TMP}/err.log")"
+          echo "OUT=${out}"
+          cat "${TMP}/err.log" >&2
+          grep -qF "${HOME}/scratch.d" "${TMP}/err.log" && echo "WARN_NAMES_PATH"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/scratch.d:/home/llm/scratch.d:ro"
+          - result.systemout ShouldNotContainSubstring "/scratch.d:/home/llm/scratch.d:rw"
+          - result.systemout ShouldContainSubstring "WARN_NAMES_PATH"
+          - result.systemerr ShouldContainSubstring "RIOTBOX_READONLY=1"
+
+  - name: RIOTBOX_READONLY=1 leaves read-only entries alone and warns about nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          export RIOTBOX_READONLY=1
+          unset XDG_CONFIG_HOME
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/plain.d" "${TMP}/etc"
+          echo "~/plain.d" > "${HOME}/.config/riotbox/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>"${TMP}/err.log")"
+          echo "OUT=${out}"
+          cat "${TMP}/err.log" >&2
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/plain.d:/home/llm/plain.d:ro"
+          - result.systemerr ShouldNotContainSubstring "WARN:"
+          - result.systemerr ShouldNotContainSubstring "NOTE:"
+
+  - name: read-write entries produce one counted stderr notice and no stdout noise
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset XDG_CONFIG_HOME
+          unset RIOTBOX_READONLY
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/one.d" "${HOME}/two.d" \
+                   "${HOME}/three.d" "${TMP}/etc"
+          cat >"${HOME}/.config/riotbox/mounts.conf" <<'EOF'
+          ~/one.d:rw
+          ~/two.d:rw
+          ~/three.d
+          EOF
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>"${TMP}/err.log")"
+          if printf '%s\n' "${out}" | grep -q "NOTE:"; then
+              echo "NOTE_ON_STDOUT"
+          else
+              echo "NOTE_OFF_STDOUT"
+          fi
+          cat "${TMP}/err.log" >&2
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NOTE_OFF_STDOUT"
+          # Single-quoted: the "NOTE: " colon-space would otherwise make YAML
+          # read this list item as a mapping instead of an assertion string.
+          - 'result.systemerr ShouldContainSubstring "NOTE: 2 host path(s) mounted read-write from mounts.conf"'
+
+  - name: a :rw entry whose source is missing yields neither a mount nor a notice
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset XDG_CONFIG_HOME
+          unset RIOTBOX_READONLY
+          mkdir -p "${HOME}/.config/riotbox" "${TMP}/etc"
+          echo "~/absent.d:rw" > "${HOME}/.config/riotbox/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>"${TMP}/err.log")"
+          if printf '%s\n' "${out}" | grep -q "absent.d"; then
+              echo "PRESENT"
+          else
+              echo "SKIPPED"
+          fi
+          cat "${TMP}/err.log" >&2
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SKIPPED"
+          - result.systemerr ShouldNotContainSubstring "NOTE:"
+
+  - name: the system mounts.conf honours :rw the same way the user file does
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "${TMP}"' EXIT
+          export HOME="${TMP}/home"
+          export RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset XDG_CONFIG_HOME
+          unset RIOTBOX_READONLY
+          mkdir -p "${HOME}/.config/riotbox" "${HOME}/sysrw.d" "${TMP}/etc"
+          echo "~/sysrw.d:rw" > "${TMP}/etc/mounts.conf"
+          out="$("{{.riotbox_dir}}/scripts/detect-mounts.sh" --format=triple 2>/dev/null)"
+          echo "OUT=${out}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "/sysrw.d:/home/llm/sysrw.d:rw"
