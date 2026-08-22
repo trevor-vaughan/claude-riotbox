@@ -374,10 +374,31 @@ cat > ~/.config/riotbox/mounts.conf << 'EOF'
 # .yarnrc.yml
 # Maven settings with server credentials
 # .m2/settings.xml
+# A scratch directory the session is meant to write back to
+# .cache/mytool:rw
 EOF
 ```
 
-Each line is a path relative to `$HOME` (or absolute with `/`). All user mounts are **read-only** — the container can read your live tokens but cannot modify the host files. This is the recommended way to provide private registry credentials at runtime, since auth tokens are [stripped from configs at build time](#build-time-config-collection) and never baked into image layers.
+Each line is a path relative to `$HOME` (or absolute with `/`). Mounts are **read-only by default** — the container can read your live tokens but cannot modify the host files. This is the recommended way to provide private registry credentials at runtime, since auth tokens are [stripped from configs at build time](#build-time-config-collection) and never baked into image layers.
+
+An entry can end in `:rw` to mount that one path read-write, or `:ro` to be explicit about the default:
+
+| Entry | Result |
+|-------|--------|
+| `.npmrc`             | Read-only (the default) |
+| `.npmrc:ro`          | Read-only, said out loud |
+| `.cache/mytool:rw`   | Read-write |
+
+Only lowercase `:rw` and `:ro` are recognised; anything else is read as part of the path, which then does not exist and is skipped. A typo can therefore drop a mount or leave it read-only — it can never widen one.
+
+Weigh `:rw` before you use it. The agent in the container is autonomous, and a read-write entry is a direct hole to that path on your host, outside the git checkpoint that protects `/workspace`. Keep credentials and configs read-only; reach for `:rw` when a session is meant to produce something — a shared cache, an output directory. RiotBox prints one line to stderr at launch counting how many paths are mounted read-write, and `riotbox mounts` lists every mount with its podman flags — `:ro,z` for read-only, a bare `:z` for read-write.
+
+Two guard rails apply:
+
+- `RIOTBOX_READONLY=1` overrides every `:rw` entry back to read-only and lists the downgraded paths on stderr, so a read-only session is read-only everywhere.
+- A `:rw` entry that resolves to your home directory, any ancestor of it, or `/` is refused with a warning. That covers `~/`, `.`, `./`, `..` and `/` — a writable mount of any of them would hand the agent the run of your host.
+
+Entries in your file are **added to** the system ones in `/etc/riotbox/mounts.conf`, not merged with them. Listing a path the system file already mounts produces two mounts of the same container destination, which podman rejects outright — so a user entry cannot re-mount a system entry at a different mode.
 
 **Persistent defaults** (`~/.config/riotbox/config`):
 
@@ -1412,7 +1433,7 @@ Non-interactive callers (`riotbox run`, CI, scripts) never block on the prompt: 
 | RiotBox config (`~/.config/riotbox/`)    | bind mount (`:z`)            | `plugins.conf`, `config`, `mounts.conf`       |
 | Host plugins (`~/.claude/plugins/`)      | read-only bind mount         | Merged into session at startup                |
 | User scripts (`~/bin`)                   | read-only bind mount         | Available but not writable                    |
-| User-defined mounts                      | read-only bind mount         | From `~/.config/riotbox/mounts.conf`          |
+| User-defined mounts                      | read-only bind mount by default | From `~/.config/riotbox/mounts.conf`; per-entry `:rw` opt-in |
 | Package caches                           | named volumes                | Shared across containers, not with host       |
 | Network                                  | enabled                      | The agent needs npm/PyPI/crates.io etc.       |
 
