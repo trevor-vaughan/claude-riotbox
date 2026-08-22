@@ -74,4 +74,5 @@ venom run \
 	--var shared_helpers="${ROOT_DIR}/tests/lib/wrapper-shared.sh" \
 	--var sync_helpers="${ROOT_DIR}/tests/lib/sync-settings-test-helpers.sh" \
 	--var startup_helpers="${ROOT_DIR}/tests/lib/startup-scripts-test-helpers.sh" \
+	--var release_helpers="${ROOT_DIR}/tests/lib/release-test-helpers.sh" \
 	"${resolved_args[@]}"

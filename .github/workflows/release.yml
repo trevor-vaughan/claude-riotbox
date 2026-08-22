@@ -46,8 +46,17 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          # Bound as an env var and quoted at every use. Git ref names may
+          # contain shell metacharacters ($, ;, backtick are all legal), so the
+          # tag never reaches the shell as unquoted text.
+          TAG: ${{ github.ref_name }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
+          # Notes come from the CHANGELOG.md that `task release:bump` committed
+          # alongside this tag, so the published release and the file in the
+          # repository cannot disagree. The extraction is a script rather than
+          # an inline awk so tests/release-bump.venom.yml covers it.
+          .taskfiles/scripts/changelog-section.sh "${TAG#v}" CHANGELOG.md > release-notes.md
+          gh release create "${TAG}" \
             dist/*.rpm dist/*.deb dist/SHA256SUMS \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+            --title "${TAG}" \
+            --notes-file release-notes.md

@@ -1499,11 +1499,34 @@ yourself: venom writes `venom.log` to CWD on every invocation (and rotates earli
 Releases are tag-driven. Bump the version, push the tag, and CI builds and publishes the packages:
 
 ```sh
-task release:bump -- <ver>   # writes VERSION, commits, tags v<ver>
-git push --follow-tags       # push the commit and the v<ver> tag together
+task release:bump           # prompts for the version, writes VERSION and CHANGELOG.md, commits, tags
+git push --follow-tags      # push the commit and the v<ver> tag together
 ```
 
-Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds the rpm and deb with a pinned [`nfpm`](https://nfpm.goreleaser.com/) (v2.46.3) and publishes them alongside a `SHA256SUMS` checksum file via `gh`. The three artifacts (`riotbox-<ver>-1.noarch.rpm`, `riotbox_<ver>_all.deb`, `SHA256SUMS`) attach to the GitHub release for the tag.
+`release:bump` reads the current version and offers the next one:
+
+```console
+$ task release:bump
+Current version: 0.5.0
+New version [0.5.1]:
+✅ Released v0.5.1 — run 'git push --follow-tags' when ready
+```
+
+The default in brackets comes from [git-cliff](https://git-cliff.org) reading the [Conventional Commits](https://www.conventionalcommits.org) since the last `v*` tag. Press Enter to take it, or type any higher semantic version — `1.0.0` included — to override. While the major version is 0, a `BREAKING CHANGE` bumps the minor and a `feat` bumps the patch, so the prompt never proposes 1.0.0 on its own; reaching 1.0 is something you type. Those rules live in the `[bump]` block of [`cliff.toml`](cliff.toml).
+
+`task release:bump -- 0.6.0` skips the prompt, which is what you want in a script.
+
+Two cases make the suggestion fall back to a plain patch bump, each printing why: no `v*` tag exists yet (git-cliff has no baseline to measure against), or `VERSION` has drifted away from the last tag (its answer would be wrong rather than merely absent).
+
+The task needs `git-cliff` on `PATH` and stops with install instructions when it is missing:
+
+```sh
+cargo install git-cliff --version 2.13.1
+```
+
+Each run regenerates `CHANGELOG.md` in full rather than prepending to it. The release commit itself is skipped by a `cliff.toml` commit parser, so regenerating later reproduces the same file.
+
+Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds the rpm and deb with a pinned [`nfpm`](https://nfpm.goreleaser.com/) (v2.46.3) and publishes them alongside a `SHA256SUMS` checksum file via `gh`. The three artifacts (`riotbox-<ver>-1.noarch.rpm`, `riotbox_<ver>_all.deb`, `SHA256SUMS`) attach to the GitHub release for the tag. The release notes are that version's section of the committed `CHANGELOG.md`, extracted by [`.taskfiles/scripts/changelog-section.sh`](.taskfiles/scripts/changelog-section.sh), so the published notes and the file in the repository cannot disagree.
 
 ## Podman setup
 
