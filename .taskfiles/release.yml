@@ -6,22 +6,14 @@ tasks:
     cmd: task release --list
 
   bump:
-    desc: "Bump version, commit, and tag (usage: task release:bump -- 0.2.0)"
-    vars:
-      NEW_VERSION: "{{.CLI_ARGS}}"
-    preconditions:
-      - sh: '[ -n "{{.NEW_VERSION}}" ]'
-        msg: "Usage: task release:bump -- <version>  (e.g. 0.2.0)"
-      - sh: 'echo "{{.NEW_VERSION}}" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$"'
-        msg: "Version must be semver (e.g. 1.2.3)"
-      - sh: "git diff --quiet && git diff --cached --quiet"
-        msg: "Working tree must be clean before releasing"
-    cmds:
-      - echo "{{.NEW_VERSION}}" > "{{.ROOT_DIR}}/VERSION"
-      - git add "{{.ROOT_DIR}}/VERSION"
-      - git commit -m "release v{{.NEW_VERSION}}"
-      - git tag -a "v{{.NEW_VERSION}}" -m "v{{.NEW_VERSION}}"
-      - echo "✅ Released v{{.NEW_VERSION}} — run 'git push && git push --tags' when ready"
+    desc: "Bump the version, regenerate CHANGELOG.md, commit and tag (prompts; or: task release:bump -- 0.6.0)"
+    # interactive so the version prompt reaches the terminal unbuffered, silent
+    # so task does not echo the command over it. Validation, the suggested
+    # version and the changelog all live in the script — duplicating any of it
+    # as preconditions here would give two answers that drift apart.
+    interactive: true
+    silent: true
+    cmd: '"{{.ROOT_DIR}}/.taskfiles/scripts/release-bump.sh" {{.CLI_ARGS}}'
 
   current:
     desc: Show the current version

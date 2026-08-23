@@ -1,0 +1,430 @@
+name: release:bump suggests a version from Conventional Commits, regenerates the changelog, and refuses bad input
+vars:
+  root: "."
+  helpers: "{{.root}}/tests/lib/git-test-helpers.sh"
+  release_helpers: "{{.root}}/tests/lib/release-test-helpers.sh"
+
+# Covers .taskfiles/scripts/release-bump.sh and the cliff.toml it drives.
+#
+# Every case builds a throwaway checkout (init_release_repo) that copies the
+# project's real cliff.toml, so the suggestion levels asserted here are the
+# levels the shipped config produces. The suite never touches the riotbox
+# repository it runs from.
+#
+# These run against the repo checkout with no image build, so they are safe
+# for `task test:direct` — but they do require git-cliff on PATH.
+
+testcases:
+  - name: a breaking change suggests a minor bump under 0.x and Enter accepts it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "feat(api)!: drop the legacy socket
+
+          BREAKING CHANGE: the socket transport is gone."
+          run_bump ""
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          printf 'TAGS=%s\n' "$(git -C "${REPO_DIR}" tag --list 'v*' | tr '\n' ' ')"
+          grep -F '## [0.6.0]' "${REPO_DIR}/CHANGELOG.md"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          # Single-quoted: venom splits an unquoted assertion on spaces and the
+          # colon in the expected substring lands as a stray operand.
+          - 'result.systemout ShouldContainSubstring "Current version: 0.5.0"'
+          - result.systemout ShouldContainSubstring "New version [0.6.0]"
+          - result.systemout ShouldContainSubstring "VERSION=0.6.0"
+          - result.systemout ShouldContainSubstring "TAGS=v0.5.0 v0.6.0"
+          - result.systemout ShouldContainSubstring "## [0.6.0]"
+
+  - name: a feature alone suggests a patch bump under 0.x
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "feat(cli): add a tokscale subcommand"
+          run_bump ""
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "New version [0.5.1]"
+          - result.systemout ShouldContainSubstring "VERSION=0.5.1"
+
+  - name: a fix alone suggests a patch bump
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "fix(mounts): stop dropping ro entries"
+          run_bump ""
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "New version [0.5.1]"
+          - result.systemout ShouldContainSubstring "VERSION=0.5.1"
+
+  - name: typing a version at the prompt overrides the suggestion
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "fix(mounts): stop dropping ro entries"
+          run_bump "1.0.0"
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          git -C "${REPO_DIR}" rev-parse -q --verify refs/tags/v1.0.0 >/dev/null
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "New version [0.5.1]"
+          - result.systemout ShouldContainSubstring "VERSION=1.0.0"
+
+  - name: an explicit argument skips the prompt entirely
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "feat(cli): add a tokscale subcommand"
+          out="$(ROOT_DIR="${REPO_DIR}" bash "${RELEASE_BUMP}" 0.7.0 </dev/null 2>&1)"
+          printf '%s\n' "${out}"
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "New version ["
+          - result.systemout ShouldContainSubstring "VERSION=0.7.0"
+
+  - name: with no v tag the suggestion falls back to a patch bump and says why
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          commit_in "${REPO_DIR}" "feat(api)!: drop the legacy socket
+
+          BREAKING CHANGE: the socket transport is gone."
+          run_bump ""
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "no v* release tag found"
+          - result.systemout ShouldContainSubstring "New version [0.5.1]"
+          - result.systemout ShouldContainSubstring "VERSION=0.5.1"
+
+  - name: a VERSION ahead of the last tag warns about drift and falls back to a patch bump
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          printf '0.5.2\n' >"${REPO_DIR}/VERSION"
+          git -C "${REPO_DIR}" add VERSION
+          git -C "${REPO_DIR}" commit -qm "chore: hand-edit VERSION out of band"
+          commit_in "${REPO_DIR}" "feat(api)!: drop the legacy socket
+
+          BREAKING CHANGE: the socket transport is gone."
+          run_bump ""
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "does not match VERSION"
+          - result.systemout ShouldContainSubstring "New version [0.5.3]"
+          - result.systemout ShouldContainSubstring "VERSION=0.5.3"
+
+  - name: checkpoint and backup tags do not derail the suggestion
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          git -C "${REPO_DIR}" tag -a riotbox-checkpoint/20260804-182443 -m snapshot
+          git -C "${REPO_DIR}" tag -a backup/pre-reown-20260804-180953/feat-x -m backup
+          commit_in "${REPO_DIR}" "feat(cli): add a tokscale subcommand"
+          run_bump ""
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "Semver error"
+          - result.systemout ShouldContainSubstring "New version [0.5.1]"
+          - result.systemout ShouldContainSubstring "VERSION=0.5.1"
+
+  - name: the release commit is kept out of the next release's notes
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "fix(mounts): stop dropping ro entries"
+          run_bump "" >/dev/null
+          commit_in "${REPO_DIR}" "fix(cli): correct the exit code"
+          run_bump "" >/dev/null
+          printf 'RELEASE_LINES=%s\n' "$(grep -c 'chore(release)' "${REPO_DIR}/CHANGELOG.md" || true)"
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RELEASE_LINES=0"
+          - result.systemout ShouldContainSubstring "VERSION=0.5.2"
+
+  - name: the changelog groups by type and drops merge and checkpoint commits
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "feat(cli): add a tokscale subcommand"
+          commit_in "${REPO_DIR}" "fix(mounts): stop dropping ro entries"
+          # libexec/checkpoint.sh writes these; "checkpoint" parses as a
+          # conventional type, so only an explicit skip keeps them out.
+          commit_in "${REPO_DIR}" "checkpoint: pre-riotbox-20260524-024220"
+          git -C "${REPO_DIR}" checkout -q -b side
+          commit_in "${REPO_DIR}" "docs: describe the snapshot refs"
+          git -C "${REPO_DIR}" checkout -q main
+          git -C "${REPO_DIR}" merge -q --no-ff -m "Merge pull request #14 from trevor-vaughan/side" side
+          run_bump "" >/dev/null
+          cat "${REPO_DIR}/CHANGELOG.md"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Features"
+          - result.systemout ShouldContainSubstring "Bug Fixes"
+          - result.systemout ShouldContainSubstring "Documentation"
+          - result.systemout ShouldContainSubstring "Add a tokscale subcommand"
+          - result.systemout ShouldNotContainSubstring "Merge pull request"
+          - result.systemout ShouldNotContainSubstring "pre-riotbox-20260524"
+          - result.systemout ShouldNotContainSubstring "Other"
+
+  - name: a dirty working tree aborts before anything is written
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "feat(cli): add a tokscale subcommand"
+          printf 'dirty\n' >"${REPO_DIR}/scratch"
+          git -C "${REPO_DIR}" add scratch
+          code=0
+          run_bump "" || code=$?
+          printf 'CODE=%s\n' "${code}"
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          printf 'CHANGELOG=%s\n' "$([ -e "${REPO_DIR}/CHANGELOG.md" ] && echo present || echo absent)"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "uncommitted changes"
+          - result.systemout ShouldContainSubstring "CODE=1"
+          - result.systemout ShouldContainSubstring "VERSION=0.5.0"
+          - result.systemout ShouldContainSubstring "CHANGELOG=absent"
+
+  - name: a non-semver version is rejected
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "feat(cli): add a tokscale subcommand"
+          code=0
+          run_bump "v0.6" || code=$?
+          printf 'CODE=%s\n' "${code}"
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "not a semantic version"
+          - result.systemout ShouldContainSubstring "CODE=1"
+          - result.systemout ShouldContainSubstring "VERSION=0.5.0"
+
+  - name: a version that is not greater than the current one is rejected
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "feat(cli): add a tokscale subcommand"
+          same=0
+          run_bump "0.5.0" || same=$?
+          lower=0
+          run_bump "0.4.9" || lower=$?
+          printf 'SAME=%s LOWER=%s\n' "${same}" "${lower}"
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "is not greater than the current version"
+          - result.systemout ShouldContainSubstring "SAME=1 LOWER=1"
+          - result.systemout ShouldContainSubstring "VERSION=0.5.0"
+
+  - name: an existing tag for the target version is rejected
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "feat(cli): add a tokscale subcommand"
+          git -C "${REPO_DIR}" tag -a v0.6.0 -m "tagged out of band"
+          code=0
+          run_bump "0.6.0" || code=$?
+          printf 'CODE=%s\n' "${code}"
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tag v0.6.0 already exists"
+          - result.systemout ShouldContainSubstring "CODE=1"
+          - result.systemout ShouldContainSubstring "VERSION=0.5.0"
+
+  - name: no argument and no stdin fails instead of hanging
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "feat(cli): add a tokscale subcommand"
+          code=0
+          out="$(ROOT_DIR="${REPO_DIR}" bash "${RELEASE_BUMP}" </dev/null 2>&1)" || code=$?
+          printf '%s\n' "${out}"
+          printf 'CODE=%s\n' "${code}"
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "no version given"
+          - result.systemout ShouldContainSubstring "CODE=1"
+          - result.systemout ShouldContainSubstring "VERSION=0.5.0"
+
+  - name: a missing git-cliff fails with install instructions
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "feat(cli): add a tokscale subcommand"
+          code=0
+          out="$(GIT_CLIFF="${TEST_DIR}/absent-git-cliff" ROOT_DIR="${REPO_DIR}" \
+            bash "${RELEASE_BUMP}" 0.6.0 </dev/null 2>&1)" || code=$?
+          printf '%s\n' "${out}"
+          printf 'CODE=%s\n' "${code}"
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "git-cliff not found"
+          - result.systemout ShouldContainSubstring "git-cliff.org"
+          - result.systemout ShouldContainSubstring "CODE=1"
+          - result.systemout ShouldContainSubstring "VERSION=0.5.0"
+
+  - name: the release workflow's notes extraction pulls exactly the new section
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "feat(cli): add a tokscale subcommand"
+          run_bump "" >/dev/null
+          commit_in "${REPO_DIR}" "fix(mounts): stop dropping ro entries"
+          run_bump "" >/dev/null
+          echo "--- notes for 0.5.2 ---"
+          bash "{{.root}}/.taskfiles/scripts/changelog-section.sh" 0.5.2 "${REPO_DIR}/CHANGELOG.md"
+          echo "--- end ---"
+          code=0
+          bash "{{.root}}/.taskfiles/scripts/changelog-section.sh" 9.9.9 "${REPO_DIR}/CHANGELOG.md" >/dev/null 2>&1 || code=$?
+          printf 'MISSING_CODE=%s\n' "${code}"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Stop dropping ro entries"
+          - result.systemout ShouldNotContainSubstring "Add a tokscale subcommand"
+          - result.systemout ShouldNotContainSubstring "# Changelog"
+          - result.systemout ShouldContainSubstring "MISSING_CODE=1"
+
+  - name: the prompt works over a real terminal
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.helpers}}"
+          source "{{.release_helpers}}"
+          init_release_repo "{{.root}}" 0.5.0
+          git -C "${REPO_DIR}" tag -a v0.5.0 -m v0.5.0
+          commit_in "${REPO_DIR}" "feat(cli): add a tokscale subcommand"
+          export ROOT_DIR="${REPO_DIR}"
+          run_under_pty "" bash "${RELEASE_BUMP}"
+          printf 'VERSION=%s\n' "$(cat "${REPO_DIR}/VERSION")"
+          rm -rf "${TEST_DIR}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "New version [0.5.1]"
+          - result.systemout ShouldContainSubstring "VERSION=0.5.1"
+
+  - name: task release:bump is wired to the script and still accepts an explicit version
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          task --list
+          grep -F 'release-bump.sh' .taskfiles/release.yml
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "release:bump"
+          - result.systemout ShouldContainSubstring "release-bump.sh"
