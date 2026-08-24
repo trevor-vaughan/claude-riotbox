@@ -284,7 +284,7 @@ A wrap-shaped verb MUST:
 
 - start with `headroom wrap <real-binary>`,
 - disable anything that downloads at session start (the claude manifest
-  passes `--no-serena --no-context-tool` — the image is offline-after-build),
+  passes `--code-memory none` — the image is offline-after-build),
 - place all caller args after a literal `--` (headroom's wrap subcommands
   define their own flags, e.g. `-p/--port`, that would otherwise swallow
   agent flags).
@@ -308,14 +308,19 @@ The helper owns whatever routing the tool needs and MUST:
 - ensure `headroom proxy` is listening (reuse a live one, else spawn with
   `--memory --learn`, log to `~/.headroom/logs/proxy.log`, and wait for
   TCP readiness with a timeout),
-- apply agent-specific routing only AFTER the proxy answers (opencode
-  ignores `*_BASE_URL` env vars, so its helper injects
-  `provider.{anthropic,openai}.options.baseURL` into the merged
-  `opencode.jsonc`, never overriding a user-set baseURL),
+- apply agent-specific routing only AFTER the proxy answers,
 - degrade to unwrapped on any failure — warn on stderr, leave config
   untouched, `exec <real-binary-name> "$@"`,
-- end with `exec <real-binary-name> "$@"` so the shim's guarded second
-  pass applies the agent's normal injection rules.
+- end by exec'ing something that reaches `<real-binary-name>`, so the shim's
+  guarded second pass applies the agent's normal injection rules. That may
+  be the binary directly, or `headroom wrap <tool>`, which launches it.
+
+A helper is the right shape whenever `headroom wrap <tool>` does most of the
+job but one of its side effects is unacceptable in a container. The opencode
+helper exists for exactly one such effect: `wrap opencode --memory` writes a
+memory block into `AGENTS.md` in the CWD, which in a session is the caller's
+bind-mounted repository. Owning the proxy locally buys memory without that
+write; everything else is delegated to `wrap opencode --no-proxy`.
 
 `agents/opencode/headroom-exec.sh` is the reference implementation.
 

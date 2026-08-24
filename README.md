@@ -583,13 +583,17 @@ What changes when enabled:
   `~/.claude/headroom`) and is shared by all agents of that project set.
 - Model inference is fully offline — the compression models are baked into
   the image at build time.
-- Wired for `--agent=claude` (via `headroom wrap`) and `--agent=opencode`
-  (via `headroom proxy` plus provider baseURL injection — headroom has no
-  `wrap opencode`). Other agents print a warning and run uncompressed.
-- For opencode, only the `anthropic` and `openai` providers route through
-  the proxy; other providers (openrouter, gemini, …) go direct. A baseURL
-  you set yourself in `opencode.json(c)` always wins — riotbox prints a
-  notice and leaves that provider unrouted.
+- Wired for `--agent=claude` and `--agent=opencode`, both via `headroom
+  wrap`. Other agents print a warning and run uncompressed.
+- For opencode, riotbox starts the proxy itself and then hands off to
+  `headroom wrap opencode --no-proxy`. It starts the proxy rather than
+  letting `wrap` do it because `wrap opencode --memory` appends a memory
+  block to `AGENTS.md` in the working directory — your repository. This way
+  you get cross-session memory and nothing is written to your checkout.
+- If you set a provider `baseURL` yourself in `opencode.json(c)`, headroom
+  routes that provider through the proxy anyway and riotbox prints a notice
+  naming it. Your endpoint still receives the traffic — the proxy forwards
+  upstream — but the request goes through the proxy first.
 - Nested agent invocations inside a wrapped session (e.g. the agent's own
   shell running `claude`) intentionally run uncompressed.
 
