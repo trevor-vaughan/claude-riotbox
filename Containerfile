@@ -696,17 +696,30 @@ RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 # the session uses makes the warmed revision and the requested one agree by
 # construction, and allow_network=False is that resolver's own offline mode,
 # so the verification pass proves the cache against the real read path.
+#
+# HEADROOM_KOMPRESS_CANARY_SECONDS=0 on both preload probes: since 0.36.5
+# preload() starts a daemon thread that runs a canary inference and returns
+# WITHOUT joining it, so the proxy can bind its port while the probe runs. A
+# one-shot `python3 -c` has no port to bind and no next request — it exits the
+# moment preload() returns, tearing the interpreter down while that thread is
+# still inside native ONNX Runtime code. glibc aborts the process ("FATAL:
+# exception not rethrown", exit 134) and fails this layer. Whether the canary
+# finishes first is a race, so leaving it on fails the build only sometimes —
+# worse than never. Upstream documents <=0 as the off switch. Deliberately NOT
+# an image-wide ENV: in a session the canary is what catches a degraded ONNX
+# runtime before live traffic depends on it, which is the whole reason it
+# exists. tests/headroom.venom.yml pins both halves of that.
 ARG HEADROOM_VERSION=0.36.5
 RUN pip3 install --user --no-cache-dir --break-system-packages \
         "headroom-ai[proxy,code]==${HEADROOM_VERSION}" && \
     /home/llm/.local/bin/headroom --version && \
     SYNC="$(python3 -c 'import headroom.memory.sync as m; print(m.__file__)')" && \
     grep -qF 'embedder_backend="onnx"' "${SYNC}" && \
-    python3 -c "from headroom.transforms.kompress_compressor import KompressCompressor; \
+    HEADROOM_KOMPRESS_CANARY_SECONDS=0 python3 -c "from headroom.transforms.kompress_compressor import KompressCompressor; \
 print('kompress backend:', KompressCompressor().preload(allow_download=True))" && \
     python3 -c "from headroom.onnx_runtime import hf_hub_download_local_first as d; \
 [d('Qdrant/all-MiniLM-L6-v2-onnx', f) for f in ('model.onnx', 'tokenizer.json')]" && \
-    HF_HUB_OFFLINE=1 python3 -c "from headroom.transforms.kompress_compressor import KompressCompressor; \
+    HF_HUB_OFFLINE=1 HEADROOM_KOMPRESS_CANARY_SECONDS=0 python3 -c "from headroom.transforms.kompress_compressor import KompressCompressor; \
 KompressCompressor().preload(allow_download=False)" && \
     HF_HUB_OFFLINE=1 python3 -c "from headroom.onnx_runtime import hf_hub_download_local_first as d; \
 [d('Qdrant/all-MiniLM-L6-v2-onnx', f, allow_network=False) for f in ('model.onnx', 'tokenizer.json')]" && \

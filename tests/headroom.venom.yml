@@ -11,6 +11,78 @@ vars:
 # to pre-feature behavior.
 
 testcases:
+  - name: every build-time kompress preload disables the startup canary
+    steps:
+      - type: exec
+        script: |
+          cd "{{.riotbox_dir}}"
+          # KompressCompressor.preload() spawns a daemon thread that runs an
+          # ONNX canary inference and returns without joining it. In a
+          # long-lived proxy that is the point. In a one-shot `python3 -c`
+          # that warms the model cache, the interpreter exits immediately
+          # after preload() returns and tears down under a daemon thread
+          # still inside native ORT code — glibc aborts the process with
+          # "FATAL: exception not rethrown" and exit 134. It is a race, so a
+          # missing opt-out fails the image build only sometimes, which is
+          # worse than never. HEADROOM_KOMPRESS_CANARY_SECONDS=0 is
+          # upstream's documented off switch (<=0 disables it entirely).
+          #
+          # Rebuild logical commands before matching: the env prefix and the
+          # preload() call sit on different physical lines. Two ways a command
+          # spans lines here, and both must be handled or the check reports a
+          # guarded call site as unguarded — the Containerfile uses backslash
+          # continuations, while preflight.sh embeds a multi-line python3 -c
+          # payload inside an open double quote.
+          python3 - <<'PY'
+          import sys
+          FILES = ("Containerfile", "scripts/preflight.sh")
+          ENV = "HEADROOM_KOMPRESS_CANARY_SECONDS=0"
+          bad, seen = [], 0
+          for path in FILES:
+              with open(path) as fh:
+                  joined, buf = [], ""
+                  for line in fh:
+                      line = line.rstrip("\n")
+                      buf += line[:-1] + " " if line.endswith("\\") else line + " "
+                      # Escaped quotes are data, not delimiters.
+                      if line.endswith("\\") or buf.replace('\\"', "").count('"') % 2:
+                          continue
+                      joined.append(buf)
+                      buf = ""
+                  if buf:
+                      joined.append(buf)
+              # Split each logical command on && so a RUN chaining several
+              # probes is checked per invocation. Guarding one preload and
+              # not its sibling would otherwise pass.
+              for cmd in joined:
+                  for part in cmd.split("&&"):
+                      if "KompressCompressor().preload(" not in part:
+                          continue
+                      seen += 1
+                      if ENV not in part:
+                          bad.append(f"{path}: {part.strip()[:120]}")
+          if not seen:
+              print("FAIL: found no preload call sites — did they move?")
+              sys.exit(1)
+          if bad:
+              print(f"FAIL: {len(bad)} preload call site(s) without {ENV}:")
+              for b in bad:
+                  print("  " + b)
+              sys.exit(1)
+          print(f"CANARY_OK ({seen} call sites guarded)")
+          PY
+          # The opt-out must stay scoped to those build-time probes. Baking it
+          # in as an image-wide ENV would also disable the canary for the
+          # session proxy, where a degraded ONNX runtime is exactly what it is
+          # there to catch.
+          grep -qE '^\s*ENV\s+HEADROOM_KOMPRESS_CANARY_SECONDS' Containerfile \
+            && { echo "FAIL: canary disabled image-wide; the session proxy needs it" >&2; exit 1; }
+          echo "SCOPE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CANARY_OK"
+          - result.systemout ShouldContainSubstring "SCOPE_OK"
+
   - name: gate off — wrapper behavior is unchanged and headroom is never invoked
     steps:
       - type: exec

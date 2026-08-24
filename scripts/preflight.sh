@@ -294,8 +294,15 @@ preflight_check_headroom() {
 	# headroom/onnx_runtime.py) — see the Containerfile's headroom block.
 	# A bare hf_hub_download would check the floating `main` ref and report
 	# a healthy cache for a revision nothing actually reads.
+	# HEADROOM_KOMPRESS_CANARY_SECONDS=0: preload() starts a daemon thread
+	# running an ONNX canary inference and does not join it, so a one-shot
+	# interpreter exits underneath it and glibc aborts the process (exit 134,
+	# "FATAL: exception not rethrown"). The probe would fail the check for a
+	# perfectly healthy image. Scoped here, not image-wide — the session proxy
+	# is exactly where the canary earns its keep. Same reasoning as the
+	# Containerfile's build-time preloads.
 	if ! podman run --rm --network=none --entrypoint /usr/bin/bash "${image}" -c \
-		'command -v headroom >/dev/null && HF_HUB_OFFLINE=1 python3 -c "
+		'command -v headroom >/dev/null && HF_HUB_OFFLINE=1 HEADROOM_KOMPRESS_CANARY_SECONDS=0 python3 -c "
 from headroom.transforms.kompress_compressor import KompressCompressor
 from headroom.onnx_runtime import hf_hub_download_local_first as d
 KompressCompressor().preload(allow_download=False)
