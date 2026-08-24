@@ -288,12 +288,18 @@ preflight_check_headroom() {
 	# is on PATH, the Kompress preload cache is intact, and the MiniLM
 	# memory-embedder cache (Qdrant/all-MiniLM-L6-v2-onnx) used by
 	# --memory is present. --network=none proves no network is needed.
+	# The MiniLM lookup goes through headroom's own resolver, not
+	# huggingface_hub's hf_hub_download, so it asks for the same pinned
+	# commit SHA a session asks for (_PINNED_REVISIONS in
+	# headroom/onnx_runtime.py) — see the Containerfile's headroom block.
+	# A bare hf_hub_download would check the floating `main` ref and report
+	# a healthy cache for a revision nothing actually reads.
 	if ! podman run --rm --network=none --entrypoint /usr/bin/bash "${image}" -c \
 		'command -v headroom >/dev/null && HF_HUB_OFFLINE=1 python3 -c "
 from headroom.transforms.kompress_compressor import KompressCompressor
-from huggingface_hub import hf_hub_download
+from headroom.onnx_runtime import hf_hub_download_local_first as d
 KompressCompressor().preload(allow_download=False)
-[hf_hub_download(\"Qdrant/all-MiniLM-L6-v2-onnx\", f, local_files_only=True)
+[d(\"Qdrant/all-MiniLM-L6-v2-onnx\", f, allow_network=False)
  for f in (\"model.onnx\", \"tokenizer.json\")]"' >/dev/null 2>&1; then
 		_preflight_report headroom fail "${label}" 21 \
 			"Image lacks headroom or its model cache — rebuild with riotbox rebuild"

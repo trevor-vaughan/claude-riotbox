@@ -482,11 +482,25 @@ testcases:
           fi
           mapfile -d '' -t argv < <(agent_call claude headroom_argv -p "do work")
           echo "argv=${argv[*]}"
-          # Required flags (offline-after-build: serena/rtk download at start).
-          for want in --memory --learn --no-serena --no-context-tool; do
+          # Required flags (offline-after-build: Serena downloads at start).
+          for want in --memory --learn --code-memory; do
             found=0
             for t in "${argv[@]}"; do [ "${t}" = "${want}" ] && found=1; done
             [ "${found}" = "1" ] || { echo "FAIL: missing ${want}" >&2; exit 1; }
+          done
+          # --code-memory takes a value; only 'none' suppresses the download.
+          # Checking the flag alone would pass on --code-memory serena.
+          cm=""
+          for i in "${!argv[@]}"; do
+            [ "${argv[$i]}" = "--code-memory" ] && cm="${argv[$((i + 1))]:-}"
+          done
+          [ "${cm}" = "none" ] \
+            || { echo "FAIL: --code-memory is '${cm}', want 'none'" >&2; exit 1; }
+          # Retired upstream: headroom raises a ClickException on this flag,
+          # so passing it would abort every headroom-enabled session.
+          for t in "${argv[@]}"; do
+            [ "${t}" = "--no-context-tool" ] \
+              && { echo "FAIL: --no-context-tool was removed from headroom" >&2; exit 1; }
           done
           # `--` must exist and every user arg must come after it: headroom
           # wrap claude has its own -p/--port, so a user -p BEFORE the

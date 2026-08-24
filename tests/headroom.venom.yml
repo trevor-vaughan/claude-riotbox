@@ -66,8 +66,9 @@ testcases:
           - result.systemout ShouldContainSubstring "hrarg=claude"
           - result.systemout ShouldContainSubstring "hrarg=--memory"
           - result.systemout ShouldContainSubstring "hrarg=--learn"
-          - result.systemout ShouldContainSubstring "hrarg=--no-serena"
-          - result.systemout ShouldContainSubstring "hrarg=--no-context-tool"
+          - result.systemout ShouldContainSubstring "hrarg=--code-memory"
+          - result.systemout ShouldContainSubstring "hrarg=none"
+          - result.systemout ShouldNotContainSubstring "hrarg=--no-context-tool"
           - result.systemout ShouldContainSubstring "SEP_OK"
           - result.systemout ShouldContainSubstring "hrarg=do work"
           # First pass must NOT reach the real binary — headroom owns the launch.

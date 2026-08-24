@@ -174,7 +174,8 @@ its benefit, because `PostToolUse` fires on nearly every tool call and each fire
 spawns the pinned Node.
 
 Measured against `context-mode@1.0.169` inside `quay.io/centos/centos:stream10` on
-Node v22.23.1 — the version `ARG CONTEXT_MODE_NODE` pins — 50 invocations per
+Node v22.23.1, the version `ARG CONTEXT_MODE_NODE` pinned at the time — 50
+invocations per
 condition, each piping a 2 KB `Write` payload that lands a row in
 `session_events`:
 

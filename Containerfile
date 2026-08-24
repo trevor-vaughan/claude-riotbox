@@ -102,7 +102,7 @@ FROM quay.io/centos/centos:stream10 AS runtime
 # Dockerfile SHELL directive (which OCI image config doesn't support).
 
 # ── Build args (populated by build.sh from host introspection) ────────────────
-ARG NVM_INSTALLER_VERSION=0.39.7
+ARG NVM_INSTALLER_VERSION=0.40.7
 ARG NODE_VERSIONS="20"
 ARG NODE_DEFAULT="20"
 ARG UV_VERSION="latest"
@@ -267,7 +267,7 @@ RUN pip3 install --no-cache-dir --break-system-packages semgrep pyyaml && \
 # which is already on PATH for both root and the llm user. Pinned for
 # supply-chain integrity; refresh by bumping LOLA_VERSION below after picking
 # a new release at https://github.com/LobsterTrap/lola/releases.
-ARG LOLA_VERSION=0.4.4
+ARG LOLA_VERSION=0.7.1
 # hadolint ignore=DL3041
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         python3.13 python3.13-pip \
@@ -669,34 +669,47 @@ RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 # the final offline preload proves the cache is complete at build time.
 # NOTE: preload() is internal headroom API — acceptable because the version
 # is pinned; a pin bump that breaks it fails THIS layer, not a user session.
-# Upstream bug (present through 0.25.0): `headroom wrap --memory` spawns
-# `python -m headroom.memory.sync`, which builds its backend config with the
-# dataclass default embedder (torch sentence-transformers — excluded here)
-# instead of the ONNX embedder the proxy auto-selects; there is no flag or
-# env var to steer it. The sed below patches the call site to "onnx". The
-# guard grep fails this layer on a pin bump that changes the line — the
-# signal to re-check whether upstream fixed the sync path.
+# Through 0.25.0 this layer carried a sed patch: `headroom wrap --memory`
+# spawns `python -m headroom.memory.sync`, which built its backend config with
+# the dataclass default embedder (torch sentence-transformers — excluded here)
+# instead of the ONNX embedder the proxy auto-selects, with no flag or env var
+# to steer it. Upstream fixed it (headroom #1092): _build_sync_backend now
+# passes embedder_backend="onnx" itself, so the patch is gone. The grep stays
+# as the tripwire in its place — a future pin that regresses the sync path to
+# the torch default fails THIS layer instead of a user session, which is the
+# only place the regression would otherwise surface.
 # The smoke test then runs the exact sync command the wrap emits, offline,
-# against a seeded memory file under a throwaway HOME — proving the patched
+# against a seeded memory file under a throwaway HOME — proving the ONNX
 # embedder path AND the pre-warmed model cache end to end. PYTHONPATH is
 # pinned to the user site because overriding HOME hides pip's --user dir.
 # The hf-xet chunk cache is transfer-time scratch — the offline loads above
 # prove the hub cache alone suffices, so it is removed.
-ARG HEADROOM_VERSION=0.25.0
+#
+# The MiniLM warm-up goes through headroom's own hf_hub_download_local_first
+# rather than huggingface_hub's hf_hub_download, because since 0.36.5 headroom
+# resolves model artifacts at immutable commit SHAs (_PINNED_REVISIONS in
+# headroom/onnx_runtime.py) for supply-chain integrity. A bare hf_hub_download
+# fetches the floating `main` ref instead, so the moment upstream pushes to
+# that HuggingFace repo the build would warm one revision and every session
+# would ask for another — a cache miss reached only at runtime, which is
+# exactly what RIOTBOX_NETWORK=none forbids. Going through the same resolver
+# the session uses makes the warmed revision and the requested one agree by
+# construction, and allow_network=False is that resolver's own offline mode,
+# so the verification pass proves the cache against the real read path.
+ARG HEADROOM_VERSION=0.36.5
 RUN pip3 install --user --no-cache-dir --break-system-packages \
         "headroom-ai[proxy,code]==${HEADROOM_VERSION}" && \
     /home/llm/.local/bin/headroom --version && \
     SYNC="$(python3 -c 'import headroom.memory.sync as m; print(m.__file__)')" && \
-    grep -qF 'config = LocalBackendConfig(db_path=args.db)' "${SYNC}" && \
-    sed -i 's/config = LocalBackendConfig(db_path=args.db)/config = LocalBackendConfig(db_path=args.db, embedder_backend="onnx")/' "${SYNC}" && \
+    grep -qF 'embedder_backend="onnx"' "${SYNC}" && \
     python3 -c "from headroom.transforms.kompress_compressor import KompressCompressor; \
 print('kompress backend:', KompressCompressor().preload(allow_download=True))" && \
-    python3 -c "from huggingface_hub import hf_hub_download; \
-[hf_hub_download('Qdrant/all-MiniLM-L6-v2-onnx', f) for f in ('model.onnx', 'tokenizer.json')]" && \
+    python3 -c "from headroom.onnx_runtime import hf_hub_download_local_first as d; \
+[d('Qdrant/all-MiniLM-L6-v2-onnx', f) for f in ('model.onnx', 'tokenizer.json')]" && \
     HF_HUB_OFFLINE=1 python3 -c "from headroom.transforms.kompress_compressor import KompressCompressor; \
 KompressCompressor().preload(allow_download=False)" && \
-    HF_HUB_OFFLINE=1 python3 -c "from huggingface_hub import hf_hub_download; \
-[hf_hub_download('Qdrant/all-MiniLM-L6-v2-onnx', f, local_files_only=True) for f in ('model.onnx', 'tokenizer.json')]" && \
+    HF_HUB_OFFLINE=1 python3 -c "from headroom.onnx_runtime import hf_hub_download_local_first as d; \
+[d('Qdrant/all-MiniLM-L6-v2-onnx', f, allow_network=False) for f in ('model.onnx', 'tokenizer.json')]" && \
     USERSITE="$(python3 -m site --user-site)" && \
     SMOKE="$(mktemp -d)" && \
     MEMDIR="${SMOKE}/.claude/projects/$(python3 -c "import sys; from pathlib import Path; \
@@ -931,7 +944,7 @@ RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
 #     silently stop printing the exit report.
 #
 # DL3016 does not apply: the version is pinned via the build ARG.
-ARG CONTEXT_MODE_NODE=22.23.1
+ARG CONTEXT_MODE_NODE=22.23.2
 ARG CONTEXT_MODE_VERSION=1.0.169
 RUN bash -c '\
     set -e; \
@@ -1106,9 +1119,9 @@ ARG RIOTBOX_GH_GLAB=0
 #          | grep -E 'Linux_(x86_64|arm64)'
 #   3. Update the three ARGs below (VERSION carries the leading v, the
 #      tarball name does not)
-ARG GITHUB_MCP_SERVER_VERSION=v1.9.0
-ARG GITHUB_MCP_SERVER_SHA256_AMD64=cbf38bd3364518ccf80b6a25587d5ef11655b15d63cbb48bc066384d0b5b5964
-ARG GITHUB_MCP_SERVER_SHA256_ARM64=11e14ce34492b6a07ae4bc567d8773fc4cd3dd77e91daf3f9cacc88b15d840ea
+ARG GITHUB_MCP_SERVER_VERSION=v1.10.1
+ARG GITHUB_MCP_SERVER_SHA256_AMD64=c2629e850a344275cfc5a1590acdfd8c11476a44b688812d460163768e05572d
+ARG GITHUB_MCP_SERVER_SHA256_ARM64=c51dc6cf192c35a328b9f71696d42c38a9a3ba3c2ffe010da836bed071d1ac8a
 
 # Root for the rpm install and for writing to /usr/local/bin; back to llm at the
 # end, since the entrypoint and every agent run as llm.

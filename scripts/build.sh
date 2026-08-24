@@ -55,7 +55,7 @@ if [[ -s "${NVM_DIR}/nvm.sh" ]]; then
 	source "${NVM_DIR}/nvm.sh" --no-use
 
 	# nvm version
-	NVM_INSTALLER_VERSION="$(nvm --version 2>/dev/null || echo "0.39.7")"
+	NVM_INSTALLER_VERSION="$(nvm --version 2>/dev/null || echo "0.40.7")"
 
 	# All installed Node versions (strip the 'v' prefix)
 	ALL_NODE_VERSIONS="$(
@@ -132,7 +132,7 @@ if [[ -s "${NVM_DIR}/nvm.sh" ]]; then
 	echo "→ Node default:         ${NODE_DEFAULT}"
 else
 	echo "⚠️  nvm not found at ${NVM_DIR} — using Node 20 LTS as default"
-	NVM_INSTALLER_VERSION="0.39.7"
+	NVM_INSTALLER_VERSION="0.40.7"
 	NODE_VERSIONS="20"
 	NODE_DEFAULT="20"
 fi

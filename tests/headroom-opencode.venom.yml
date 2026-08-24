@@ -6,7 +6,8 @@ vars:
   test_port: "18787"
 
 # Pins agents/opencode/headroom-exec.sh: the proxy-routed headroom path
-# (headroom 0.25.0 has no `wrap opencode`). The helper must (a) reuse or
+# (see that file's header for why it predates `wrap opencode`). The helper
+# must (a) reuse or
 # spawn `headroom proxy`, (b) inject provider baseURLs into the merged
 # opencode.jsonc only after the proxy answers, (c) exec opencode, and
 # (d) degrade to unwrapped with the config untouched on any proxy failure.

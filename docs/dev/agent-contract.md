@@ -284,7 +284,7 @@ A wrap-shaped verb MUST:
 
 - start with `headroom wrap <real-binary>`,
 - disable anything that downloads at session start (the claude manifest
-  passes `--no-serena --no-context-tool` — the image is offline-after-build),
+  passes `--code-memory none` — the image is offline-after-build),
 - place all caller args after a literal `--` (headroom's wrap subcommands
   define their own flags, e.g. `-p/--port`, that would otherwise swallow
   agent flags).

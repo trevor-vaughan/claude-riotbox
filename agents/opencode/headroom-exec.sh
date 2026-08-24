@@ -2,9 +2,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # agents/opencode/headroom-exec.sh — headroom interposition for opencode.
 #
-# headroom 0.25.0 has no `wrap opencode` subcommand; its wrap docstring says
-# to run `headroom proxy` and point opencode at it. This helper is that
-# proxy-routed path. The wrapper execs it on the first pass when
+# Written when headroom had no `wrap opencode` subcommand (true through
+# 0.25.0); its wrap docstring said to run `headroom proxy` and point opencode
+# at it, and this helper is that proxy-routed path. headroom 0.36.5 does ship
+# `wrap opencode` (headroom/providers/opencode/), so this path is a candidate
+# for retirement — but that swaps a mechanism RiotBox controls end to end for
+# one that mutates opencode's own config, and it is not a version-bump-sized
+# change. Evaluate it separately; nothing here is broken by the newer pin.
+# The wrapper execs it on the first pass when
 # RIOTBOX_HEADROOM=1, with RIOTBOX_HEADROOM_ACTIVE=1 already exported:
 #
 #   1. Ensure a proxy is listening on 127.0.0.1:${HEADROOM_PORT:-8787} —
