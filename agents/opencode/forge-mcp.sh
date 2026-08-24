@@ -53,10 +53,10 @@ _agent_opencode_forge_valid_var() {
 }
 
 # Read the two halves of opencode.jsonc. Line-level splitting is safe for
-# exactly the reason headroom-exec.sh:104-105 gives: the body is jq-generated
-# plain JSON, so a line starting with `//` is always a banner line and never a
-# string containing one. Neither reader may be pointed at a hand-written JSONC
-# file.
+# exactly the reason setup.sh gives where it writes the file: the body is
+# jq-generated plain JSON, so a line starting with `//` is always a banner
+# line and never a string containing one. Neither reader may be pointed at a
+# hand-written JSONC file.
 #
 # Two readers rather than one function returning both halves, because there is
 # no separator that survives the trip. Command substitution silently drops NUL

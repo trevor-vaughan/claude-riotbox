@@ -1,23 +1,32 @@
-name: headroom opencode — proxy lifecycle, config injection, fallbacks
+name: headroom opencode — proxy lifecycle, wrap delegation, fallbacks
 vars:
   root: "."
   riotbox_dir: "{{.root}}"
   shared_helpers: "{{.root}}/tests/lib/wrapper-shared.sh"
   test_port: "18787"
 
-# Pins agents/opencode/headroom-exec.sh: the proxy-routed headroom path
-# (see that file's header for why it predates `wrap opencode`). The helper
-# must (a) reuse or
-# spawn `headroom proxy`, (b) inject provider baseURLs into the merged
-# opencode.jsonc only after the proxy answers, (c) exec opencode, and
-# (d) degrade to unwrapped with the config untouched on any proxy failure.
+# Pins agents/opencode/headroom-exec.sh. The helper owns the proxy and
+# nothing else: it must (a) reuse or spawn `headroom proxy --memory --learn`,
+# (b) delegate routing and launch to `headroom wrap opencode --no-proxy`
+# only after the proxy answers, (c) write nothing to the merged
+# opencode.jsonc itself, and (d) degrade to unwrapped opencode on any proxy
+# failure.
+#
+# Why the helper survives at all now that `wrap opencode` exists: passing
+# --memory to it appends a "## Memory" block to AGENTS.md in the CWD, which
+# in a session is the caller's bind-mounted repository. Owning the proxy
+# here keeps cross-session memory without writing to the user's checkout.
+# See the helper's header.
 #
 # Fakes: `headroom proxy` is faked with a python3 accept-once TCP listener;
 # each readiness probe consumes one accept, so listeners exit on their own
-# and never leak across cases.
+# and never leak across cases. `headroom wrap opencode` is faked to log its
+# argv and then exec the post-`--` arguments through opencode, so the
+# wrapper's RIOTBOX_HEADROOM_ACTIVE guard resolves them to the real binary
+# exactly as upstream's `shutil.which("opencode")` launch does.
 
 testcases:
-  - name: spawn path — proxy started, config injected, opencode exec'd once
+  - name: spawn path — proxy started once, launch delegated to wrap opencode
     steps:
       - type: exec
         script: |
@@ -26,8 +35,6 @@ testcases:
           setup_wrapper_sandbox opencode
           trap 'rm -rf "${TEST_DIR}"' EXIT
           install_generic_wrapper_for opencode
-          # Fake headroom: `proxy` subcommand binds an accept-once listener
-          # on the requested port (records its argv first).
           cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
           #!/usr/bin/env bash
           printf 'FAKE_HEADROOM_ARGV=%s\n' "$*" >>"${HOME}/headroom-calls.log"
@@ -37,24 +44,26 @@ testcases:
             for a in "$@"; do [ "${prev}" = "--port" ] && port="${a}"; prev="${a}"; done
             exec python3 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', ${port})); s.listen(1); s.accept()"
           fi
+          if [ "${1:-}" = "wrap" ] && [ "${2:-}" = "opencode" ]; then
+            shift 2
+            while [ "$#" -gt 0 ]; do a="$1"; shift; [ "${a}" = "--" ] && break; done
+            exec opencode "$@"
+          fi
           FAKE
           chmod +x "${TEST_DIR}/realbin/headroom"
           export RIOTBOX_HEADROOM=1 HEADROOM_PORT={{.test_port}}
           unset RIOTBOX_HEADROOM_ACTIVE
           out="$(opencode run "do work" 2>&1)"
           echo "${out}"
-          # Proxy spawned exactly once, with memory+learn.
-          grep -c 'FAKE_HEADROOM_ARGV=proxy' "${HOME}/headroom-calls.log" | grep -qx 1 \
-            || { echo "FAIL: proxy not spawned exactly once" >&2; exit 1; }
-          grep -q 'FAKE_HEADROOM_ARGV=proxy --port {{.test_port}} --memory --learn' "${HOME}/headroom-calls.log" \
-            || { echo "FAIL: proxy argv missing flags" >&2; cat "${HOME}/headroom-calls.log" >&2; exit 1; }
-          # Config injected with both provider baseURLs.
-          cfg="${HOME}/.config/opencode/opencode.jsonc"
-          [ -f "${cfg}" ] || { echo "FAIL: merged config not created" >&2; exit 1; }
-          grep -v '^//' "${cfg}" | jq -e '
-            .provider.anthropic.options.baseURL == "http://127.0.0.1:{{.test_port}}/v1"
-            and .provider.openai.options.baseURL == "http://127.0.0.1:{{.test_port}}/v1"
-          ' >/dev/null || { echo "FAIL: baseURLs not injected" >&2; cat "${cfg}" >&2; exit 1; }
+          calls="${HOME}/headroom-calls.log"
+          grep -c 'FAKE_HEADROOM_ARGV=proxy' "${calls}" | grep -qx 1 \
+            || { echo "FAIL: proxy not spawned exactly once" >&2; cat "${calls}" >&2; exit 1; }
+          grep -q 'FAKE_HEADROOM_ARGV=proxy --port {{.test_port}} --memory --learn' "${calls}" \
+            || { echo "FAIL: proxy argv missing --memory/--learn" >&2; cat "${calls}" >&2; exit 1; }
+          # Delegation carries every flag the offline-after-build posture needs,
+          # and --no-proxy so upstream does not start a second proxy.
+          grep -q 'FAKE_HEADROOM_ARGV=wrap opencode --no-proxy --no-mcp --no-serena --port {{.test_port}} -- run do work' "${calls}" \
+            || { echo "FAIL: wrap opencode argv wrong" >&2; cat "${calls}" >&2; exit 1; }
           echo "SPAWN_OK"
         assertions:
           - result.code ShouldEqual 0
@@ -63,7 +72,7 @@ testcases:
           - result.systemout ShouldContainSubstring "arg=--auto"
           - result.systemout ShouldContainSubstring "arg=do work"
 
-  - name: reuse path — listening proxy is not respawned, injection still applied
+  - name: reuse path — listening proxy is not respawned, delegation still happens
     steps:
       - type: exec
         script: |
@@ -72,18 +81,24 @@ testcases:
           setup_wrapper_sandbox opencode
           trap 'rm -rf "${TEST_DIR}"' EXIT
           install_generic_wrapper_for opencode
-          # headroom exists on PATH (wrapper requires it) but must NOT be
-          # invoked — a pre-existing listener owns the port.
           cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
           #!/usr/bin/env bash
-          echo "FAKE_HEADROOM_INVOKED"
+          printf 'FAKE_HEADROOM_ARGV=%s\n' "$*" >>"${HOME}/headroom-calls.log"
+          if [ "${1:-}" = "proxy" ]; then
+            echo "FAKE_PROXY_SPAWNED"
+            exit 0
+          fi
+          if [ "${1:-}" = "wrap" ] && [ "${2:-}" = "opencode" ]; then
+            shift 2
+            while [ "$#" -gt 0 ]; do a="$1"; shift; [ "${a}" = "--" ] && break; done
+            exec opencode "$@"
+          fi
           FAKE
           chmod +x "${TEST_DIR}/realbin/headroom"
           # Two accepts: the bind-wait probe below consumes the first, the
           # helper's reuse probe consumes the second (then the listener exits).
           python3 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', {{.test_port}})); s.listen(2); s.accept(); s.accept()" &
           listener=$!
-          # Wait until the listener is actually bound before launching.
           for _ in $(seq 1 50); do
             (exec 3<>"/dev/tcp/127.0.0.1/{{.test_port}}") 2>/dev/null && { exec 3>&- 3<&-; break; } || sleep 0.1
           done
@@ -91,14 +106,10 @@ testcases:
           unset RIOTBOX_HEADROOM_ACTIVE
           out="$(opencode run "do work" 2>&1)"
           echo "${out}"
-          # Defensive: if the helper misbehaved and never consumed the second
-          # accept, wait would hang until the venom timeout and mask the real
-          # failure — kill the listener first.
           kill "${listener}" 2>/dev/null || true
           wait "${listener}" 2>/dev/null || true
-          grep -v '^//' "${HOME}/.config/opencode/opencode.jsonc" | jq -e '
-            .provider.anthropic.options.baseURL == "http://127.0.0.1:{{.test_port}}/v1"
-          ' >/dev/null || { echo "FAIL: baseURL not injected on reuse" >&2; exit 1; }
+          grep -q 'FAKE_HEADROOM_ARGV=wrap opencode --no-proxy' "${HOME}/headroom-calls.log" \
+            || { echo "FAIL: wrap opencode not invoked on reuse" >&2; exit 1; }
           echo "REUSE_OK"
         assertions:
           - result.code ShouldEqual 0
@@ -106,9 +117,9 @@ testcases:
           - result.systemout ShouldContainSubstring "FAKE_REAL_opencode_INVOKED"
           - result.systemout ShouldContainSubstring "arg=--auto"
           - result.systemout ShouldContainSubstring "arg=do work"
-          - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_INVOKED"
+          - result.systemout ShouldNotContainSubstring "FAKE_PROXY_SPAWNED"
 
-  - name: proxy dies at startup — warn, config untouched, runs unwrapped
+  - name: proxy dies at startup — warn, no delegation, runs unwrapped
     steps:
       - type: exec
         script: |
@@ -119,6 +130,7 @@ testcases:
           install_generic_wrapper_for opencode
           cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
           #!/usr/bin/env bash
+          printf 'FAKE_HEADROOM_ARGV=%s\n' "$*" >>"${HOME}/headroom-calls.log"
           exit 3
           FAKE
           chmod +x "${TEST_DIR}/realbin/headroom"
@@ -127,6 +139,10 @@ testcases:
           opencode run "do work" 2>"${TEST_DIR}/stderr"
           echo "--- stderr ---"
           cat "${TEST_DIR}/stderr"
+          # A dead proxy must not be papered over by delegating anyway: the
+          # session runs unwrapped rather than routed at a port nothing serves.
+          grep -q 'FAKE_HEADROOM_ARGV=wrap' "${HOME}/headroom-calls.log" \
+            && { echo "FAIL: delegated despite proxy failure" >&2; exit 1; }
           [ ! -f "${HOME}/.config/opencode/opencode.jsonc" ] \
             || { echo "FAIL: config written despite proxy failure" >&2; exit 1; }
           echo "DIED_OK"
@@ -151,6 +167,7 @@ testcases:
           # match (or kill) unrelated processes on a shared host.
           cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
           #!/usr/bin/env bash
+          printf 'FAKE_HEADROOM_ARGV=%s\n' "$*" >>"${HOME}/headroom-calls.log"
           exec sleep 7919
           FAKE
           chmod +x "${TEST_DIR}/realbin/headroom"
@@ -167,6 +184,8 @@ testcases:
             pkill -f 'sleep 7919' || true
             exit 1
           fi
+          grep -q 'FAKE_HEADROOM_ARGV=wrap' "${HOME}/headroom-calls.log" \
+            && { echo "FAIL: delegated despite readiness timeout" >&2; exit 1; }
           echo "TIMEOUT_OK"
         assertions:
           - result.code ShouldEqual 0
@@ -175,7 +194,7 @@ testcases:
           - result.systemout ShouldContainSubstring "WARNING"
           - result.systemout ShouldContainSubstring "not ready after 2s"
 
-  - name: user-set baseURL is preserved with a notice; the other provider is still routed
+  - name: user-set baseURL gets a notice naming the override, and still delegates
     steps:
       - type: exec
         script: |
@@ -186,11 +205,17 @@ testcases:
           install_generic_wrapper_for opencode
           cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
           #!/usr/bin/env bash
+          printf 'FAKE_HEADROOM_ARGV=%s\n' "$*" >>"${HOME}/headroom-calls.log"
           if [ "${1:-}" = "proxy" ]; then
             port=8787
             prev=""
             for a in "$@"; do [ "${prev}" = "--port" ] && port="${a}"; prev="${a}"; done
             exec python3 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', ${port})); s.listen(1); s.accept()"
+          fi
+          if [ "${1:-}" = "wrap" ] && [ "${2:-}" = "opencode" ]; then
+            shift 2
+            while [ "$#" -gt 0 ]; do a="$1"; shift; [ "${a}" = "--" ] && break; done
+            exec opencode "$@"
           fi
           FAKE
           chmod +x "${TEST_DIR}/realbin/headroom"
@@ -206,55 +231,21 @@ testcases:
           opencode run "do work" 2>"${TEST_DIR}/stderr"
           echo "--- stderr ---"
           cat "${TEST_DIR}/stderr"
-          cfg="${HOME}/.config/opencode/opencode.jsonc"
-          grep -v '^//' "${cfg}" | jq -e '
-            .provider.anthropic.options.baseURL == "https://gw.corp.example/v1"
-            and .provider.openai.options.baseURL == "http://127.0.0.1:{{.test_port}}/v1"
-            and .permission == "allow"
-          ' >/dev/null || { echo "FAIL: user baseURL clobbered or openai not routed" >&2; cat "${cfg}" >&2; exit 1; }
-          grep -q '^// file generated by riotbox' "${cfg}" \
-            || { echo "FAIL: banner lines lost" >&2; exit 1; }
-          echo "PRESERVE_OK"
+          # Upstream's OPENCODE_CONFIG_CONTENT wins over the file, so the
+          # override is real and must be announced rather than hidden. The
+          # notice names the provider so a corporate-gateway user can act.
+          grep -q 'anthropic' "${TEST_DIR}/stderr" \
+            || { echo "FAIL: no notice naming the overridden provider" >&2; exit 1; }
+          grep -q 'FAKE_HEADROOM_ARGV=wrap opencode --no-proxy' "${HOME}/headroom-calls.log" \
+            || { echo "FAIL: did not delegate" >&2; exit 1; }
+          echo "NOTICE_OK"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "PRESERVE_OK"
-          - result.systemout ShouldContainSubstring "headroom will not route anthropic"
+          - result.systemout ShouldContainSubstring "NOTICE_OK"
+          - result.systemout ShouldContainSubstring "NOTICE"
+          - result.systemout ShouldContainSubstring "FAKE_REAL_opencode_INVOKED"
 
-  - name: injection is idempotent — second run leaves an identical file
-    steps:
-      - type: exec
-        script: |
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.shared_helpers}}"
-          setup_wrapper_sandbox opencode
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          install_generic_wrapper_for opencode
-          # listen(2) + two accepts: run 1's readiness probe consumes accept
-          # #1, run 2's reuse probe consumes accept #2, then the fake exits.
-          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
-          #!/usr/bin/env bash
-          if [ "${1:-}" = "proxy" ]; then
-            port=8787
-            prev=""
-            for a in "$@"; do [ "${prev}" = "--port" ] && port="${a}"; prev="${a}"; done
-            exec python3 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', ${port})); s.listen(2); s.accept(); s.accept()"
-          fi
-          FAKE
-          chmod +x "${TEST_DIR}/realbin/headroom"
-          export RIOTBOX_HEADROOM=1 HEADROOM_PORT={{.test_port}}
-          unset RIOTBOX_HEADROOM_ACTIVE
-          opencode run "first" >/dev/null 2>&1
-          cfg="${HOME}/.config/opencode/opencode.jsonc"
-          cp "${cfg}" "${TEST_DIR}/first-pass"
-          opencode run "second" >/dev/null 2>&1
-          diff -u "${TEST_DIR}/first-pass" "${cfg}" \
-            || { echo "FAIL: second run changed the config" >&2; exit 1; }
-          echo "IDEMPOTENT_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "IDEMPOTENT_OK"
-
-  - name: corrupt merged config — warn, file untouched, runs unwrapped
+  - name: helper writes nothing to the merged config — that is upstream's job now
     steps:
       - type: exec
         script: |
@@ -271,6 +262,55 @@ testcases:
             for a in "$@"; do [ "${prev}" = "--port" ] && port="${a}"; prev="${a}"; done
             exec python3 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', ${port})); s.listen(1); s.accept()"
           fi
+          if [ "${1:-}" = "wrap" ] && [ "${2:-}" = "opencode" ]; then
+            shift 2
+            while [ "$#" -gt 0 ]; do a="$1"; shift; [ "${a}" = "--" ] && break; done
+            exec opencode "$@"
+          fi
+          FAKE
+          chmod +x "${TEST_DIR}/realbin/headroom"
+          mkdir -p "${HOME}/.config/opencode"
+          cat > "${HOME}/.config/opencode/opencode.jsonc" <<'CFG'
+          // file generated by riotbox at session start.
+          {"permission":"allow","plugin":["/home/llm/.riotbox/context-mode-plugin.js"]}
+          CFG
+          cp "${HOME}/.config/opencode/opencode.jsonc" "${TEST_DIR}/before"
+          export RIOTBOX_HEADROOM=1 HEADROOM_PORT={{.test_port}}
+          unset RIOTBOX_HEADROOM_ACTIVE
+          opencode run "do work" >/dev/null 2>&1
+          # The whole point of delegating: no jq surgery, no temp-file swap,
+          # and in particular no chance of dropping the Context Mode plugin
+          # entry that setup.sh put in the array.
+          diff -u "${TEST_DIR}/before" "${HOME}/.config/opencode/opencode.jsonc" \
+            || { echo "FAIL: helper modified the merged config" >&2; exit 1; }
+          echo "NOWRITE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NOWRITE_OK"
+
+  - name: unparseable merged config does not block delegation
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox opencode
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for opencode
+          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
+          #!/usr/bin/env bash
+          printf 'FAKE_HEADROOM_ARGV=%s\n' "$*" >>"${HOME}/headroom-calls.log"
+          if [ "${1:-}" = "proxy" ]; then
+            port=8787
+            prev=""
+            for a in "$@"; do [ "${prev}" = "--port" ] && port="${a}"; prev="${a}"; done
+            exec python3 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', ${port})); s.listen(1); s.accept()"
+          fi
+          if [ "${1:-}" = "wrap" ] && [ "${2:-}" = "opencode" ]; then
+            shift 2
+            while [ "$#" -gt 0 ]; do a="$1"; shift; [ "${a}" = "--" ] && break; done
+            exec opencode "$@"
+          fi
           FAKE
           chmod +x "${TEST_DIR}/realbin/headroom"
           mkdir -p "${HOME}/.config/opencode"
@@ -281,11 +321,15 @@ testcases:
           opencode run "do work" 2>"${TEST_DIR}/stderr"
           echo "--- stderr ---"
           cat "${TEST_DIR}/stderr"
+          # The config is only read to decide whether to print the override
+          # notice. An unreadable one costs the notice, not the session: the
+          # helper no longer parses it to build anything.
           diff -u "${TEST_DIR}/before" "${HOME}/.config/opencode/opencode.jsonc" \
             || { echo "FAIL: corrupt config was modified" >&2; exit 1; }
+          grep -q 'FAKE_HEADROOM_ARGV=wrap opencode --no-proxy' "${HOME}/headroom-calls.log" \
+            || { echo "FAIL: corrupt config blocked delegation" >&2; exit 1; }
           echo "CORRUPT_OK"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "CORRUPT_OK"
           - result.systemout ShouldContainSubstring "FAKE_REAL_opencode_INVOKED"
-          - result.systemout ShouldContainSubstring "WARNING"

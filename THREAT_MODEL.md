@@ -198,13 +198,24 @@ on the host (`<session>/headroom`). This is the same sensitivity class as
 the `.claude` transcripts already stored there, but it is a second,
 independent copy with its own retention behavior. The compression proxy
 binds localhost inside the container network namespace and exposes no
-ports. For opencode, riotbox additionally rewrites the container-side merged
-`opencode.jsonc` to point the anthropic/openai providers at that localhost
-proxy; the rewrite happens only after the proxy passes a readiness check,
-never touches a user-set baseURL, and is discarded when the merged file is
-regenerated at the next container start (the host copy is never modified).
-Headroom's usage telemetry is disabled image-wide
-(`ENV HEADROOM_TELEMETRY=off`).
+ports. For opencode, riotbox starts that proxy itself and then hands the
+launch to `headroom wrap opencode --no-proxy`, which points the providers at
+the proxy via `OPENCODE_CONFIG_CONTENT` in the launched process's environment
+and writes a `headroom` provider block into the container-side merged
+`opencode.jsonc`. Handoff happens only after the proxy passes a readiness
+check, and the config write is discarded when the merged file is regenerated
+at the next container start (the host copy is never modified). Unlike the
+mechanism it replaced, this one does override a baseURL the user set — the
+provider is named in a notice on stderr, and the traffic still reaches that
+endpoint, forwarded by the proxy.
+
+riotbox starts the proxy itself rather than letting `wrap` do it because
+`headroom wrap opencode --memory` appends a memory block to `AGENTS.md` in
+the working directory and creates `.headroom/` beside it — inside the
+bind-mounted project, the one host path in this flow that riotbox otherwise
+leaves alone. Owning the proxy keeps cross-session memory without that write;
+`--memory` is never forwarded to `wrap`. Headroom's usage telemetry is
+disabled image-wide (`ENV HEADROOM_TELEMETRY=off`).
 
 ## CodeGraph index
 

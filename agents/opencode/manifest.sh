@@ -135,15 +135,12 @@ agent_opencode_wrapper_inject() {
 }
 
 # Optional verb: argv for headroom interposition (RIOTBOX_HEADROOM=1).
-# Written when headroom had no `wrap opencode` subcommand (true through
-# 0.25.0) — its wrap docstring said to run `headroom proxy` and point
-# opencode at it. 0.36.5 does ship one; see headroom-exec.sh's header for
-# why this path is kept for now. headroom-exec.sh
-# is that proxy-routed path: it ensures the proxy is listening, injects
-# provider baseURLs into the merged opencode.jsonc (only after the proxy
-# answers), and re-execs opencode under the wrapper's exported
-# RIOTBOX_HEADROOM_ACTIVE guard. No `--` separator: the helper defines no
-# flags of its own, so every token after argv[0] is a user arg.
+# Helper-shaped rather than wrap-shaped: headroom-exec.sh owns the proxy so
+# that memory can be enabled without `wrap opencode --memory` writing to the
+# caller's checkout, then delegates routing and launch to `headroom wrap
+# opencode --no-proxy`. That helper's header carries the full rationale and
+# is the single place to update it. No `--` separator here: the helper
+# defines no flags of its own, so every token after argv[0] is a user arg.
 agent_opencode_headroom_argv() {
 	printf '%s\0' "${_AGENT_OPENCODE_DIR}/headroom-exec.sh"
 	local arg
