@@ -1,0 +1,255 @@
+name: scripts/lib/progress.sh startup progress reporting
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Pins the public contract of scripts/lib/progress.sh. Every caller wraps a
+# startup step that the session needs run, so a regression here either hides a
+# failure that used to be visible or aborts container startup outright.
+
+testcases:
+  - name: off a TTY it prints the label and a done line with no carriage return
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          out="$(with_progress "  [test] Working" true)"
+
+          case "${out}" in
+            *"  [test] Working..."*) ;;
+            *) echo "FAIL: no start line in [${out}]"; exit 1 ;;
+          esac
+          case "${out}" in
+            *"  [test] Working... done ("*) ;;
+            *) echo "FAIL: no done line in [${out}]"; exit 1 ;;
+          esac
+          case "${out}" in
+            *$'\r'*) echo "FAIL: carriage return present off a TTY"; exit 1 ;;
+          esac
+          echo "nontty_success=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "nontty_success=pass"
+
+  - name: it returns the wrapped command exit status verbatim
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+
+          status=0
+          with_progress "  [test] Zero" true >/dev/null 2>&1 || status=$?
+          [ "${status}" -eq 0 ] || { echo "FAIL: expected 0, got ${status}"; exit 1; }
+
+          status=0
+          with_progress "  [test] Seven" bash -c 'exit 7' >/dev/null 2>&1 || status=$?
+          [ "${status}" -eq 7 ] || { echo "FAIL: expected 7, got ${status}"; exit 1; }
+
+          echo "status_propagation=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "status_propagation=pass"
+
+  - name: a failing command reports failed and replays its captured output
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+
+          out="$(with_progress "  [test] Boom" \
+                   bash -c 'echo the-captured-line >&2; exit 3' 2>&1 || true)"
+
+          case "${out}" in
+            *"  [test] Boom... failed ("*) ;;
+            *) echo "FAIL: no failed line in [${out}]"; exit 1 ;;
+          esac
+          case "${out}" in
+            *"--- output from 'bash -c echo the-captured-line >&2; exit 3' ---"*) ;;
+            *) echo "FAIL: no output banner in [${out}]"; exit 1 ;;
+          esac
+          case "${out}" in
+            *"the-captured-line"*) ;;
+            *) echo "FAIL: captured output not replayed in [${out}]"; exit 1 ;;
+          esac
+          case "${out}" in
+            *"done ("*) echo "FAIL: said done for a failing command"; exit 1 ;;
+          esac
+          echo "failure_replay=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "failure_replay=pass"
+
+  - name: a succeeding command's output is discarded, not printed
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+
+          out="$(with_progress "  [test] Chatty" \
+                   bash -c 'echo noisy-stdout; echo noisy-stderr >&2' 2>&1)"
+
+          case "${out}" in
+            *"noisy-stdout"*) echo "FAIL: stdout leaked in [${out}]"; exit 1 ;;
+          esac
+          case "${out}" in
+            *"noisy-stderr"*) echo "FAIL: stderr leaked in [${out}]"; exit 1 ;;
+          esac
+          case "${out}" in
+            *"  [test] Chatty... done ("*) ;;
+            *) echo "FAIL: no done line in [${out}]"; exit 1 ;;
+          esac
+          echo "success_discard=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "success_discard=pass"
+
+  # The two cases below allocate a pty with `script -qec` so the `-t 1` branch
+  # is exercised. The runner is written to a file because nesting three levels
+  # of quoting inside `script -c` is how this test becomes unmaintainable.
+  - name: on a TTY a slow step redraws an elapsed counter in place
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          cat > "${TEST_DIR}/runner.sh" <<EOF
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          with_progress "  [test] Slow" sleep 3
+          EOF
+
+          script -qec "bash ${TEST_DIR}/runner.sh" /dev/null > "${TEST_DIR}/out.txt"
+          out="$(cat "${TEST_DIR}/out.txt")"
+
+          # A carriage return alone proves nothing here: the pty translates
+          # every LF to CRLF, so CRs are present whether or not anything is
+          # redrawn. The redraw signature is a CR followed immediately by the
+          # label, which LF translation can never produce.
+          case "${out}" in
+            *$'\r'"  [test] Slow"*) ;;
+            *) echo "FAIL: no in-place redraw on a TTY"; exit 1 ;;
+          esac
+          case "${out}" in
+            *"  [test] Slow... 2s"*) ;;
+            *) echo "FAIL: no 2s tick in [${out}]"; exit 1 ;;
+          esac
+          case "${out}" in
+            *"  [test] Slow... done (3s)"*) ;;
+            *) echo "FAIL: no done line in [${out}]"; exit 1 ;;
+          esac
+          echo "tty_ticker=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "tty_ticker=pass"
+
+  - name: a step finishing inside the grace period emits no tick
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          cat > "${TEST_DIR}/runner.sh" <<EOF
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          with_progress "  [test] Quick" true
+          EOF
+
+          script -qec "bash ${TEST_DIR}/runner.sh" /dev/null > "${TEST_DIR}/out.txt"
+          out="$(cat "${TEST_DIR}/out.txt")"
+
+          case "${out}" in
+            *"  [test] Quick... 1s"*) echo "FAIL: ticked inside the grace period"; exit 1 ;;
+          esac
+          case "${out}" in
+            *"  [test] Quick... 2s"*) echo "FAIL: ticked inside the grace period"; exit 1 ;;
+          esac
+          case "${out}" in
+            *"  [test] Quick... done (0s)"*) ;;
+            *) echo "FAIL: no done line in [${out}]"; exit 1 ;;
+          esac
+          echo "grace_period=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "grace_period=pass"
+
+  - name: it does not abort a set -e caller
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          # The hazard is internal, not the wrapped command: an `((expr))` that
+          # evaluates to zero returns 1, and as the last command of a compound
+          # under set -e that aborts the caller mid-function. Off a TTY the
+          # `tty` flag is 0, which is exactly the value that triggers it.
+          cat > "${TEST_DIR}/caller.sh" <<EOF
+          set -e
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          with_progress "  [test] Fine" true
+          echo "reached_end=yes"
+          EOF
+
+          out="$(bash "${TEST_DIR}/caller.sh" 2>&1)"
+          case "${out}" in
+            *"reached_end=yes"*) ;;
+            *) echo "FAIL: set -e caller aborted, output was [${out}]"; exit 1 ;;
+          esac
+          echo "set_e_safety=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "set_e_safety=pass"
+
+  - name: it leaves no temp files behind on success or failure
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+
+          mkdir -p "${TEST_DIR}/tmp"
+          export TMPDIR="${TEST_DIR}/tmp"
+
+          with_progress "  [test] Ok" true >/dev/null 2>&1
+          with_progress "  [test] Bad" false >/dev/null 2>&1 || true
+
+          left="$(find "${TEST_DIR}/tmp" -type f | wc -l)"
+          [ "${left}" -eq 0 ] \
+            || { echo "FAIL: ${left} temp file(s) left behind"; exit 1; }
+          echo "temp_cleanup=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "temp_cleanup=pass"
+
+  - name: an unusable TMPDIR degrades to passthrough instead of failing
+    steps:
+      - type: exec
+        script: |
+          set -e
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+
+          export TMPDIR=/proc/riotbox-nonexistent-dir
+
+          status=0
+          out="$(with_progress "  [test] NoTmp" echo hello 2>&1)" || status=$?
+
+          [ "${status}" -eq 0 ] \
+            || { echo "FAIL: expected 0, got ${status}"; exit 1; }
+          case "${out}" in
+            *"hello"*) ;;
+            *) echo "FAIL: passthrough lost the command output, got [${out}]"; exit 1 ;;
+          esac
+          echo "mktemp_degrade=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "mktemp_degrade=pass"

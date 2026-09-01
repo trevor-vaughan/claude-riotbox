@@ -278,6 +278,15 @@ ralph-loop
 EOF
 ```
 
+**Startup steps that can take a while** — copying plugins, installing one from a marketplace — report how long they have been running. A first start against a fresh session directory can spend minutes inside a single install, and the counter is what distinguishes that from a wedged session:
+
+```text
+  [plugins] Installing superpowers... 12s
+  [plugins] Installing superpowers... done (14s)
+```
+
+The live counter only appears on a terminal, and only once a step has run for more than two seconds — quick steps look exactly as they always did. Piped or captured output gets the start and completion lines without the redraw, so logs stay readable. A step that fails prints `failed` with the elapsed time and replays the command's output; a failed plugin install is still not fatal to the session.
+
 **User extensions** from your host `~/.claude/` are copied into the session directory at every launch, so newly installed resources are available immediately. The covered directories are `skills/`, `agents/` (subagents), `commands/` (slash commands), and `output-styles/`. Symlinks are dereferenced during copy, and removing a directory on the host removes it from the next session too.
 
 ## Status bar customization

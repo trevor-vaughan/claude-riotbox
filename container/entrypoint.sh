@@ -82,6 +82,13 @@ source "${RIOTBOX_SCRIPT_DIR}/lib/overlay-ignore.sh"
 # neither can own the writer.
 # shellcheck source=../scripts/lib/json-write.sh disable=SC1091
 source "${RIOTBOX_SCRIPT_DIR}/lib/json-write.sh"
+# Elapsed-time reporting for slow startup steps. Sourced ahead of
+# plugin-setup.sh, which is the only caller today; it lives here rather than in
+# that file for the same reason json-write.sh does — the entrypoint composes all
+# of these into one shell, and a setup script may not depend on another setup
+# script having been sourced first.
+# shellcheck source=../scripts/lib/progress.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/lib/progress.sh"
 # shellcheck source=./session-branch.sh disable=SC1091  # source path resolves only from container/; safe to skip follow
 source "${RIOTBOX_SCRIPT_DIR}/session-branch.sh"
 # shellcheck source=./overlay-setup.sh disable=SC1091
