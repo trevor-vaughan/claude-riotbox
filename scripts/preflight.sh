@@ -343,16 +343,23 @@ preflight_check_context_mode() {
 			"RIOTBOX_CONTEXT_MODE=1 and RIOTBOX_HEADROOM=1 are mutually exclusive — unset one"
 		return 22
 	fi
-	# Context Mode is wired per agent through the optional registry verbs. An
+	# Context Mode is supported per agent through the optional registry verbs. An
 	# agent that implements none of them runs with the feature off, so say so
 	# here rather than letting doctor imply the feature will engage.
+	#
+	# Probed on the storage verb, which is the one every supported agent has.
+	# Claude Code has no wire verb — its hooks and MCP server come from the
+	# plugin container/plugin-setup.sh registers — so a probe for that verb
+	# would report the default agent as unsupported on an image where the
+	# feature works. container/context-mode-setup.sh gates on the same verb, so
+	# doctor and session start answer this question the same way.
 	#
 	# Reported as ok, not fail: _preflight_report has two states and fail
 	# carries an exit code, which would make `riotbox doctor` non-zero for a
 	# legitimate configuration. This mirrors the "not requested" branch above —
 	# an explanatory ok line, so a user sees why rather than wondering.
 	local cm_agent="${RIOTBOX_AGENT:-claude}"
-	if ! declare -F "agent_${cm_agent}_context_mode_wire" >/dev/null; then
+	if ! declare -F "agent_${cm_agent}_context_mode_store_dir" >/dev/null; then
 		_preflight_report context_mode ok \
 			"Context Mode requested, but agent '${cm_agent}' has no Context Mode support in riotbox — the session will run with the feature off"
 		return 0
@@ -380,6 +387,46 @@ preflight_check_context_mode() {
 	# Code spawns the MCP server, which GETs registry.npmjs.org (README.md,
 	# THREAT_MODEL.md).
 	#
+	# The staged plugin tree is checked here for the same reason, and it is what
+	# makes the runtime probe above worth reading at all for a Claude session.
+	# Since the plugin adoption the hooks and the MCP server a session loads come
+	# from the clone container/plugin-setup.sh registers out of
+	# RIOTBOX_CM_PLUGIN_DIR, not from the npm package `context-mode doctor`
+	# exercises — so an image built before the staging layer existed, the
+	# ordinary upgrade path, passes every line above while carrying no Context
+	# Mode a session can use. Without these four lines that user gets a green
+	# "Context Mode available in image" and a session that then warns the plugin
+	# is not installed and runs with the feature off.
+	#
+	# The tree is resolved exactly as container/plugin-setup.sh resolves it —
+	# newest version-stamped directory under the same variable, same default —
+	# so doctor and session start read one tree rather than two. Both files own
+	# a copy of that rule and neither can move alone; the header on
+	# context_mode_staged_path says so from the other side.
+	#
+	# What is asserted of the tree is what a session needs of it, and the set is
+	# deliberately no smaller than what session start demands. Two of the tests
+	# are this check's own: .claude-plugin/plugin.json, or nothing can register
+	# the tree at all, and an installed better-sqlite3, or every hook would try
+	# to npm install at hook time in a session that may have no network. The
+	# third mirrors context_mode_staged_version line for line — same type gate,
+	# same emptiness test, same swallowed jq failure — because that function is
+	# the whole of what makes a staged tree usable to a session: it refuses a
+	# package.json that is missing, unreadable, or whose .version is absent or
+	# not a string, and context_mode_plugin_register then warns and unregisters.
+	# Doctor being laxer than that is the bug this check exists to remove — it
+	# would report green on a tree the session is about to refuse. Doctor being
+	# stricter is merely a false red that sends a user to a rebuild, so the rule
+	# for anything added here is: never assert less than session start does.
+	#
+	# agent_claude_context_mode_build_assert is deliberately not reused. It is
+	# generalized over a tree root, but it greps that root on the local
+	# filesystem, and this tree exists only inside the image — reusing it would
+	# mean a second container or shipping the function text through `podman run`,
+	# both of which cost more than the four tests they would replace. The build
+	# already calls it on this tree (Containerfile), which is where a contract
+	# drift belongs.
+	#
 	# The bridge sentinel is checked in the same container as the runtime probe
 	# rather than in a second one: both are image state, and a session pays for
 	# every container `riotbox doctor` starts. Two properties make the gate both
@@ -395,8 +442,8 @@ preflight_check_context_mode() {
 	# write on a 0555 directory regardless, so this probe depends on the image
 	# ending `USER llm` and would report a healthy image as broken if the
 	# container's user ever became root. The extracted-body test in
-	# tests/doctor-context-mode.venom.yml skips itself under a root runner for
-	# the same reason.
+	# tests/doctor-context-mode.venom.yml drops to an unprivileged uid before
+	# running this body for the same reason.
 	# Every assertion below is `|| exit 1` / `&& exit 1` — never the tail of an
 	# `&&` chain — and the script ends in an unconditional `exit 0`. The
 	# sentinel's own tests are negative (absent is healthy), so on a healthy
@@ -405,6 +452,12 @@ preflight_check_context_mode() {
 	if ! podman run --rm --network=none --entrypoint /usr/bin/bash "${image}" -c \
 		'command -v context-mode >/dev/null || exit 1
 		 context-mode doctor >/dev/null || exit 1
+		 cm_tree="$(find "${RIOTBOX_CM_PLUGIN_DIR:-${HOME}/.riotbox/context-mode-plugin}" \
+		            -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -V | tail -n 1)"
+		 [ -n "${cm_tree}" ] || exit 1
+		 [ -r "${cm_tree}/.claude-plugin/plugin.json" ] || exit 1
+		 [ -n "$(jq -r ".version | select(type == \"string\")" "${cm_tree}/package.json" 2>/dev/null)" ] || exit 1
+		 [ -r "${cm_tree}/node_modules/better-sqlite3/package.json" ] || exit 1
 		 for d in "${HOME}/.context-mode" \
 		          "${HOME}/.config/context-mode"; do
 			[ -d "${d}" ] || exit 1
@@ -413,7 +466,7 @@ preflight_check_context_mode() {
 		 done
 		 exit 0' >/dev/null 2>&1; then
 		_preflight_report context_mode fail "${label}" 22 \
-			"Image lacks Context Mode, its runtime is broken, or the event-bridge sentinel was replaced — rebuild with riotbox rebuild"
+			"Image lacks Context Mode or its staged plugin tree, its runtime is broken, or the event-bridge sentinel was replaced — rebuild with riotbox rebuild"
 		return 22
 	fi
 	_preflight_report context_mode ok "${label}"

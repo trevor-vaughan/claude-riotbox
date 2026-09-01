@@ -30,6 +30,16 @@ Read the body below with these two corrections in hand:
   from upstream, and it names `Bash`, `WebFetch`, `Read`, `Grep`, `Agent` and every
   MCP tool — no WebSearch, no Glob. Their output lands in the transcript in full.
   `Agent` (subagent calls) *is* intercepted, and went unmentioned here.
+
+  *Correction:* `CONTEXT_MODE_MATCHER` no longer exists. It was RiotBox's
+  verbatim copy of upstream's array, compared to `hooks/hooks.json` for equality
+  at build time; the copy and the guard were both removed when Claude Code moved
+  to upstream's marketplace plugin, which ships that `hooks.json` and is read
+  directly. The correction above still holds — the tool set is the same — but it
+  is now read from the staged plugin's own `hooks/hooks.json`, with no
+  RiotBox-side copy and no build-time equality check standing behind it. See
+  [context-mode.md § Which tools are actually
+  intercepted](../context-mode.md#which-tools-are-actually-intercepted).
 - **"Upstream supports both RiotBox agents" was true of upstream, not of RiotBox.**
   The first integration wired Claude Code only. opencode was wired later; see
   [context-mode-opencode.md](context-mode-opencode.md).

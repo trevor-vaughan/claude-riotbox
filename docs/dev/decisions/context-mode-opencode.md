@@ -296,6 +296,18 @@ No layer reordering is needed: `COPY agents/` is already at `Containerfile:582`,
 ahead of the Context Mode layer at 852. `CONTEXT_MODE_BIN` and
 `CONTEXT_MODE_STATS_BIN` assertions stay where they are.
 
+*Correction:* the claude bullet above has since lost two of its three checks, and
+"the installed bundle" is no longer the only tree read. The matcher and
+hook-event comparisons went with the RiotBox-side tables they compared when
+Claude Code moved to upstream's marketplace plugin, so
+`agent_claude_context_mode_build_assert` greps for `CONTEXT_MODE_MCP_NAME` and
+nothing else. The installed bundle is also no longer the only tree it reads: the
+Containerfile calls claude's verb a second time against the staged plugin clone,
+which is the tree `container/plugin-setup.sh` registers and a session's hooks run
+from. The `$1` root the verb takes is not what changed — every agent's verb has
+always been spelled that way — only what may be handed to it. See
+[context-mode-native-plugin.md](context-mode-native-plugin.md).
+
 ## Tests
 
 New suite `tests/context-mode-opencode.venom.yml`, shell-level and hermetic — no
@@ -391,11 +403,28 @@ warning when the selected agent has no verb.
    MCP server name and the `hook <platform> <event>` dispatcher, nothing in the image
    build greps the installed bundle for either variable, so a version bump that
    renamed or dropped one would surface in a user session rather than at build time.
+
+   *Correction:* two of those three comparisons no longer hold. The matcher
+   guards and the dispatcher guard were both removed when Claude Code moved to
+   upstream's marketplace plugin — there is no RiotBox-side matcher copy left to
+   compare, and nothing RiotBox installs calls the `hook <platform> <event>`
+   subcommand. The MCP server name is the only bundle grep left. The point this
+   paragraph was making stands and now applies more widely: see
+   [context-mode-native-plugin.md](context-mode-native-plugin.md).
 2. **The in-process paradigm has no matcher to audit.** On Claude, `CONTEXT_MODE_MATCHER`
    is a reviewable list of which tools reach the hook, asserted against upstream at
    build time. On opencode, routing enforcement lives inside
    `tool.execute.before` with nothing equivalent to inspect or pin. A version bump
    can change which tools are intercepted with no build-time signal.
+
+   *Correction:* the Claude half of that contrast is gone. `CONTEXT_MODE_MATCHER`
+   and its build-time equality check were removed with the hand-authored wiring;
+   the intercepted set is now read from the staged plugin's own
+   `hooks/hooks.json`, with no RiotBox-side copy to compare it against. So the
+   last sentence is true of **both** agents now, and the asymmetry this bullet
+   drew no longer exists. See
+   [context-mode.md § Which tools are actually
+   intercepted](../context-mode.md#which-tools-are-actually-intercepted).
 3. **Version drift is now two-sided.** Bumping `CONTEXT_MODE_VERSION` can break the
    plugin export or the bun path, and bumping opencode can change the plugin
    directory, the plugin API, or the bundled zod that

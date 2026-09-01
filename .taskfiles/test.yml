@@ -38,9 +38,22 @@ tasks:
       ARGS: "{{.ARGS | default .CLI_ARGS}}"
     env:
       TEST_DIR: "{{.TEST_DIR}}"
+      TEST_AS_ROOT: '{{.TEST_AS_ROOT | default ""}}'
     cmds:
       - mkdir -p "{{.TEST_DIR}}"
       - "{{.ROOT_DIR}}/.taskfiles/scripts/run-tests.sh {{.ARGS}}"
+
+  # Delegates to `run` so the image build and the venom invocation stay defined
+  # once; the only difference is the uid the suites execute under. Pass a single
+  # suite — this exists for coverage of the privilege drop, not as a second full
+  # test pass.
+  as-root:
+    desc: "Run tests as uid 0 in the container — covers the setpriv drop in doctor-context-mode (pass a suite via --)"
+    cmds:
+      - task: run
+        vars:
+          ARGS: "{{.ARGS | default .CLI_ARGS}}"
+          TEST_AS_ROOT: "1"
 
   direct:
     desc: "Run venom tests directly without the test container (artifacts to .test-output/)"

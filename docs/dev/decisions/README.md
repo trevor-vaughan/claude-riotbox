@@ -17,9 +17,10 @@ they turned out to be wrong.
 | [Wiring Context Mode for opencode](context-mode-opencode.md) | 2026-07-31 | **Wire it via registry verbs** — no agent names in shared code |
 | [Should a pre-session checkpoint be a commit and a tag, or a ref?](checkpoint-snapshots-refs-not-tags.md) | 2026-08-04 | **A ref** — no automatic tags, on-demand `riotbox-snapshot/*` |
 | [Should the agent run in a git worktree instead of the user's checkout?](should-the-agent-run-in-a-worktree.md) | 2026-08-04 | **No** — it hides uncommitted work and shares the ref store anyway |
+| [Should RiotBox author Claude Code's Context Mode wiring, or install upstream's plugin?](context-mode-native-plugin.md) | 2026-08-24 | **Install the plugin** — the authored wiring was inert and nothing could tell |
 
 For how the Context Mode integration actually behaves today, read
-[../context-mode.md](../context-mode.md) instead of any of the three records
+[../context-mode.md](../context-mode.md) instead of any of the four records
 above.
 
 ## Open questions
@@ -29,7 +30,10 @@ above.
   component. See [context-mode-adoption.md § Decision](context-mode-adoption.md#decision);
   whoever settles it should replace that note with a pointer to the record.
 - **Context Mode has never been measured against a real RiotBox session.** It stays
-  opt-in until it is.
+  opt-in until it is. Sharper now than when it was written: the Claude integration
+  was inert on at least one system until 2026-08-24, so any impression formed of
+  the feature's value there was formed against something that may not have been
+  running. See [context-mode-native-plugin.md](context-mode-native-plugin.md).
 
 ## Writing a new one
 

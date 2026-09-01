@@ -16,6 +16,9 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
           mkdir -p "${HOME}/.claude/plugins/cache"
           mkdir -p "${HOME}/.host-plugins/cache/claude-plugins-official/broken-plugin/0.1.0/skills"
           ln -s /nonexistent/missing-target \
@@ -24,6 +27,8 @@ testcases:
           echo "intact" > "${HOME}/.host-plugins/cache/claude-plugins-official/good-plugin/1.0.0/PLUGIN.md"
 
           # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
           source "{{.riotbox_dir}}/container/plugin-setup.sh"
           stderr_file="${TEST_DIR}/stderr"
           plugin_setup 2>"${stderr_file}"
@@ -46,12 +51,17 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
           mkdir -p "${HOME}/.claude/plugins/cache"
           mkdir -p "${HOME}/.host-plugins/cache/claude-plugins-official/plugin/1.0.0/real"
           echo "payload" > "${HOME}/.host-plugins/cache/claude-plugins-official/plugin/1.0.0/real/file.txt"
           ln -s real "${HOME}/.host-plugins/cache/claude-plugins-official/plugin/1.0.0/aliased"
 
           # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
           source "{{.riotbox_dir}}/container/plugin-setup.sh"
           plugin_setup >/dev/null
 
@@ -69,6 +79,9 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
           mkdir -p "${HOME}/.claude/plugins/cache"
           mkdir -p "${HOME}/.host-plugins/cache/temp_git_abc123/junk"
           echo "x" > "${HOME}/.host-plugins/cache/temp_git_abc123/junk/file"
@@ -76,6 +89,8 @@ testcases:
           echo "y" > "${HOME}/.host-plugins/cache/marketplace/plugin/1.0.0/PLUGIN.md"
 
           # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
           source "{{.riotbox_dir}}/container/plugin-setup.sh"
           plugin_setup >/dev/null
 
@@ -83,3 +98,2719 @@ testcases:
           [ ! -e "${HOME}/.claude/plugins/cache/temp_git_abc123" ]
         assertions:
           - result.code ShouldEqual 0
+
+  - name: Registers the Context Mode plugin against the staged image path
+    # The staged tree is ~60 MB and the session directory is a host bind mount,
+    # so registration points at the image path instead of copying it in.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}/.claude-plugin" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          echo '{"version":2,"plugins":{}}' > "${HOME}/.claude/plugins/installed_plugins.json"
+          echo '{}' > "${HOME}/.claude/plugins/known_marketplaces.json"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          declare -F context_mode_plugin_register >/dev/null || {
+            echo "FAIL - context_mode_plugin_register is not defined"; exit 1; }
+          stdout_file="${TEST_DIR}/stdout"
+          context_mode_plugin_register >"${stdout_file}"
+
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          got="$(jq -r '.plugins["context-mode@context-mode"][0].installPath' "${installed}")"
+          [ "${got}" = "${staged}" ] || { echo "FAIL - installPath ${got}, want ${staged}"; exit 1; }
+          got_version="$(jq -r '.plugins["context-mode@context-mode"][0].version' "${installed}")"
+          [ "${got_version}" = "1.0.169" ] || { echo "FAIL - version ${got_version}"; exit 1; }
+          got_scope="$(jq -r '.plugins["context-mode@context-mode"][0].scope' "${installed}")"
+          [ "${got_scope}" = "user" ] || { echo "FAIL - scope ${got_scope}"; exit 1; }
+          got_format="$(jq -r '.version' "${installed}")"
+          [ "${got_format}" = "2" ] || { echo "FAIL - registry format version ${got_format}"; exit 1; }
+
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          got_location="$(jq -r '.["context-mode"].installLocation' "${markets}")"
+          [ "${got_location}" = "${staged}" ] || { echo "FAIL - installLocation ${got_location}"; exit 1; }
+          got_auto="$(jq -r '.["context-mode"].autoUpdate' "${markets}")"
+          [ "${got_auto}" = "false" ] || { echo "FAIL - autoUpdate ${got_auto}"; exit 1; }
+
+          # This line is the whole of what a `--agent=claude` session shows for
+          # Context Mode — riotbox no longer writes any wiring of its own — and
+          # README pins it verbatim as the signal to look for. Compared as the
+          # entire stream, not searched for, so the version and the staged path
+          # are both under test and a second line would fail here too.
+          want_line="  [plugins] Context Mode 1.0.169 registered at ${staged}."
+          [ "$(cat "${stdout_file}")" = "${want_line}" ] || {
+            echo "FAIL - announcement was:"; cat "${stdout_file}"
+            echo "want: ${want_line}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Reconciles a stale installPath left by an older image
+    # A session directory outlives the image that seeded it: a rebuild at a new
+    # ref moves the version-stamped path, so the recorded one can be gone.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          stale="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.100"
+          mkdir -p "${staged}/.claude-plugin" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          jq -n --arg old "${stale}" \
+            '{version:2,plugins:{"context-mode@context-mode":[{scope:"user",installPath:$old,version:"1.0.100"}]}}' \
+            > "${HOME}/.claude/plugins/installed_plugins.json"
+          jq -n --arg old "${stale}" \
+            '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},installLocation:$old,autoUpdate:false}}' \
+            > "${HOME}/.claude/plugins/known_marketplaces.json"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          declare -F context_mode_plugin_register >/dev/null || {
+            echo "FAIL - context_mode_plugin_register is not defined"; exit 1; }
+          first_out="${TEST_DIR}/stdout.1"
+          second_out="${TEST_DIR}/stdout.2"
+          context_mode_plugin_register >"${first_out}"
+
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          got="$(jq -r '.plugins["context-mode@context-mode"][0].installPath' "${installed}")"
+          [ "${got}" = "${staged}" ] || { echo "FAIL - stale path kept ${got}"; exit 1; }
+          n="$(jq -r '.plugins["context-mode@context-mode"] | length' "${installed}")"
+          [ "${n}" = "1" ] || { echo "FAIL - ${n} entries, want 1"; exit 1; }
+          got_location="$(jq -r '.["context-mode"].installLocation' \
+            "${HOME}/.claude/plugins/known_marketplaces.json")"
+          [ "${got_location}" = "${staged}" ] || { echo "FAIL - stale installLocation ${got_location}"; exit 1; }
+
+          # Positive control for the silence asserted below: this call did move
+          # the stale path, and said so. Without it a register that never speaks
+          # at all would pass the silence check.
+          [ -s "${first_out}" ] || { echo "FAIL - the reconciling call announced nothing"; exit 1; }
+
+          # A second call in the same session changes nothing — and says nothing.
+          # README documents that silence as the normal state of an already-wired
+          # session directory, and plugin_setup calls this twice per start, so a
+          # second line would read to the user as a repeat install.
+          before="$(cat "${installed}")"
+          context_mode_plugin_register >"${second_out}"
+          [ "$(cat "${installed}")" = "${before}" ] || { echo "FAIL - second call rewrote the entry"; exit 1; }
+          [ ! -s "${second_out}" ] || {
+            echo "FAIL - second call announced a registration it did not make:"
+            cat "${second_out}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Registration is a no-op when nothing is staged
+    # An image built before the staging layer existed must not gain a
+    # registration pointing at an empty path: Claude Code would surface the
+    # plugin and then fail to load every hook in it.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          mkdir -p "${HOME}/.claude/plugins"
+          echo '{"version":2,"plugins":{}}' > "${HOME}/.claude/plugins/installed_plugins.json"
+          echo '{}' > "${HOME}/.claude/plugins/known_marketplaces.json"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          declare -F context_mode_plugin_register >/dev/null || {
+            echo "FAIL - context_mode_plugin_register is not defined"; exit 1; }
+          context_mode_plugin_register >/dev/null
+
+          if jq -e '.plugins | has("context-mode@context-mode")' \
+            "${HOME}/.claude/plugins/installed_plugins.json" >/dev/null; then
+            echo "FAIL - registered a plugin that is not staged"; exit 1
+          fi
+          if jq -e 'has("context-mode")' \
+            "${HOME}/.claude/plugins/known_marketplaces.json" >/dev/null; then
+            echo "FAIL - registered a marketplace that is not staged"; exit 1
+          fi
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Picks the newest staged tree by version sort, not glob order
+    # v1.0.9 sorts after v1.0.169 lexically, so glob order alone would pick the
+    # older tree in a hand-built image that carries two.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          newest="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          older="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.9"
+          mkdir -p "${newest}" "${older}" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${newest}/package.json"
+          echo '{"name":"context-mode","version":"1.0.9"}' > "${older}/package.json"
+          echo '{"version":2,"plugins":{}}' > "${HOME}/.claude/plugins/installed_plugins.json"
+          echo '{}' > "${HOME}/.claude/plugins/known_marketplaces.json"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          declare -F context_mode_plugin_register >/dev/null || {
+            echo "FAIL - context_mode_plugin_register is not defined"; exit 1; }
+          context_mode_plugin_register >/dev/null
+
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          got="$(jq -r '.plugins["context-mode@context-mode"][0].installPath' "${installed}")"
+          [ "${got}" = "${newest}" ] || { echo "FAIL - picked ${got}, want ${newest}"; exit 1; }
+          got_version="$(jq -r '.plugins["context-mode@context-mode"][0].version' "${installed}")"
+          [ "${got_version}" = "1.0.169" ] || { echo "FAIL - version ${got_version}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Leaves an unparseable registry alone and warns
+    # Same refusal as agent_claude_context_mode_strip: a document jq cannot read
+    # is hand-edited state this code must not overwrite.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          printf '{"version":2,"plugins":{' > "${installed}"
+          echo '{}' > "${HOME}/.claude/plugins/known_marketplaces.json"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          declare -F context_mode_plugin_register >/dev/null || {
+            echo "FAIL - context_mode_plugin_register is not defined"; exit 1; }
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_register >/dev/null 2>"${stderr_file}" ||
+            { echo "FAIL - a broken registry must not fail the session"; exit 1; }
+
+          [ "$(cat "${installed}")" = '{"version":2,"plugins":{' ] || {
+            echo "FAIL - overwrote a registry it could not read"; exit 1; }
+          grep -q 'not valid JSON' "${stderr_file}" || {
+            echo "FAIL - no warning on stderr"; exit 1; }
+          if jq -e 'has("context-mode")' \
+            "${HOME}/.claude/plugins/known_marketplaces.json" >/dev/null; then
+            echo "FAIL - registered a marketplace for a plugin it could not record"; exit 1
+          fi
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Refuses to register a staged tree with an unreadable package.json
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins"
+          printf '{"name":"context-mode",' > "${staged}/package.json"
+          # Seeded from an earlier image, so the other half of the refusal is
+          # asserted too: what it declines to write, it also declines to leave.
+          jq -n --arg old "${RIOTBOX_CM_PLUGIN_DIR}/v1.0.100" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$old,version:"1.0.100"}]}}' \
+            > "${HOME}/.claude/plugins/installed_plugins.json"
+          echo '{}' > "${HOME}/.claude/plugins/known_marketplaces.json"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          declare -F context_mode_plugin_register >/dev/null || {
+            echo "FAIL - context_mode_plugin_register is not defined"; exit 1; }
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_register >/dev/null 2>"${stderr_file}" ||
+            { echo "FAIL - a broken package.json must not fail the session"; exit 1; }
+
+          if jq -e '.plugins | has("context-mode@context-mode")' \
+            "${HOME}/.claude/plugins/installed_plugins.json" >/dev/null; then
+            echo "FAIL - registered a tree whose version it could not read"; exit 1
+          fi
+          grep -q 'version' "${stderr_file}" || { echo "FAIL - no warning on stderr"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Refuses a staged tree whose package.json declares a non-string version
+    # jq -r renders whatever it is handed, so a number, an object or an array in
+    # the version field becomes the string "123", "{}" or "[]" and lands in the
+    # registry as the version Claude Code shows the user and compares against
+    # the marketplace. That is registering a tree as something it is not, which
+    # is the one thing the version is read to prevent. Nothing here is a shape
+    # an image built by this project produces; the file is hand-editable and the
+    # check costs one jq filter.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          echo '{"version":2,"plugins":{}}' > "${installed}"
+          echo '{}' > "${HOME}/.claude/plugins/known_marketplaces.json"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+
+          for bad in '123' '{}' '[]' 'true'; do
+            jq -n --argjson v "${bad}" '{name:"context-mode",version:$v}' \
+              > "${staged}/package.json"
+            # The premise: the document parses and really does carry a version
+            # key, so what is under test is its type and not its absence — which
+            # a different branch already declines.
+            jq -e 'has("version")' "${staged}/package.json" >/dev/null || {
+              echo "FAIL - fixture ${bad} produced no version key"; exit 1; }
+
+            context_mode_plugin_register >/dev/null 2>"${stderr_file}" ||
+              { echo "FAIL - a non-string version must not fail the session"; exit 1; }
+
+            if jq -e '.plugins | has("context-mode@context-mode")' "${installed}" >/dev/null; then
+              got="$(jq -r '.plugins["context-mode@context-mode"][0].version' "${installed}")"
+              echo "FAIL - registered version ${bad} as the string \"${got}\""; exit 1
+            fi
+            # The user-visible half of the refusal: a shape declined in silence
+            # would leave a session wondering where Context Mode went.
+            grep -q 'declares no version' "${stderr_file}" || {
+              echo "FAIL - refused version ${bad} without saying so"
+              cat "${stderr_file}"; exit 1; }
+          done
+
+          # Positive control: the same tree, the same call, a string version —
+          # so the refusals above cannot pass because registration was broken
+          # for some unrelated reason.
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          context_mode_plugin_register >/dev/null
+          got="$(jq -r '.plugins["context-mode@context-mode"][0].version' "${installed}")"
+          [ "${got}" = "1.0.169" ] || {
+            echo "FAIL - refused a string version too (got ${got})"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A staged tree the image cannot read leaves no stale registration standing
+    # An image can ship a tree this code refuses to register — no package.json,
+    # or one declaring no version. Refusing is right, but returning there and
+    # leaving whatever the session already recorded is not: the recorded path
+    # belongs to an earlier image and is typically gone, which is the "surface
+    # the plugin, then fail to load every hook in it" outcome registration
+    # exists to prevent. Every path that declines to register converges on
+    # nothing registered; the paths that fail reading or writing these files
+    # return instead, because a removal would meet the same obstacle.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          gone="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.100"
+          # Staged, but carrying no package.json at all.
+          mkdir -p "${staged}" "${HOME}/.claude/plugins"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          jq -n --arg old "${gone}" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$old,version:"1.0.100"}]}}' \
+            > "${installed}"
+          jq -n --arg old "${gone}" \
+            '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                              installLocation:$old,autoUpdate:false}}' \
+            > "${markets}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_register >/dev/null 2>"${stderr_file}" ||
+            { echo "FAIL - an unreadable staged tree must not fail the session"; exit 1; }
+
+          grep -q 'package.json' "${stderr_file}" || {
+            echo "FAIL - no warning naming the unreadable tree"; cat "${stderr_file}"; exit 1; }
+          if jq -e '.plugins | has("context-mode@context-mode")' "${installed}" >/dev/null; then
+            echo "FAIL - left a registration naming a path this image does not have"; exit 1
+          fi
+          if jq -e 'has("context-mode")' "${markets}" >/dev/null; then
+            echo "FAIL - left a marketplace naming a path this image does not have"; exit 1
+          fi
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A host copy of Context Mode never displaces the staged tree
+    # Issue #17: a host-installed context-mode is copied in verbatim, so it has
+    # not been through the staging layer's interpreter rewrite or its offline
+    # dependency install. Its hooks still invoke a bare `node` — the image
+    # default Node 20, below the node:sqlite floor — which sends every hook into
+    # ensure-deps.mjs: 120 s per invocation with no network, never succeeding.
+    # Its installPath is a host path that does not exist in the container.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}/.claude-plugin" "${HOME}/.claude/plugins/cache"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+
+          host_cm="/Users/someone/.claude/plugins/cache/context-mode/context-mode/1.0.169"
+          mkdir -p "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169/hooks"
+          echo '{"hooks":{"Stop":[{"hooks":[{"command":"node hooks/stop.mjs"}]}]}}' \
+            > "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169/hooks/hooks.json"
+          mkdir -p "${HOME}/.host-plugins/cache/other-market/other-plugin/1.0.0"
+          echo "kept" > "${HOME}/.host-plugins/cache/other-market/other-plugin/1.0.0/PLUGIN.md"
+          jq -n --arg cm "${host_cm}" \
+            '{version:2,plugins:{
+               "context-mode@context-mode":[{scope:"user",installPath:$cm,version:"1.0.169"}],
+               "other-plugin@other-market":[{scope:"user",installPath:"/Users/someone/.claude/plugins/cache/other-market/other-plugin/1.0.0",version:"1.0.0"}]}}' \
+            > "${HOME}/.host-plugins/installed_plugins.json"
+          jq -n '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                                  installLocation:"/Users/someone/.claude/plugins/marketplaces/context-mode"}}' \
+            > "${HOME}/.host-plugins/known_marketplaces.json"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stdout_file="${TEST_DIR}/stdout"
+          plugin_setup >"${stdout_file}"
+
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          got="$(jq -r '.plugins["context-mode@context-mode"][0].installPath' "${installed}")"
+          [ "${got}" = "${staged}" ] || { echo "FAIL - host entry survived as ${got}"; exit 1; }
+          [ ! -e "${HOME}/.claude/plugins/cache/context-mode" ] || {
+            echo "FAIL - copied the host Context Mode tree"; exit 1; }
+          got_location="$(jq -r '.["context-mode"].installLocation' \
+            "${HOME}/.claude/plugins/known_marketplaces.json")"
+          [ "${got_location}" = "${staged}" ] || {
+            echo "FAIL - marketplace points at ${got_location}"; exit 1; }
+
+          # Every other host plugin is still copied and still wins.
+          [ -f "${HOME}/.claude/plugins/cache/other-market/other-plugin/1.0.0/PLUGIN.md" ] || {
+            echo "FAIL - stopped copying unrelated host plugins"; exit 1; }
+          jq -e '.plugins | has("other-plugin@other-market")' "${installed}" >/dev/null || {
+            echo "FAIL - dropped an unrelated host entry"; exit 1; }
+
+          # Step 7 is what enables the plugin: the upstream self-heal skips
+          # entries outside the plugin cache root, so nothing else does it.
+          jq -e '.enabledPlugins["context-mode@context-mode"]' \
+            "${HOME}/.claude/settings.json" >/dev/null || {
+            echo "FAIL - staged plugin not enabled"; exit 1; }
+
+          # Twice, and that is not the "repeat install" line the once-only rule
+          # forbids: this is the one session shape where both calls really do
+          # register. Step 3 writes the staged entry, the host merge in step 5
+          # overwrites it with a host path, and the re-assert at the end of step 5
+          # puts it back. A single line here means either the re-assert stopped
+          # running — leaving the session naming a host path nothing filled — or
+          # the repair it made stopped being reported, which is the same silence
+          # a session that needed no repair gives.
+          want_line="  [plugins] Context Mode 1.0.169 registered at ${staged}."
+          n_said="$(grep -c -F -x "${want_line}" "${stdout_file}" || true)"
+          [ "${n_said}" = "2" ] || {
+            echo "FAIL - ${n_said} announcements of the staged registration, want 2"
+            cat "${stdout_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A staged tree this session cannot register does not cost it the host copy
+    # The third member of the family above, and the one the skip got wrong: the
+    # image staged a tree, so the directory is there, but it carries no
+    # package.json and the registration refuses it. A skip that fires on the
+    # directory existing is then protecting a registration that will never be
+    # made, and it costs the session the only Context Mode it could have had —
+    # while the host merge still records the entry, rewritten onto a cache path
+    # the skip had just declined to fill. Authoritative has to mean "was actually
+    # registered", not "is a directory".
+    #
+    # The session's own registry files are seeded because that is what the second
+    # start on a session directory looks like: the first start merged the host's
+    # context-mode into both, and ~/.claude outlives the run. It also puts the
+    # gate's two questions on content rather than on the files being absent — the
+    # key is there in both, naming host paths, and the staged tree is still not
+    # what they name.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          # Staged, and unusable: a directory with nothing in it to register.
+          mkdir -p "${staged}" "${HOME}/.claude/plugins/cache"
+          host_tree="${HOME}/.claude/plugins/cache/context-mode/context-mode/1.0.169"
+          # What an earlier start merged in: both files name the host tree, and
+          # the removal spares both because neither path is under the staging
+          # directory.
+          jq -n --arg h "${host_tree}" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$h,version:"1.0.169"}]}}' \
+            > "${HOME}/.claude/plugins/installed_plugins.json"
+          jq -n --arg m "${HOME}/.claude/plugins/marketplaces/context-mode" \
+            '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                              installLocation:$m,autoUpdate:false}}' \
+            > "${HOME}/.claude/plugins/known_marketplaces.json"
+          mkdir -p "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169"
+          echo "host tree" \
+            > "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169/PLUGIN.md"
+          mkdir -p "${HOME}/.host-plugins/cache/other-market/other-plugin/1.0.0"
+          echo "kept" > "${HOME}/.host-plugins/cache/other-market/other-plugin/1.0.0/PLUGIN.md"
+          jq -n '{version:2,plugins:{
+                   "context-mode@context-mode":[{scope:"user",
+                     installPath:"/Users/someone/.claude/plugins/cache/context-mode/context-mode/1.0.169",
+                     version:"1.0.169"}],
+                   "other-plugin@other-market":[{scope:"user",
+                     installPath:"/Users/someone/.claude/plugins/cache/other-market/other-plugin/1.0.0",
+                     version:"1.0.0"}]}}' \
+            > "${HOME}/.host-plugins/installed_plugins.json"
+
+          # The premise: a staged directory really is there — so the skip has
+          # something to fire on — and it really is unusable.
+          [ -d "${staged}" ] || { echo "FAIL - fixture staged no directory"; exit 1; }
+          [ ! -e "${staged}/package.json" ] || {
+            echo "FAIL - fixture staged a usable tree"; exit 1; }
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          plugin_setup >/dev/null 2>"${stderr_file}"
+
+          # The host copy is the only Context Mode this session can have, so it
+          # is taken.
+          [ -f "${host_tree}/PLUGIN.md" ] || {
+            echo "FAIL - skipped the host copy for a tree it then refused to register"; exit 1; }
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          got="$(jq -r '.plugins["context-mode@context-mode"][0].installPath' "${installed}")"
+          [ "${got}" = "${host_tree}" ] || {
+            echo "FAIL - installPath ${got}, want ${host_tree}"; exit 1; }
+          [ "${got}" != "${staged}" ] || {
+            echo "FAIL - registered a tree it cannot read"; exit 1; }
+
+          # The invariant this whole family exists to hold: whatever the registry
+          # names, that directory is really there. An entry naming a path nothing
+          # filled is the "surface the plugin, then fail to load every hook in
+          # it" outcome, and step 7 enables it.
+          [ -d "${got}" ] || {
+            echo "FAIL - registered ${got}, which does not exist"; exit 1; }
+          jq -e '.enabledPlugins["context-mode@context-mode"]' \
+            "${HOME}/.claude/settings.json" >/dev/null || {
+            echo "FAIL - the host Context Mode this session copied in is not enabled"; exit 1; }
+
+          # An image that stages a tree it cannot read is a build defect, and the
+          # give-up says so rather than leaving the fallback to be inferred. Both
+          # halves are pinned: naming the tree it gave up on, and naming what
+          # this session does instead — the second is the whole improvement, and
+          # asserting only the first would let it be deleted silently.
+          grep -q "${staged}/package.json" "${stderr_file}" || {
+            echo "FAIL - gave up on the staged tree without naming it"
+            cat "${stderr_file}"; exit 1; }
+          grep -q 'host copy, if this session has one, stands in for it' "${stderr_file}" || {
+            echo "FAIL - gave up without saying the host copy stands in"
+            cat "${stderr_file}"; exit 1; }
+
+          # Unrelated host plugins are unaffected either way.
+          [ -f "${HOME}/.claude/plugins/cache/other-market/other-plugin/1.0.0/PLUGIN.md" ] || {
+            echo "FAIL - stopped copying unrelated host plugins"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A marketplace file this session cannot parse does not cost it the host copy
+    # The fourth member of the family, and the one a usability gate cannot see:
+    # the staged tree here is perfectly good, so a gate that asks only "is this
+    # tree usable" stands down for it — while step 3 registered nothing at all.
+    # The all-or-nothing rule refuses both halves of one fact together, and a
+    # known_marketplaces.json jq cannot read ends the read phase before either
+    # file is written. Nothing names the staged tree, the host merge rewrites
+    # the host entry onto a cache path the stand-down declined to fill, and step
+    # 7 enables it: the "surface the plugin, then fail to load every hook in it"
+    # outcome, reached without a single unreadable tree in sight. The gate has
+    # to model whether the registration happened, not whether it could have.
+    #
+    # What this case deliberately does not ask for, because no gate can buy it:
+    # a marketplace entry. The file is left exactly as the user wrote it, so
+    # this session ends with a registry that names a Context Mode the
+    # marketplace file knows nothing about. That entry is the host's, which the
+    # under-remove rule spares and which is the only Context Mode this session
+    # can have. What must not happen is this project's own registration standing
+    # in the registry alone — one fact, two files, never half of it — or an
+    # entry of any origin naming a directory nothing filled.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          # Staged and usable — the half that makes this case different from the
+          # one above, and the half a usability gate stands down for.
+          mkdir -p "${staged}" "${HOME}/.claude/plugins/cache"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          printf '%s\n' '{ this is not json' > "${markets}"
+          # A registration an earlier image made, which this one cannot reconcile
+          # because the marketplace half is unreadable. It is what the gate has to
+          # reject on the path it names rather than on the key being present: the
+          # tree it points at went with the image that staged it.
+          jq -n --arg p "${RIOTBOX_CM_PLUGIN_DIR}/v1.0.100" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$p,version:"1.0.100"}]}}' \
+            > "${HOME}/.claude/plugins/installed_plugins.json"
+          host_tree="${HOME}/.claude/plugins/cache/context-mode/context-mode/1.0.169"
+          mkdir -p "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169"
+          echo "host tree" \
+            > "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169/PLUGIN.md"
+          mkdir -p "${HOME}/.host-plugins/cache/other-market/other-plugin/1.0.0"
+          echo "kept" > "${HOME}/.host-plugins/cache/other-market/other-plugin/1.0.0/PLUGIN.md"
+          jq -n '{version:2,plugins:{
+                   "context-mode@context-mode":[{scope:"user",
+                     installPath:"/Users/someone/.claude/plugins/cache/context-mode/context-mode/1.0.169",
+                     version:"1.0.169"}],
+                   "other-plugin@other-market":[{scope:"user",
+                     installPath:"/Users/someone/.claude/plugins/cache/other-market/other-plugin/1.0.0",
+                     version:"1.0.0"}]}}' \
+            > "${HOME}/.host-plugins/installed_plugins.json"
+
+          # The premise, asserted rather than assumed: the staged tree really is
+          # usable and the marketplace file really is unreadable. A fixture that
+          # got either backwards would be one of the cases above wearing this
+          # one's name and covering nothing.
+          jq -e '.version | select(type == "string")' "${staged}/package.json" >/dev/null || {
+            echo "FAIL - fixture staged a tree with no readable version"; exit 1; }
+          ! jq -e . "${markets}" >/dev/null 2>&1 || {
+            echo "FAIL - fixture wrote a marketplace file jq can read"; exit 1; }
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          plugin_setup >/dev/null 2>"${stderr_file}"
+
+          # The invariant this whole family exists to hold: whatever the registry
+          # names, that directory is really there.
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          got="$(jq -r '.plugins["context-mode@context-mode"][0].installPath' "${installed}")"
+          [ -d "${got}" ] || {
+            echo "FAIL - registered ${got}, which does not exist"
+            cat "${stderr_file}"; exit 1; }
+
+          # And what it names is the host copy, because a session whose
+          # registration never happened has no other Context Mode to run.
+          [ "${got}" = "${host_tree}" ] || {
+            echo "FAIL - installPath ${got}, want ${host_tree}"; exit 1; }
+          [ -f "${host_tree}/PLUGIN.md" ] || {
+            echo "FAIL - skipped the host copy for a registration that never happened"; exit 1; }
+          jq -e '.enabledPlugins["context-mode@context-mode"]' \
+            "${HOME}/.claude/settings.json" >/dev/null || {
+            echo "FAIL - the host Context Mode this session copied in is not enabled"; exit 1; }
+
+          # The half this shape adds. The registration records one fact in two
+          # files, so the staged tree may never appear in the registry while the
+          # marketplace file carries no entry for it — the entry above is the
+          # host's, and is not this.
+          if jq -e --arg p "${staged}" \
+            '.plugins["context-mode@context-mode"] | any(.installPath == $p)' \
+            "${installed}" >/dev/null; then
+            echo "FAIL - the registry names the staged tree the marketplace file never recorded"
+            exit 1
+          fi
+
+          # Refusing to parse the user's file is not licence to rewrite it, so
+          # it survives byte for byte — including through the step-5 merge.
+          [ "$(cat "${markets}")" = '{ this is not json' ] || {
+            echo "FAIL - rewrote a marketplace file it could not parse"; exit 1; }
+
+          # The refusal names the file it could not read, so a session that ends
+          # up on the host copy is told why rather than left to infer it.
+          grep -q "${markets}" "${stderr_file}" || {
+            echo "FAIL - declined the registration without naming the marketplace file"
+            cat "${stderr_file}"; exit 1; }
+
+          # Unrelated host plugins are unaffected either way.
+          [ -f "${HOME}/.claude/plugins/cache/other-market/other-plugin/1.0.0/PLUGIN.md" ] || {
+            echo "FAIL - stopped copying unrelated host plugins"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A marketplace file the registration cannot build does not keep the host copy out
+    # The other side of the same predicate, and the only case where the registry
+    # half says yes. A marketplace document that parses but is not an object
+    # fails at the build, before anything is written — so a registration an
+    # earlier start committed is still standing in installed_plugins.json,
+    # naming the staged tree, while the marketplace file records nothing. Half a
+    # fact is not the fact: the gate takes the host copy.
+    #
+    # This is the state the deferred note called the gate "imprecise" at rather
+    # than wrong, because nothing dangles if the copy is skipped either. Widening
+    # cost it, and the cost is real — the session ends up running the host tree,
+    # whose hooks are the slow ones this carve-out exists to avoid. It is taken
+    # deliberately. Skipping the copy leaves the session one unwritable
+    # known_marketplaces.json away from an entry naming a directory nothing
+    # filled, and a plugin that loads slowly is recoverable where that is not.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins/cache"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          # The registry half already says what this session would register, so
+          # the gate's first question answers yes on content and only the second
+          # one can stand the copy down.
+          jq -n --arg p "${staged}" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$p,version:"1.0.169"}]}}' \
+            > "${installed}"
+          echo '[]' > "${markets}"
+          host_tree="${HOME}/.claude/plugins/cache/context-mode/context-mode/1.0.169"
+          mkdir -p "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169"
+          echo "host tree" \
+            > "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169/PLUGIN.md"
+          jq -n '{version:2,plugins:{"context-mode@context-mode":[{scope:"user",
+                  installPath:"/Users/someone/.claude/plugins/cache/context-mode/context-mode/1.0.169",
+                  version:"1.0.169"}]}}' \
+            > "${HOME}/.host-plugins/installed_plugins.json"
+
+          # The premise: the registry really does name the staged tree, and the
+          # marketplace document really does parse. A fixture whose marketplace
+          # file were merely unreadable would be the case above, and would leave
+          # the registry half untested again.
+          jq -e --arg p "${staged}" \
+            '.plugins["context-mode@context-mode"] | any(.installPath == $p)' \
+            "${installed}" >/dev/null || {
+            echo "FAIL - fixture registry does not name the staged tree"; exit 1; }
+          jq -e . "${markets}" >/dev/null || {
+            echo "FAIL - fixture marketplace file does not parse"; exit 1; }
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          plugin_setup >/dev/null 2>"${stderr_file}"
+
+          # The host copy is taken even though the registry alone would have
+          # stood the loop down. This is the assertion the marketplace half of
+          # the gate is holding up: drop that half and the tree below is missing.
+          [ -f "${host_tree}/PLUGIN.md" ] || {
+            echo "FAIL - skipped the host copy on the strength of half a registration"
+            cat "${stderr_file}"; exit 1; }
+
+          got="$(jq -r '.plugins["context-mode@context-mode"][0].installPath' "${installed}")"
+          [ -d "${got}" ] || {
+            echo "FAIL - registered ${got}, which does not exist"
+            cat "${stderr_file}"; exit 1; }
+          [ "${got}" = "${host_tree}" ] || {
+            echo "FAIL - installPath ${got}, want ${host_tree}"; exit 1; }
+          jq -e '.enabledPlugins["context-mode@context-mode"]' \
+            "${HOME}/.claude/settings.json" >/dev/null || {
+            echo "FAIL - the host Context Mode this session copied in is not enabled"; exit 1; }
+
+          # A document it cannot build an entry into is not one it may rewrite.
+          [ "$(cat "${markets}")" = '[]' ] || {
+            echo "FAIL - overwrote a marketplace file it could not build an entry into"
+            cat "${markets}"; exit 1; }
+          grep -q 'could not build' "${stderr_file}" || {
+            echo "FAIL - declined the registration without saying what it could not build"
+            cat "${stderr_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A registry the registration cannot build does not keep the host copy out
+    # The mirror of the case above, and the only one where the marketplace half
+    # says yes on its own. `plugins` as an array is what a hand-edit or a v1
+    # document looks like: it parses, so the read phase passes it, and the entry
+    # cannot be assigned into it, so the build fails before anything is written.
+    # The marketplace file is left naming the staged tree from the last start
+    # that worked — the one state in which the two halves disagree this way
+    # round, and the one the registry half of the gate is there for.
+    #
+    # This session ends with the host tree on disk and nothing registered, which
+    # is the recoverable end of it: the registry cannot be written by anything
+    # here, and a copy that is present is one the next start can use once the
+    # user repairs that file. Standing the copy down would spend that too.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins/cache"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          echo '{"version":2,"plugins":[]}' > "${installed}"
+          jq -n --arg p "${staged}" \
+            '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                              installLocation:$p,autoUpdate:false}}' \
+            > "${markets}"
+          host_tree="${HOME}/.claude/plugins/cache/context-mode/context-mode/1.0.169"
+          mkdir -p "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169"
+          echo "host tree" \
+            > "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169/PLUGIN.md"
+          jq -n '{version:2,plugins:{"context-mode@context-mode":[{scope:"user",
+                  installPath:"/Users/someone/.claude/plugins/cache/context-mode/context-mode/1.0.169",
+                  version:"1.0.169"}]}}' \
+            > "${HOME}/.host-plugins/installed_plugins.json"
+
+          # The premise: the marketplace half really does name the staged tree,
+          # so the copy below stands down only if the registry half is asked too.
+          jq -e --arg p "${staged}" '.["context-mode"].installLocation == $p' \
+            "${markets}" >/dev/null || {
+            echo "FAIL - fixture marketplace does not name the staged tree"; exit 1; }
+          # Compared as documents rather than as bytes: the merge's path rewrite
+          # reads the registry and writes it back pretty-printed even when it
+          # changes nothing in it, so the reflow is not what is under test here.
+          before_installed="$(jq -S -c . "${installed}")"
+          before_markets="$(jq -S -c . "${markets}")"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          plugin_setup >/dev/null 2>"${stderr_file}"
+
+          # Drop the registry half of the gate and this tree is missing.
+          [ -f "${host_tree}/PLUGIN.md" ] || {
+            echo "FAIL - skipped the host copy on the strength of half a registration"
+            cat "${stderr_file}"; exit 1; }
+
+          # Neither document says anything new: the registration wrote neither,
+          # and the merge could not multiply an array into the host's registry
+          # either, so no entry arrives by that door.
+          [ "$(jq -S -c . "${installed}")" = "${before_installed}" ] || {
+            echo "FAIL - rewrote a registry it could not build an entry into"
+            cat "${installed}"; exit 1; }
+          [ "$(jq -S -c . "${markets}")" = "${before_markets}" ] || {
+            echo "FAIL - rewrote the marketplace half of a registration never made"
+            cat "${markets}"; exit 1; }
+
+          # Nothing registered means nothing surfaced: the copy is on disk for a
+          # start that can read the registry, and this session enables no entry
+          # it cannot find.
+          if jq -e '.enabledPlugins["context-mode@context-mode"]' \
+            "${HOME}/.claude/settings.json" >/dev/null 2>&1; then
+            echo "FAIL - enabled a Context Mode this session never registered"; exit 1
+          fi
+          grep -q 'could not build' "${stderr_file}" || {
+            echo "FAIL - declined the registration without saying what it could not build"
+            cat "${stderr_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # The pre-existing "A marketplace file registration cannot read leaves the
+  # registry untouched" covers neighbouring ground and not the three cases above:
+  # it calls context_mode_plugin_register directly and stages no host copy, so it
+  # never reaches the merge that creates the entry.
+
+  - name: With nothing staged the host copy of Context Mode is left alone
+    # The staged tree is authoritative only when it exists. On an image built
+    # before the staging layer, the host copy is the only Context Mode there is,
+    # so neither the skip nor the re-assert may take it away.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          mkdir -p "${HOME}/.claude/plugins/cache"
+          mkdir -p "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169"
+          echo "host tree" \
+            > "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169/PLUGIN.md"
+          jq -n '{version:2,plugins:{"context-mode@context-mode":[{scope:"user",
+                  installPath:"/Users/someone/.claude/plugins/cache/context-mode/context-mode/1.0.169",
+                  version:"1.0.169"}]}}' \
+            > "${HOME}/.host-plugins/installed_plugins.json"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          plugin_setup >/dev/null
+
+          [ -f "${HOME}/.claude/plugins/cache/context-mode/context-mode/1.0.169/PLUGIN.md" ] || {
+            echo "FAIL - dropped the only Context Mode tree this session has"; exit 1; }
+          got="$(jq -r '.plugins["context-mode@context-mode"][0].installPath' \
+            "${HOME}/.claude/plugins/installed_plugins.json")"
+          want="${HOME}/.claude/plugins/cache/context-mode/context-mode/1.0.169"
+          [ "${got}" = "${want}" ] || { echo "FAIL - installPath ${got}, want ${want}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Registers nothing when Context Mode is off
+    # RIOTBOX_CONTEXT_MODE is the opt-in gate for the whole feature: the
+    # launcher refuses to pair it with headroom, and context-mode-setup.sh
+    # exports no storage variables while it is off. A registration made anyway
+    # would run upstream's six hooks and its MCP server in every session,
+    # unwired, and bypass an exclusion the launcher enforces.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}/.claude-plugin" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          echo '{"version":2,"plugins":{}}' > "${HOME}/.claude/plugins/installed_plugins.json"
+          echo '{}' > "${HOME}/.claude/plugins/known_marketplaces.json"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          plugin_setup >/dev/null
+
+          if jq -e '.plugins | has("context-mode@context-mode")' \
+            "${HOME}/.claude/plugins/installed_plugins.json" >/dev/null; then
+            echo "FAIL - registered the plugin with the toggle off"; exit 1
+          fi
+          if jq -e 'has("context-mode")' \
+            "${HOME}/.claude/plugins/known_marketplaces.json" >/dev/null; then
+            echo "FAIL - registered the marketplace with the toggle off"; exit 1
+          fi
+          # Step 7 syncs .enabledPlugins from the registry, so an entry there is
+          # what turns the hooks on.
+          if jq -e '.enabledPlugins | has("context-mode@context-mode")' \
+            "${HOME}/.claude/settings.json" >/dev/null; then
+            echo "FAIL - enabled the plugin with the toggle off"; exit 1
+          fi
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Removes a registration an earlier enabled run left when Context Mode is off
+    # installed_plugins.json lives in the bind-mounted session directory, which
+    # is reused across runs with different toggles. Declining to write is not
+    # enough: without a removal the toggle only fails to enable Context Mode,
+    # and never disables it.
+    #
+    # The announcement is read here too, and as the whole of stdout: it is
+    # composed from whichever writes landed, so a line naming only one of the
+    # two files — or a second line from the second call, which removed
+    # nothing — would each be a true statement about a session that is not this
+    # one. Its one-file form is asserted by "Removal spares a host-installed
+    # Context Mode entry" and its silence by "With nothing staged a
+    # host-installed registration survives".
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}/.claude-plugin" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          jq -n --arg p "${staged}" \
+            '{version:2,plugins:{
+               "context-mode@context-mode":[{scope:"user",installPath:$p,version:"1.0.169"}],
+               "other-plugin@other-market":[{scope:"user",installPath:"/somewhere/else",version:"1.0.0"}]}}' \
+            > "${installed}"
+          jq -n --arg p "${staged}" \
+            '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                              installLocation:$p,autoUpdate:false},
+              "other-market":{source:{source:"github",repo:"someone/other"},
+                              installLocation:"/somewhere/else"}}' \
+            > "${markets}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stdout_file="${TEST_DIR}/stdout"
+          context_mode_plugin_register >"${stdout_file}"
+
+          if jq -e '.plugins | has("context-mode@context-mode")' "${installed}" >/dev/null; then
+            echo "FAIL - left the registration in place with the toggle off"; exit 1
+          fi
+          if jq -e 'has("context-mode")' "${markets}" >/dev/null; then
+            echo "FAIL - left the marketplace entry in place with the toggle off"; exit 1
+          fi
+          # Everything the toggle does not own is untouched.
+          jq -e '.plugins | has("other-plugin@other-market")' "${installed}" >/dev/null || {
+            echo "FAIL - removed an unrelated plugin"; exit 1; }
+          [ "$(jq -r '.version' "${installed}")" = "2" ] || {
+            echo "FAIL - dropped the registry format version"; exit 1; }
+          jq -e 'has("other-market")' "${markets}" >/dev/null || {
+            echo "FAIL - removed an unrelated marketplace"; exit 1; }
+
+          # Both files were cleaned, so both are named, in that order and once.
+          # Compared as the whole stream rather than searched for: an extra line
+          # about a removal that did not happen is exactly what this is holding
+          # off, and a substring test would not see one.
+          want="  [plugins] Removed the staged Context Mode registration and marketplace entry left in ${HOME}/.claude/plugins."
+          [ "$(cat "${stdout_file}")" = "${want}" ] || {
+            echo "FAIL - announcement mismatch"
+            echo "want: ${want}"
+            echo "got : $(cat "${stdout_file}")"; exit 1; }
+
+          # A second call in the same session changes nothing, and says nothing.
+          before="$(cat "${installed}")"
+          context_mode_plugin_register >"${stdout_file}"
+          [ "$(cat "${installed}")" = "${before}" ] || {
+            echo "FAIL - second call rewrote the registry"; exit 1; }
+          [ ! -s "${stdout_file}" ] || {
+            echo "FAIL - second call announced a removal it did not make"
+            cat "${stdout_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Removal spares an installPath that escapes the staging directory via a dot-dot segment
+    # The ownership test is a textual prefix match, and a path can start with
+    # the staging prefix and still resolve outside it. Ownership means what the
+    # image staged; a traversal is not that, and removing one would be the
+    # over-removal the rule forbids.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          escape="${RIOTBOX_CM_PLUGIN_DIR}/../escape/x"
+          mkdir -p "${HOME}/.claude/plugins"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          jq -n --arg p "${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169" --arg esc "${escape}" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$p,version:"1.0.169"},
+               {scope:"user",installPath:$esc,version:"1.0.171"}]}}' \
+            > "${installed}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          context_mode_plugin_register >/dev/null
+
+          n="$(jq -r '.plugins["context-mode@context-mode"] | length' "${installed}")"
+          [ "${n}" = "1" ] || { echo "FAIL - ${n} entries left, want 1"; exit 1; }
+          jq -e --arg esc "${escape}" \
+            '[.plugins["context-mode@context-mode"][].installPath] | index($esc) != null' \
+            "${installed}" >/dev/null || {
+            echo "FAIL - removed a path that resolves outside the staging directory"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Removal spares an installLocation that escapes the staging directory via a dot-dot segment
+    # The same textual-prefix hole, on the other file. One ownership definition
+    # is shared by both jq programs precisely so this cannot drift, but nothing
+    # was holding the marketplace side to it: every other fixture seeds that file
+    # under the plugin cache, which fails the prefix test long before the
+    # traversal check is reached, so this branch was never taken here.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          escape="${RIOTBOX_CM_PLUGIN_DIR}/../escape/context-mode"
+          mkdir -p "${HOME}/.claude/plugins"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          # Plainly ours, and the positive control: its removal is what proves
+          # the removal ran at all, so the marketplace entry surviving cannot
+          # pass because the function bailed out before reaching that file.
+          jq -n --arg p "${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$p,version:"1.0.169"}]}}' \
+            > "${installed}"
+          jq -n --arg esc "${escape}" \
+            '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                              installLocation:$esc,autoUpdate:false}}' \
+            > "${markets}"
+
+          # The premise, asserted rather than assumed: this path really does
+          # start with the staging prefix, so the traversal check is the only
+          # thing that can spare it. A fixture that failed the prefix test would
+          # pass the case below while covering nothing.
+          case "${escape}" in
+            "${RIOTBOX_CM_PLUGIN_DIR}/"*) ;;
+            *) echo "FAIL - fixture installLocation does not start with the staging prefix"; exit 1 ;;
+          esac
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          context_mode_plugin_register >/dev/null
+
+          got_location="$(jq -r '.["context-mode"].installLocation' "${markets}")"
+          [ "${got_location}" = "${escape}" ] || {
+            echo "FAIL - removed a marketplace entry that resolves outside the staging directory"
+            echo "installLocation is now: ${got_location}"; exit 1; }
+          if jq -e '.plugins | has("context-mode@context-mode")' "${installed}" >/dev/null; then
+            echo "FAIL - the removal never ran: the staged registry entry is still there"; exit 1
+          fi
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Removal spares a host-installed Context Mode entry
+    # Under-remove rather than over-remove, the rule agent_claude_context_mode_strip
+    # follows: the toggle governs the registration RiotBox makes against its own
+    # staged tree, not a plugin the user installed on the host and mounted in.
+    #
+    # The one-file arm of the announcement is read here, because this is the
+    # fixture that produces it: the registry is written and the marketplace file
+    # is not, so the line must name the registration alone. A composition that
+    # always said both would be wrong about this session and right about the
+    # other one, which is why neither arm can be left to the other's case.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          host_cm="${HOME}/.claude/plugins/cache/context-mode/context-mode/1.0.169"
+          mkdir -p "${staged}/.claude-plugin" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          jq -n --arg p "${staged}" --arg h "${host_cm}" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$p,version:"1.0.169"},
+               {scope:"user",installPath:$h,version:"1.0.170"}]}}' \
+            > "${installed}"
+          jq -n --arg h "${HOME}/.claude/plugins/marketplaces/context-mode" \
+            '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                              installLocation:$h}}' \
+            > "${markets}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stdout_file="${TEST_DIR}/stdout"
+          context_mode_plugin_register >"${stdout_file}"
+
+          # Membership, not position: which entry the filter leaves first is not
+          # the behaviour under test.
+          n="$(jq -r '.plugins["context-mode@context-mode"] | length' "${installed}")"
+          [ "${n}" = "1" ] || { echo "FAIL - ${n} entries left, want 1"; exit 1; }
+          jq -e --arg h "${host_cm}" \
+            '[.plugins["context-mode@context-mode"][].installPath] | index($h) != null' \
+            "${installed}" >/dev/null || {
+            echo "FAIL - removed the host entry"; exit 1; }
+          jq -e --arg p "${staged}" \
+            '[.plugins["context-mode@context-mode"][].installPath] | index($p) == null' \
+            "${installed}" >/dev/null || {
+            echo "FAIL - kept the staged entry"; exit 1; }
+          got_location="$(jq -r '.["context-mode"].installLocation' "${markets}")"
+          [ "${got_location}" = "${HOME}/.claude/plugins/marketplaces/context-mode" ] || {
+            echo "FAIL - removed a host marketplace entry (${got_location})"; exit 1; }
+
+          # One file was written, so one is named — no "and marketplace entry"
+          # for a host entry this run deliberately left standing.
+          want="  [plugins] Removed the staged Context Mode registration left in ${HOME}/.claude/plugins."
+          [ "$(cat "${stdout_file}")" = "${want}" ] || {
+            echo "FAIL - announcement mismatch"
+            echo "want: ${want}"
+            echo "got : $(cat "${stdout_file}")"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Removes a registration whose staged tree the image no longer carries
+    # A rollback, or a rebuild that drops the staging layer, against a reused
+    # session directory. The recorded path is gone, so leaving the entry would
+    # surface a plugin whose every hook then fails to load.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          gone="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${HOME}/.claude/plugins"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          jq -n --arg p "${gone}" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$p,version:"1.0.169"}]}}' \
+            > "${installed}"
+          jq -n --arg p "${gone}" \
+            '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                              installLocation:$p,autoUpdate:false}}' \
+            > "${markets}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          context_mode_plugin_register >/dev/null
+
+          if jq -e '.plugins | has("context-mode@context-mode")' "${installed}" >/dev/null; then
+            echo "FAIL - kept a registration naming a path the image dropped"; exit 1
+          fi
+          if jq -e 'has("context-mode")' "${markets}" >/dev/null; then
+            echo "FAIL - kept a marketplace naming a path the image dropped"; exit 1
+          fi
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: With Context Mode off a plugins.conf entry does not install it
+    # The other way through the gate. Step 3 unregisters with the toggle off,
+    # so the "already installed" check below it misses and the install loop
+    # would spawn `claude plugin install context-mode` — landing an entry under
+    # the plugin cache, which the removal must not touch, and which step 7 then
+    # enables. RiotBox owns Context Mode as a feature, and declining to install
+    # is not the over-removal the host-copy carve-out exists to avoid: nothing
+    # the user already has is taken away.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins" "${HOME}/.config/riotbox" "${TEST_DIR}/bin"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          echo '{"version":2,"plugins":{}}' > "${HOME}/.claude/plugins/installed_plugins.json"
+          echo '{}' > "${HOME}/.claude/plugins/known_marketplaces.json"
+          printf 'context-mode\nother-plugin\n' > "${HOME}/.config/riotbox/plugins.conf"
+
+          # Stands in for the real CLI: records the invocation and leaves behind
+          # what a marketplace install leaves behind, so the whole chain the
+          # finding describes — install, entry under the cache, step 7 enabling
+          # it — is reproduced rather than assumed.
+          export CLAUDE_STUB_LOG="${TEST_DIR}/claude-invocations"
+          : > "${CLAUDE_STUB_LOG}"
+          cat > "${TEST_DIR}/bin/claude" <<'STUB'
+          #!/usr/bin/env bash
+          printf '%s\n' "$*" >> "${CLAUDE_STUB_LOG}"
+          [ "$1" = "plugin" ] && [ "$2" = "install" ] || exit 0
+          reg="${HOME}/.claude/plugins/installed_plugins.json"
+          tmp="$(mktemp)"
+          jq --arg k "$3@$3" --arg p "${HOME}/.claude/plugins/cache/$3/$3/1.0.0" \
+            '.plugins[$k] = [{scope:"user",installPath:$p,version:"1.0.0"}]' \
+            "${reg}" > "${tmp}" && mv "${tmp}" "${reg}"
+          STUB
+          chmod +x "${TEST_DIR}/bin/claude"
+          export PATH="${TEST_DIR}/bin:${PATH}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          plugin_setup >/dev/null 2>"${stderr_file}"
+
+          if grep -q 'install context-mode' "${CLAUDE_STUB_LOG}"; then
+            echo "FAIL - installed Context Mode with the toggle off"; exit 1
+          fi
+          grep -q 'install other-plugin' "${CLAUDE_STUB_LOG}" || {
+            echo "FAIL - stopped installing unrelated plugins.conf entries"; exit 1; }
+          if jq -e '.plugins | has("context-mode@context-mode")' \
+            "${HOME}/.claude/plugins/installed_plugins.json" >/dev/null; then
+            echo "FAIL - a plugins.conf entry registered Context Mode with the toggle off"; exit 1
+          fi
+          if jq -e '.enabledPlugins | has("context-mode@context-mode")' \
+            "${HOME}/.claude/settings.json" >/dev/null; then
+            echo "FAIL - a plugins.conf entry enabled Context Mode with the toggle off"; exit 1
+          fi
+          # Not silent: the user asked for a plugin and did not get it.
+          grep -q 'RIOTBOX_CONTEXT_MODE' "${stderr_file}" || {
+            echo "FAIL - skipped it without saying why"; cat "${stderr_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: The declined plugins.conf install does not deny a session its host Context Mode
+    # The two toggle-off behaviours in one session, which is where the warning
+    # has to be careful about what it claims. Step 4 declines to install
+    # context-mode from a marketplace, and step 5 then copies the host tree in
+    # and step 7 enables it — so a warning saying the session has no Context Mode
+    # would be contradicted three steps later by this same run. What is declined
+    # is RiotBox's own install; the user's own copy is untouched.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins/cache" \
+            "${HOME}/.config/riotbox" "${TEST_DIR}/bin"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          printf 'context-mode\n' > "${HOME}/.config/riotbox/plugins.conf"
+          host_tree="${HOME}/.claude/plugins/cache/context-mode/context-mode/1.0.169"
+          mkdir -p "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169"
+          echo "host tree" \
+            > "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169/PLUGIN.md"
+          jq -n '{version:2,plugins:{"context-mode@context-mode":[{scope:"user",
+                  installPath:"/Users/someone/.claude/plugins/cache/context-mode/context-mode/1.0.169",
+                  version:"1.0.169"}]}}' \
+            > "${HOME}/.host-plugins/installed_plugins.json"
+
+          # Records invocations only: this case is about what the session ends up
+          # with, and a marketplace install reaching the network would be the
+          # failure rather than something to simulate.
+          export CLAUDE_STUB_LOG="${TEST_DIR}/claude-invocations"
+          : > "${CLAUDE_STUB_LOG}"
+          cat > "${TEST_DIR}/bin/claude" <<'STUB'
+          #!/usr/bin/env bash
+          printf '%s\n' "$*" >> "${CLAUDE_STUB_LOG}"
+          STUB
+          chmod +x "${TEST_DIR}/bin/claude"
+          export PATH="${TEST_DIR}/bin:${PATH}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          plugin_setup >/dev/null 2>"${stderr_file}"
+
+          # The premise: the install really was declined, so the claim the
+          # warning makes is the one under test.
+          if grep -q 'install context-mode' "${CLAUDE_STUB_LOG}"; then
+            echo "FAIL - installed Context Mode with the toggle off"; exit 1
+          fi
+          grep -q 'RIOTBOX_CONTEXT_MODE' "${stderr_file}" || {
+            echo "FAIL - declined the plugins.conf entry without saying why"
+            cat "${stderr_file}"; exit 1; }
+
+          # And the session has Context Mode anyway, from the host.
+          [ -f "${host_tree}/PLUGIN.md" ] || {
+            echo "FAIL - the host Context Mode tree was not copied in"; exit 1; }
+          got="$(jq -r '.plugins["context-mode@context-mode"][0].installPath' \
+            "${HOME}/.claude/plugins/installed_plugins.json")"
+          [ "${got}" = "${host_tree}" ] || {
+            echo "FAIL - installPath ${got}, want ${host_tree}"; exit 1; }
+          jq -e '.enabledPlugins["context-mode@context-mode"]' \
+            "${HOME}/.claude/settings.json" >/dev/null || {
+            echo "FAIL - the host Context Mode this session copied in is not enabled"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: With Context Mode off the host copy stands in for the staged tree
+    # The judgment call the toggle gate forced, pinned. A staged tree this
+    # session will not register is authoritative over nothing, so the host copy
+    # is taken exactly as it is on an image that staged nothing. Keeping the
+    # skip instead would let the host merge record an entry naming a cache path
+    # this loop had declined to fill — a plugin surfaced with every hook in it
+    # failing to load. The user's own Context Mode running is the accepted
+    # consequence: removing it would be the over-removal the under-remove rule
+    # forbids, and it is the same outcome an unstaged image already gives.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}/.claude-plugin" "${HOME}/.claude/plugins/cache"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          mkdir -p "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169"
+          echo "host tree" \
+            > "${HOME}/.host-plugins/cache/context-mode/context-mode/1.0.169/PLUGIN.md"
+          mkdir -p "${HOME}/.host-plugins/cache/other-market/other-plugin/1.0.0"
+          echo "kept" > "${HOME}/.host-plugins/cache/other-market/other-plugin/1.0.0/PLUGIN.md"
+          jq -n '{version:2,plugins:{
+                   "context-mode@context-mode":[{scope:"user",
+                     installPath:"/Users/someone/.claude/plugins/cache/context-mode/context-mode/1.0.169",
+                     version:"1.0.169"}],
+                   "other-plugin@other-market":[{scope:"user",
+                     installPath:"/Users/someone/.claude/plugins/cache/other-market/other-plugin/1.0.0",
+                     version:"1.0.0"}]}}' \
+            > "${HOME}/.host-plugins/installed_plugins.json"
+          jq -n '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                                  installLocation:"/Users/someone/.claude/plugins/marketplaces/context-mode"}}' \
+            > "${HOME}/.host-plugins/known_marketplaces.json"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          plugin_setup >/dev/null
+
+          [ -f "${HOME}/.claude/plugins/cache/context-mode/context-mode/1.0.169/PLUGIN.md" ] || {
+            echo "FAIL - skipped the host copy for a staged tree it will not register"; exit 1; }
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          got="$(jq -r '.plugins["context-mode@context-mode"][0].installPath' "${installed}")"
+          want="${HOME}/.claude/plugins/cache/context-mode/context-mode/1.0.169"
+          [ "${got}" = "${want}" ] || { echo "FAIL - installPath ${got}, want ${want}"; exit 1; }
+          [ "${got}" != "${staged}" ] || { echo "FAIL - registered the staged tree"; exit 1; }
+          got_location="$(jq -r '.["context-mode"].installLocation' \
+            "${HOME}/.claude/plugins/known_marketplaces.json")"
+          [ "${got_location}" = "${HOME}/.claude/plugins/marketplaces/context-mode" ] || {
+            echo "FAIL - marketplace points at ${got_location}"; exit 1; }
+          # The accepted consequence, asserted rather than left to chance.
+          jq -e '.enabledPlugins["context-mode@context-mode"]' \
+            "${HOME}/.claude/settings.json" >/dev/null || {
+            echo "FAIL - the host plugin the session copied in is not enabled"; exit 1; }
+          [ -f "${HOME}/.claude/plugins/cache/other-market/other-plugin/1.0.0/PLUGIN.md" ] || {
+            echo "FAIL - stopped copying unrelated host plugins"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Removal survives a trailing slash on the staging directory override
+    # The prefix is built by appending "/" to the directory, so a trailing slash
+    # would end it "//" and match nothing find emits — a removal that quietly
+    # does nothing, which is the failure mode the toggle cannot afford.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin/"
+          mkdir -p "${HOME}/.claude/plugins"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          jq -n --arg p "${HOME}/.riotbox/context-mode-plugin/v1.0.169" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$p,version:"1.0.169"}]}}' \
+            > "${installed}"
+          jq -n --arg p "${HOME}/.riotbox/context-mode-plugin/v1.0.169" \
+            '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                              installLocation:$p,autoUpdate:false}}' \
+            > "${markets}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          context_mode_plugin_register >/dev/null
+
+          if jq -e '.plugins | has("context-mode@context-mode")' "${installed}" >/dev/null; then
+            echo "FAIL - a trailing slash turned the removal into a no-op"; exit 1
+          fi
+          if jq -e 'has("context-mode")' "${markets}" >/dev/null; then
+            echo "FAIL - a trailing slash turned the marketplace removal into a no-op"; exit 1
+          fi
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Removal leaves an unparseable registry alone and warns
+    # The removal reads the same hand-editable, bind-mounted files the
+    # registration does, and owes them the same refusal: a document jq cannot
+    # read is left exactly as it is, and the session still starts.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          printf '{"version":2,"plugins":{' > "${installed}"
+          printf '{"context-mode":' > "${markets}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_register >/dev/null 2>"${stderr_file}" ||
+            { echo "FAIL - a broken registry must not fail the session"; exit 1; }
+
+          [ "$(cat "${installed}")" = '{"version":2,"plugins":{' ] || {
+            echo "FAIL - overwrote a registry it could not read"; exit 1; }
+          [ "$(cat "${markets}")" = '{"context-mode":' ] || {
+            echo "FAIL - overwrote a marketplace file it could not read"; exit 1; }
+          [ "$(grep -c 'not valid JSON' "${stderr_file}")" = "2" ] || {
+            echo "FAIL - both files must warn"; cat "${stderr_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: With nothing staged a host-installed registration survives
+    # The other half of the removal above: on an image built without the staging
+    # layer the host copy is the only Context Mode this session has, and the
+    # entry naming it is the one that makes it usable.
+    #
+    # It is also the common case — most sessions never had a staged Context Mode
+    # to remove — and so the one that pins the announcement's silence. This
+    # function runs twice per session start, and a session told twice about a
+    # cleanup that did not happen would read as one that lost something.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          host_cm="${HOME}/.claude/plugins/cache/context-mode/context-mode/1.0.169"
+          mkdir -p "${HOME}/.claude/plugins"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          jq -n --arg h "${host_cm}" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$h,version:"1.0.169"}]}}' \
+            > "${installed}"
+          jq -n --arg h "${HOME}/.claude/plugins/marketplaces/context-mode" \
+            '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                              installLocation:$h}}' \
+            > "${markets}"
+          before_installed="$(cat "${installed}")"
+          before_markets="$(cat "${markets}")"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stdout_file="${TEST_DIR}/stdout"
+          context_mode_plugin_register >"${stdout_file}"
+
+          [ "$(cat "${installed}")" = "${before_installed}" ] || {
+            echo "FAIL - rewrote a host-installed registration"; exit 1; }
+          [ "$(cat "${markets}")" = "${before_markets}" ] || {
+            echo "FAIL - rewrote a host-installed marketplace entry"; exit 1; }
+          [ ! -s "${stdout_file}" ] || {
+            echo "FAIL - announced a removal on a session that had nothing to remove"
+            cat "${stdout_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A marketplace file registration cannot read leaves the registry untouched
+    # The two files record one fact — where this session's Context Mode is — so
+    # a registry entry naming a staged path that the marketplace file never
+    # learns about is a half-fact this function built itself. Both documents are
+    # parsed, built and formatted before either is written, so the marketplace
+    # half failing is seen while both files are still as the user left them.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          echo '{"version":2,"plugins":{}}' > "${installed}"
+          printf '{"context-mode":' > "${markets}"
+          before_installed="$(cat "${installed}")"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_register >/dev/null 2>"${stderr_file}" ||
+            { echo "FAIL - an unreadable marketplace file must not fail the session"; exit 1; }
+
+          [ "$(cat "${installed}")" = "${before_installed}" ] || {
+            echo "FAIL - committed the registry half of a registration the marketplace half could not record"
+            cat "${installed}"; exit 1; }
+          [ "$(cat "${markets}")" = '{"context-mode":' ] || {
+            echo "FAIL - overwrote a marketplace file it could not read"; exit 1; }
+          grep -q 'not valid JSON' "${stderr_file}" || {
+            echo "FAIL - no warning on stderr"; cat "${stderr_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A marketplace entry registration cannot build leaves the registry untouched
+    # The other marketplace-side failure, and the one no read check catches: a
+    # document that parses but is not an object, so assigning the entry into it
+    # raises. It has to be seen at the same point the unreadable file is.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          echo '{"version":2,"plugins":{}}' > "${installed}"
+          echo '[]' > "${markets}"
+          before_installed="$(cat "${installed}")"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_register >/dev/null 2>"${stderr_file}" ||
+            { echo "FAIL - an unbuildable marketplace entry must not fail the session"; exit 1; }
+
+          [ "$(cat "${installed}")" = "${before_installed}" ] || {
+            echo "FAIL - committed the registry half of a registration the marketplace half could not record"
+            cat "${installed}"; exit 1; }
+          [ "$(cat "${markets}")" = '[]' ] || {
+            echo "FAIL - overwrote a marketplace file it could not build an entry into"; exit 1; }
+          grep -q 'could not build' "${stderr_file}" || {
+            echo "FAIL - no warning on stderr"; cat "${stderr_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # The third and fourth ways each half of the registration can give up, after
+  # unreadable and unbuildable. Neither is reachable from a JSON document — jq
+  # does not fail pretty-printing a value it has just produced, and a write
+  # fails for reasons above this code — so the four cases below break jq and the
+  # filesystem instead, one at a time, and each pins the same thing the data
+  # shapes above pin: the half that failed is not written, and neither is the
+  # half that was ready to be.
+  #
+  # Both halves get both cases because the function returns at the first
+  # failure, so a marketplace-side branch is only reachable from a run whose
+  # registry half asked for no write at all — a registry that already says
+  # exactly what this call would say. That premise is asserted where it is used.
+
+  - name: A registry entry it cannot format is written nowhere
+    # Formatting is the last step before the writes, so this is as close to a
+    # half-registration as the function comes: both entries are built and one
+    # document is ready to go out.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          echo '{"version":2,"plugins":{}}' > "${installed}"
+          echo '{}' > "${markets}"
+          before_installed="$(cat "${installed}")"
+          before_markets="$(cat "${markets}")"
+
+          # Fail the pretty-print of the registry document, and only that one.
+          # Both format steps hand jq a lone "." with the document on stdin, so
+          # the shim reads it and tells them apart: a registry entry carries
+          # installPath, a marketplace entry installLocation. Refusing both
+          # would spare the marketplace half for the wrong reason and let a
+          # missing `return 0` through unseen. Every other call — the two
+          # compacting reads, both entry builds — runs for real. The technique
+          # is the one tests/ctx-stats.venom.yml uses to reach a reader that
+          # could not report its own failure.
+          SHIM="${TEST_DIR}/shim"
+          mkdir -p "${SHIM}"
+          REAL_JQ="$(command -v jq)"
+          export REAL_JQ
+          cat > "${SHIM}/jq" <<'SHIMEOF'
+          #!/usr/bin/env bash
+          if [ "$#" -eq 1 ] && [ "$1" = "." ]; then
+            doc="$(cat)"
+            case "${doc}" in *'"installPath"'*) exit 5 ;; esac
+            printf '%s' "${doc}" | "${REAL_JQ}" "$@"
+            exit $?
+          fi
+          exec "${REAL_JQ}" "$@"
+          SHIMEOF
+          chmod +x "${SHIM}/jq"
+          PATH="${SHIM}:${PATH}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stdout_file="${TEST_DIR}/stdout"
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_register >"${stdout_file}" 2>"${stderr_file}" ||
+            { echo "FAIL - a jq that cannot format must not fail the session"; exit 1; }
+
+          [ "$(cat "${installed}")" = "${before_installed}" ] || {
+            echo "FAIL - wrote a registry entry it could not format"
+            cat "${installed}"; exit 1; }
+          [ "$(cat "${markets}")" = "${before_markets}" ] || {
+            echo "FAIL - recorded the marketplace half of a registration the registry half never made"
+            cat "${markets}"; exit 1; }
+          grep -q "could not format the Context Mode entry for ${installed}" "${stderr_file}" || {
+            echo "FAIL - no warning naming the registry"; cat "${stderr_file}"; exit 1; }
+          # `wrote` is set before each write is attempted, so the announcement
+          # is held off by the give-up return alone. A session told it has
+          # Context Mode registered when nothing was written is the failure this
+          # whole file is about, and it costs one line to catch here.
+          [ ! -s "${stdout_file}" ] || {
+            echo "FAIL - announced a registration that never landed"
+            cat "${stdout_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A marketplace entry it cannot format leaves the registry untouched
+    # The same failure on the other half. Reaching it needs a registry that
+    # already says exactly what this call would say, so the registry is never
+    # formatted and the marketplace document is the first to try.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          jq -n --arg p "${staged}" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$p,version:"1.0.169"}]}}' \
+            > "${installed}"
+          echo '{}' > "${markets}"
+          before_installed="$(cat "${installed}")"
+
+          # The premise: the registry half has nothing to change. Without it
+          # the registry would be formatted first and this would be the case
+          # above wearing another name — which the warning check below is what
+          # catches, since it names the marketplace file and only that.
+          jq -e --arg p "${staged}" \
+            '.plugins["context-mode@context-mode"] | any(.installPath == $p)' \
+            "${installed}" >/dev/null || {
+            echo "FAIL - fixture registry does not already name the staged tree"; exit 1; }
+
+          SHIM="${TEST_DIR}/shim"
+          mkdir -p "${SHIM}"
+          REAL_JQ="$(command -v jq)"
+          export REAL_JQ
+          cat > "${SHIM}/jq" <<'SHIMEOF'
+          #!/usr/bin/env bash
+          if [ "$#" -eq 1 ] && [ "$1" = "." ]; then exit 5; fi
+          exec "${REAL_JQ}" "$@"
+          SHIMEOF
+          chmod +x "${SHIM}/jq"
+          PATH="${SHIM}:${PATH}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stdout_file="${TEST_DIR}/stdout"
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_register >"${stdout_file}" 2>"${stderr_file}" ||
+            { echo "FAIL - a jq that cannot format must not fail the session"; exit 1; }
+
+          [ "$(cat "${markets}")" = '{}' ] || {
+            echo "FAIL - wrote a marketplace entry it could not format"
+            cat "${markets}"; exit 1; }
+          [ "$(cat "${installed}")" = "${before_installed}" ] || {
+            echo "FAIL - rewrote the registry on the way past"
+            cat "${installed}"; exit 1; }
+          grep -q "could not format the Context Mode entry for ${markets}" "${stderr_file}" || {
+            echo "FAIL - no warning naming the marketplace file"; cat "${stderr_file}"; exit 1; }
+          [ ! -s "${stdout_file}" ] || {
+            echo "FAIL - announced a registration that never landed"
+            cat "${stdout_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A registry it cannot write leaves the marketplace unwritten too
+    # The last of the four, and the only one the code cannot see coming: the
+    # write is where a read-only bind mount, a full filesystem, or a session
+    # directory the container cannot write shows up. The marketplace half is
+    # formatted and waiting at this point, and must not go out alone.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'chmod u+w "${TEST_DIR}/.claude/plugins" 2>/dev/null || true; rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          plugin_setup_test_needs_unprivileged || exit 1
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          echo '{"version":2,"plugins":{}}' > "${installed}"
+          echo '{}' > "${markets}"
+          before_installed="$(cat "${installed}")"
+          before_markets="$(cat "${markets}")"
+
+          # json_write_atomic stages its replacement inside the target's own
+          # directory, so a directory nothing may create files in is what fails
+          # it — the shape a read-only mount of the session directory has, and
+          # one that leaves both documents readable so the reads still succeed.
+          chmod a-w "${HOME}/.claude/plugins"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stdout_file="${TEST_DIR}/stdout"
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_register >"${stdout_file}" 2>"${stderr_file}" ||
+            { chmod u+w "${HOME}/.claude/plugins"
+              echo "FAIL - an unwritable registry must not fail the session"; exit 1; }
+          chmod u+w "${HOME}/.claude/plugins"
+
+          [ "$(cat "${installed}")" = "${before_installed}" ] || {
+            echo "FAIL - the registry changed under a failed write"
+            cat "${installed}"; exit 1; }
+          [ "$(cat "${markets}")" = "${before_markets}" ] || {
+            echo "FAIL - wrote the marketplace half after the registry half failed"
+            cat "${markets}"; exit 1; }
+          # Both writes target the same directory, so an unchanged marketplace
+          # file cannot tell "never attempted" from "attempted and failed too".
+          # Its warning is what separates them, and its absence is the claim
+          # this case's name makes.
+          if grep -q "could not write ${markets}" "${stderr_file}"; then
+            echo "FAIL - attempted the marketplace write after the registry write failed"
+            cat "${stderr_file}"; exit 1
+          fi
+          grep -q "could not write ${installed}" "${stderr_file}" || {
+            echo "FAIL - no warning naming the registry"; cat "${stderr_file}"; exit 1; }
+          [ ! -s "${stdout_file}" ] || {
+            echo "FAIL - announced a registration that never landed"
+            cat "${stdout_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A marketplace file it cannot write leaves the registry as it found it
+    # The marketplace-side write, reached the same way as its format twin: a
+    # registry with nothing to change, so the only write attempted is the one
+    # that fails. What it proves is the narrower half of the pair — the
+    # registry is not touched on the way to a marketplace write that cannot
+    # land, so the next start still reads the document the user has.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'chmod u+w "${TEST_DIR}/.claude/plugins" 2>/dev/null || true; rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          plugin_setup_test_needs_unprivileged || exit 1
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${staged}" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          jq -n --arg p "${staged}" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$p,version:"1.0.169"}]}}' \
+            > "${installed}"
+          echo '{}' > "${markets}"
+          before_installed="$(cat "${installed}")"
+
+          jq -e --arg p "${staged}" \
+            '.plugins["context-mode@context-mode"] | any(.installPath == $p)' \
+            "${installed}" >/dev/null || {
+            echo "FAIL - fixture registry does not already name the staged tree"; exit 1; }
+
+          chmod a-w "${HOME}/.claude/plugins"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stdout_file="${TEST_DIR}/stdout"
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_register >"${stdout_file}" 2>"${stderr_file}" ||
+            { chmod u+w "${HOME}/.claude/plugins"
+              echo "FAIL - an unwritable marketplace file must not fail the session"; exit 1; }
+          chmod u+w "${HOME}/.claude/plugins"
+
+          [ "$(cat "${markets}")" = '{}' ] || {
+            echo "FAIL - the marketplace file changed under a failed write"
+            cat "${markets}"; exit 1; }
+          [ "$(cat "${installed}")" = "${before_installed}" ] || {
+            echo "FAIL - rewrote the registry on the way past"
+            cat "${installed}"; exit 1; }
+          grep -q "could not write ${markets}" "${stderr_file}" || {
+            echo "FAIL - no warning naming the marketplace file"; cat "${stderr_file}"; exit 1; }
+          [ ! -s "${stdout_file}" ] || {
+            echo "FAIL - announced a registration that never landed"
+            cat "${stdout_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Removal still answers each file's ownership question on its own evidence
+    # The asymmetry between the two functions, pinned so it is not "fixed" into
+    # symmetry. Registration records one fact in two files and so refuses both
+    # halves together; removal asks two questions — is this registry entry ours,
+    # is this marketplace entry ours — that a host merge can legitimately answer
+    # differently. A marketplace file no answer can be read out of must not keep
+    # a registry entry this code can prove it wrote, because that entry is the
+    # one that surfaces a plugin whose hooks then fail to load.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          mkdir -p "${HOME}/.claude/plugins"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          jq -n --arg p "${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$p,version:"1.0.169"}]}}' \
+            > "${installed}"
+          printf '{"context-mode":' > "${markets}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_unregister >/dev/null 2>"${stderr_file}" ||
+            { echo "FAIL - an unreadable marketplace file must not fail the session"; exit 1; }
+
+          if jq -e '.plugins | has("context-mode@context-mode")' "${installed}" >/dev/null; then
+            echo "FAIL - an unreadable marketplace file kept a registry entry this code wrote"; exit 1
+          fi
+          [ "$(cat "${markets}")" = '{"context-mode":' ] || {
+            echo "FAIL - overwrote a marketplace file it could not read"; exit 1; }
+          grep -q 'not valid JSON' "${stderr_file}" || {
+            echo "FAIL - no warning on stderr"; cat "${stderr_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # The removal's own give-up branches, which its two unparseable-file cases
+  # above do not reach: an ownership filter that cannot run, a cleaned document
+  # that cannot be formatted, and a write that cannot land. None is reachable
+  # from a JSON document — the filters are type-gated the whole way down
+  # precisely so no shape can raise — so these break jq and the filesystem the
+  # way the registration's last two cases do.
+  #
+  # One case each covers both files, unlike the registration's, and that is the
+  # asymmetry itself: this function judges the two documents independently and
+  # returns at neither, so a hostile condition that applies to both is answered
+  # twice in one run. Each case reads stdout as well, because a removal that
+  # could not finish must not announce one.
+
+  - name: Removal leaves both files alone when the ownership filter cannot run
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${HOME}/.claude/plugins"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          jq -n --arg p "${staged}" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$p,version:"1.0.169"}]}}' \
+            > "${installed}"
+          jq -n --arg p "${staged}" \
+            '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                              installLocation:$p,autoUpdate:false}}' \
+            > "${markets}"
+          before_installed="$(cat "${installed}")"
+          before_markets="$(cat "${markets}")"
+
+          # Both entries are plainly ours, so a jq that ran would remove them
+          # both: what this case sees is only what the failure spares. The shim
+          # refuses the two programs carrying the shared owned() definition and
+          # passes the compacting reads through, so each file is read and only
+          # its ownership question goes unanswered.
+          SHIM="${TEST_DIR}/shim"
+          mkdir -p "${SHIM}"
+          REAL_JQ="$(command -v jq)"
+          export REAL_JQ
+          cat > "${SHIM}/jq" <<'SHIMEOF'
+          #!/usr/bin/env bash
+          for arg in "$@"; do
+            case "${arg}" in
+            *"owned("*) exit 5 ;;
+            esac
+          done
+          exec "${REAL_JQ}" "$@"
+          SHIMEOF
+          chmod +x "${SHIM}/jq"
+          PATH="${SHIM}:${PATH}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stdout_file="${TEST_DIR}/stdout"
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_unregister >"${stdout_file}" 2>"${stderr_file}" ||
+            { echo "FAIL - a jq that cannot filter must not fail the session"; exit 1; }
+
+          [ "$(cat "${installed}")" = "${before_installed}" ] || {
+            echo "FAIL - rewrote a registry whose ownership question went unanswered"
+            cat "${installed}"; exit 1; }
+          [ "$(cat "${markets}")" = "${before_markets}" ] || {
+            echo "FAIL - rewrote a marketplace file whose ownership question went unanswered"
+            cat "${markets}"; exit 1; }
+          [ "$(grep -c 'could not clean' "${stderr_file}")" = "2" ] || {
+            echo "FAIL - both files must warn"; cat "${stderr_file}"; exit 1; }
+          [ ! -s "${stdout_file}" ] || {
+            echo "FAIL - announced a removal that never happened"
+            cat "${stdout_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Removal leaves both files alone when the cleaned document cannot be formatted
+    # A step later than the case above: each file's answer is known and is
+    # "this entry is ours", and the document that would replace it cannot be
+    # produced. Reset to empty rather than written as whatever jq managed to
+    # print, which is the difference between leaving the user's registry and
+    # replacing it with a fragment.
+    #
+    # The shim prints before it fails for that reason. A jq that dies silently
+    # is caught by the `[[ -z ]]` half of the guard, leaving the two
+    # `pretty=''` resets doing nothing and untested; a jq that emits and then
+    # fails — the shape a broken pipe or a mid-document error really has — is
+    # caught by the status check alone, and the reset is the only thing
+    # standing between that fragment and the user's file.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${HOME}/.claude/plugins"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          jq -n --arg p "${staged}" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$p,version:"1.0.169"}]}}' \
+            > "${installed}"
+          jq -n --arg p "${staged}" \
+            '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                              installLocation:$p,autoUpdate:false}}' \
+            > "${markets}"
+          before_installed="$(cat "${installed}")"
+          before_markets="$(cat "${markets}")"
+
+          SHIM="${TEST_DIR}/shim"
+          mkdir -p "${SHIM}"
+          REAL_JQ="$(command -v jq)"
+          export REAL_JQ
+          cat > "${SHIM}/jq" <<'SHIMEOF'
+          #!/usr/bin/env bash
+          if [ "$#" -eq 1 ] && [ "$1" = "." ]; then printf '{ }\n'; exit 5; fi
+          exec "${REAL_JQ}" "$@"
+          SHIMEOF
+          chmod +x "${SHIM}/jq"
+          PATH="${SHIM}:${PATH}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stdout_file="${TEST_DIR}/stdout"
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_unregister >"${stdout_file}" 2>"${stderr_file}" ||
+            { echo "FAIL - a jq that cannot format must not fail the session"; exit 1; }
+
+          [ "$(cat "${installed}")" = "${before_installed}" ] || {
+            echo "FAIL - wrote a cleaned registry it could not format"
+            cat "${installed}"; exit 1; }
+          [ "$(cat "${markets}")" = "${before_markets}" ] || {
+            echo "FAIL - wrote a cleaned marketplace file it could not format"
+            cat "${markets}"; exit 1; }
+          [ "$(grep -c 'could not format the cleaned' "${stderr_file}")" = "2" ] || {
+            echo "FAIL - both files must warn"; cat "${stderr_file}"; exit 1; }
+          [ ! -s "${stdout_file}" ] || {
+            echo "FAIL - announced a removal that never happened"
+            cat "${stdout_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: Removal leaves both files alone when neither can be written
+    # The last step, and the one the header calls out as not atomic across the
+    # pair: each write is atomic on its own and both can fail independently.
+    # Here both do, which is the state a read-only session directory produces —
+    # and the one where a stale registration outlives the toggle that turned it
+    # off, so the session must be told twice and told nothing was removed.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'chmod u+w "${TEST_DIR}/.claude/plugins" 2>/dev/null || true; rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          plugin_setup_test_needs_unprivileged || exit 1
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${HOME}/.claude/plugins"
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          jq -n --arg p "${staged}" \
+            '{version:2,plugins:{"context-mode@context-mode":[
+               {scope:"user",installPath:$p,version:"1.0.169"}]}}' \
+            > "${installed}"
+          jq -n --arg p "${staged}" \
+            '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                              installLocation:$p,autoUpdate:false}}' \
+            > "${markets}"
+          before_installed="$(cat "${installed}")"
+          before_markets="$(cat "${markets}")"
+
+          chmod a-w "${HOME}/.claude/plugins"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stdout_file="${TEST_DIR}/stdout"
+          stderr_file="${TEST_DIR}/stderr"
+          context_mode_plugin_unregister >"${stdout_file}" 2>"${stderr_file}" ||
+            { chmod u+w "${HOME}/.claude/plugins"
+              echo "FAIL - an unwritable session directory must not fail the session"; exit 1; }
+          chmod u+w "${HOME}/.claude/plugins"
+
+          [ "$(cat "${installed}")" = "${before_installed}" ] || {
+            echo "FAIL - the registry changed under a failed write"
+            cat "${installed}"; exit 1; }
+          [ "$(cat "${markets}")" = "${before_markets}" ] || {
+            echo "FAIL - the marketplace file changed under a failed write"
+            cat "${markets}"; exit 1; }
+          [ "$(grep -c 'could not write' "${stderr_file}")" = "2" ] || {
+            echo "FAIL - both files must warn"; cat "${stderr_file}"; exit 1; }
+          [ ! -s "${stdout_file}" ] || {
+            echo "FAIL - announced a removal neither write landed"
+            cat "${stdout_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: An unparseable registry leaves enabledPlugins alone and warns
+    # Step 7 reads two hand-editable documents out of the bind-mounted session
+    # directory, and this is the first of them. A registry jq cannot parse must
+    # leave settings.json exactly as it is and say which file was bad — the
+    # refusal every other give-up in this file makes.
+    #
+    # Called under `set -e`, and deliberately not as the left side of a `||`,
+    # which would suppress it: a standalone assignment from a failing command
+    # substitution trips errexit, and the shape this replaces did exactly that —
+    # abandoning plugin_setup mid-function for every caller that sets it, which
+    # is every case in this suite. Reaching the next line at all is half of what
+    # this case asserts.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          mkdir -p "${HOME}/.claude/plugins"
+          settings="${HOME}/.claude/settings.json"
+          registry="${HOME}/.claude/plugins/installed_plugins.json"
+          # Written the way jq prints it, so step 6's own rewrite of this file is
+          # byte-for-byte a no-op and any difference below is step 7's doing.
+          jq -n '{promptSuggestionEnabled:false,autoCompact:true}' > "${settings}"
+          printf '{"version":2,"plugins":{' > "${registry}"
+          before_settings="$(cat "${settings}")"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          plugin_setup >/dev/null 2>"${stderr_file}"
+
+          [ "$(cat "${settings}")" = "${before_settings}" ] || {
+            echo "FAIL - rewrote settings.json from a registry it could not read"
+            cat "${settings}"; exit 1; }
+          # Exact line, because context_mode_plugin_unregister warns about this
+          # same file on this same fixture and the two must not be confused for
+          # each other.
+          want="  [plugins] WARNING: ${registry} is not valid JSON or does not list its plugins as an object — enabledPlugins left as it was."
+          grep -q -F -x "${want}" "${stderr_file}" || {
+            echo "FAIL - no warning naming the registry"; cat "${stderr_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A registry that is not an object leaves enabledPlugins alone and warns
+    # Parseable, and still not the document this step reads. `.plugins` against a
+    # top-level array raises rather than answering false, so what the read has to
+    # survive here is jq exiting non-zero on a file that parsed perfectly well.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          mkdir -p "${HOME}/.claude/plugins"
+          settings="${HOME}/.claude/settings.json"
+          registry="${HOME}/.claude/plugins/installed_plugins.json"
+          jq -n '{promptSuggestionEnabled:false,autoCompact:true}' > "${settings}"
+          echo '[]' > "${registry}"
+          before_settings="$(cat "${settings}")"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          plugin_setup >/dev/null 2>"${stderr_file}"
+
+          [ "$(cat "${settings}")" = "${before_settings}" ] || {
+            echo "FAIL - rewrote settings.json from a registry it could not read"
+            cat "${settings}"; exit 1; }
+          want="  [plugins] WARNING: ${registry} is not valid JSON or does not list its plugins as an object — enabledPlugins left as it was."
+          grep -q -F -x "${want}" "${stderr_file}" || {
+            echo "FAIL - no warning naming the registry"; cat "${stderr_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A registry whose plugins are an array is not read as an empty plugin list
+    # The one wrong shape that raises nothing on its own: `keys` answers on an
+    # array — with its indices — so an ungated filter reads {"plugins":[]} as a
+    # plugin list with nothing in it, and a non-empty array as a list keyed by
+    # numbers. A document this step cannot read is not the same fact as a session
+    # with no plugins installed, and only one of the two is worth writing
+    # settings.json off.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          mkdir -p "${HOME}/.claude/plugins"
+          settings="${HOME}/.claude/settings.json"
+          registry="${HOME}/.claude/plugins/installed_plugins.json"
+          jq -n '{promptSuggestionEnabled:false,autoCompact:true}' > "${settings}"
+          echo '{"version":2,"plugins":[]}' > "${registry}"
+          before_settings="$(cat "${settings}")"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stderr_file="${TEST_DIR}/stderr"
+          plugin_setup >/dev/null 2>"${stderr_file}"
+
+          [ "$(cat "${settings}")" = "${before_settings}" ] || {
+            echo "FAIL - wrote settings.json off a registry shape it cannot read"
+            cat "${settings}"; exit 1; }
+          if jq -e 'has("enabledPlugins")' "${settings}" >/dev/null; then
+            echo "FAIL - synced an enable map from a plugins array"; exit 1
+          fi
+          want="  [plugins] WARNING: ${registry} is not valid JSON or does not list its plugins as an object — enabledPlugins left as it was."
+          grep -q -F -x "${want}" "${stderr_file}" || {
+            echo "FAIL - no warning naming the registry"; cat "${stderr_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A settings.json step 7 cannot parse is left exactly as it is
+    # The second of the two documents, and the one the sync writes back. It is
+    # hand-editable in the same session directory, so a document jq cannot read is
+    # left alone and named.
+    #
+    # Not called under `set -e`, unlike the cases above: step 6 rewrites
+    # settings.json through a redirect of its own and fails on this same fixture,
+    # which aborts an errexit caller before step 7 is reached at all.
+    # container/entrypoint.sh does not set it, so this is the caller shape that
+    # reaches this branch in production. Step 6's own failed redirect is also why
+    # this case says nothing about staging files — that one is not step 7's.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          mkdir -p "${HOME}/.claude/plugins"
+          settings="${HOME}/.claude/settings.json"
+          registry="${HOME}/.claude/plugins/installed_plugins.json"
+          printf '{"promptSuggestionEnabled":false,' > "${settings}"
+          jq -n '{version:2,plugins:{"demo@market":[
+                   {scope:"user",installPath:"/opt/demo",version:"1.0.0"}]}}' \
+            > "${registry}"
+          before_settings="$(cat "${settings}")"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          declare -F plugin_setup >/dev/null || {
+            echo "FAIL - plugin_setup is not defined"; exit 1; }
+          stderr_file="${TEST_DIR}/stderr"
+          set +e
+          plugin_setup >/dev/null 2>"${stderr_file}"
+          rc=$?
+          set -e
+          [ "${rc}" = "0" ] || {
+            echo "FAIL - a settings.json it cannot read must not fail the session (rc=${rc})"
+            cat "${stderr_file}"; exit 1; }
+
+          [ "$(cat "${settings}")" = "${before_settings}" ] || {
+            echo "FAIL - overwrote a settings.json it could not read"
+            cat "${settings}"; exit 1; }
+          want="  [plugins] WARNING: ${settings} is not valid JSON — enabledPlugins not synced."
+          grep -q -F -x "${want}" "${stderr_file}" || {
+            echo "FAIL - no warning naming settings.json"; cat "${stderr_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A settings.json it cannot write warns and leaves the file alone
+    # The failure this step cannot see coming, and the one it only has because the
+    # write goes through json_write_atomic: the helper stages its replacement
+    # inside the target's own directory, so a directory nothing may create files
+    # in is what fails it — the shape a read-only mount of the session directory
+    # has, and one that leaves settings.json perfectly readable so the reads above
+    # still succeed.
+    #
+    # Not under `set -e`, for the reason the case above gives: step 6 writes
+    # settings.json first and cannot write it here either.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'chmod u+w "${TEST_DIR}/.claude" 2>/dev/null || true; rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          plugin_setup_test_needs_unprivileged || exit 1
+          mkdir -p "${HOME}/.claude/plugins"
+          settings="${HOME}/.claude/settings.json"
+          registry="${HOME}/.claude/plugins/installed_plugins.json"
+          jq -n '{promptSuggestionEnabled:false,autoCompact:true}' > "${settings}"
+          jq -n '{version:2,plugins:{"demo@market":[
+                   {scope:"user",installPath:"/opt/demo",version:"1.0.0"}]}}' \
+            > "${registry}"
+          before_settings="$(cat "${settings}")"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          declare -F plugin_setup >/dev/null || {
+            echo "FAIL - plugin_setup is not defined"; exit 1; }
+          stderr_file="${TEST_DIR}/stderr"
+          chmod a-w "${HOME}/.claude"
+          set +e
+          plugin_setup >/dev/null 2>"${stderr_file}"
+          rc=$?
+          set -e
+          chmod u+w "${HOME}/.claude"
+          [ "${rc}" = "0" ] || {
+            echo "FAIL - an unwritable settings.json must not fail the session (rc=${rc})"
+            cat "${stderr_file}"; exit 1; }
+
+          [ "$(cat "${settings}")" = "${before_settings}" ] || {
+            echo "FAIL - settings.json changed under a failed write"
+            cat "${settings}"; exit 1; }
+          want="  [plugins] WARNING: could not write ${settings} — enabledPlugins not synced."
+          grep -q -F -x "${want}" "${stderr_file}" || {
+            echo "FAIL - no warning naming the write it could not make"
+            cat "${stderr_file}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: A sync it cannot make leaves no staging file behind
+    # The shape this replaces opened settings.json.tmp before jq ran, so a read it
+    # could not make still left an empty staging file in ~/.claude — a bind mount
+    # of the user's host session directory, where the litter outlives the
+    # container that made it.
+    #
+    # Reached without `set -e` because that is the only caller shape that gets
+    # there: an errexit caller is abandoned at the failing read, before the write
+    # that drops the file. container/entrypoint.sh is that caller.
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env off
+          mkdir -p "${HOME}/.claude/plugins"
+          settings="${HOME}/.claude/settings.json"
+          registry="${HOME}/.claude/plugins/installed_plugins.json"
+          jq -n '{promptSuggestionEnabled:false,autoCompact:true}' > "${settings}"
+          printf '{"version":2,"plugins":{' > "${registry}"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          declare -F plugin_setup >/dev/null || {
+            echo "FAIL - plugin_setup is not defined"; exit 1; }
+          set +e
+          plugin_setup >/dev/null 2>/dev/null
+          rc=$?
+          set -e
+
+          # Every staging name, not just the fixed one: json_write_atomic names
+          # its own settings.json.XXXXXX in the same directory and must clean up
+          # after itself too.
+          leftovers="$(find "${HOME}/.claude" -maxdepth 1 -name 'settings.json.*')"
+          [ -z "${leftovers}" ] || {
+            echo "FAIL - left a staging file behind: ${leftovers}"; exit 1; }
+          [ "${rc}" = "0" ] || {
+            echo "FAIL - a registry it cannot read must not fail the session (rc=${rc})"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"

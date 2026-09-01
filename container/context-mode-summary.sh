@@ -235,6 +235,7 @@ context_mode_render_stats() {
 		local lifetime="${computed#UNKNOWN }"
 		[[ "${lifetime}" =~ ^[0-9]+$ ]] || return 1
 		printf '── context-mode ─────────────────────────────────────\n'
+		# shellcheck disable=SC2312  # _humanize_bytes is a display formatter — its awk exits 0 on every path
 		printf ' this run unknown (baseline could not be read) · last 7 days %s\n' \
 			"$(_humanize_bytes "${lifetime}")"
 		printf ' store: %s (this project set)\n' "${store}"
@@ -269,6 +270,7 @@ context_mode_render_stats() {
 
 	printf '── context-mode ─────────────────────────────────────\n'
 	printf '%s\n' "${run_line}"
+	# shellcheck disable=SC2312  # _humanize_bytes is a display formatter — its awk exits 0 on every path
 	printf ' last 7 days %s\n' "$(_humanize_bytes "${lifetime}")"
 	printf ' store: %s (this project set)\n' "${store}"
 }
@@ -382,10 +384,14 @@ context_mode_read_stats() {
 }
 
 # context_mode_summary_init
-# Snapshot the counters before the agent runs. No-op unless the running agent's
-# context_mode_wire verb reported success — an unwired session has nothing to
-# measure, and taking a baseline anyway would let a later toggle change print a
-# report for a run that never had the feature.
+# Snapshot the counters before the agent runs. No-op unless the session is
+# wired, which context_mode_setup decides two ways: for an agent that has a
+# context_mode_wire verb, that the verb reported success; for one that does not —
+# claude, which reaches Context Mode through the plugin container/plugin-setup.sh
+# registers — that context_mode_plugin_installed found one registered, enabled
+# and present on disk. An unwired session has nothing to measure, and taking a
+# baseline anyway would let a later toggle change print a report for a run that
+# never had the feature.
 #
 # Reads with a 3-second budget, not the teardown's 10: this call sits in front
 # of the agent, on the critical path to a usable session, while

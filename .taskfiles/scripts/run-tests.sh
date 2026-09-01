@@ -14,6 +14,30 @@ if [[ "$(basename "${CONTAINER_CMD}")" = "podman" ]]; then
 	INIT_FLAG="--init=false"
 fi
 
+# TEST_AS_ROOT=1 runs the suites as uid 0 in the container instead of the
+# image's `USER testuser`. One case in tests/doctor-context-mode.venom.yml
+# drops to uid 65534 with setpriv, and that branch is only reached when the
+# runner is already uid 0 — which nothing here is by default, so it would be
+# exercised only by a maintainer who happened to be root. The `test` job in
+# .github/workflows/test.yml runs `task test:as-root` for that one suite, which
+# is also the supported way to reproduce it locally.
+#
+# --userns=keep-id has to be removed when it is set, not merely supplemented.
+# keep-id maps the caller's host uid onto itself and everything else onto the
+# caller's subuid range, so container uid 0 becomes a subuid and writes to the
+# .test-output bind mount land as a host id the caller neither owns nor can
+# remove without `podman unshare` — verified: the file came out owned by the
+# first id of the subuid range. Under the default rootless mapping container
+# uid 0 *is* the caller's host uid, so artifacts stay caller-owned and a later
+# non-root run on the same workspace is unaffected. Docker has no such mapping:
+# there uid 0 is real root and .test-output would be left root-owned, so run
+# the root pass under podman.
+USER_FLAG=""
+if [[ "${TEST_AS_ROOT:-}" = "1" ]]; then
+	USERNS_FLAG=""
+	USER_FLAG="--user=0:0"
+fi
+
 RIOTBOX_DIR=/home/testuser/riotbox
 
 OUTPUT_DIR="${TEST_DIR:-${ROOT_DIR}/.test-output}"
@@ -24,10 +48,11 @@ run_venom() {
 	local _container_cmd _expected_version
 	_container_cmd="$(command -v podman 2>/dev/null || command -v docker 2>/dev/null || echo '')"
 	_expected_version="$(cat "${ROOT_DIR}/VERSION")"
-	# shellcheck disable=SC2086,SC2248  # USERNS_FLAG/INIT_FLAG are empty under docker; quoting would pass empty args to `run`
+	# shellcheck disable=SC2086,SC2248  # USERNS_FLAG/INIT_FLAG are empty under docker and USER_FLAG unless TEST_AS_ROOT=1; quoting would pass empty args to `run`
 	${CONTAINER_CMD} run --rm \
 		${USERNS_FLAG} \
 		${INIT_FLAG} \
+		${USER_FLAG} \
 		-v "${ROOT_DIR}:${RIOTBOX_DIR}:ro,z" \
 		-v "${OUTPUT_DIR}:${CONTAINER_OUTPUT_DIR}:rw,z" \
 		-e RIOTBOX_DIR="${RIOTBOX_DIR}" \

@@ -237,6 +237,18 @@ testcases:
   # in a developer's config would fail all three against unmodified code. The
   # two output knobs are unset for the same reason: they can arrive from the
   # ambient environment as well as from a config file.
+  #
+  # RIOTBOX_AGENT is pinned to claude in each of them rather than left to the
+  # ambient value, and that is not a formality. The check returns before the
+  # image is consulted for an agent with no Context Mode support, so these cases
+  # reach the probe at all only because the agent in scope has the storage verb —
+  # and bin/riotbox always sets RIOTBOX_AGENT while libexec/launch.sh always
+  # forwards it, so running this suite inside an `--agent=opencode` container
+  # would silently move every one of them onto the other agent. claude is the
+  # default and the only supported agent with no wire verb, which makes the pin
+  # the anchor for the image path as well: a check that probed for a wire verb
+  # would report the default agent as unsupported and never run the probe these
+  # cases assert on.
   - name: doctor reports ok when the stubbed image carries a working context-mode
     steps:
       - type: exec
@@ -264,7 +276,7 @@ testcases:
           export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
           unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
           source "{{.riotbox_dir}}/scripts/preflight.sh"
-          export RIOTBOX_CONTEXT_MODE=1
+          export RIOTBOX_CONTEXT_MODE=1 RIOTBOX_AGENT=claude
           unset RIOTBOX_HEADROOM
           rc=0
           out="$(preflight_check_context_mode 2>&1)" || rc=$?
@@ -305,6 +317,30 @@ testcases:
             || { echo "FAIL: probe does not check the shim is on PATH: ${run_argv}"; exit 1; }
           echo "${run_argv}" | grep -q -- "context-mode doctor" \
             || { echo "FAIL: probe does not exercise the installed runtime: ${run_argv}"; exit 1; }
+
+          # The staged plugin tree is image state as well, and since the plugin
+          # adoption it is the tree a Claude session loads its hooks and MCP
+          # server from — the npm package the two lines above exercise supplies
+          # neither. An image built before the staging layer existed carries no
+          # tree at all and still passes both of them, which is the ordinary
+          # upgrade path: without these three the user gets a green
+          # "Context Mode available in image" and a session that then warns the
+          # plugin is not installed and runs with the feature off. The probe
+          # resolves the newest directory under RIOTBOX_CM_PLUGIN_DIR the way
+          # container/plugin-setup.sh does, and reads a version out of
+          # package.json the way context_mode_staged_version does, so doctor and
+          # session start read the same tree and judge it by the same rule.
+          echo "${run_argv}" | grep -q -- "RIOTBOX_CM_PLUGIN_DIR" \
+            || { echo "FAIL: probe does not look for the staged plugin tree: ${run_argv}"; exit 1; }
+          echo "${run_argv}" | grep -q -- ".claude-plugin/plugin.json" \
+            || { echo "FAIL: probe does not check the staged tree can be registered: ${run_argv}"; exit 1; }
+          # Matched on the type gate, not on "package.json": that string also
+          # appears in the better-sqlite3 line above, so a grep for it would
+          # hold against a probe that had dropped the version test entirely.
+          echo "${run_argv}" | grep -q -- "select(type ==" \
+            || { echo "FAIL: probe does not type-gate the staged tree's version the way context_mode_staged_version does: ${run_argv}"; exit 1; }
+          echo "${run_argv}" | grep -q -- "node_modules/better-sqlite3" \
+            || { echo "FAIL: probe does not check the staged tree's runtime deps: ${run_argv}"; exit 1; }
           echo "doctor_image_ok=pass"
         assertions:
           - result.code ShouldEqual 0
@@ -313,6 +349,10 @@ testcases:
           - result.systemout ShouldContainSubstring "--network=none"
           - result.systemout ShouldContainSubstring "command -v context-mode"
           - result.systemout ShouldContainSubstring "context-mode doctor"
+          - result.systemout ShouldContainSubstring "RIOTBOX_CM_PLUGIN_DIR"
+          - result.systemout ShouldContainSubstring ".claude-plugin/plugin.json"
+          - result.systemout ShouldContainSubstring "select(type =="
+          - result.systemout ShouldContainSubstring "node_modules/better-sqlite3"
           - result.systemout ShouldContainSubstring "doctor_image_ok=pass"
 
   # An image that was never built is a different problem from an image that was
@@ -334,7 +374,7 @@ testcases:
           export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
           unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
           source "{{.riotbox_dir}}/scripts/preflight.sh"
-          export RIOTBOX_CONTEXT_MODE=1
+          export RIOTBOX_CONTEXT_MODE=1 RIOTBOX_AGENT=claude
           unset RIOTBOX_HEADROOM
           rc=0
           out="$(preflight_check_context_mode 2>&1)" || rc=$?
@@ -374,7 +414,7 @@ testcases:
           export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
           unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
           source "{{.riotbox_dir}}/scripts/preflight.sh"
-          export RIOTBOX_CONTEXT_MODE=1
+          export RIOTBOX_CONTEXT_MODE=1 RIOTBOX_AGENT=claude
           unset RIOTBOX_HEADROOM
           rc=0
           out="$(preflight_check_context_mode 2>&1)" || rc=$?
@@ -423,7 +463,7 @@ testcases:
           export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
           unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
           source "{{.riotbox_dir}}/scripts/preflight.sh"
-          export RIOTBOX_CONTEXT_MODE=1
+          export RIOTBOX_CONTEXT_MODE=1 RIOTBOX_AGENT=claude
           unset RIOTBOX_HEADROOM
 
           rc=0
@@ -474,28 +514,28 @@ testcases:
   # out of scripts/preflight.sh — between its own opening `command -v
   # context-mode` line and its closing `exit 0` — so what runs here is the
   # shipped string, not a copy that can drift out of sync with it, and
-  # executes it directly under a real filesystem for four directory shapes. A
+  # executes it directly under a real filesystem for nine directory shapes. A
   # stub `context-mode` on PATH stands in for the pinned Node/package install
-  # the real probe also checks, so only the sentinel half is exercised in
-  # isolation; `context-mode doctor` itself has no bearing on the sentinel
-  # bug this case exists to catch.
-  - name: the sentinel probe body exits 0 on a healthy image and non-zero on all three defeats
+  # the real probe also checks, so only the sentinel and staged-tree halves are
+  # exercised in isolation; `context-mode doctor` itself has no bearing on
+  # either bug this case exists to catch.
+  #
+  # The staged-tree shapes are here rather than only in the argv case above for
+  # the same reason the sentinel ones are: the stub decides that case's outcome,
+  # so it can prove the probe *mentions* RIOTBOX_CM_PLUGIN_DIR and prove nothing
+  # about whether an image carrying no tree is actually rejected.
+  - name: the probe body exits 0 on a healthy image and non-zero on every defeat
     steps:
       - type: exec
         script: |
           set -e
-          # The probe's healthy shape asserts that a 0555 directory is not
-          # writable, which is true of the image's llm user and false of root —
-          # root is granted write on any mode. Under a root runner the healthy
-          # and platform.json shapes would both fail for a reason that has
-          # nothing to do with the control flow this case exists to pin, so skip
-          # visibly instead of reporting a broken probe. scripts/preflight.sh
-          # records the same dependency at the probe itself.
-          if [ "$(id -u)" = "0" ]; then
-            echo "SKIP: running as root — [ -w ] ignores the 0555 sentinel mode"
-            echo "sentinel_body=pass"
-            exit 0
-          fi
+          # Governs the `mkdir -p` directories and `echo >` files the fixtures
+          # are built from, so a runner with a restrictive umask does not build a
+          # tree the unprivileged uid below cannot read — every shape would then
+          # fail for that instead of for its own reason. It does not govern the
+          # fixture root: mktemp -d creates 0700 whatever the umask is, and the
+          # explicit chmod further down is what opens that one.
+          umask 022
           TMP="$(mktemp -d)"
           # The sentinel shapes below chmod their directories 0555 on
           # purpose — that is the state under test — so a plain `rm -rf`
@@ -519,7 +559,7 @@ testcases:
             || { echo "FAIL: extracted probe body is empty"; exit 1; }
 
           # Stands in for a working pinned-Node/context-mode install so only
-          # the sentinel half is under test.
+          # the staged-tree and sentinel halves are under test.
           mkdir -p "${TMP}/bin"
           cat > "${TMP}/bin/context-mode" <<'STUB'
           #!/usr/bin/env bash
@@ -529,26 +569,100 @@ testcases:
           chmod +x "${TMP}/bin/context-mode"
           export PATH="${TMP}/bin:${PATH}"
 
+          # The probe resolves the staged tree under RIOTBOX_CM_PLUGIN_DIR, and
+          # this suite may itself be running inside a container that sets it.
+          # Unset so every shape below falls back to the documented default,
+          # ${HOME}/.riotbox/context-mode-plugin — which is what makes HOME the
+          # single knob each shape turns.
+          unset RIOTBOX_CM_PLUGIN_DIR
+
+          # The probe body is only meaningful as a non-root user. `[ -w ]` is
+          # true for root on any mode, so under a root runner the sentinel loop
+          # rejects every shape and the probe can never exit 0 — the healthy
+          # shape would fail for a reason this case is not about, and, worse,
+          # every negative shape would pass without discriminating anything at
+          # all, since they assert only that the probe failed. Skipping the case
+          # is the other way to handle that and it is what this case used to do,
+          # but it silently voids the whole thing on a CI runner that happens to
+          # be uid 0.
+          #
+          # So drop instead of skip: the fixtures stay owned by the runner and
+          # are world-readable, and the probe reads them as an unprivileged uid —
+          # which is exactly how the image's llm user reads a root-owned staged
+          # tree and a root-owned sentinel directory. nobody is used rather than
+          # a created account because this needs no home, no shell and no write
+          # access anywhere. If setpriv is missing there is no honest way to run
+          # this case as root, and it says so and fails rather than passing.
+          PROBE_AS=""
+          if [ "$(id -u)" = "0" ]; then
+            command -v setpriv >/dev/null \
+              || { echo "FAIL: running as root without setpriv — cannot drop privileges, and the probe body is meaningless as uid 0"; exit 1; }
+            PROBE_AS="setpriv --reuid=65534 --regid=65534 --clear-groups"
+            chmod 0755 "${TMP}"
+            # setpriv being present is not the same as the drop working, and a
+            # drop that does not work blames scripts/preflight.sh for an
+            # environment problem: no CAP_SETUID, a seccomp filter or a userns
+            # without subuids surfaces as "healthy shape did not exit 0, got
+            # 127", and a TMPDIR the dropped uid cannot traverse — root with
+            # TMPDIR under a 0700 home, or systemd PrivateTmp — as "got 1". The
+            # chmod above opens the fixture root but not its parents, so the
+            # second is real on a hardened runner. One line exercises the drop
+            # and the whole traversal to the fixtures, and says which it is.
+            ${PROBE_AS} test -x "${TMP}/bin/context-mode" \
+              || { echo "FAIL: dropped to uid 65534 but it cannot execute ${TMP}/bin/context-mode — check CAP_SETUID and that TMPDIR is traversable by other users; this is the test environment, not scripts/preflight.sh"; exit 1; }
+          fi
+
+          # Unquoted on purpose: PROBE_AS is either empty or a command prefix
+          # that has to split into words.
           run_probe() {
-            HOME="$1" bash -c "$(cat "${TMP}/probe_body.sh")"
+            ${PROBE_AS} env HOME="$1" bash -c "$(cat "${TMP}/probe_body.sh")"
           }
 
-          # 1. Healthy: both sentinel directories present, mode 0555, no
-          # platform.json in either. This is the shape that regressed: the
-          # probe's own last assertion is negative (absent is healthy), so a
-          # script whose exit status falls through from that assertion's
-          # status reports a perfectly good image as broken.
+          # The parts of a staged tree this probe judges, and only those: the
+          # version-stamped directory the resolution picks, the package.json
+          # session start reads a version out of, the .claude-plugin/plugin.json
+          # that lets Claude Code register the tree, and an installed
+          # better-sqlite3. It is deliberately not the whole shape the staging
+          # layer leaves behind (Containerfile) — hooks.json, the rewritten
+          # interpreter pins and upstream's marketplace.json are all absent,
+          # because nothing under test reads them and a fixture carrying files no
+          # assertion touches invites a reader to think they matter here.
+          TREE=".riotbox/context-mode-plugin/v1.0.0"
+          stage_plugin() {
+            local tree="$1/${TREE}"
+            mkdir -p "${tree}/.claude-plugin" "${tree}/node_modules/better-sqlite3"
+            echo '{"name":"context-mode"}' > "${tree}/.claude-plugin/plugin.json"
+            echo '{"version":"1.0.0"}' > "${tree}/package.json"
+            echo '{"name":"better-sqlite3"}' > "${tree}/node_modules/better-sqlite3/package.json"
+          }
+
+          # Every shape gets a staged tree and both sentinel directories, and
+          # then breaks exactly one thing. Shape 1 is the positive control the
+          # other eight are read against: without it, a fixture the probe would
+          # reject for some unrelated reason would make all eight pass while
+          # discriminating nothing.
+
+          # 1. Healthy: a staged tree, and both sentinel directories present,
+          # mode 0555, no platform.json in either. This is the shape that
+          # regressed: the probe's own last assertion is negative (absent is
+          # healthy), so a script whose exit status falls through from that
+          # assertion's status reports a perfectly good image as broken.
           H1="${TMP}/h1"
           mkdir -p "${H1}/.context-mode" "${H1}/.config/context-mode"
+          stage_plugin "${H1}"
           chmod 0555 "${H1}/.context-mode" "${H1}/.config/context-mode"
           rc=0; run_probe "${H1}" || rc=$?
           [ "${rc}" = "0" ] \
             || { echo "FAIL: healthy shape did not exit 0, got ${rc}"; exit 1; }
 
-          # 2. A sentinel directory writable by the current user.
+          # 2. A sentinel directory writable by the user the probe runs as. 0777
+          # rather than 0755 because that user is not the fixture's owner when
+          # this case has dropped privileges, and the property under test is
+          # "the probe can write here", not a particular mode.
           H2="${TMP}/h2"
           mkdir -p "${H2}/.context-mode" "${H2}/.config/context-mode"
-          chmod 0755 "${H2}/.context-mode"
+          stage_plugin "${H2}"
+          chmod 0777 "${H2}/.context-mode"
           chmod 0555 "${H2}/.config/context-mode"
           rc=0; run_probe "${H2}" || rc=$?
           [ "${rc}" != "0" ] \
@@ -560,6 +674,7 @@ testcases:
           # builtin here would kill this whole script rather than the probe.
           H3="${TMP}/h3"
           mkdir -p "${H3}/.context-mode" "${H3}/.config/context-mode"
+          stage_plugin "${H3}"
           touch "${H3}/.context-mode/platform.json"
           chmod 0555 "${H3}/.context-mode" "${H3}/.config/context-mode"
           rc=0; run_probe "${H3}" || rc=$?
@@ -569,15 +684,88 @@ testcases:
           # 4. A sentinel directory missing entirely.
           H4="${TMP}/h4"
           mkdir -p "${H4}/.context-mode"
+          stage_plugin "${H4}"
           chmod 0555 "${H4}/.context-mode"
           rc=0; run_probe "${H4}" || rc=$?
           [ "${rc}" != "0" ] \
             || { echo "FAIL: a missing directory did not fail the probe"; exit 1; }
 
-          echo "sentinel_body=pass"
+          # 5. No staged plugin tree at all — an image built before the staging
+          # layer existed, which is the ordinary upgrade path
+          # (container/plugin-setup.sh names that state in as many words). The
+          # npm shim and `context-mode doctor` are both intact on such an image,
+          # so this is precisely the shape the runtime half of the probe cannot
+          # see: doctor would report the image healthy and the session would then
+          # run with the feature off.
+          H5="${TMP}/h5"
+          mkdir -p "${H5}/.context-mode" "${H5}/.config/context-mode"
+          chmod 0555 "${H5}/.context-mode" "${H5}/.config/context-mode"
+          rc=0; run_probe "${H5}" || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: a missing staged plugin tree did not fail the probe"; exit 1; }
+
+          # 6. A staged tree Claude Code cannot register: no
+          # .claude-plugin/plugin.json, so nothing surfaces the hooks or the MCP
+          # server the routing table steers toward.
+          H6="${TMP}/h6"
+          mkdir -p "${H6}/.context-mode" "${H6}/.config/context-mode"
+          stage_plugin "${H6}"
+          rm -f "${H6}/${TREE}/.claude-plugin/plugin.json"
+          chmod 0555 "${H6}/.context-mode" "${H6}/.config/context-mode"
+          rc=0; run_probe "${H6}" || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: a staged tree with no plugin.json did not fail the probe"; exit 1; }
+
+          # 7. A staged tree with no package.json, so nothing can read a version
+          # out of it. This is the divergence the probe would otherwise carry:
+          # context_mode_staged_version refuses such a tree and
+          # context_mode_plugin_register then warns and unregisters, so a doctor
+          # that did not ask the same question would report green on a tree the
+          # session is about to refuse — the exact symptom the staged-tree half
+          # of this probe exists to remove.
+          H7="${TMP}/h7"
+          mkdir -p "${H7}/.context-mode" "${H7}/.config/context-mode"
+          stage_plugin "${H7}"
+          rm -f "${H7}/${TREE}/package.json"
+          chmod 0555 "${H7}/.context-mode" "${H7}/.config/context-mode"
+          rc=0; run_probe "${H7}" || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: a staged tree with no package.json did not fail the probe"; exit 1; }
+
+          # 8. A staged tree whose npm ci never landed. Every hook the session
+          # runs would try to install better-sqlite3 at hook time, in a session
+          # that may have no network at all.
+          H8="${TMP}/h8"
+          mkdir -p "${H8}/.context-mode" "${H8}/.config/context-mode"
+          stage_plugin "${H8}"
+          rm -rf "${H8}/${TREE}/node_modules"
+          chmod 0555 "${H8}/.context-mode" "${H8}/.config/context-mode"
+          rc=0; run_probe "${H8}" || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: a staged tree with no better-sqlite3 did not fail the probe"; exit 1; }
+
+          # 9. A staged tree whose version is present but not a string. This is
+          # the shape the type gate exists for, and the only one that tells a
+          # real mirror of context_mode_staged_version from a bare
+          # `[ -r package.json ]`: shape 7 removes the file, which either would
+          # catch. jq -r would render 123 as the string "123" and the session
+          # would register the tree as a version it does not declare, which is
+          # the one thing reading the version prevents — so upstream refuses it,
+          # context_mode_plugin_register unregisters, and a doctor without the
+          # gate reports green on a tree the session is about to drop.
+          H9="${TMP}/h9"
+          mkdir -p "${H9}/.context-mode" "${H9}/.config/context-mode"
+          stage_plugin "${H9}"
+          echo '{"version":123}' > "${H9}/${TREE}/package.json"
+          chmod 0555 "${H9}/.context-mode" "${H9}/.config/context-mode"
+          rc=0; run_probe "${H9}" || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: a staged tree with a non-string version did not fail the probe"; exit 1; }
+
+          echo "probe_body=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "sentinel_body=pass"
+          - result.systemout ShouldContainSubstring "probe_body=pass"
 
   # Context Mode is wired per agent through the optional registry verbs (see
   # docs/dev/agent-contract.md), so an agent implementing none of them
@@ -590,6 +778,12 @@ testcases:
   # fixture agent would only prove the fixture agrees with itself. podman is
   # stubbed, and XDG_CONFIG_HOME/RIOTBOX_SYSCONF_DIR isolated before the source,
   # for the reasons given above the image cases.
+  #
+  # claude is walked first and on its own. It is the default agent and, since
+  # the plugin adoption, the only supported one with no wire verb — so it is the
+  # single arm that can catch a check probing for the wrong verb. The opencode
+  # arms cannot: opencode implements both verbs, so it is reported supported
+  # whichever one the check asks for.
   - name: doctor reports an agent with no Context Mode support
     steps:
       - type: exec
@@ -612,6 +806,18 @@ testcases:
           source "{{.riotbox_dir}}/scripts/preflight.sh"
           export RIOTBOX_CONTEXT_MODE=1
           unset RIOTBOX_HEADROOM
+
+          # claude: the default agent, and the one whose support the check gets
+          # wrong if it probes for a verb Claude Code no longer has.
+          export RIOTBOX_AGENT=claude
+          rc=0
+          out="$(preflight_check_context_mode 2>&1)" || rc=$?
+          [ "${rc}" = "0" ] || { echo "FAIL: claude, expected 0, got ${rc}: ${out}"; exit 1; }
+          echo "${out}" | grep -q "\[ok\]" \
+            || { echo "FAIL: claude got no [ok]: ${out}"; exit 1; }
+          echo "${out}" | grep -q "no Context Mode support" \
+            && { echo "FAIL: called the default agent unsupported: ${out}"; exit 1; }
+
           export RIOTBOX_AGENT=opencode
 
           # Supported: opencode implements the verbs, so the check runs on
@@ -624,8 +830,11 @@ testcases:
           echo "${out}" | grep -q "no Context Mode support" \
             && { echo "FAIL: called a supported agent unsupported: ${out}"; exit 1; }
 
-          # Unsupported: the same agent with its wire verb taken away.
-          unset -f agent_opencode_context_mode_wire
+          # Unsupported: the same agent with its storage verb taken away. That
+          # verb, not the wire verb, is what the check probes — Claude Code has
+          # no wire verb at all now, and probing for one would report the
+          # default agent as unsupported on an image where the feature works.
+          unset -f agent_opencode_context_mode_store_dir
           rc=0
           out="$(preflight_check_context_mode 2>&1)" || rc=$?
           # ok, not fail: a fail carries an exit code and would make
