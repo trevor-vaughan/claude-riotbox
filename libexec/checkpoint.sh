@@ -444,6 +444,7 @@ then relaunch. Do NOT delete the store — it is the other project's backup."
 		# Surface forced branch rewrites — the only notice the user gets that a
 		# backed-up branch was replaced rather than extended.
 		local line
+		# shellcheck disable=SC2312  # grep exits 1 when nothing was force-updated, the ordinary case; the loop then runs zero times
 		while IFS= read -r line; do
 			echo "  checkpoint: ${project_name}: backup branch rewritten — ${line}"
 		done < <(printf '%s\n' "${err}" | grep -F 'forced update' | sed 's/^[[:space:]]*//')
@@ -559,6 +560,7 @@ _snapshot_project() {
 	# refused to reach here on the one failure that is real (a corrupt index).
 	local -a skipped_paths=() skipped_sizes=()
 	local record size path
+	# shellcheck disable=SC2312  # the subshell's status is masked deliberately: a failed cd or stat yields no records, and "no records" is the same answer as "nothing oversized"
 	while IFS= read -r -d '' record; do
 		size="${record%%$'\t'*}"
 		path="${record#*$'\t'}"
@@ -632,6 +634,7 @@ _snapshot_project() {
 
 	# A clean tree needs no new object: point the ref at HEAD itself.
 	local snapshot
+	# shellcheck disable=SC2312  # head_sha is a verified HEAD, so HEAD^{tree} resolves; were it to fail, the empty result takes the commit-tree branch, which still writes a correct snapshot
 	if [[ -n "${head_sha}" ]] && [[ "${tree}" == "$(git -C "${dir}" rev-parse "HEAD^{tree}")" ]]; then
 		snapshot="${head_sha}"
 	else
@@ -667,6 +670,7 @@ _snapshot_project() {
 	# is worse than one that fails loudly. On the clean-tree branch above this
 	# holds by construction, so there it can only catch an update-ref that
 	# returned 0 while leaving the ref unresolvable.
+	# shellcheck disable=SC2312  # a rev-parse failure yields an empty string, which never equals the tree — the post-condition fails closed, which is its whole purpose
 	if [[ "$(git -C "${dir}" rev-parse --verify "${ref}^{tree}")" != "${tree}" ]]; then
 		echo "  WARNING: ${project_name}: snapshot ref does not match the tree just written — no checkpoint protection!" >&2
 		return 1
@@ -744,5 +748,6 @@ for dir in "${PROJECT_DIRS[@]}"; do
 	# the worktree, the index, HEAD, or any branch. commit-tree runs no hooks
 	# and ignores commit.gpgsign, so a host that forces signing, a repo with a
 	# pre-commit hook, and a conflicted merge in progress are all safe.
+	# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
 	_snapshot_project "${dir}" "${project_name}" || continue
 done

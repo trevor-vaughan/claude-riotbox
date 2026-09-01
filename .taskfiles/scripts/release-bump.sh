@@ -78,6 +78,7 @@ else
 	suggested="${suggested#v}"
 	[[ "${suggested}" =~ ${SEMVER_RE} ]] || die "git-cliff returned an unusable version ('${suggested}')"
 	# With nothing releasable since the tag, git-cliff echoes the tag back.
+	# shellcheck disable=SC2310  # is_greater is a predicate — its return value is the answer, so set -e suppression is intentional
 	if ! is_greater "${current}" "${suggested}"; then
 		printf 'note: no releasable commits since %s; suggesting a patch bump\n' "${last_tag}" >&2
 		suggested="$(patch_bump "${current}")"
@@ -97,6 +98,7 @@ if [[ -z "${new}" ]]; then
 fi
 
 [[ "${new}" =~ ${SEMVER_RE} ]] || die "'${new}' is not a semantic version (expected MAJOR.MINOR.PATCH)"
+# shellcheck disable=SC2310  # is_greater is a predicate — its return value is the answer, so set -e suppression is intentional
 is_greater "${current}" "${new}" || die "${new} is not greater than the current version ${current}"
 if git -C "${ROOT_DIR}" rev-parse -q --verify "refs/tags/v${new}" >/dev/null 2>&1; then
 	die "tag v${new} already exists"

@@ -120,6 +120,7 @@ session_branch_teardown() {
 	# Session branching silently stops happening until the user acts.
 	local checkout_err
 	if ! checkout_err="$(git -C "${_SB_WORKSPACE}" checkout "${_SB_BASE_BRANCH}" 2>&1)"; then
+		# shellcheck disable=SC2312  # git status failing yields an empty result, which takes the generic-failure branch below — the one that prints the real checkout error
 		if [[ -n "$(git -C "${_SB_WORKSPACE}" status --porcelain --untracked-files=no)" ]]; then
 			echo "  [session-branch] MERGE SKIPPED — UNCOMMITTED CHANGES block the switch to '${_SB_BASE_BRANCH}'."
 			echo "  Your working tree has edits that would be overwritten by checking out ${_SB_BASE_BRANCH}."
