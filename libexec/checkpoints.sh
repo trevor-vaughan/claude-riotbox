@@ -159,8 +159,10 @@ _list_project() {
 
 	# Sorted by name descending, which for session timestamps is newest first.
 	local -a refs=()
+	# shellcheck disable=SC2312  # for-each-ref failure yields no refs; the empty-array branch below is the handler
 	mapfile -t refs < <(git -C "${dir}" for-each-ref --sort=-refname --format='%(refname)' "${SNAPSHOT_NS}" 2>/dev/null)
 
+	# shellcheck disable=SC2312  # _snapshot_size and _shq are display helpers that return 0 on every path
 	if [[ ${#refs[@]} -eq 0 ]]; then
 		echo "  No checkpoint snapshots. RiotBox takes one at the start of each session."
 	else
@@ -187,16 +189,19 @@ _list_legacy() {
 	local dir="$1"
 
 	local -a tags=()
+	# shellcheck disable=SC2312  # for-each-ref failure yields no tags; the guard below returns early
 	mapfile -t tags < <(git -C "${dir}" for-each-ref --sort=-refname --format='%(refname)' "refs/tags/${LEGACY_NS}" 2>/dev/null)
 	[[ ${#tags[@]} -gt 0 ]] || return 0
 
 	echo "  Legacy checkpoint tags (older RiotBox versions made these; nothing does now):"
 	local ref
+	# shellcheck disable=SC2312  # _snapshot_size is a display helper that returns 0 on every path
 	for ref in "${tags[@]}"; do
 		printf '    %-15s  %-9s  %s\n' "${ref##*/}" "$(_snapshot_size "${dir}" "${ref}")" "${ref}"
 	done
 	echo "    These are real tags: they appear in git tag, they change what"
 	echo "    git describe --tags reports, and git push --tags publishes them."
+	# shellcheck disable=SC2312  # _shq is printf %q — it cannot fail for a set argument
 	echo "    Remove one:  git -C $(_shq "${dir}") tag -d ${LEGACY_NS}/<timestamp>"
 	echo "    Remove all:  riotbox checkpoint-prune --legacy"
 }
@@ -250,6 +255,7 @@ cmd_tag() {
 	fi
 
 	local tag="${TAG_NS}/${ts}"
+	# shellcheck disable=SC2312  # _shq is printf %q — it cannot fail for a set argument
 	if git -C "${dir}" rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null 2>&1; then
 		echo "ERROR: tag ${tag} already exists in ${dir}." >&2
 		echo "Inspect it with: git -C $(_shq "${dir}") show ${tag}" >&2
@@ -272,7 +278,9 @@ cmd_tag() {
 	top="$(git -C "${dir}" rev-parse --show-toplevel 2>/dev/null)" || top="${dir}"
 
 	echo "Tagged refs/tags/${tag} → ${sha}"
+	# shellcheck disable=SC2312  # _shq is printf %q — it cannot fail for a set argument
 	echo "  Restore it:  git -C $(_shq "${top}") restore --source=${tag} -- ."
+	# shellcheck disable=SC2312  # _shq is printf %q — it cannot fail for a set argument
 	echo "  Remove it:   git -C $(_shq "${top}") tag -d ${tag}"
 	echo "  Note: this is a real tag. Until you remove it, it appears in git tag,"
 	echo "        it changes what git describe --tags reports, and git push --tags"
@@ -310,7 +318,7 @@ _prune_usage_err() {
 _backup_stores_for() {
 	local dir="$1"
 	local -a stores=()
-	local top common store origin origin_common known duplicate
+	local top common common_rel store origin origin_common known duplicate
 
 	top="$(git -C "${dir}" rev-parse --show-toplevel 2>/dev/null)" || top="${dir}"
 	# shellcheck disable=SC2312  # printf into sed cannot fail for a non-empty path
@@ -319,7 +327,23 @@ _backup_stores_for() {
 	# The common git dir is the repository's identity: a subdirectory, the main
 	# checkout and every linked worktree all resolve to the same one. Same
 	# resolution cmd_prune uses to collapse duplicate project arguments.
-	common="$(cd "${dir}" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)" || common=""
+	#
+	# rev-parse is run and checked on its own rather than nested inside the cd
+	# chain. Nested, its failure was invisible: outside a repository it prints
+	# nothing, and `cd ""` is a no-op bash reports as success, so the chain went
+	# on to `pwd -P` and answered with the directory's own resolved path. A
+	# plain directory therefore arrived here carrying a non-empty "identity"
+	# and entered the scan below, where any store recording that same directory
+	# as its origin resolved to the same string and was claimed as its backup —
+	# a match made without either side being a git dir. A non-repository has no
+	# identity to match on, and now gets an empty one and no scan.
+	common_rel="$(git -C "${dir}" rev-parse --git-common-dir 2>/dev/null)" || common_rel=""
+	common=""
+	if [[ -n "${common_rel}" ]]; then
+		# Relative to ${dir} when rev-parse answers relatively (`.git`), which
+		# is why the cd is still needed to resolve it.
+		common="$(cd "${dir}" && cd "${common_rel}" && pwd -P)" || common=""
+	fi
 	if [[ -n "${common}" ]]; then
 		for store in "${RIOTBOX_DATA_DIR}"/backups/*.git; do
 			[[ -d "${store}" ]] || continue
@@ -327,6 +351,7 @@ _backup_stores_for() {
 			[[ -n "${origin}" ]] || continue
 			# A store whose origin is a URL, or a path that no longer exists,
 			# simply does not answer here — (1) is the fallback for that.
+			# shellcheck disable=SC2312  # the inner rev-parse's status is masked deliberately: a URL or vanished path already failed the outer cd, and anything else resolves to a path the comparison below can reject
 			origin_common="$(cd "${origin}" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)" || continue
 			[[ "${origin_common}" == "${common}" ]] || continue
 			duplicate=false
@@ -426,6 +451,10 @@ cmd_prune() {
 			return 1
 		fi
 		;;
+	*)
+		# --legacy reaches here. It takes no argument, so there is nothing to
+		# validate before the selection below runs.
+		;;
 	esac
 
 	local joined=""
@@ -445,9 +474,19 @@ cmd_prune() {
 	# the reported total is double the truth. Keying on the common git dir
 	# covers the plain `prune ~/proj ~/proj` slip as well. A non-repo has no
 	# common dir; it keys on its own path and is reported as skipped below.
+	#
+	# Unlike _backup_stores_for, which needs a real common git dir before it
+	# will claim a store as a repository's, this loop wants a distinct key per
+	# project and nothing more, so keying a non-repo on itself is the answer,
+	# not a fallback: `cd ""` is a no-op bash reports as success and `pwd -P`
+	# supplies that key. The `|| store="${dir}"` arm is therefore reached only
+	# when `cd "${dir}"` itself fails — a directory that stopped being readable
+	# after resolve_projects canonicalised it — and keys it on the path as
+	# given, which is still distinct.
 	local -a unique_dirs=()
 	local dir store seen=""
 	for dir in "${PROJECT_DIRS[@]}"; do
+		# shellcheck disable=SC2312  # the inner rev-parse's status is masked deliberately: a non-repo prints nothing, cd "" is a no-op, and pwd -P keys it on its own path — what the comment above asks for
 		store="$(cd "${dir}" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)" || store="${dir}"
 		if [[ ":${seen}:" == *":${store}:"* ]]; then
 			echo "Note: ${dir} shares its snapshot refs with an earlier project — counting it once." >&2
@@ -485,9 +524,11 @@ cmd_prune() {
 		# same-named projects do not share a store.
 		local backup_dir
 		local -a backup_dirs=()
+		# shellcheck disable=SC2312  # _backup_stores_for prints the store list; mapfile captures its stdout deliberately
 		mapfile -t backup_dirs < <(_backup_stores_for "${dir}")
 
 		local -a found=() candidates=() unrecognised=() chosen=()
+		# shellcheck disable=SC2312  # for-each-ref failure yields no refs; nothing is then selected for deletion
 		mapfile -t found < <(git -C "${dir}" for-each-ref --sort=-refname --format='%(refname)' "${namespace}" 2>/dev/null)
 		for ref in "${found[@]}"; do
 			if [[ "${ref##*/}" =~ ${TS_RE} ]]; then
@@ -497,6 +538,7 @@ cmd_prune() {
 			fi
 		done
 
+		# shellcheck disable=SC2249  # selector is closed by construction: the three arms below are the only values the option parser assigns, and an empty one already returned 2
 		case "${selector}" in
 		keep)
 			local index=0
@@ -572,6 +614,7 @@ cmd_prune() {
 					marker="  ← NO BACKUP COPY — this is the only one"
 					unbacked=$((unbacked + 1))
 				fi
+				# shellcheck disable=SC2312  # _snapshot_size is a display helper that returns 0 on every path
 				printf '    %-46s  %-9s  %s%s\n' \
 					"${ref}" "$(_snapshot_size "${dir}" "${ref}")" "${sha:0:7}" "${marker}"
 				to_delete+=("${dir}"$'\t'"${ref}"$'\t'"${sha}")
@@ -671,6 +714,7 @@ cmd_prune() {
 	if [[ ${deleted} -gt 0 ]]; then
 		echo "Deleted ${deleted} ref(s) — in the project repository only."
 		echo "The objects they held are freed by the next git gc. To reclaim the space now:"
+		# shellcheck disable=SC2312  # _shq is printf %q — it cannot fail for a set argument
 		for repo in "${gc_dirs[@]}"; do
 			echo "  git -C $(_shq "${repo}") gc --prune=now"
 		done

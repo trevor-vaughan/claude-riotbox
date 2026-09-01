@@ -1321,3 +1321,81 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "key_derivations_agree=true"
           - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # _backup_stores_for's second lookup is keyed on the common git dir, which is
+  # a repository's identity. A directory that is not a repository has no such
+  # identity, so that lookup must not run for one at all.
+  #
+  # It used to run anyway. `cd "$(git rev-parse --git-common-dir)"` outside a
+  # repository is `cd ""`, which bash treats as success with no directory
+  # change, so the chain still reached `pwd -P` and answered with the
+  # directory's own resolved path — a non-empty value that passed the
+  # is-this-a-repository test below it. Any store whose recorded origin was
+  # that same plain directory then compared equal and was claimed as the
+  # directory's backup, on an identity check that never compared two git dirs.
+  #
+  # cmd_prune happens to reject non-repositories before it gets here, so the
+  # accident is not reachable through the shipped verb; the seam is driven
+  # directly rather than left to be re-armed by a future caller.
+  - name: A directory that is not a repository claims only its path-keyed store
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo base > "${REPO_DIR}/f.txt"
+          git -C "${REPO_DIR}" add f.txt
+          git -C "${REPO_DIR}" commit -qm initial
+          # A plain directory beside the repo, canonical from the start so the
+          # path key derived here and the one derived inside the function are
+          # comparable even where the temp root is a symlink.
+          plain="$(cd "${TEST_DIR}" && pwd -P)/plain"
+          mkdir -p "${plain}"
+          if git -C "${plain}" rev-parse --git-dir >/dev/null 2>&1; then
+            echo "FIXTURE INVALID: the plain directory is inside a repository, so the non-repo path is untested" >&2
+            exit 1
+          fi
+          # Two stores, each recording one of the two directories as its
+          # origin. Only the second is anybody's backup; the first is the shape
+          # the origin scan wrongly matched for the plain directory.
+          plain_store="${XDG_DATA_HOME}/riotbox/backups/keyed-on-the-plain-dir.git"
+          repo_store="${XDG_DATA_HOME}/riotbox/backups/keyed-on-the-repo.git"
+          mkdir -p "${XDG_DATA_HOME}/riotbox/backups"
+          git init --bare -q --initial-branch=main "${plain_store}"
+          git -C "${plain_store}" remote add origin "${plain}"
+          git init --bare -q --initial-branch=main "${repo_store}"
+          git -C "${repo_store}" remote add origin "${REPO_DIR}"
+          (
+            export ROOT_DIR="{{.riotbox_dir}}"
+            source "{{.riotbox_dir}}/libexec/checkpoints.sh"
+            resolve_projects "${plain}"
+            mapfile -t stores < <(_backup_stores_for "${plain}")
+            printf 'plain_store=%s\n' "${stores[@]}"
+            [ "${#stores[@]}" -eq 1 ] \
+              || { echo "FAIL: a non-repository claimed ${#stores[@]} stores"; exit 1; }
+            [ "${stores[0]}" = "$(backup_path "${plain}")" ] \
+              || { echo "FAIL: the single store is not the path-keyed one"; exit 1; }
+          )
+          # ...and a real repository still finds a store by its recorded origin,
+          # so the guard did not simply switch the origin scan off.
+          (
+            export ROOT_DIR="{{.riotbox_dir}}"
+            source "{{.riotbox_dir}}/libexec/checkpoints.sh"
+            resolve_projects "${REPO_DIR}"
+            mapfile -t stores < <(_backup_stores_for "${REPO_DIR}")
+            printf 'repo_store=%s\n' "${stores[@]}"
+            printf '%s\n' "${stores[@]}" | grep -qxF "${repo_store}" \
+              || { echo "FAIL: the origin scan no longer finds a store by its origin"; exit 1; }
+            # `if`, not `&& { ... }`: an AND-list whose last command is skipped
+            # exits non-zero, and set -e would take that as the failure.
+            if printf '%s\n' "${stores[@]}" | grep -qxF "${plain_store}"; then
+              echo "FAIL: the repository claimed a store belonging to the plain directory"
+              exit 1
+            fi
+          )
+          echo "nonrepo_store_scan_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "nonrepo_store_scan_ok=true"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
