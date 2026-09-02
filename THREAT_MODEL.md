@@ -352,11 +352,10 @@ that content onto the container overlay, where it would vanish at exit and
 escape session cleanup. The pin is a real defence with two stated limits:
 
 - It holds only while upstream keeps honouring a variable of that name. Unlike
-  the Claude wiring's matcher, MCP server name, and dispatcher form, no
-  build-time guard greps the installed bundle for it, and the tests assert the
-  exported value rather than that the package reads it — so a version bump that
-  renamed or dropped the variable would surface in a user session, not at build
-  time.
+  the MCP server name, no build-time guard greps the installed bundle for it,
+  and the tests assert the exported value rather than that the package reads it
+  — so a version bump that renamed or dropped the variable would surface in a
+  user session, not at build time.
 - On the opencode path the pin does not cover everything. `CONTEXT_MODE_DIR` is
   read by the storage resolvers behind the `ctx_*` tools, but the plugin's own
   session database resolves independently, from the platform config directory
@@ -367,16 +366,55 @@ escape session cleanup. The pin is a real defence with two stated limits:
   construction rather than because one variable governs both. Setting
   `CONTEXT_MODE_DIR` to somewhere else by hand would move one and not the other.
 
-**Wiring the session reaches no network, by construction.** Context Mode's only
-hook-configuring command is `context-mode upgrade`, and that command
-`git clone`s `https://github.com/mksglu/context-mode.git` and — when upstream is
-newer than the installed copy — runs `npm install`, `npm run build`, and copies
-the result over the installed package tree. Invoking it per session would swap
-pinned, reviewed code for whatever is on `main`, inside a container that has the
-user's project mounted read-write, and would break `RIOTBOX_NETWORK=none`. It is
-never invoked. RiotBox writes the two JSON stanzas itself, offline, and the image
-build greps the installed bundle for the tool set the wiring template encodes, so
-a version bump that changes it fails the build rather than a user session.
+**Starting a session reaches no network, by construction.** Context Mode's only
+self-installing command is `context-mode upgrade` (and the `ctx_upgrade` tool
+that fronts it), which `git clone`s
+`https://github.com/mksglu/context-mode.git` and — when upstream is newer than
+the installed copy — runs `npm install`, `npm run build`, and copies the result
+over the installed tree. Invoking it per session would swap pinned, reviewed
+code for whatever is on `main`, inside a container that has the user's project
+mounted read-write, and would break `RIOTBOX_NETWORK=none`. It is never invoked.
+
+Everything fetched is fetched at image build time: the npm package at
+`CONTEXT_MODE_VERSION`, and the Claude Code plugin as a `git clone` at the
+`CONTEXT_MODE_PLUGIN_REF` tag, verified against `CONTEXT_MODE_PLUGIN_SHA`
+before its `.git` directory is dropped, with `npm ci --omit=dev` against the
+committed `container/context-mode-package-lock.json` for its runtime
+dependencies. A session only writes a registry entry naming the resulting path.
+
+Both halves of that pin have the same limit the release-asset digests
+elsewhere in the image have: the SHA and the lockfile's integrity hashes were
+transcribed from one resolution, so they catch the bytes behind a fixed tag or
+a published tarball changing afterwards, and cannot notice a release that was
+already compromised at the moment of transcription.
+
+**The lockfile does not cover the whole install.** Its 266 integrity hashes
+cover registry tarballs. `better-sqlite3` is marked `hasInstallScript` and
+depends on `prebuild-install`, and the staging layer does not pass
+`--ignore-scripts`, so the install additionally fetches a prebuilt
+`better_sqlite3.node` from that project's GitHub releases — no digest for it is
+recorded in this repo or in the lockfile, and the build's loader check proves
+the binary imports, not that it is the one upstream published. It is native code
+loaded by every hook in every enabled session. This is the one download in the
+image that RIOTBOX-20260312-001 does not yet cover; it is listed there as open,
+not closed by the lockfile above.
+
+One further limit, accepted:
+
+- **A host-installed `context-mode` plugin is excluded from the host-plugin
+  copy** rather than merged. A host tree has been through neither the pinned
+  clone nor the interpreter rewrite, and `plugin_setup` lets host entries win
+  every other merge, so without the exclusion a session would silently run
+  whatever the host had.
+
+  The exclusion is bounded, and the bound is deliberate. It applies only where
+  this session will actually register the staged tree — the feature on and an
+  image carrying a tree that declares its version. With the toggle off, or on an
+  image built before the staging layer, the host copy is taken and enabled like
+  any other host plugin, because it is then the only Context Mode the session
+  has and it is the user's own install. So the pinned-and-reviewed guarantee
+  above covers the tree RiotBox stages, not every `context-mode` that can end up
+  running in a session.
 
 **On opencode the same code runs inside the agent process, and that is a wider
 blast radius for identical code.** The Claude path spawns a short-lived hook
@@ -419,10 +457,12 @@ could send anywhere. The marker is a correctness guard against riotbox
 clobbering or deleting a file it did not create, and nothing more.
 
 **The routing block the adapter injects is never written to disk.** On the
-Claude path, what the wiring does to a session is reviewable after the fact:
-the hook stanzas and the `mcpServers` entry sit in `settings.json` and
-`.claude.json`, and `cat` shows exactly what was added. The opencode adapter
-instead injects its routing instructions into the system prompt at runtime,
+Claude path, what a session runs is reviewable after the fact: the hook commands
+and the `mcpServers` entry sit in the staged plugin's `hooks/hooks.json` and
+`.claude-plugin/plugin.json`, the session's `installed_plugins.json` names the
+tree they came from, and `cat` shows exactly what each one is. The opencode
+adapter instead injects its routing instructions into the system prompt at
+runtime,
 through `experimental.chat.system.transform`, when it does not already find
 them there. Nothing in the session config records that this happened or what
 was injected — reading `opencode.jsonc` and the shim tells you the plugin is
@@ -449,19 +489,49 @@ set, and that flag is what skips the startup routine the version check lives in
 riotbox holds, so it is recorded here as an observation about the pinned
 version, not as a guarantee across bumps.
 
-**Wiring outlives the image, so it is stripped rather than documented away.**
-The hooks and the `mcpServers` entry are written into the session
-`settings.json` and `.claude.json`, and the opencode shim into the session
-`plugins/` directory; riotbox syncs none of those from the host. That is the
-same trap CodeGraph's prompt hook set: a session wired by an image that shipped
-the feature would keep spawning a missing binary on every matching tool call, or
-keep loading a plugin that re-exports a path that no longer exists. Each agent's
-`context_mode_strip` verb removes exactly what that agent's wiring could have
-written — the entries whose command names the riotbox shim, the shim file
-carrying riotbox's marker line — leaving anything the user wrote untouched, on
-the first session that starts with the toggle off or the binary absent. Starting
-a session with a different `--agent` strips the other agent's wiring the same
-way, so a session directory never holds two agents' wiring at once.
+**Wiring outlives the image, so it is unregistered or stripped rather than
+documented away.** What a Claude session records is a *registration*: an entry
+in its `installed_plugins.json` and `known_marketplaces.json` naming a
+version-stamped path inside the image. The session directory outlives that
+image, so a rebuild at a new ref leaves the entry naming a tree that is gone,
+and Claude Code surfaces the plugin and then fails to load every hook in it.
+Both files are rebuilt from what is staged now at every session start, and where
+the session has no usable staged tree — the toggle off, an image carrying no
+tree, or a tree whose version cannot be read — `context_mode_plugin_unregister`
+takes the entry out instead.
+
+**What does not clear a stale entry is a session that cannot read or write those
+two files.** Registration refuses both halves of one fact together, so a
+`known_marketplaces.json` it cannot parse, build or write leaves the readable
+registry beside it exactly as found: an entry naming a version-stamped path this
+image does not carry, warned about on stderr and standing until a session that
+can read and write both. Nothing else removes it, so a session whose only real
+problem is one corrupt file keeps the dangling registration the rest of this
+machinery exists to prevent.
+
+The hand-authored wiring that predates the plugin is stripped on a wider trigger
+than that. Releases before RiotBox adopted the plugin wrote six hook stanzas
+into the session `settings.json` and an `mcpServers` entry into `.claude.json`,
+and RiotBox still writes the opencode shim into the session `plugins/`
+directory. `settings.json` is never synced from the host, so nothing regenerates
+those stanzas; `.claude.json` is copied from the host at every launch, so a
+stale MCP entry survives only on a host that has no `~/.claude.json` to copy.
+That is the same trap CodeGraph's prompt hook set: a session wired by an image
+that shipped the feature would keep spawning a missing binary on every matching
+tool call, or keep loading a plugin that re-exports a path that no longer
+exists. Each agent's `context_mode_strip` verb runs on the first session that
+starts with the toggle off or the binary absent, and on any session that starts
+with a different `--agent`, so a session directory never holds two agents'
+wiring at once.
+
+Two of the three removals prove ownership before deleting — a hook entry whose
+command names the riotbox shim, a shim file carrying riotbox's marker line — and
+leave anything else the user wrote. **The MCP entry is deleted by key, and that
+key is upstream's server name rather than one riotbox owns**, so a user's own
+entry under it goes with it, and the host copy above re-supplies such an entry
+every launch to be deleted again every session. Riotbox cannot pick a different
+name: it is the shape Claude Code derives for upstream's plugin, and the routing
+table steers only toward tools carrying it.
 
 **Licence.** Context Mode is Elastic Licence 2.0: source-available, not OSI open
 source, and the only such component in the image. It is fetched from npm during
@@ -635,6 +705,13 @@ describes proves nothing.
     /usr/local/bin/hadolint
     https://github.com/hadolint/hadolint/releases/latest/download/hadolint-linux-x86_64`
     (accepted 2026-08-03 — see Mitigations)
+  - `/workspace/Containerfile:1401` — `"${CM_NODE_BIN}/npm" ci --omit=dev`, the
+    Context Mode plugin staging install. Not a curl-to-shell, but the same
+    missing control: `better-sqlite3` is `hasInstallScript` and its
+    `prebuild-install` dependency downloads a prebuilt `better_sqlite3.node`
+    from that project's GitHub releases — outside the lockfile's 266 integrity
+    hashes, with no digest pinned in this repo, and loaded by every Context Mode
+    hook in every enabled session (open — see Mitigations)
 
 #### Asset & Security Criteria
 
@@ -753,7 +830,20 @@ and exfiltrate credentials.
   verify SHA256 against a pinned hash, (3) execute only if hash matches. For the
   base image, use FROM quay.io/centos/centos:stream10@sha256:<digest>. For tools
   with published checksums (trivy, grype, syft), verify them. For venom (no
-  published checksums), compute and pin a self-managed SHA256. Example for
+  published checksums), compute and pin a self-managed SHA256. Done for venom,
+  github-mcp-server, and bun — each fetches a version-pinned release asset and
+  verifies it against a SHA256 recorded in the `Containerfile` before use; bun
+  takes its digests from the `SHASUMS256.txt` upstream publishes per release
+  rather than self-computing them, and reaches the binary directly instead of
+  through `https://bun.sh/install`. **Open for the Context Mode plugin's
+  `better-sqlite3` prebuild**: the lockfile pins the registry tree but not the
+  native binary `prebuild-install` fetches from GitHub releases. Closing it means
+  either pinning that download to a digest (a `sha256sum -c` over the fetched
+  `.node`, or vendoring the tarball and pointing `prebuild-install` at it) or
+  building it from source, which needs a toolchain the staging stage does not
+  carry — `--ignore-scripts` alone falls through to node-gyp and fails the build.
+  The digest is also per-Node-ABI and per-architecture, so it is a real pin to
+  maintain, not a one-line addition. Example for
   trivy: RUN curl -sfL -o /tmp/install-trivy.sh
   <https://raw.githubusercontent.com/aquasecurity/trivy/v0.58.2/contrib/install.sh>
   && \

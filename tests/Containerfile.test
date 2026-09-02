@@ -4,6 +4,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
 FROM quay.io/centos/centos:stream10
 
+# util-linux is here for setpriv, which the uid-0 run of this image
+# (`task test:as-root`, and the matching step in .github/workflows/test.yml)
+# needs: the probe case in tests/doctor-context-mode.venom.yml drops to uid
+# 65534 rather than skipping, and hard-fails when setpriv is absent. The base
+# image ships only util-linux-core, which does not carry it. The packages
+# below happen to pull the full util-linux in transitively today — listing it
+# makes that a declared dependency instead of something a future dependency
+# resolution can quietly take away.
 RUN dnf -y install \
         bash \
         git \
@@ -11,6 +19,7 @@ RUN dnf -y install \
         podman \
         fuse-overlayfs \
         jq \
+        util-linux \
     && dnf clean all
 
 # venom (integration test runner)

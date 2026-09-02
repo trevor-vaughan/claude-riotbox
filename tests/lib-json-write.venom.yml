@@ -102,6 +102,84 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "atomic_failed_write=pass"
 
+  # A target that is a directory is not an absurd state to guard against: it is
+  # what podman and docker create when a bind mount's source path does not
+  # exist on the host, and libexec/launch.sh mounts the very config paths these
+  # callers rewrite. One mistyped or not-yet-created host path is enough.
+  #
+  # `mv file dir` moves the file INTO the directory and exits 0, and `stat` on a
+  # directory happily returns 755, so every guard in the writer passes: the
+  # caller is told its config was replaced while the content sits at
+  # <target>/<basename>.XXXXXX and the real config is untouched. Refusing before
+  # the staging file exists is what turns that silent loss into the failure
+  # branch each caller already has.
+  - name: a directory target is refused before anything is staged
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          target="${TEST_DIR}/settings.json"
+          mkdir "${target}"
+          chmod 755 "${target}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # Without this, a renamed or deleted writer makes the whole case pass:
+          # bash exits 127 for a missing command, which is the non-zero this
+          # test is looking for.
+          declare -F json_write_atomic >/dev/null \
+            || { echo "FAIL: json_write_atomic is not defined"; exit 1; }
+          rc=0
+          json_write_atomic "${target}" '{"a":2}' || rc=$?
+
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: reported success writing onto a directory"; exit 1; }
+          [ -d "${target}" ] \
+            || { echo "FAIL: target is no longer the directory it was"; exit 1; }
+          strays="$(find "${TEST_DIR}" -mindepth 1 -not -path "${target}")"
+          [ -z "${strays}" ] \
+            || { echo "FAIL: wrote something anyway - ${strays}"; exit 1; }
+          echo "atomic_dir_target=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "atomic_dir_target=pass"
+
+  # Same reachable state one indirection further out, and the reason the guard
+  # must not exempt symlinks: a host config path can be a symlink into a shared
+  # dotfiles directory, and if that directory is the bind mount source podman
+  # created, the target resolves to a directory while looking like a file. `mv`
+  # follows it and drops the content inside, so a guard that trusts a symlink
+  # loses the write exactly as before.
+  - name: a symlink to a directory is refused the same way
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          target="${TEST_DIR}/settings.json"
+          mkdir "${TEST_DIR}/dotfiles"
+          ln -s "${TEST_DIR}/dotfiles" "${target}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          declare -F json_write_atomic >/dev/null \
+            || { echo "FAIL: json_write_atomic is not defined"; exit 1; }
+          rc=0
+          json_write_atomic "${target}" '{"a":2}' || rc=$?
+
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: reported success writing through a symlinked directory"; exit 1; }
+          [ -L "${target}" ] \
+            || { echo "FAIL: target is no longer the symlink it was"; exit 1; }
+          strays="$(find "${TEST_DIR}/dotfiles" "${TEST_DIR}" -mindepth 1 -not -path "${target}" -not -path "${TEST_DIR}/dotfiles")"
+          [ -z "${strays}" ] \
+            || { echo "FAIL: wrote something anyway - ${strays}"; exit 1; }
+          echo "atomic_symlink_dir_target=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "atomic_symlink_dir_target=pass"
+
   # The writer is shared because the entrypoint sources codegraph-setup.sh and
   # context-mode-setup.sh independently, so neither may own it. That only works
   # if the library is sourced first: a source line moved below either setup
@@ -160,8 +238,6 @@ testcases:
           out="$(bash -uc '. container/context-mode-setup.sh
             . agents/claude/context-mode.sh
             : "${CONTEXT_MODE_BIN:?}"
-            : "${CONTEXT_MODE_MATCHER:?}"
-            : "${CONTEXT_MODE_POST_MATCHER:?}"
             : "${CONTEXT_MODE_MCP_NAME:?}"
             echo standalone_source_ok' 2>&1)"
           [ "${out}" = "standalone_source_ok" ] \

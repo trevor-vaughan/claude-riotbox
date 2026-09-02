@@ -62,3 +62,14 @@ jobs:
 
       - name: Run tests
         run: task test
+
+      # The probe case in tests/doctor-context-mode.venom.yml drops to uid 65534
+      # with setpriv, and that branch is only taken when the runner is uid 0 —
+      # which nothing above ever is: the job runs as `runner` and the test image
+      # ends `USER testuser`. Left at that, the drop (and the four sentinel
+      # shapes it recovered, which a root runner used to skip) would be executed
+      # only when a maintainer happened to be root, so a typo in it would land
+      # green. This re-runs that one suite as uid 0 against the image the step
+      # above already built, so it costs a suite rather than a rebuild.
+      - name: Run the Context Mode doctor suite as uid 0
+        run: task test:as-root -- tests/doctor-context-mode.venom.yml

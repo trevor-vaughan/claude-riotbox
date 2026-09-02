@@ -1,16 +1,33 @@
-name: context-mode-setup.sh — per-session wiring, stripping, and storage
+name: context-mode — the Claude session path and the build-time pins behind it
 vars:
   root: "."
   riotbox_dir: "{{.root}}"
 
-# RiotBox writes Context Mode's wiring itself rather than calling
-# `context-mode upgrade`. That command is the vendor's only hook-configuring
-# entry point, and it git-clones https://github.com/mksglu/context-mode.git
-# and — when upstream is newer — npm-installs and copies the result over the
-# installed package tree. Running it at session start would swap pinned,
-# reviewed code for whatever is on main, inside a container holding the user's
-# project, and would break RIOTBOX_NETWORK=none.
-# See docs/dev/decisions/context-mode-adoption.md.
+# Deciding whether a new case belongs here: the plugin REGISTRATION is covered
+# by tests/plugin-setup.venom.yml, not by this file. RiotBox no longer writes
+# Claude's wiring — the image stages upstream's marketplace plugin at a pinned
+# ref and container/plugin-setup.sh registers it against the session — so what
+# is left here is everything around that registration.
+#
+# Which is three kinds of thing. They are INTERLEAVED rather than sectioned, so
+# read this as what the file covers and not as a map of where to find it:
+#
+#   * The per-session Claude path in container/context-mode-setup.sh — the
+#     storage and platform pins, the probe that decides whether this session
+#     actually has a Context Mode plugin to claim, and the stripper that clears
+#     hook stanzas an earlier release wrote by hand.
+#   * The build-time pins that path depends on. No image is built here, so the
+#     layer cases read the Containerfile as text — the Context Mode layer, the
+#     bun layer, the plugin-staging layer and its three-way version check, the
+#     COPY manifests. The claude build assert is the exception: it is sourced
+#     through agents/registry.sh and executed against fixtures, both the
+#     accepting and the rejecting direction.
+#   * The seams either side of it — the launcher forwarding
+#     RIOTBOX_SESSION_KEY, entrypoint ordering, and the generated shim
+#     context_mode_pkg_root parses.
+#
+# See docs/dev/decisions/context-mode-native-plugin.md for why the wiring was
+# retired, and docs/dev/context-mode.md for how the integration behaves now.
 
 # Every case sources scripts/lib/json-write.sh first, the way entrypoint.sh
 # does: the atomic config writer is shared with codegraph-setup.sh, so neither
@@ -18,855 +35,6 @@ vars:
 # one on its own). Its own contract is pinned by tests/lib-json-write.venom.yml.
 
 testcases:
-  - name: wire writes the MCP entry and both hooks
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          agent_call claude context_mode_wire
-
-          settings="${CLAUDE_CONFIG_DIR}/settings.json"
-          jq -e '.hooks.PreToolUse[0].hooks[0].command | endswith("hook claude-code pretooluse")' \
-            "${settings}" >/dev/null || { echo "FAIL: PreToolUse missing"; exit 1; }
-          jq -e '.hooks.SessionStart[0].hooks[0].command | endswith("hook claude-code sessionstart")' \
-            "${settings}" >/dev/null || { echo "FAIL: SessionStart missing"; exit 1; }
-          # The matcher is the deny control's whole reach, and every alternative
-          # in it earns its place: drop `WebFetch|` and the only compelled
-          # routing path disappears, drop the trailing bare `mcp__` and every
-          # external-MCP interception goes with it — in both cases the session
-          # still wires, still reports healthy, and quietly stops intercepting.
-          # Pinned as the full literal rather than a substring, and spelled out
-          # here rather than compared against CONTEXT_MODE_MATCHER — comparing
-          # the constant to itself would only prove the value travelled.
-          #
-          # The image build does not cover this and cannot be made to without
-          # changing what it checks. Containerfile:835-838 splits
-          # ${CONTEXT_MODE_MATCHER} on "|" and greps the bundle for each
-          # element, so a constant that loses `WebFetch|` simply presents eight
-          # elements instead of nine, all of them still present upstream, and
-          # the build passes. The Containerfile's own comment (line 791) rates
-          # the plain names "a tripwire, not proof" for a related reason. That
-          # guard asserts every element of the constant exists upstream; it
-          # never asserts the constant is complete. This literal is the only
-          # check of that, so weakening it back to a substring restores the
-          # blind spot rather than removing a duplicate.
-          expected_matcher='Bash|WebFetch|Read|Grep|Agent|mcp__plugin_context-mode_context-mode__ctx_execute|mcp__plugin_context-mode_context-mode__ctx_execute_file|mcp__plugin_context-mode_context-mode__ctx_batch_execute|mcp__'
-          actual_matcher="$(jq -r '.hooks.PreToolUse[0].matcher' "${settings}")"
-          [ "${actual_matcher}" = "${expected_matcher}" ] \
-            || { echo "FAIL: matcher is '${actual_matcher}', want '${expected_matcher}'"; exit 1; }
-          # The server name is load-bearing: Claude Code exposes MCP tools as
-          # mcp__<server>__<tool>, and Context Mode's routing hardcodes
-          # mcp__plugin_context-mode_context-mode__<tool> for this platform. A
-          # plain "context-mode" server would make every redirect name a tool
-          # that does not exist in the session.
-          jq -e '.mcpServers["plugin_context-mode_context-mode"].command == env.CONTEXT_MODE_BIN' \
-            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
-            || { echo "FAIL: MCP entry missing or misnamed"; exit 1; }
-          jq -e '.mcpServers["plugin_context-mode_context-mode"] as $s
-                 | ($s.type == "stdio") and ($s.args | length == 0)' \
-            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
-            || { echo "FAIL: MCP entry shape wrong"; exit 1; }
-          echo "wire=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire=pass"
-
-  # All six of upstream's hook events, not the two the first integration wired.
-  # PostToolUse, UserPromptSubmit, Stop and PreCompact are the writers of the
-  # session DB that SessionStart replays: with only PreToolUse and SessionStart
-  # wired, `riotbox resume` restores nothing and an autocompact loses the
-  # snapshot. hooks/hooks.json upstream is the source of truth for the set.
-  - name: wire writes all six hook events with the right dispatch subcommands
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          agent_call claude context_mode_wire
-
-          settings="${CLAUDE_CONFIG_DIR}/settings.json"
-          for pair in PreToolUse:pretooluse PostToolUse:posttooluse \
-                      UserPromptSubmit:userpromptsubmit PreCompact:precompact \
-                      SessionStart:sessionstart Stop:stop; do
-            key="${pair%%:*}"
-            event="${pair##*:}"
-            jq -e --arg k "${key}" --arg e "hook claude-code ${event}" \
-              '.hooks[$k][0].hooks[0].command | endswith($e)' \
-              "${settings}" >/dev/null \
-              || { echo "FAIL: ${key} not dispatching ${event}"; exit 1; }
-          done
-
-          jq -e '.hooks | length == 6' "${settings}" >/dev/null \
-            || { echo "FAIL: expected exactly six hook events"; exit 1; }
-
-          post="$(jq -r '.hooks.PostToolUse[0].matcher' "${settings}")"
-          expected='Bash|Read|Write|Edit|NotebookEdit|Glob|Grep|TodoWrite|TaskCreate|TaskUpdate|EnterPlanMode|ExitPlanMode|Skill|Agent|AskUserQuestion|EnterWorktree|mcp__'
-          [ "${post}" = "${expected}" ] \
-            || { echo "FAIL: PostToolUse matcher drifted: ${post}"; exit 1; }
-
-          for key in UserPromptSubmit PreCompact SessionStart Stop; do
-            m="$(jq -r --arg k "${key}" '.hooks[$k][0].matcher' "${settings}")"
-            [ "${m}" = "" ] \
-              || { echo "FAIL: ${key} matcher should be empty, got '${m}'"; exit 1; }
-          done
-          echo "wire_six=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire_six=pass"
-
-  # A session directory outlives the image and settings.json is never synced
-  # from the host, so an event this function forgets keeps spawning a hook that
-  # no longer exists on every matching tool call, forever. Six wired, six
-  # stripped — and a user-authored hook in the same arrays survives, because the
-  # rule is under-remove rather than over-remove.
-  - name: strip removes all six hook events and keeps foreign entries
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          agent_call claude context_mode_wire
-
-          settings="${CLAUDE_CONFIG_DIR}/settings.json"
-          # A hook the user owns in two of the arrays we prune.
-          tmp="$(mktemp)"
-          jq '.hooks.PostToolUse += [{"matcher":"Bash","hooks":[{"type":"command","command":"my-audit.sh"}]}]
-              | .hooks.Stop += [{"matcher":"","hooks":[{"type":"command","command":"my-bell.sh"}]}]' \
-            "${settings}" > "${tmp}"
-          mv "${tmp}" "${settings}"
-
-          agent_call claude context_mode_strip
-
-          for key in PreToolUse UserPromptSubmit PreCompact SessionStart; do
-            jq -e --arg k "${key}" 'has("hooks") and (.hooks | has($k))' \
-              "${settings}" >/dev/null 2>&1 \
-              && { echo "FAIL: ${key} survived the strip"; exit 1; }
-          done
-          jq -e '[.hooks.PostToolUse[].hooks[0].command] == ["my-audit.sh"]' \
-            "${settings}" >/dev/null \
-            || { echo "FAIL: foreign PostToolUse entry not preserved alone"; exit 1; }
-          jq -e '[.hooks.Stop[].hooks[0].command] == ["my-bell.sh"]' \
-            "${settings}" >/dev/null \
-            || { echo "FAIL: foreign Stop entry not preserved alone"; exit 1; }
-          jq -e '.mcpServers | has("plugin_context-mode_context-mode") | not' \
-            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
-            || { echo "FAIL: MCP entry survived the strip"; exit 1; }
-          echo "strip_six=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "strip_six=pass"
-
-  # The table only tells agent_claude_context_mode_wire what to WRITE. Pruning
-  # by it too means a session already wired with a stanza for a row later
-  # removed (or renamed) from the table can never have it removed again — a hook
-  # pointing at a binary that is gone, for the life of a session directory
-  # that outlives the image. is_ours does not need the table either: it
-  # matches on the shim's own path in the command, which is true for any key.
-  # Wiring above uses the REAL table, so this stanza exists at "Stop" the
-  # normal way; only the strip below sees a table with that row missing.
-  - name: strip removes a stanza the table no longer names, keeping foreign entries
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          agent_call claude context_mode_wire
-
-          settings="${CLAUDE_CONFIG_DIR}/settings.json"
-          jq -e '.hooks | has("Stop")' "${settings}" >/dev/null \
-            || { echo "FAIL: wire did not write a Stop stanza to strand"; exit 1; }
-
-          # A hook the user owns, in the same array as the stanza about to be
-          # stranded — must survive the strip untouched.
-          tmp="$(mktemp)"
-          jq '.hooks.Stop += [{"matcher":"","hooks":[{"type":"command","command":"my-bell.sh"}]}]' \
-            "${settings}" > "${tmp}"
-          mv "${tmp}" "${settings}"
-
-          # Shadowed only now, after wiring above used the real table to write
-          # a real Stop stanza: this models an image whose table dropped the
-          # Stop row after the session directory was already wired.
-          context_mode_hook_table() {
-            jq -nc '{
-              PreToolUse:       {matcher: "x", event: "pretooluse"},
-              PostToolUse:      {matcher: "x", event: "posttooluse"},
-              UserPromptSubmit: {matcher: "",  event: "userpromptsubmit"},
-              PreCompact:       {matcher: "",  event: "precompact"},
-              SessionStart:     {matcher: "",  event: "sessionstart"}
-            }'
-          }
-
-          agent_call claude context_mode_strip
-
-          jq -e '[.hooks.Stop[].hooks[0].command] == ["my-bell.sh"]' "${settings}" >/dev/null \
-            || { echo "FAIL: Stop should hold only the foreign entry: $(jq -c '.hooks.Stop' "${settings}")"; exit 1; }
-          for key in PreToolUse PostToolUse UserPromptSubmit PreCompact SessionStart; do
-            jq -e --arg k "${key}" '(.hooks // {}) | has($k) | not' "${settings}" >/dev/null \
-              || { echo "FAIL: ${key} survived the strip"; exit 1; }
-          done
-          echo "strip_stranded_event=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "strip_stranded_event=pass"
-
-  # The one give-up path reachable before any jq call touches the session's
-  # files. On a session with no settings.json yet, `current` stays the literal
-  # '{}' and nothing has run jq before the table is built — exactly the shape a
-  # broken or absent jq on PATH produces. Shadowing context_mode_hook_table
-  # itself, rather than jq, isolates the branch under test from the jq calls
-  # this case's own assertions still need to make.
-  - name: wire gives up cleanly when the hook table cannot be built
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          context_mode_hook_table() { return 1; }
-
-          # A give-up path returns non-zero — the all-or-nothing half of the
-          # registry contract — so the status is captured rather than left to
-          # abort the script under set -e, and asserted below.
-          rc=0
-          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
-
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: wire reported success with no hook table"; exit 1; }
-          echo "${err}" | grep -q "could not build the hook table" \
-            || { echo "FAIL: no warning about the failed table: ${err}"; exit 1; }
-          [ ! -f "${CLAUDE_CONFIG_DIR}/settings.json" ] \
-            || { echo "FAIL: settings.json written despite the table failure"; exit 1; }
-          [ ! -f "${CLAUDE_CONFIG_DIR}/.claude.json" ] \
-            || { echo "FAIL: .claude.json written despite the table failure"; exit 1; }
-          echo "wire_table_fails=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire_table_fails=pass"
-
-  - name: wire preserves user hooks and unrelated settings keys
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-          cat > "${CLAUDE_CONFIG_DIR}/settings.json" <<'JSON'
-          {"statusLine":{"type":"command","command":"mine.sh"},
-           "hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"codegraph prompt-hook"}]}],
-                    "PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"my-audit.sh"}]}]}}
-          JSON
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          agent_call claude context_mode_wire
-
-          settings="${CLAUDE_CONFIG_DIR}/settings.json"
-          jq -e '.statusLine.command == "mine.sh"' "${settings}" >/dev/null \
-            || { echo "FAIL: unrelated key lost"; exit 1; }
-          jq -e '.hooks.UserPromptSubmit[0].hooks[0].command == "codegraph prompt-hook"' \
-            "${settings}" >/dev/null || { echo "FAIL: foreign hook type lost"; exit 1; }
-          jq -e '[.hooks.PreToolUse[] | select(.hooks[0].command == "my-audit.sh")] | length == 1' \
-            "${settings}" >/dev/null || { echo "FAIL: foreign PreToolUse entry lost"; exit 1; }
-          jq -e '.hooks.PreToolUse | length == 2' "${settings}" >/dev/null \
-            || { echo "FAIL: expected the user entry plus ours"; exit 1; }
-          echo "wire_preserve=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire_preserve=pass"
-
-  - name: wire is idempotent — a second call changes nothing
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          agent_call claude context_mode_wire
-          first="$(cat "${CLAUDE_CONFIG_DIR}/settings.json")"
-          agent_call claude context_mode_wire
-          second="$(cat "${CLAUDE_CONFIG_DIR}/settings.json")"
-
-          [ "${first}" = "${second}" ] \
-            || { echo "FAIL: second call changed the file"; exit 1; }
-          jq -e '.hooks.PreToolUse | length == 1' \
-            "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
-            || { echo "FAIL: hook duplicated"; exit 1; }
-          echo "wire_idempotent=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire_idempotent=pass"
-
-  - name: wire leaves malformed settings untouched and warns
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-          printf 'not json at all' > "${CLAUDE_CONFIG_DIR}/settings.json"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          rc=0
-          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
-
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: wire reported success over a malformed settings.json"; exit 1; }
-          echo "${err}" | grep -q "not valid JSON" \
-            || { echo "FAIL: no warning about the malformed file: ${err}"; exit 1; }
-          [ "$(cat "${CLAUDE_CONFIG_DIR}/settings.json")" = "not json at all" ] \
-            || { echo "FAIL: malformed file was rewritten"; exit 1; }
-          echo "wire_malformed=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire_malformed=pass"
-
-  # The data-destruction guard. settings.json is hand-edited, so a `hooks` key
-  # that is an array or a string is somebody's configuration, not garbage —
-  # rewriting it with our two stanzas would destroy something nothing
-  # regenerates and no backup holds. The malformed case above never reaches
-  # this branch: it stops at `jq -c '.'`. This input is valid JSON all the way
-  # in and fails only inside the jq program.
-  #
-  # What is pinned here is the refusal — no rewrite, a warning, and no MCP
-  # half — not the wording of the `error("settings.json .hooks is not an
-  # object")` clause, and the distinction is not academic. Delete that clause
-  # and jq still fails on the next line with `Cannot index array with string
-  # "PreToolUse"`; the message is swallowed by the `2>/dev/null` on the
-  # substitution, and wire emits the same warning and writes nothing, so this
-  # case stays green. The explicit error buys a diagnosable failure for a
-  # maintainer reading the jq program, not a distinct observable outcome —
-  # do not read a green run here as proof that string reached anybody.
-  # Byte-identity, not "still parses": a reflow is already a loss here.
-  - name: wire refuses to rewrite a hooks key that is not an object
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-
-          settings="${CLAUDE_CONFIG_DIR}/settings.json"
-          # An array and a string: the two shapes a hand edit most plausibly
-          # leaves behind, and both are valid JSON.
-          for shape in '{"hooks":[{"foo":1}]}' '{"hooks":"x"}'; do
-            printf '%s' "${shape}" > "${settings}"
-            cp "${settings}" "${TEST_DIR}/before"
-            rm -f "${CLAUDE_CONFIG_DIR}/.claude.json"
-
-            rc=0
-            err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
-
-            [ "${rc}" != "0" ] \
-              || { echo "FAIL (${shape}): wire reported success on a refusal"; exit 1; }
-            cmp -s "${TEST_DIR}/before" "${settings}" \
-              || { echo "FAIL (${shape}): the file was rewritten: $(cat "${settings}")"; exit 1; }
-            echo "${err}" | grep -q "could not build hook config" \
-              || { echo "FAIL (${shape}): the refusal was silent: ${err}"; exit 1; }
-            echo "${err}" | grep -q "not wired" \
-              || { echo "FAIL (${shape}): warning does not say the feature is off: ${err}"; exit 1; }
-            # Nothing is written before the whole document is built, so the MCP
-            # half must not exist either — a registered server with no hooks
-            # still gets spawned at session start.
-            [ ! -f "${CLAUDE_CONFIG_DIR}/.claude.json" ] \
-              || { echo "FAIL (${shape}): MCP entry written after refusing the hooks"; exit 1; }
-          done
-          echo "wire_hooks_not_object=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire_hooks_not_object=pass"
-
-  # The .claude.json twin of the case above, and the file it guards is the one
-  # holding the agent's account metadata. An `mcpServers` key that is present
-  # but not an object is a hand edit, and jq's `.[$name] = …` raises on an array
-  # or a string rather than answering — the raise this branch turns into a
-  # refusal. Overwriting instead would take the oauthAccount stanza with it, and
-  # nothing in a session regenerates that file.
-  - name: wire refuses to rewrite an mcpServers key that is not an object
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-
-          claude_json="${CLAUDE_CONFIG_DIR}/.claude.json"
-          settings="${CLAUDE_CONFIG_DIR}/settings.json"
-          # An array and a string — the same two shapes a hand edit most
-          # plausibly leaves behind, both valid JSON — each carrying the account
-          # stanza that has to survive them.
-          for shape in \
-            '{"oauthAccount":{"emailAddress":"a@b.invalid"},"mcpServers":[]}' \
-            '{"oauthAccount":{"emailAddress":"a@b.invalid"},"mcpServers":"x"}'; do
-            printf '%s' "${shape}" > "${claude_json}"
-            cp "${claude_json}" "${TEST_DIR}/before-claude-json"
-            printf '%s' '{"statusLine":{"type":"command","command":"mine.sh"}}' > "${settings}"
-            cp "${settings}" "${TEST_DIR}/before-settings"
-
-            rc=0
-            err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
-
-            [ "${rc}" != "0" ] \
-              || { echo "FAIL (${shape}): wire reported success on a refusal"; exit 1; }
-            cmp -s "${TEST_DIR}/before-claude-json" "${claude_json}" \
-              || { echo "FAIL (${shape}): account metadata rewritten: $(cat "${claude_json}")"; exit 1; }
-            # Nothing is written before both documents are built, so the hooks
-            # half must not have landed either: it denies WebFetch and redirects
-            # to a server this session would not have registered.
-            cmp -s "${TEST_DIR}/before-settings" "${settings}" \
-              || { echo "FAIL (${shape}): hooks written after refusing the MCP entry: $(cat "${settings}")"; exit 1; }
-            echo "${err}" | grep -q "could not build the MCP entry" \
-              || { echo "FAIL (${shape}): the refusal was silent: ${err}"; exit 1; }
-            echo "${err}" | grep -q "not wired" \
-              || { echo "FAIL (${shape}): warning does not say the feature is off: ${err}"; exit 1; }
-          done
-          echo "wire_mcpservers_not_object=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire_mcpservers_not_object=pass"
-
-  # The hooks are a deny control: PreToolUse denies WebFetch and names an MCP
-  # tool to use instead. Writing them without the MCP server registration means
-  # the session denies the capability and redirects to a tool that does not
-  # exist, for the life of the session directory — worse than leaving Context
-  # Mode off. Every failure that can be seen before the first write must be
-  # seen before the first write.
-  - name: wire writes nothing when .claude.json cannot be parsed
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-          printf '{"statusLine":{"type":"command","command":"mine.sh"}}\n' \
-            > "${CLAUDE_CONFIG_DIR}/settings.json"
-          printf 'not json at all' > "${CLAUDE_CONFIG_DIR}/.claude.json"
-          settings_before="$(cat "${CLAUDE_CONFIG_DIR}/settings.json")"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          rc=0
-          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
-
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: wire reported success over a malformed .claude.json"; exit 1; }
-          echo "${err}" | grep -q "not valid JSON" \
-            || { echo "FAIL: no warning about the malformed file: ${err}"; exit 1; }
-          jq -e '.hooks == null' "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
-            || { echo "FAIL: hooks wired with no MCP server to redirect to"; exit 1; }
-          [ "${settings_before}" = "$(cat "${CLAUDE_CONFIG_DIR}/settings.json")" ] \
-            || { echo "FAIL: settings.json rewritten"; exit 1; }
-          [ "$(cat "${CLAUDE_CONFIG_DIR}/.claude.json")" = "not json at all" ] \
-            || { echo "FAIL: malformed .claude.json was rewritten"; exit 1; }
-          echo "wire_mcp_malformed=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire_mcp_malformed=pass"
-
-  # The invariant has to cover state this function inherits, not just state it
-  # creates. A session directory outlives the run that wired it, and .claude.json
-  # can come back truncated (a crash mid-write, the same failure the codegraph
-  # suite models with its empty-target case) or hand-broken. Bailing out on the
-  # parse then leaves the earlier run's hooks denying WebFetch with no registered
-  # server — and a warning that says the session is not wired when it is half
-  # wired.
-  - name: wire strips the hooks an earlier run left when .claude.json is unreadable
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          settings="${CLAUDE_CONFIG_DIR}/settings.json"
-          claude_json="${CLAUDE_CONFIG_DIR}/.claude.json"
-
-          # Run one: a normally wired session.
-          agent_call claude context_mode_wire
-          jq -e '.hooks.PreToolUse != null and .hooks.SessionStart != null' \
-            "${settings}" >/dev/null || { echo "FAIL: the first run did not wire"; exit 1; }
-
-          # Between runs the MCP registration is lost. Zero bytes rather than
-          # garbage: jq parses it to nothing and exits 0, which is the arm a
-          # crash mid-write reaches.
-          printf '' > "${claude_json}"
-
-          # Run two, same session directory.
-          rc=0
-          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
-
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: wire reported success over an unreadable .claude.json"; exit 1; }
-          jq -e '.hooks.PreToolUse == null and .hooks.SessionStart == null' \
-            "${settings}" >/dev/null \
-            || { echo "FAIL: hooks from the earlier run survived with no MCP server: ${err}"; exit 1; }
-          echo "${err}" | grep -q "not valid JSON" \
-            || { echo "FAIL: no warning about the unreadable file: ${err}"; exit 1; }
-          echo "${err}" | grep -q "Removed" \
-            || { echo "FAIL: warning claims a state it did not reach: ${err}"; exit 1; }
-          [ ! -s "${claude_json}" ] \
-            || { echo "FAIL: the unreadable file was rewritten"; exit 1; }
-          echo "wire_inherited_half_wiring=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire_inherited_half_wiring=pass"
-
-  # The first of the two writes fails on I/O. Reached the same way as the case
-  # below and for the same reason — json_write_atomic renames a staging file
-  # into place, and shimming `mv` for one target is the only way to fail a
-  # specific file as any user, root included — but the outcome is the one the
-  # write order is chosen to produce: nothing this call built is on disk, so
-  # there is no MCP entry naming a set of hooks the session never got.
-  - name: wire registers no MCP server when the hooks cannot be written
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-          settings="${CLAUDE_CONFIG_DIR}/settings.json"
-          claude_json="${CLAUDE_CONFIG_DIR}/.claude.json"
-          printf '%s' '{"statusLine":{"type":"command","command":"mine.sh"}}' > "${settings}"
-          cp "${settings}" "${TEST_DIR}/before"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          mv() {
-            case "${2}" in
-              */settings.json) return 1 ;;
-              *) command mv "$@" ;;
-            esac
-          }
-          rc=0
-          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
-          unset -f mv
-
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: wire reported success when the hooks could not be written"; exit 1; }
-          echo "${err}" | grep -q "could not write ${settings}" \
-            || { echo "FAIL: the failed write was silent: ${err}"; exit 1; }
-          echo "${err}" | grep -q "not wired" \
-            || { echo "FAIL: warning does not say the feature is off: ${err}"; exit 1; }
-          cmp -s "${TEST_DIR}/before" "${settings}" \
-            || { echo "FAIL: settings.json rewritten by a failed write: $(cat "${settings}")"; exit 1; }
-          [ ! -f "${claude_json}" ] \
-            || { echo "FAIL: MCP server registered with no hooks: $(cat "${claude_json}")"; exit 1; }
-          leftovers="$(find "${CLAUDE_CONFIG_DIR}" -maxdepth 1 -name 'settings.json.*')"
-          [ -z "${leftovers}" ] \
-            || { echo "FAIL: staging file left behind: ${leftovers}"; exit 1; }
-          echo "wire_first_write_fails=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire_first_write_fails=pass"
-
-  # The residual case: settings.json is written, then the second write fails on
-  # I/O. It cannot be staged with permissions — rename(2) checks the containing
-  # directory, and both files live in the same one, so an unwritable directory
-  # fails the first write instead. Shimming `mv` for one target is the only way
-  # to reach the path, and it reaches it as any user, root included.
-  - name: wire removes the hooks it wrote when the MCP entry cannot be written
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-          cat > "${CLAUDE_CONFIG_DIR}/settings.json" <<'JSON'
-          {"statusLine":{"type":"command","command":"mine.sh"},
-           "hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"my-audit.sh"}]}]}}
-          JSON
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          mv() {
-            case "${2}" in
-              */.claude.json) return 1 ;;
-              *) command mv "$@" ;;
-            esac
-          }
-          rc=0
-          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
-          unset -f mv
-
-          settings="${CLAUDE_CONFIG_DIR}/settings.json"
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: wire reported success when the MCP entry could not be written"; exit 1; }
-          echo "${err}" | grep -q "MCP server not registered" \
-            || { echo "FAIL: no warning about the failed write: ${err}"; exit 1; }
-          echo "${err}" | grep -q "Removed" \
-            || { echo "FAIL: did not say the hooks were taken back out: ${err}"; exit 1; }
-          jq -e '[.hooks.PreToolUse[]? | select(.hooks[0].command | contains("hook claude-code"))] | length == 0' \
-            "${settings}" >/dev/null \
-            || { echo "FAIL: our PreToolUse hook survived without an MCP server"; exit 1; }
-          jq -e '.hooks.SessionStart == null' "${settings}" >/dev/null \
-            || { echo "FAIL: our SessionStart hook survived without an MCP server"; exit 1; }
-          jq -e '.statusLine.command == "mine.sh"' "${settings}" >/dev/null \
-            || { echo "FAIL: unrelated key lost"; exit 1; }
-          jq -e '.hooks.PreToolUse[0].hooks[0].command == "my-audit.sh"' "${settings}" >/dev/null \
-            || { echo "FAIL: the user's own hook was taken with ours"; exit 1; }
-          leftovers="$(find "${CLAUDE_CONFIG_DIR}" -maxdepth 1 -name '.claude.json.*')"
-          [ -z "${leftovers}" ] \
-            || { echo "FAIL: staging file left behind: ${leftovers}"; exit 1; }
-          echo "wire_second_write_fails=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire_second_write_fails=pass"
-
-  # `$(jq . <<<"${doc}")` yields the empty string when jq fails or prints
-  # nothing, and the writer's `${2?…}` accepts set-but-empty — so an unchecked
-  # substitution writes a lone newline over the user's hand-edited config, with
-  # no backup and no error. The shim below fails exactly the pretty-print call
-  # (`jq .`, one argument, reading stdin) and leaves every other jq intact.
-  - name: wire never writes an empty document over an existing config
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-          printf '{"statusLine":{"type":"command","command":"mine.sh"}}\n' \
-            > "${CLAUDE_CONFIG_DIR}/settings.json"
-          settings_before="$(cat "${CLAUDE_CONFIG_DIR}/settings.json")"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          jq() {
-            if [ "$#" -eq 1 ] && [ "$1" = "." ]; then
-              return 0
-            fi
-            command jq "$@"
-          }
-          rc=0
-          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
-          unset -f jq
-
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: wire reported success on an empty pretty-print"; exit 1; }
-          [ "${settings_before}" = "$(cat "${CLAUDE_CONFIG_DIR}/settings.json")" ] \
-            || { echo "FAIL: config truncated by an empty pretty-print"; exit 1; }
-          [ ! -f "${CLAUDE_CONFIG_DIR}/.claude.json" ] \
-            || { echo "FAIL: .claude.json written from an empty pretty-print"; exit 1; }
-          echo "${err}" | grep -q "\[context-mode\]" \
-            || { echo "FAIL: the failed format was silent: ${err}"; exit 1; }
-          echo "wire_empty_format=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire_empty_format=pass"
-
-  # The same shim against the second pretty-print. The case above can only ever
-  # reach the first one — both documents differ from what is on disk, so
-  # settings.json is formatted first and the function gives up there. Wiring a
-  # session and then removing only .claude.json is the state that skips it: the
-  # settings document already matches what this call rebuilds, so its
-  # pretty-print is never run and the MCP document's is the only one left to
-  # fail. That state is not hypothetical — .claude.json is the file a crash
-  # mid-write truncates, and the case two above models the same loss.
-  #
-  # The end state is loud on both halves, and that is the point: the MCP entry
-  # is refused by name, and the strip that follows cannot rewrite settings.json
-  # either — the shim fails its pretty-print too — so it says so rather than
-  # leaving the session quietly denying WebFetch with no server registered.
-  - name: wire refuses the MCP entry when its document cannot be formatted
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          settings="${CLAUDE_CONFIG_DIR}/settings.json"
-          claude_json="${CLAUDE_CONFIG_DIR}/.claude.json"
-
-          agent_call claude context_mode_wire >/dev/null
-          rm -f "${claude_json}"
-          cp "${settings}" "${TEST_DIR}/before"
-
-          jq() {
-            if [ "$#" -eq 1 ] && [ "$1" = "." ]; then
-              return 0
-            fi
-            command jq "$@"
-          }
-          rc=0
-          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)" || rc=$?
-          unset -f jq
-
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: wire reported success when the MCP document never formatted"; exit 1; }
-          echo "${err}" | grep -q "could not format ${claude_json}" \
-            || { echo "FAIL: the failed format was silent or named the wrong file: ${err}"; exit 1; }
-          [ ! -f "${claude_json}" ] \
-            || { echo "FAIL: MCP entry written from a document that never formatted: $(cat "${claude_json}")"; exit 1; }
-          cmp -s "${TEST_DIR}/before" "${settings}" \
-            || { echo "FAIL: settings.json rewritten: $(cat "${settings}")"; exit 1; }
-          echo "${err}" | grep -q "stale hooks left in place" \
-            || { echo "FAIL: hooks left with no server and nothing said about it: ${err}"; exit 1; }
-          echo "wire_mcp_format_fails=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wire_mcp_format_fails=pass"
-
   - name: strip never writes an empty document over an existing config
     steps:
       - type: exec
@@ -882,10 +50,18 @@ testcases:
           printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
+          # The shape the previous release wrote, seeded directly — the verb
+          # that wrote it is gone, and the stripper still has to face it.
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" '{hooks: {
+            PreToolUse:   [{matcher:"Bash", hooks:[{type:"command", command:($bin + " hook claude-code pretooluse")}]}],
+            SessionStart: [{matcher:"",     hooks:[{type:"command", command:($bin + " hook claude-code sessionstart")}]}]
+          }}' > "${CLAUDE_CONFIG_DIR}/settings.json"
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" \
+            '{mcpServers: {"plugin_context-mode_context-mode": {type:"stdio", command:$bin, args:[]}}}' \
+            > "${CLAUDE_CONFIG_DIR}/.claude.json"
+
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
-          agent_call claude context_mode_wire
           settings_before="$(cat "${CLAUDE_CONFIG_DIR}/settings.json")"
           claude_json_before="$(cat "${CLAUDE_CONFIG_DIR}/.claude.json")"
 
@@ -909,50 +85,6 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "strip_empty_format=pass"
 
-  - name: strip removes our hooks and MCP entry, keeps foreign ones
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          agent_call claude context_mode_wire
-
-          settings="${CLAUDE_CONFIG_DIR}/settings.json"
-          claude_json="${CLAUDE_CONFIG_DIR}/.claude.json"
-          jq '.hooks.UserPromptSubmit=[{"hooks":[{"type":"command","command":"codegraph prompt-hook"}]}]' \
-            "${settings}" > "${settings}.new" && mv "${settings}.new" "${settings}"
-          jq '.mcpServers.codegraph={"command":"codegraph"}' \
-            "${claude_json}" > "${claude_json}.new" && mv "${claude_json}.new" "${claude_json}"
-
-          agent_call claude context_mode_strip 2>/dev/null
-
-          jq -e '.hooks.PreToolUse == null' "${settings}" >/dev/null \
-            || { echo "FAIL: our PreToolUse survived"; exit 1; }
-          jq -e '.hooks.SessionStart == null' "${settings}" >/dev/null \
-            || { echo "FAIL: our SessionStart survived"; exit 1; }
-          jq -e '.hooks.UserPromptSubmit[0].hooks[0].command == "codegraph prompt-hook"' \
-            "${settings}" >/dev/null || { echo "FAIL: foreign hook removed"; exit 1; }
-          jq -e '.mcpServers["plugin_context-mode_context-mode"] == null' "${claude_json}" >/dev/null \
-            || { echo "FAIL: our MCP entry survived"; exit 1; }
-          jq -e '.mcpServers.codegraph.command == "codegraph"' "${claude_json}" >/dev/null \
-            || { echo "FAIL: foreign MCP entry removed"; exit 1; }
-          echo "strip=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "strip=pass"
-
   # The discriminator, not just the preservation. An entry is ours only when its
   # command names the shim path, so "a user-written hook that merely mentions
   # context-mode survives". A hook whose command is unrelated proves nothing
@@ -974,17 +106,16 @@ testcases:
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
           printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
-          cat > "${CLAUDE_CONFIG_DIR}/settings.json" <<'JSON'
-          {"hooks":{"PreToolUse":[
-            {"matcher":"Bash","hooks":[{"type":"command","command":"my-audit.sh"}]},
-            {"matcher":"WebFetch","hooks":[{"type":"command","command":"context-mode hook claude-code pretooluse"}]}
-          ]}}
-          JSON
+          # Two user entries and, between them, the stanza the previous release
+          # wrote — the one entry the strip below is entitled to remove.
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" '{hooks: {PreToolUse: [
+            {matcher:"Bash",     hooks:[{type:"command", command:"my-audit.sh"}]},
+            {matcher:"WebFetch", hooks:[{type:"command", command:"context-mode hook claude-code pretooluse"}]},
+            {matcher:"Bash",     hooks:[{type:"command", command:($bin + " hook claude-code pretooluse")}]}
+          ]}}' > "${CLAUDE_CONFIG_DIR}/settings.json"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
-          agent_call claude context_mode_wire
           agent_call claude context_mode_strip 2>/dev/null
 
           jq -e '.hooks.PreToolUse | length == 2' \
@@ -1004,13 +135,13 @@ testcases:
   # A `command` that is not a string. settings.json lives in a hand-editable
   # host bind mount, and an argv array — `["/bin/sh","-c","…"]` — is a shape a
   # person plausibly writes there. jq's `contains` raises on a non-string
-  # instead of answering false, and one raise fails the whole filter: the wiring
-  # jq and the cleanup jq both abort, so the session runs with Context Mode off
-  # while `riotbox doctor` still reports it healthy, and with the toggle off the
-  # earlier run's deny hooks stay on disk for the life of the session directory.
+  # instead of answering false, and one raise fails the whole filter: the
+  # cleanup jq aborts, and the previous release's deny hooks stay on disk for
+  # the life of the session directory, dispatching every event a second time
+  # beside the registered plugin's own.
   # A shape jq does not understand is "not ours", never a fatal error — the rule
   # codegraph_strip_session_wiring already spells out for the same reason.
-  - name: wire and strip treat a non-string hook command as not ours
+  - name: strip treats a non-string hook command as not ours
     steps:
       - type: exec
         script: |
@@ -1024,30 +155,17 @@ testcases:
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
           printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
-          cat > "${CLAUDE_CONFIG_DIR}/settings.json" <<'JSON'
-          {"hooks":{"PreToolUse":[
-            {"matcher":"Bash","hooks":[{"type":"command","command":["/bin/sh","-c","audit"]}]}
-          ]}}
-          JSON
+          # The user's unreadable entry, beside the stanza the previous release
+          # wrote in the same array.
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" '{hooks: {
+            PreToolUse:   [{matcher:"Bash", hooks:[{type:"command", command:["/bin/sh","-c","audit"]}]},
+                           {matcher:"Bash", hooks:[{type:"command", command:($bin + " hook claude-code pretooluse")}]}],
+            SessionStart: [{matcher:"",     hooks:[{type:"command", command:($bin + " hook claude-code sessionstart")}]}]
+          }}' > "${CLAUDE_CONFIG_DIR}/settings.json"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
-
-          err="$(agent_call claude context_mode_wire 2>&1 >/dev/null)"
-
-          echo "${err}" | grep -q "not wired" \
-            && { echo "FAIL: the malformed entry disabled wiring: ${err}"; exit 1; }
-          jq -e '[.hooks.PreToolUse[] | select(.hooks[0].command
-                   | type == "string" and contains("hook claude-code pretooluse"))] | length == 1' \
-            "${settings}" >/dev/null || { echo "FAIL: PreToolUse not wired"; exit 1; }
-          jq -e '.hooks.SessionStart[0].hooks[0].command
-                   | endswith("hook claude-code sessionstart")' \
-            "${settings}" >/dev/null || { echo "FAIL: SessionStart not wired"; exit 1; }
-          jq -e '.mcpServers["plugin_context-mode_context-mode"] != null' \
-            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
-            || { echo "FAIL: MCP entry not registered"; exit 1; }
 
           err="$(agent_call claude context_mode_strip 2>&1 >/dev/null)"
 
@@ -1101,7 +219,18 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "strip_noop=pass"
 
-  - name: setup wires when enabled and points storage at the session dir
+  # The migration guarantee, and the reason the strip verb outlives the wiring
+  # it used to undo. Session directories written by the release that authored
+  # hooks by hand carry `<shim> hook claude-code <event>` stanzas, and nothing
+  # else on the system removes them: settings.json is never synced from the
+  # host, so a reused directory would run the plugin's hooks and the previous
+  # release's hooks at once — every event dispatched twice, against an MCP
+  # server registered under the same name by two writers.
+  #
+  # Seeded as literal JSON rather than by calling a wiring verb: the verb that
+  # wrote this shape is gone, and this case has to keep working against a shape
+  # no code in the tree produces any more.
+  - name: legacy RiotBox-authored stanzas are stripped from a reused session
     steps:
       - type: exec
         script: |
@@ -1109,36 +238,111 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          export RIOTBOX_CONTEXT_MODE=1
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
           printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
+          # A session directory written by the previous release: two of the six
+          # stanzas it wrote, plus the MCP entry it registered alongside them,
+          # plus a hook and a server the user owns.
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" '{
+            hooks: {
+              PreToolUse: [{matcher:"Bash", hooks:[{type:"command", command:($bin + " hook claude-code pretooluse")}]},
+                           {matcher:"Bash", hooks:[{type:"command", command:"my-audit.sh"}]}],
+              Stop:       [{matcher:"",     hooks:[{type:"command", command:($bin + " hook claude-code stop")}]}]
+            }
+          }' > "${CLAUDE_CONFIG_DIR}/settings.json"
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" '{
+            mcpServers: {"plugin_context-mode_context-mode": {type:"stdio", command:$bin, args:[]},
+                         codegraph: {command:"codegraph"}}
+          }' > "${CLAUDE_CONFIG_DIR}/.claude.json"
+
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          agent_call claude context_mode_strip 2>/dev/null
+
+          left="$(jq -r '[.hooks[]?[]?.hooks[]?.command | select(contains("hook claude-code"))] | length' \
+            "${CLAUDE_CONFIG_DIR}/settings.json")"
+          [ "${left}" = "0" ] || { echo "FAIL: ${left} legacy stanzas survived"; exit 1; }
+          jq -e '(.hooks | has("Stop")) | not' "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
+            || { echo "FAIL: the emptied Stop array survived"; exit 1; }
+          jq -e '[.hooks.PreToolUse[].hooks[0].command] == ["my-audit.sh"]' \
+            "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
+            || { echo "FAIL: the user hook did not survive alone"; exit 1; }
+          jq -e '.mcpServers | has("plugin_context-mode_context-mode") | not' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
+            || { echo "FAIL: the legacy MCP entry survived"; exit 1; }
+          jq -e '.mcpServers.codegraph.command == "codegraph"' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
+            || { echo "FAIL: a foreign MCP entry was removed with ours"; exit 1; }
+          echo "strip_legacy=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "strip_legacy=pass"
+
+  # Claude Code has no wire verb: its hooks and MCP server arrive with the
+  # plugin container/plugin-setup.sh registers, and nothing in this file writes
+  # to settings.json for it. What is left is the pair the session inherits — the
+  # storage pin and the flag the exit report reads — and both have to be set on
+  # an agent whose wiring this function never touches, or an enabled session
+  # writes its FTS5 store wherever upstream defaults to and ends with no report.
+  - name: setup pins the store and marks the session wired for an agent with no wire verb
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_CONTEXT_MODE=1
+          # The tree the image stages and the registration reads: the wiring this
+          # agent gets is that registration, so the flag asserted below follows it.
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin" "${staged}"
+          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_claude_context_mode_wire >/dev/null \
+            && { echo "FAIL: claude still has a wire verb; this case no longer covers the path it names"; exit 1; }
+          # entrypoint.sh's order, in one shell as it runs there: plugin_setup
+          # registers, and the wiring below reads what that call decided. Called
+          # in this shell, not a subshell: both assertions below are on exports
+          # the session inherits.
+          context_mode_plugin_register >/dev/null 2>&1
           context_mode_setup >/dev/null 2>&1
 
           [ "${CONTEXT_MODE_DIR}" = "${CLAUDE_CONFIG_DIR}/context-mode" ] \
             || { echo "FAIL: storage root not set (got '${CONTEXT_MODE_DIR:-unset}')"; exit 1; }
-          jq -e '.hooks.PreToolUse != null' "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
-            || { echo "FAIL: not wired"; exit 1; }
+          [ "${_CONTEXT_MODE_WIRED:-unset}" = "1" ] \
+            || { echo "FAIL: an enabled session was not marked wired, so it ends with no report"; exit 1; }
           echo "setup_enabled=pass"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "setup_enabled=pass"
 
-  # A wired session has to say so. Every other message this file emits is a
-  # warning about a session that fell back to Context Mode off, so with no
-  # success line the two outcomes are indistinguishable to anyone reading a
-  # transcript. The path is asserted against CONTEXT_MODE_DIR rather than
-  # spelled out: the line derives the store location a second time, and this is
-  # what stops the two from drifting apart into a message that names a
-  # directory nothing writes to.
-  - name: setup announces the wired session and names the store it exported
+  # The other half of that pair: an agent with no wire verb is wired by a plugin
+  # or not at all, so the flag has to follow the plugin rather than the absence
+  # of a verb. container/plugin-setup.sh gives up quietly when the image staged
+  # no tree — what an image built before the staging layer existed looks like,
+  # which README's troubleshooting names as a plausible cause — and with no host
+  # plugin either that session has no Context Mode at all. Marking it wired
+  # anyway hands it the exit report and a ledger record, in the one place the
+  # user actually looks, saying the feature ran.
+  - name: setup does not mark the session wired when no plugin was registered
     steps:
       - type: exec
         script: |
@@ -1146,43 +350,66 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_PLATFORM
+          # Same neutralisation as every case that reaches container/plugin-setup.sh,
+          # kept in one place rather than spelled out here; CONTEXT_MODE_PLATFORM
+          # is not part of it because nothing in that file reads it.
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          export RIOTBOX_CONTEXT_MODE=1
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
+          export RIOTBOX_AGENT=claude
+          # The directory the image stages into, left empty: the toggle is on
+          # and there is nothing to register.
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          mkdir -p "${CLAUDE_CONFIG_DIR}/plugins" "${HOME}/.local/bin"
           printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
+          echo '{"version":2,"plugins":{}}' > "${CLAUDE_CONFIG_DIR}/plugins/installed_plugins.json"
+          echo '{}' > "${CLAUDE_CONFIG_DIR}/plugins/known_marketplaces.json"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
-          # Called in this shell, not a subshell: the assertion below compares
-          # the announced path against the export the session inherits.
-          context_mode_setup >"${TEST_DIR}/out" 2>/dev/null
-          out="$(cat "${TEST_DIR}/out")"
 
-          [ "$(wc -l <"${TEST_DIR}/out")" -eq 1 ] \
-            || { echo "FAIL: expected exactly one line, got: ${out}"; exit 1; }
-          case "${out}" in
-            "  [context-mode] "*) ;;
-            *) echo "FAIL: line does not carry the prefix: ${out}"; exit 1 ;;
-          esac
-          echo "${out}" | grep -q "wired" \
-            || { echo "FAIL: line does not say the hooks are wired: ${out}"; exit 1; }
-          case "${out}" in
-            *"${CONTEXT_MODE_DIR}"*) ;;
-            *) echo "FAIL: line does not name the exported store '${CONTEXT_MODE_DIR}': ${out}"; exit 1 ;;
-          esac
-          echo "setup_announces=pass"
+          # entrypoint.sh's order, in one shell as it runs there: plugin_setup
+          # registers, and the wiring below reads what that call decided.
+          context_mode_plugin_register >/dev/null 2>&1
+          context_mode_setup 2>"${TEST_DIR}/err" >/dev/null
+          err="$(cat "${TEST_DIR}/err")"
+
+          jq -e '.plugins | has("context-mode@context-mode") | not' \
+            "${CLAUDE_CONFIG_DIR}/plugins/installed_plugins.json" >/dev/null \
+            || { echo "FAIL: the fixture registered a plugin; this case no longer covers the path it names"; exit 1; }
+          [ "${_CONTEXT_MODE_WIRED:-unset}" = "unset" ] \
+            || { echo "FAIL: a session with no registered plugin was marked wired, so it ends with a report claiming Context Mode ran"; exit 1; }
+          # The storage pin outlives the flag on this branch, deliberately: it
+          # says where an FTS5 store goes, not that anything was wired. Unset it
+          # here and the next writer puts a store of verbatim tool output on the
+          # container overlay, where it dies at exit and `riotbox session-remove`
+          # never sees it.
+          [ "${CONTEXT_MODE_DIR}" = "${CLAUDE_CONFIG_DIR}/context-mode" ] \
+            || { echo "FAIL: the storage pin went with the flag (got '${CONTEXT_MODE_DIR:-unset}') — a store of verbatim tool output would land on the container overlay, out of reach of riotbox session-remove"; exit 1; }
+          echo "${err}" | grep -q "no Context Mode plugin is installed and enabled" \
+            || { echo "FAIL: the session was left with the feature off in silence: ${err}"; exit 1; }
+          echo "setup_unregistered=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "setup_announces=pass"
+          - result.systemout ShouldContainSubstring "setup_unregistered=pass"
 
-  # A session that degraded to Context Mode off must not announce itself as
-  # wired: the success line above is the only thing that tells the two apart,
-  # and the warnings it would sit next to go to a stderr nothing reads.
-  - name: setup announces nothing when the wiring is refused
+  # The mirror of the case above, and the reason the question this asks is
+  # "does this session have Context Mode" rather than "did RiotBox stage it".
+  # With nothing staged, plugin_setup copies the host plugin tree in
+  # (~/.claude/plugins is bind-mounted by agents/claude/sync-settings.sh),
+  # context_mode_plugin_unregister spares its registry entry — a host install is
+  # not what this toggle governs, and it is the only Context Mode some sessions
+  # have — and the enabledPlugins sync switches it on. That session really does
+  # run Context Mode, so withholding the flag would deny it the exit report and
+  # ledger record it has earned, and warn about a plugin that is in fact there.
+  - name: setup marks the session wired when a host-installed plugin is the Context Mode
     steps:
       - type: exec
         script: |
@@ -1190,29 +417,229 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
+          export RIOTBOX_AGENT=claude
+          # Nothing staged, so the registration stands down entirely.
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          host_tree="${CLAUDE_CONFIG_DIR}/plugins/cache/context-mode/context-mode/1.0.169"
+          mkdir -p "${host_tree}" "${HOME}/.local/bin"
           printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
-          # Valid JSON all the way in, refused inside the jq program — the
-          # hand-edit case pinned by "wire refuses to rewrite a hooks key that
-          # is not an object" above.
-          printf '{"hooks":"x"}' > "${CLAUDE_CONFIG_DIR}/settings.json"
+          # What the host merge and the enabledPlugins sync leave behind.
+          jq -n --arg p "${host_tree}" '{version:2,plugins:{"context-mode@context-mode":
+            [{scope:"user",installPath:$p,version:"1.0.169"}]}}' \
+            > "${CLAUDE_CONFIG_DIR}/plugins/installed_plugins.json"
+          echo '{}' > "${CLAUDE_CONFIG_DIR}/plugins/known_marketplaces.json"
+          echo '{"enabledPlugins":{"context-mode@context-mode":true}}' \
+            > "${CLAUDE_CONFIG_DIR}/settings.json"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
-          context_mode_setup >"${TEST_DIR}/out" 2>/dev/null
 
-          [ ! -s "${TEST_DIR}/out" ] \
-            || { echo "FAIL: a session that is not wired said it was: $(cat "${TEST_DIR}/out")"; exit 1; }
-          echo "setup_silent_on_refusal=pass"
+          context_mode_plugin_register >/dev/null 2>&1
+          context_mode_setup 2>"${TEST_DIR}/err" >/dev/null
+          err="$(cat "${TEST_DIR}/err")"
+
+          jq -e '.plugins["context-mode@context-mode"][0].installPath != null' \
+            "${CLAUDE_CONFIG_DIR}/plugins/installed_plugins.json" >/dev/null \
+            || { echo "FAIL: the host entry was removed; this case no longer covers the path it names"; exit 1; }
+          [ "${_CONTEXT_MODE_WIRED:-unset}" = "1" ] \
+            || { echo "FAIL: a session running a host-installed Context Mode was denied its exit report"; exit 1; }
+          [ -z "${err}" ] \
+            || { echo "FAIL: warned about a missing plugin while one is installed and enabled: ${err}"; exit 1; }
+          echo "setup_host_plugin=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "setup_silent_on_refusal=pass"
+          - result.systemout ShouldContainSubstring "setup_host_plugin=pass"
+
+  # The probe must not become a false-positive source of its own. A registry
+  # entry naming a version-stamped tree an image rebuild took away is the
+  # dangling registration container/plugin-setup.sh exists to prevent: Claude
+  # Code surfaces the plugin and every hook in it fails to load, so the session
+  # has no Context Mode and must not be told it has.
+  - name: setup does not count a registration whose tree is gone
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_PLATFORM
+          # As above: one neutralisation for every case that reaches
+          # container/plugin-setup.sh.
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_AGENT=claude
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          mkdir -p "${CLAUDE_CONFIG_DIR}/plugins" "${HOME}/.local/bin"
+          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+          # An entry an earlier image wrote, naming a stamped path this one does
+          # not carry. Outside RIOTBOX_CM_PLUGIN_DIR so the removal leaves it —
+          # what has to hold is that the probe refuses it, not that it is gone.
+          jq -n --arg p "${HOME}/.claude/plugins/cache/context-mode/gone" \
+            '{version:2,plugins:{"context-mode@context-mode":
+              [{scope:"user",installPath:$p,version:"1.0.100"}]}}' \
+            > "${CLAUDE_CONFIG_DIR}/plugins/installed_plugins.json"
+          echo '{}' > "${CLAUDE_CONFIG_DIR}/plugins/known_marketplaces.json"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          context_mode_plugin_register >/dev/null 2>&1
+          context_mode_setup 2>"${TEST_DIR}/err" >/dev/null
+          err="$(cat "${TEST_DIR}/err")"
+
+          [ "${_CONTEXT_MODE_WIRED:-unset}" = "unset" ] \
+            || { echo "FAIL: a registration pointing at a directory that is gone was read as wired"; exit 1; }
+          # Same pin, same reason as the unregistered case above: withholding the
+          # flag must not withhold the storage root with it.
+          [ "${CONTEXT_MODE_DIR}" = "${CLAUDE_CONFIG_DIR}/context-mode" ] \
+            || { echo "FAIL: the storage pin went with the flag (got '${CONTEXT_MODE_DIR:-unset}') — a store of verbatim tool output would land on the container overlay, out of reach of riotbox session-remove"; exit 1; }
+          echo "${err}" | grep -q "no Context Mode plugin" \
+            || { echo "FAIL: the session was left with the feature off in silence: ${err}"; exit 1; }
+          echo "setup_dangling=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "setup_dangling=pass"
+
+  # A unit test of context_mode_plugin_installed, not a claim about what a
+  # session does: it calls the probe directly, with the registry and settings.json
+  # it is given. A plugin switched off in settings.json loads nothing, so a report
+  # for it would be the same false claim from a third direction — and the probe
+  # refuses it. Whether a session can still be in that state when the probe runs
+  # is the separate question the case below answers.
+  - name: the probe refuses a plugin switched off in settings.json
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          tree="${HOME}/.claude/plugins/cache/context-mode/context-mode/1.0.169"
+          mkdir -p "${tree}"
+          jq -n --arg p "${tree}" '{version:2,plugins:{"context-mode@context-mode":
+            [{scope:"user",installPath:$p,version:"1.0.169"}]}}' \
+            > "${HOME}/.claude/plugins/installed_plugins.json"
+
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+
+          # The positive control first, so the refusal below cannot pass because
+          # the fixture was unreadable for some other reason.
+          echo '{"enabledPlugins":{"context-mode@context-mode":true}}' \
+            > "${HOME}/.claude/settings.json"
+          context_mode_plugin_installed \
+            || { echo "FAIL: an installed, enabled plugin was not counted"; exit 1; }
+
+          echo '{"enabledPlugins":{"context-mode@context-mode":false}}' \
+            > "${HOME}/.claude/settings.json"
+          if context_mode_plugin_installed; then
+            echo "FAIL: a plugin switched off in settings.json was counted"; exit 1
+          fi
+
+          # Only an explicit false denies. Another plugin's switch, a missing
+          # key and a missing file are not evidence about this one, and reading
+          # them as evidence would deny a working session its report.
+          echo '{"enabledPlugins":{"other@other":false}}' > "${HOME}/.claude/settings.json"
+          context_mode_plugin_installed \
+            || { echo "FAIL: another plugin's switch denied this one"; exit 1; }
+          echo '{"enabledPlugins":{}}' > "${HOME}/.claude/settings.json"
+          context_mode_plugin_installed \
+            || { echo "FAIL: a missing key was read as disabled"; exit 1; }
+          rm -f "${HOME}/.claude/settings.json"
+          context_mode_plugin_installed \
+            || { echo "FAIL: a missing settings.json was read as disabled"; exit 1; }
+          echo "probe_disabled=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "probe_disabled=pass"
+
+  # What a real session does with that switch, which is not what the probe alone
+  # would do: container/entrypoint.sh calls plugin_setup ahead of
+  # context_mode_setup, and it takes the answer away. Step 1 of plugin_setup
+  # deletes .enabledPlugins wholesale whenever it is present, and step 7 rebuilds
+  # it from the registry keys as all-true — '── 1. Seed settings.json' and
+  # '── 7. Sync enabledPlugins from installed_plugins.json' in
+  # container/plugin-setup.sh — so the plugin is enabled again before Context
+  # Mode wiring asks about it, and the session is wired.
+  #
+  # Pinned as it is rather than as it ought to be. RiotBox re-enabling every
+  # plugin a user disabled is a real bug and a product decision beyond Context
+  # Mode, raised separately; this case is what tells whoever fixes it that the
+  # probe's disabled check goes live at that moment, and it is meant to be
+  # rewritten by that fix rather than deleted.
+  - name: a session start re-enables a plugin the user switched off
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_PLATFORM
+          # The only case in this file that runs the whole of plugin_setup, so
+          # the only one needing the neutralisation the plugin-setup suite
+          # applies to every case: step 4 takes RIOTBOX_PLUGINS from the ambient
+          # environment — libexec/launch.sh forwards it into the container this
+          # suite runs in — and installs each name it finds there with a real,
+          # networked `claude plugin install`.
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_AGENT=claude
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          # ~/.claude/plugins/cache is created by entrypoint.sh, ahead of both
+          # calls below; plugin_setup expects to find it.
+          mkdir -p "${CLAUDE_CONFIG_DIR}/plugins/cache" "${HOME}/.local/bin" "${staged}"
+          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          # The switch a user threw in an earlier session, in the file that
+          # outlives it.
+          echo '{"enabledPlugins":{"context-mode@context-mode":false}}' \
+            > "${CLAUDE_CONFIG_DIR}/settings.json"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          # The whole of plugin_setup, not just the registration: steps 1 and 7
+          # are the ones this case is about.
+          plugin_setup >/dev/null 2>&1
+          context_mode_setup 2>"${TEST_DIR}/err" >/dev/null
+          err="$(cat "${TEST_DIR}/err")"
+
+          jq -e '.enabledPlugins["context-mode@context-mode"] == true' \
+            "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
+            || { echo "FAIL: the switch survived plugin_setup — the probe's disabled check is live now, and the case above is the one to trust"; exit 1; }
+          [ "${_CONTEXT_MODE_WIRED:-unset}" = "1" ] \
+            || { echo "FAIL: a session whose plugin plugin_setup re-enabled was not marked wired"; exit 1; }
+          [ -z "${err}" ] \
+            || { echo "FAIL: warned about a plugin that is installed and enabled: ${err}"; exit 1; }
+          echo "setup_reenabled_plugin=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "setup_reenabled_plugin=pass"
 
   - name: setup strips wiring when the toggle is off
     steps:
@@ -1229,14 +656,21 @@ testcases:
           printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
+          # An earlier session's wiring, in the form the previous release wrote
+          # it: the toggle going off is what has to clear it.
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" '{hooks: {
+            PreToolUse: [{matcher:"Bash", hooks:[{type:"command", command:($bin + " hook claude-code pretooluse")}]}]
+          }}' > "${CLAUDE_CONFIG_DIR}/settings.json"
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" \
+            '{mcpServers: {"plugin_context-mode_context-mode": {type:"stdio", command:$bin, args:[]}}}' \
+            > "${CLAUDE_CONFIG_DIR}/.claude.json"
+
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
-          RIOTBOX_CONTEXT_MODE=1 context_mode_setup >/dev/null 2>&1
-          unset RIOTBOX_CONTEXT_MODE CONTEXT_MODE_DIR
           context_mode_setup >/dev/null 2>&1
 
-          jq -e '.hooks.PreToolUse == null' "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
+          jq -e '(.hooks // {}) | has("PreToolUse") | not' "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
             || { echo "FAIL: wiring survived the toggle going off"; exit 1; }
           jq -e '.mcpServers["plugin_context-mode_context-mode"] == null' \
             "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
@@ -1294,10 +728,15 @@ testcases:
           printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
+          # Wiring an earlier session left, and then the shim it names taken
+          # away — the state a rebuild that dropped Context Mode produces.
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" '{hooks: {
+            PreToolUse: [{matcher:"Bash", hooks:[{type:"command", command:($bin + " hook claude-code pretooluse")}]}]
+          }}' > "${CLAUDE_CONFIG_DIR}/settings.json"
+
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
-          context_mode_setup >/dev/null 2>&1
           rm -f "${CONTEXT_MODE_BIN}"
           err="$(context_mode_setup 2>&1 >/dev/null)"
 
@@ -1329,7 +768,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
@@ -1337,21 +776,24 @@ testcases:
           printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
+          # An earlier session in this same directory, so the degrade below has
+          # wiring to clear rather than an empty config to leave alone.
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" '{hooks: {
+            PreToolUse:   [{matcher:"Bash", hooks:[{type:"command", command:($bin + " hook claude-code pretooluse")}]}],
+            SessionStart: [{matcher:"",     hooks:[{type:"command", command:($bin + " hook claude-code sessionstart")}]}]
+          }}' > "${CLAUDE_CONFIG_DIR}/settings.json"
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" \
+            '{mcpServers: {"plugin_context-mode_context-mode": {type:"stdio", command:$bin, args:[]}}}' \
+            > "${CLAUDE_CONFIG_DIR}/.claude.json"
+
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
 
-          # An earlier session in this same directory, so the degrade below has
-          # wiring to clear rather than an empty config to leave alone.
-          RIOTBOX_AGENT=claude context_mode_setup >/dev/null 2>&1
-          jq -e '.hooks.PreToolUse != null' "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
-            || { echo "FAIL: the wiring run did not wire"; exit 1; }
-
           AGENT_REGISTRY+=(noverbs)
           export RIOTBOX_AGENT=noverbs
-          unset CONTEXT_MODE_DIR
-          # Called in this shell, not a subshell: CONTEXT_MODE_DIR is an export
-          # and the assertion below is on what the session inherits.
+          # Called in this shell, not a subshell: both variables asserted below
+          # are exports, and the assertions are on what the session inherits.
           context_mode_setup 2>"${TEST_DIR}/err" >/dev/null
           err="$(cat "${TEST_DIR}/err")"
 
@@ -1364,6 +806,10 @@ testcases:
           # an FTS5 store nothing in that session will ever write.
           [ -z "${CONTEXT_MODE_DIR:-}" ] \
             || { echo "FAIL: storage root exported for an agent that wires nothing"; exit 1; }
+          # Same rule for the flag the exit report reads: a session running with
+          # the feature off must not end with a report claiming it ran.
+          [ "${_CONTEXT_MODE_WIRED:-unset}" = "unset" ] \
+            || { echo "FAIL: a degraded session was marked wired"; exit 1; }
           jq -e '.hooks.PreToolUse == null and .hooks.SessionStart == null' \
             "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
             || { echo "FAIL: inherited hooks survived the degrade"; exit 1; }
@@ -1394,12 +840,21 @@ testcases:
           printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
+          # What a claude session of the previous release left in this
+          # directory. The opencode run below has to clear it: opencode's own
+          # wiring is a generated plugin file elsewhere, so these stanzas would
+          # otherwise keep dispatching for the life of the session directory.
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" '{hooks: {
+            PreToolUse:   [{matcher:"Bash", hooks:[{type:"command", command:($bin + " hook claude-code pretooluse")}]}],
+            SessionStart: [{matcher:"",     hooks:[{type:"command", command:($bin + " hook claude-code sessionstart")}]}]
+          }}' > "${CLAUDE_CONFIG_DIR}/settings.json"
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" \
+            '{mcpServers: {"plugin_context-mode_context-mode": {type:"stdio", command:$bin, args:[]}}}' \
+            > "${CLAUDE_CONFIG_DIR}/.claude.json"
+
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
-          RIOTBOX_AGENT=claude context_mode_setup >/dev/null 2>&1
-          jq -e '.hooks.PreToolUse != null' "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
-            || { echo "FAIL: the claude run did not wire"; exit 1; }
 
           RIOTBOX_AGENT=opencode context_mode_setup >/dev/null 2>&1
 
@@ -1416,8 +871,9 @@ testcases:
 
   # The agent check must not cost the default path: `riotbox run` leaves
   # RIOTBOX_AGENT unset and means claude (bin/riotbox), so an unset variable
-  # has to wire exactly as an explicit claude does.
-  - name: setup wires for claude, both by default and when named explicitly
+  # has to reach the same support decision an explicit claude does — the same
+  # warning-free run, the same store, the same platform token.
+  - name: setup treats an unset agent as claude, both paths alike
     steps:
       - type: exec
         script: |
@@ -1428,13 +884,23 @@ testcases:
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
-          mkdir -p "${HOME}/.local/bin"
+          # A staged tree, because for claude the registration is the wiring: a
+          # session without one is the warning case, not the silent one this
+          # asserts.
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          mkdir -p "${HOME}/.local/bin" "${staged}"
           printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
+          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
+          context_mode_plugin_register >/dev/null 2>&1
 
           for agent_case in unset claude; do
             export CLAUDE_CONFIG_DIR="${HOME}/.claude-${agent_case}"
@@ -1445,22 +911,17 @@ testcases:
               export RIOTBOX_AGENT="${agent_case}"
             fi
 
-            # Called in this shell, not a subshell: CONTEXT_MODE_DIR is an
-            # export and the assertion below is on what the session inherits.
+            # Called in this shell, not a subshell: every variable asserted
+            # below is an export, and the assertions are on what the session
+            # inherits.
+            unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM
             context_mode_setup 2>"${TEST_DIR}/err.${agent_case}" >/dev/null
             [ ! -s "${TEST_DIR}/err.${agent_case}" ] \
               || { echo "FAIL (${agent_case}): warned on a supported agent: $(cat "${TEST_DIR}/err.${agent_case}")"; exit 1; }
-            jq -e '.hooks.PreToolUse[0].hooks[0].command | contains("hook claude-code pretooluse")' \
-              "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
-              || { echo "FAIL (${agent_case}): PreToolUse not wired"; exit 1; }
-            jq -e '.hooks.SessionStart[0].hooks[0].command | contains("hook claude-code sessionstart")' \
-              "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
-              || { echo "FAIL (${agent_case}): SessionStart not wired"; exit 1; }
-            jq -e '.mcpServers["plugin_context-mode_context-mode"].command == env.CONTEXT_MODE_BIN' \
-              "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
-              || { echo "FAIL (${agent_case}): MCP entry not registered"; exit 1; }
             [ "${CONTEXT_MODE_DIR}" = "${CLAUDE_CONFIG_DIR}/context-mode" ] \
               || { echo "FAIL (${agent_case}): storage root not set"; exit 1; }
+            [ "${CONTEXT_MODE_PLATFORM:-unset}" = "claude-code" ] \
+              || { echo "FAIL (${agent_case}): platform token is '${CONTEXT_MODE_PLATFORM:-unset}'"; exit 1; }
           done
           echo "setup_claude_agent=pass"
         assertions:
@@ -1505,49 +966,6 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "entrypoint_calls_context_mode=pass"
 
-  - name: hook commands use the CLI dispatcher, never a script path
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          agent_call claude context_mode_wire
-
-          # Regression guard. The vendor installer writes
-          # `<node> <pkg>/hooks/<event>.mjs`, and substituting the riotbox shim
-          # for that interpreter looks equivalent but is not: the shim runs the
-          # CLI bundle, and the CLI treats an unrecognised first argument as
-          # "start the MCP server". The hook then emits nothing and every
-          # routing decision is silently lost — verified against a live MCP
-          # server, where the script-path form returned no decision and the
-          # dispatcher form denied a WebFetch. A wiring that names a .mjs file
-          # is therefore a feature that looks enabled and routes nothing.
-          settings="${CLAUDE_CONFIG_DIR}/settings.json"
-          if jq -e '[.hooks[][] | .hooks[].command] | any(contains(".mjs"))' \
-               "${settings}" >/dev/null 2>&1; then
-            echo "FAIL: a hook command names a script path instead of the dispatcher"
-            exit 1
-          fi
-          jq -e '[.hooks[][] | .hooks[].command] | all(contains("hook claude-code"))' \
-            "${settings}" >/dev/null \
-            || { echo "FAIL: not every hook command uses the dispatcher"; exit 1; }
-          echo "hook_dispatch=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "hook_dispatch=pass"
-
   # Everything above runs against a stub shim, so nothing in this suite notices
   # what the image actually installs. Context Mode shipped 223 npm versions in
   # five months (docs/dev/decisions/context-mode-adoption.md), and the build-time
@@ -1586,184 +1004,354 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "containerfile_pin=pass"
 
-  # The exit report must not claim the feature ran on a session that degraded to
-  # off. Only the success path — the one that prints the `hooks wired` line —
-  # opens that gate; every give-up path leaves it closed.
-  - name: wire exports the wired flag only on success
+  # bun is what ctx_execute runs TypeScript on; without it the executor reports
+  # TypeScript as unavailable and every TS snippet fails. Nothing in that layer
+  # asserts a feature the way the opencode layer probes for --auto, so the pin
+  # is the only control over what lands — and a pin nothing checks is a pin
+  # that floats the first time someone edits the tag out. RIOTBOX-20260312-001
+  # is open, and the layer answers it by fetching a release asset and verifying
+  # it before installing it.
+  #
+  # The file-wide greps below pin SHAPE only: that the ARGs exist and carry the
+  # right form, in the shape tests/gh-glab-build.venom.yml pins
+  # github-mcp-server's. Whether the layer GATES the install on any of it is a
+  # property of the block, not of the file, so the rest is scoped to the lines
+  # between the first bun ARG and the pin-mismatch message.
+  #
+  # The block's own boundaries are asserted first, in both directions, because
+  # a sed range that has stopped delimiting silently widens every check below
+  # it. Containing its terminator catches an end pattern that was deleted or
+  # reworded, which makes sed print to EOF; spanning exactly one `RUN` catches
+  # the range over-extending because the closing message moved to a later layer
+  # or the phrase came to appear twice. Neither direction is theoretical — the
+  # first was measured: deleting `set -e` from this layer AND rewording the
+  # closing message left the whole suite green, because the unscoped
+  # `grep -q 'set -e'` then matched some other layer's.
+  #
+  # Each of the three checks below is a way the verification stays present and
+  # stops being a gate:
+  #
+  #   * `set -e`, with no `set +e` after it. Without abort-on-error a failed
+  #     sha256sum prints its warning and the unzip runs anyway — a tampered
+  #     archive installs and the layer is green. Matching `set -e` alone would
+  #     not notice a `set +e` added below it, so both are checked.
+  #   * The checksum call comparing the pinned digest against the downloaded
+  #     file, and ending the statement there. Two mutations hide behind a
+  #     looser match: swapping ${EXPECTED_SHA} for one architecture's ARG
+  #     leaves the other architecture verifying nothing, and `|| true` keeps
+  #     every string intact while swallowing the only status that matters. So
+  #     the compared expression and the terminator are both part of the match.
+  #   * Each case arm pairing its own asset with its own digest. Swapping the
+  #     two digests, or pointing both arms at BUN_SHA256_AMD64, passes every
+  #     other check here and fails at build time only on the architecture that
+  #     an amd64-only CI never builds.
+  - name: Containerfile pins the bun version and gates the install on the digest
     steps:
       - type: exec
         script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-
-          agent_call claude context_mode_wire >/dev/null
-          [ "${_CONTEXT_MODE_WIRED:-unset}" = "1" ] \
-            || { echo "FAIL: flag not set after a successful wire"; exit 1; }
-
-          # A settings.json jq cannot read is a give-up path: the flag must not
-          # survive it, or the teardown reports on a session running with the
-          # feature off.
-          unset _CONTEXT_MODE_WIRED
-          printf 'not json at all' > "${CLAUDE_CONFIG_DIR}/settings.json"
-          agent_call claude context_mode_wire 2>/dev/null >/dev/null || true
-          [ "${_CONTEXT_MODE_WIRED:-unset}" = "unset" ] \
-            || { echo "FAIL: flag set on a give-up path"; exit 1; }
-          echo "wired_flag=pass"
+          cd "{{.riotbox_dir}}"
+          grep -qE '^ARG BUN_VERSION=[0-9]+\.[0-9]+\.[0-9]+$' Containerfile \
+            || { echo "FAIL: BUN_VERSION is not pinned to an exact version"; exit 1; }
+          grep -qE '^ARG BUN_SHA256_AMD64=[0-9a-f]{64}$' Containerfile \
+            || { echo "FAIL: BUN_SHA256_AMD64 is not pinned to a SHA256"; exit 1; }
+          grep -qE '^ARG BUN_SHA256_ARM64=[0-9a-f]{64}$' Containerfile \
+            || { echo "FAIL: BUN_SHA256_ARM64 is not pinned to a SHA256"; exit 1; }
+          grep -qF 'bun-v${BUN_VERSION}/${ASSET}.zip' Containerfile \
+            || { echo "FAIL: the download does not request the pinned release tag"; exit 1; }
+          grep -qF '[ "${v}" = "${BUN_VERSION}" ]' Containerfile \
+            || { echo "FAIL: the build does not check the installed bun against the pin"; exit 1; }
+          block="$(sed -n '/^ARG BUN_VERSION=/,/bun reports/p' Containerfile)"
+          printf '%s\n' "${block}" | grep -qF 'bun reports' \
+            || { echo "FAIL: the bun block did not delimit — its first ARG or its closing message moved, and every match below would be scanning the whole file"; exit 1; }
+          [ "$(printf '%s\n' "${block}" | grep -c '^RUN ')" = 1 ] \
+            || { echo "FAIL: the bun block spans more than one RUN — its closing message moved to a later layer, or the phrase now appears twice, and every match below is scanning a wider slice than the layer it names"; exit 1; }
+          printf '%s\n' "${block}" | grep -q 'set -e' \
+            || { echo "FAIL: the bun layer does not abort on the first failed step, so a failed checksum would not stop the install"; exit 1; }
+          if printf '%s\n' "${block}" | grep -q 'set +e'; then
+            echo "FAIL: the layer re-disables abort-on-error mid-block"; exit 1
+          fi
+          printf '%s\n' "${block}" | grep -qF 'echo "${EXPECTED_SHA}  /tmp/bun.zip" | sha256sum -c -; \' \
+            || { echo "FAIL: the sha256sum call does not end the statement with the pinned digest — something was appended or the compared value changed"; exit 1; }
+          printf '%s\n' "${block}" | grep 'x86_64)' | grep -q 'bun-linux-x64-baseline.*BUN_SHA256_AMD64' \
+            || { echo "FAIL: the x86_64 arm does not pair the baseline asset with BUN_SHA256_AMD64"; exit 1; }
+          printf '%s\n' "${block}" | grep 'aarch64)' | grep -q 'bun-linux-aarch64.*BUN_SHA256_ARM64' \
+            || { echo "FAIL: the aarch64 arm does not pair the aarch64 asset with BUN_SHA256_ARM64"; exit 1; }
+          echo "bun_pin=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wired_flag=pass"
+          - result.systemout ShouldContainSubstring "bun_pin=pass"
 
-  # The invalid-settings.json case above is the *first* give-up path in
-  # agent_claude_context_mode_wire. This one is the deepest: the six stanzas have
-  # already landed in settings.json, the MCP write then fails, and the strip
-  # takes them back out. A flag that survives this path is the worst version
-  # of the bug — the session ends with the feature off and a report claiming
-  # it ran.
+  # The plugin-staging layer clones a pinned tree, installs its dependencies,
+  # rewrites two interpreters and then probes the result. `podman build` does
+  # not run in the dev container (docs/dev/context-mode.md), so no CI observes
+  # any of it — the layer has to be pinned as text, exactly like bun above.
   #
-  # The status is asserted alongside the flag because it is what carries the
-  # same fact to the one caller that matters: container/context-mode-setup.sh
-  # exports _CONTEXT_MODE_WIRED on this verb returning 0, so a give-up that
-  # returned 0 would set the flag from outside no matter how carefully this
-  # function avoids setting it from within. That is the registry contract in
-  # docs/dev/decisions/context-mode-opencode.md "Registry contract": return 0
-  # only when every artifact landed.
+  # File-wide greps pin the ARG shapes; the rest is scoped to the lines between
+  # the first plugin ARG and the layer's success line, because whether a step is
+  # in THIS block is a property of the block, not of a 1400-line file. The
+  # block's boundaries are asserted before anything is matched against it, in
+  # both directions — that it contains its terminator (an unmatched end pattern
+  # makes sed print to EOF) and that it spans exactly one `RUN` (a terminator
+  # that moved to a later layer, or a phrase that came to appear twice, extends
+  # the range instead). Either way every check below would be silently scanning
+  # a wider slice than the layer it names.
   #
-  # Making .claude.json a pre-existing directory does not force this: mktemp
-  # stages the write beside it, and `mv` into an existing directory succeeds
-  # by moving the file inside rather than failing. json_write_atomic is
-  # shadowed directly instead, matching on the target path so the
-  # settings.json writes — this call's own, and the one the strip makes to
-  # remove the hooks again — still go through to the real implementation.
-  - name: wire fails and exports no flag when the deepest give-up path strips the hooks back out
+  # Each scoped match is a way a step survives review and stops working:
+  #
+  #   * `set -e`, with no `set +e` after it. The block is one `bash -c` string
+  #     of `;`-joined statements, so without abort-on-error every guard in it
+  #     prints its message and the layer still exits 0 on the closing echo.
+  #   * The clone's SHA assert. A git tag is mutable; `--branch <tag>` takes
+  #     whatever it resolves to at build time. Comparing `git rev-parse HEAD`
+  #     against CONTEXT_MODE_PLUGIN_SHA is the only thing making the tag a pin.
+  #   * The staged tree's own contract assert. The Context Mode layer above
+  #     runs each agent's context_mode_build_assert against the npm package
+  #     root, which no Claude session loads; this call runs claude's verb
+  #     against the clone container/plugin-setup.sh registers. Drop it and the
+  #     MCP-name guarantee falls back to CONTEXT_MODE_VERSION and
+  #     CONTEXT_MODE_PLUGIN_REF happening to name one release.
+  #   * The lockfile arriving and `npm ci --omit=dev` reading it. `ci` is what
+  #     makes the lockfile authoritative — `npm install` resolves fresh and
+  #     rewrites it — and `--omit=dev` keeps upstream's devDependencies out of a
+  #     tree that then executes in every session.
+  #   * Both interpreter-rewrite counts. `before` > 0 catches upstream changing
+  #     the command shape, which would leave the substitution a no-op that
+  #     rewrites nothing; `after` == 0 catches it missing a command. Drop either
+  #     and hooks run the session-default Node, which Context Mode refuses to
+  #     start on — at hook time, not build time.
+  #   * The routing probe's three controls. The unseeded run asserts the probe
+  #     answers NOTHING before a sentinel is written, so a later pass cannot be
+  #     arriving from elsewhere; the private sentinel directory keeps it off the
+  #     shared /tmp, where any unrelated process's sentinel satisfies it; and
+  #     the scrubbed PATH stops an un-rewritten tree from answering anyway on
+  #     the build's Node. Remove any one and the probe still passes, on nothing.
+  - name: Containerfile pins the staged plugin to a reviewed commit and keeps its staging steps load-bearing
     steps:
       - type: exec
         script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          # …and the flag this case asserts is absent. The wire verb only
-          # ever exports _CONTEXT_MODE_WIRED on success; no give-up path clears
-          # it. So a maintainer running this suite from inside a wired RiotBox
-          # session inherits a 1 the code under test cannot remove, and reads
-          # it as the very bug this case exists to catch.
-          unset _CONTEXT_MODE_WIRED
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-
-          eval "$(declare -f json_write_atomic | sed '1s/json_write_atomic/_orig_json_write_atomic/')"
-          json_write_atomic() {
-            case "${1}" in
-              */.claude.json) return 1 ;;
-              *) _orig_json_write_atomic "$@" ;;
-            esac
+          cd "{{.riotbox_dir}}"
+          grep -qE '^ARG CONTEXT_MODE_PLUGIN_REF=v[0-9]+\.[0-9]+\.[0-9]+$' Containerfile \
+            || { echo "FAIL: CONTEXT_MODE_PLUGIN_REF is not pinned to an exact release tag"; exit 1; }
+          grep -qE '^ARG CONTEXT_MODE_PLUGIN_SHA=[0-9a-f]{40}$' Containerfile \
+            || { echo "FAIL: CONTEXT_MODE_PLUGIN_SHA is not pinned to a full 40-character commit SHA"; exit 1; }
+          grep -qF 'git clone --depth 1 --branch "${CONTEXT_MODE_PLUGIN_REF}"' Containerfile \
+            || { echo "FAIL: the clone does not request the pinned tag"; exit 1; }
+          block="$(sed -n '/^ARG CONTEXT_MODE_PLUGIN_REF=/,/PreToolUse routes WebFetch to/p' Containerfile)"
+          printf '%s\n' "${block}" | grep -qF 'PreToolUse routes WebFetch to' \
+            || { echo "FAIL: the staging block did not delimit — its first ARG or its closing echo moved, and every match below would be scanning the whole file"; exit 1; }
+          [ "$(printf '%s\n' "${block}" | grep -c '^RUN ')" = 1 ] \
+            || { echo "FAIL: the staging block spans more than one RUN — its closing echo moved to a later layer, or the phrase now appears twice, and every match below is scanning a wider slice than the layer it names"; exit 1; }
+          in_block() {
+            printf '%s\n' "${block}" | grep -qF "$1" || { echo "FAIL: $2"; exit 1; }
           }
-
-          # Called as a bare statement rather than through $(...): a command
-          # substitution runs in a subshell, and an export from inside one
-          # never reaches the shell this script's own assertions read from —
-          # it would make the very check below vacuously true no matter where
-          # the flag is set. The warning text goes to a file for the same
-          # reason stderr isn't captured with $(...) here. The status is kept
-          # rather than allowed to abort the script under set -e: it is one of
-          # the two things this case asserts.
-          rc=0
-          agent_call claude context_mode_wire >/dev/null 2>"${TEST_DIR}/stderr.log" || rc=$?
-          unset -f json_write_atomic
-
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: wire reported success on the deepest give-up path"; exit 1; }
-          [ "${_CONTEXT_MODE_WIRED:-unset}" = "unset" ] \
-            || { echo "FAIL: flag survived the deepest give-up path"; exit 1; }
-          grep -q "MCP server not registered" "${TEST_DIR}/stderr.log" \
-            || { echo "FAIL: no warning about the failed .claude.json write: $(cat "${TEST_DIR}/stderr.log")"; exit 1; }
-          jq -e 'has("hooks") | not' "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
-            || { echo "FAIL: hooks key survived the strip"; exit 1; }
-          echo "wired_flag_deepest=pass"
+          printf '%s\n' "${block}" | grep -q 'set -e' \
+            || { echo "FAIL: the staging layer does not abort on the first failed step, so every guard below it would print and the layer would still succeed"; exit 1; }
+          if printf '%s\n' "${block}" | grep -q 'set +e'; then
+            echo "FAIL: the layer re-disables abort-on-error mid-block"; exit 1
+          fi
+          in_block 'cloned="$(git -C "${dest}" rev-parse HEAD)"' \
+            "the layer does not read the cloned commit, so the tag is not pinned to anything"
+          in_block '[ "${cloned}" = "${CONTEXT_MODE_PLUGIN_SHA}" ]' \
+            "the cloned commit is not compared against CONTEXT_MODE_PLUGIN_SHA — a moved tag would stage code nobody reviewed"
+          in_block 'agent_call claude context_mode_build_assert "${dest}"' \
+            "the staged tree is not contract-checked — the only remaining MCP-name assert runs against the npm package root, which no Claude session loads"
+          in_block 'COPY --chown=llm:llm container/context-mode-package-lock.json' \
+            "the pinned lockfile is not copied into the build"
+          in_block 'mv /tmp/context-mode-package-lock.json "${dest}/package-lock.json"' \
+            "the lockfile is not moved into the staged tree, which is the only directory npm ci reads one from"
+          in_block '"${CM_NODE_BIN}/npm" ci --omit=dev' \
+            "the install is not a lockfile-authoritative \`npm ci --omit=dev\` — npm install would resolve fresh, and devDependencies would ship into every session"
+          in_block '[ "${before}" -gt 0 ]' \
+            "the layer does not assert there was a bare-node command to rewrite, so an upstream command-shape change would leave the substitution a silent no-op"
+          in_block '[ "${after}" -eq 0 ]' \
+            "the layer does not assert every bare-node command was rewritten, so a missed hook would run the session-default Node"
+          in_block '[ -z "${cm_decision}" ]' \
+            "the routing probe has no unseeded control run — a decision read from a sentinel the build did not write would be recorded as a pass"
+          in_block 'CONTEXT_MODE_MCP_SENTINEL_DIR="${cm_probe}/sentinel"' \
+            "the probe does not point the sentinel scan at its own private directory — upstream's default is a shared /tmp any process can satisfy"
+          in_block 'env PATH=/usr/bin:/bin' \
+            "the probe does not scrub node off PATH, so a tree the interpreter rewrite missed would still answer"
+          echo "plugin_staging_shape=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wired_flag_deepest=pass"
+          - result.systemout ShouldContainSubstring "plugin_staging_shape=pass"
 
-  # The two cases above call the wire verb directly, which is why neither of
-  # them can see the bug this one exists for: context_mode_setup exports
-  # _CONTEXT_MODE_WIRED itself, on the verb returning 0, so a give-up that
-  # reported success would set the flag from outside the function that so
-  # carefully avoids setting it from within. This case goes through
-  # context_mode_setup the way a session does, on the cheapest give-up path
-  # there is — a settings.json jq cannot read, which is what a crash mid-write
-  # or a hand edit leaves behind in a session directory that outlives the run
-  # that wired it.
+  # The matcher set is the routing table a session's redirects are built from,
+  # and the routing probe above exercises exactly one entry of it: it feeds the
+  # PreToolUse command a WebFetch payload. That leaves the other eight
+  # PreToolUse matchers and the whole PostToolUse set with no build-time signal
+  # — upstream could drop Bash or Read from the intercept set, or narrow what
+  # PostToolUse captures, and every guard in this layer would still pass.
   #
-  # The status of context_mode_setup itself is asserted as 0 in the same
-  # breath, and the two are not in tension: wiring that gives up degrades the
-  # session to Context Mode off, it does not abort the session. entrypoint.sh
-  # calls this function bare, so a non-zero return would take the whole
-  # container down over an optional feature.
-  - name: setup exports no wired flag when the agent's wiring gives up
+  # container/context-mode-hooks-expected.json is the other side of that
+  # comparison, committed the way the lockfile is and checked against the
+  # staged tree inside the staging layer itself. It replaces the hand-written
+  # transcription (context_mode_hook_table, CONTEXT_MODE_MATCHER,
+  # CONTEXT_MODE_POST_MATCHER) that used to live in agents/claude/context-mode.sh:
+  # same guarantee, but regenerated from the tree by a recipe instead of typed
+  # out, which is the maintenance cost that got the original asserts deleted.
+  #
+  # What repo state can check is the shape — the file parses, it names an event
+  # set, its matcher lists are non-empty, and the layer actually reads it.
+  # Whether it MATCHES upstream is not knowable here: that needs the cloned
+  # tree, which is why the comparison itself runs at build time.
+  - name: the staged hook table is gated against a committed expectation
+    steps:
+      - type: exec
+        script: |
+          cd "{{.riotbox_dir}}"
+          expected=container/context-mode-hooks-expected.json
+          [ -r "${expected}" ] \
+            || { echo "FAIL: ${expected} is missing — the staged matcher set has nothing to be compared against, and the routing probe covers WebFetch alone"; exit 1; }
+          jq -e . "${expected}" > /dev/null \
+            || { echo "FAIL: ${expected} is not readable JSON"; exit 1; }
+          [ "$(jq -r 'type' "${expected}")" = "object" ] \
+            || { echo "FAIL: ${expected} is not a JSON object keyed by hook event"; exit 1; }
+          for event in PreToolUse PostToolUse; do
+            [ "$(jq -r --arg e "${event}" 'has($e)' "${expected}")" = "true" ] \
+              || { echo "FAIL: ${expected} names no ${event} event — the tool set that event intercepts would go unchecked"; exit 1; }
+          done
+          [ "$(jq -r 'map_values(type) | to_entries | map(select(.value != "array")) | length' "${expected}")" = 0 ] \
+            || { echo "FAIL: ${expected} has an event whose value is not an array of matchers"; exit 1; }
+          [ "$(jq -r '[.[][] | select(type != "string")] | length' "${expected}")" = 0 ] \
+            || { echo "FAIL: ${expected} has a matcher that is not a string"; exit 1; }
+          [ "$(jq -r '.PreToolUse | length' "${expected}")" -gt 1 ] \
+            || { echo "FAIL: ${expected} expects one PreToolUse matcher or none — trimming the expectation to the single matcher the routing probe exercises is how this gate gets silently emptied"; exit 1; }
+          block="$(sed -n '/^ARG CONTEXT_MODE_PLUGIN_REF=/,/PreToolUse routes WebFetch to/p' Containerfile)"
+          printf '%s\n' "${block}" | grep -qF 'PreToolUse routes WebFetch to' \
+            || { echo "FAIL: the staging block did not delimit — every match below would be scanning the whole file"; exit 1; }
+          in_block() {
+            printf '%s\n' "${block}" | grep -qF "$1" || { echo "FAIL: $2"; exit 1; }
+          }
+          in_block 'COPY --chown=llm:llm container/context-mode-hooks-expected.json' \
+            "the committed hook expectation is not copied into the build, so the layer has nothing to compare the staged tree against"
+          in_block 'cm_table="$(jq -Sc ".hooks | map_values([.[].matcher])" "${hooks}")"' \
+            "the layer does not project the staged hooks.json down to its event and matcher set"
+          in_block '[ "${cm_table}" = "${cm_expected_table}" ]' \
+            "the staged matcher set is not compared against the committed expectation — upstream could reshape the intercept set and this layer would still pass"
+          echo "hook_table_gate=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "hook_table_gate=pass"
+
+  # Three artifacts have to name one upstream release, and only prose currently
+  # couples them: CONTEXT_MODE_VERSION (the npm package installed globally),
+  # CONTEXT_MODE_PLUGIN_REF (the git tag the plugin tree is cloned from), and
+  # the root version of the lockfile npm ci installs that tree's dependencies
+  # from. Bump any subset and both layers still build green.
+  #
+  # The lockfile is the case that motivates this. Measured against npm 11.9.0:
+  # with the lockfile root at 1.0.169 and package.json at 1.0.170 over an
+  # identical dependency block, `npm ci --omit=dev` exits 0. It errors only when
+  # the dependency SET or its RANGES differ, and an upstream patch release
+  # rarely moves a `^` range — so a maintainer who bumps the ARGs and forgets
+  # the lockfile gets a green image installing the old resolved dependency tree
+  # under new code.
+  #
+  # What repo state cannot supply, and what this case therefore does NOT claim:
+  #
+  #   * The staged tree's own package.json version. It exists only inside a
+  #     build, after the clone. CONTEXT_MODE_PLUGIN_REF stands in for it, since
+  #     the tag is what the clone resolves and the lockfile is regenerated from
+  #     that same tree.
+  #   * Whether CONTEXT_MODE_PLUGIN_SHA is the commit that tag points at. That
+  #     needs the network. The SHA's shape is pinned by the case above and its
+  #     value is checked at build time against `git rev-parse HEAD`.
+  #   * That the lockfile was GENERATED FROM the tree it names. Comparing
+  #     version strings proves the lockfile CLAIMS a release, not that its
+  #     resolved dependency graph came from one: hand-editing the two version
+  #     fields after a bump passes here with a stale graph, reaching the same
+  #     end state by a different route. Nothing in repo state distinguishes a
+  #     regenerated lockfile from an edited one — only running the recipe does.
+  #     The claim asserted here is exactly "three artifacts name one release".
+  - name: the staged plugin ref, its lockfile and the npm package name one release
+    steps:
+      - type: exec
+        script: |
+          cd "{{.riotbox_dir}}"
+          lock=container/context-mode-package-lock.json
+          [ -r "${lock}" ] || { echo "FAIL: ${lock} is missing — the pinned lockfile npm ci reads"; exit 1; }
+          [ "$(grep -c '^ARG CONTEXT_MODE_VERSION=' Containerfile)" = 1 ] \
+            || { echo "FAIL: expected exactly one ARG CONTEXT_MODE_VERSION line"; exit 1; }
+          [ "$(grep -c '^ARG CONTEXT_MODE_PLUGIN_REF=' Containerfile)" = 1 ] \
+            || { echo "FAIL: expected exactly one ARG CONTEXT_MODE_PLUGIN_REF line"; exit 1; }
+          version="$(sed -nE 's/^ARG CONTEXT_MODE_VERSION=(.+)$/\1/p' Containerfile)"
+          ref="$(sed -nE 's/^ARG CONTEXT_MODE_PLUGIN_REF=(.+)$/\1/p' Containerfile)"
+          [ -n "${version}" ] || { echo "FAIL: CONTEXT_MODE_VERSION has no value"; exit 1; }
+          [ -n "${ref}" ] || { echo "FAIL: CONTEXT_MODE_PLUGIN_REF has no value"; exit 1; }
+          [ "${ref}" = "v${version}" ] \
+            || { echo "FAIL: CONTEXT_MODE_PLUGIN_REF is ${ref} but CONTEXT_MODE_VERSION is ${version} — the staged plugin tree and the installed npm package would be different releases"; exit 1; }
+          lock_name="$(jq -r '.name' "${lock}")" \
+            || { echo "FAIL: ${lock} is not readable JSON"; exit 1; }
+          [ "${lock_name}" = "context-mode" ] \
+            || { echo "FAIL: ${lock} is not context-mode's lockfile (name=${lock_name})"; exit 1; }
+          for field in '.version' '.packages[""].version'; do
+            lock_version="$(jq -r "${field}" "${lock}")"
+            [ "${lock_version}" = "${version}" ] \
+              || { echo "FAIL: ${lock} ${field} is ${lock_version} but the build stages ${ref} — npm ci exits 0 against a stale lockfile whose ranges still satisfy package.json, so the image would install the old resolved dependency tree under new code. Regenerate it with the recipe in the Containerfile."; exit 1; }
+          done
+          echo "context_mode_release_agreement=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "context_mode_release_agreement=pass"
+
+  # `riotbox build` runs the Containerfile from the INSTALLED app tree, not from
+  # the dev repo, so a COPY source that no install manifest ships resolves for
+  # the developer who added it and for nobody else. That is not hypothetical:
+  # the plugin lockfile landed in packaging/ first, which neither nfpm.yaml nor
+  # install.sh APP_PATHS installs, and it built green here. With no image build
+  # available the packaged tree has to be reconstructed from the manifests and
+  # compared against the Containerfile as text — tests/lib/copy-manifest-coverage.sh
+  # does that and carries the parsing rules.
+  - name: every Containerfile COPY source ships in both install manifests
+    steps:
+      - type: exec
+        script: bash "{{.riotbox_dir}}/tests/lib/copy-manifest-coverage.sh" "{{.riotbox_dir}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "copy_manifest_coverage=pass"
+
+  # The control for the case above: a checker that has quietly stopped parsing
+  # anything reports a pass on every repo. The fixture is a copy of the three
+  # real files, which is asserted to pass first — so the red below is the
+  # injected COPY and not the copying. packaging/ is the right source to inject
+  # because it exists in the repo and is deliberately in neither manifest,
+  # which is exactly the shape of the defect this guard was written for.
+  - name: the COPY manifest checker reddens on a source no manifest ships
     steps:
       - type: exec
         script: |
           set -e
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          # Nothing under test ever clears this flag, so a maintainer running
-          # the suite from inside a wired RiotBox session would otherwise
-          # inherit a 1 and read it as the bug this case exists to catch.
-          unset _CONTEXT_MODE_WIRED
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          export RIOTBOX_CONTEXT_MODE=1
-          export RIOTBOX_AGENT=claude
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-          printf 'not json at all' > "${CLAUDE_CONFIG_DIR}/settings.json"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-
-          # Called in this shell, not a subshell: the flag below is an export
-          # and the assertion is on what the session inherits.
-          rc=0
-          context_mode_setup >/dev/null 2>"${TEST_DIR}/err" || rc=$?
-
-          [ "${rc}" = "0" ] \
-            || { echo "FAIL: setup returned ${rc}; a degraded session is not a fatal one"; exit 1; }
-          [ "${_CONTEXT_MODE_WIRED:-unset}" = "unset" ] \
-            || { echo "FAIL: the session claims to be wired after the wiring gave up"; exit 1; }
-          [ "$(cat "${CLAUDE_CONFIG_DIR}/settings.json")" = "not json at all" ] \
-            || { echo "FAIL: the malformed file was rewritten"; exit 1; }
-          [ ! -f "${CLAUDE_CONFIG_DIR}/.claude.json" ] \
-            || { echo "FAIL: MCP server registered on a give-up path"; exit 1; }
-          grep -q "not valid JSON" "${TEST_DIR}/err" \
-            || { echo "FAIL: the give-up was silent: $(cat "${TEST_DIR}/err")"; exit 1; }
-          echo "setup_wired_flag_giveup=pass"
+          cd "{{.riotbox_dir}}"
+          root="$(pwd)"
+          checker="${root}/tests/lib/copy-manifest-coverage.sh"
+          # The fixture is a symlink farm over the real tree, not a handful of
+          # loose files: the checker resolves each COPY source against the repo
+          # root it is given, so a directory of three files would fail every
+          # existence check and the premise below would never hold. Only the
+          # Containerfile is a real copy, because it is the file being mutated.
+          mkdir -p "${TEST_DIR}/repo"
+          for entry in $(ls -A "${root}" | grep -v '^\.git$'); do
+            ln -s "${root}/${entry}" "${TEST_DIR}/repo/${entry}"
+          done
+          rm "${TEST_DIR}/repo/Containerfile"
+          cp Containerfile "${TEST_DIR}/repo/Containerfile"
+          bash "${checker}" "${TEST_DIR}/repo" >"${TEST_DIR}/control" 2>&1 \
+            || { echo "FAIL: the unmutated fixture does not pass, so a red below would prove nothing:"; cat "${TEST_DIR}/control"; exit 1; }
+          grep -q 'copy_manifest_coverage=pass' "${TEST_DIR}/control" \
+            || { echo "FAIL: the unmutated fixture did not report a pass"; cat "${TEST_DIR}/control"; exit 1; }
+          echo 'COPY --chown=llm:llm packaging/postinstall.sh /tmp/unshipped.sh' >>"${TEST_DIR}/repo/Containerfile"
+          if bash "${checker}" "${TEST_DIR}/repo" >"${TEST_DIR}/mutated" 2>&1; then
+            echo "FAIL: the checker passed a COPY from packaging/, which neither manifest ships"; cat "${TEST_DIR}/mutated"; exit 1
+          fi
+          grep -q 'UNRESOLVED packaging/postinstall.sh' "${TEST_DIR}/mutated" \
+            || { echo "FAIL: the checker failed without naming the unshipped source:"; cat "${TEST_DIR}/mutated"; exit 1; }
+          echo "copy_manifest_control=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "setup_wired_flag_giveup=pass"
+          - result.systemout ShouldContainSubstring "copy_manifest_control=pass"
 
   # The ledger record names the project set, and only the host knows it.
   # Asserted against real argv rather than by reading launch.sh, because the
@@ -1878,14 +1466,18 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PKG_ROOT_REJECTS_OK"
 
-  # The image build calls this verb against the package it just installed, so a
-  # pin bump that changes the intercepted tool set fails the build rather than
-  # shipping sessions that intercept something other than what upstream ships.
-  # The fixture is a fake package built from the constants themselves — every
-  # part of it matches except the PreToolUse matcher, so the diagnostic below
-  # proves the drift was caught by the comparison that owns it and not by an
-  # ill-formed fixture tripping an earlier check.
-  - name: the claude build assert rejects a drifted matcher
+  # The image build calls this verb against the package it just installed. What
+  # is left for it to assert, now that upstream's own hooks.json defines the
+  # events and the matchers, is the MCP server name: the routing table hardcodes
+  # `mcp__plugin_context-mode_context-mode__<tool>` with nothing to steer it, so
+  # a pin bump that renamed the prefix would leave every redirect pointing at a
+  # tool the session does not have — and the registered plugin would still look
+  # healthy while doing it.
+  #
+  # Both directions are exercised. The negative half is the guard; the positive
+  # half is what stops it from being a guard that rejects everything, which is
+  # how a build-time check gets deleted by the next person who hits it.
+  - name: the claude build assert accepts the routing table and rejects a renamed one
     steps:
       - type: exec
         script: |
@@ -1905,26 +1497,192 @@ testcases:
           # including the backtick that opens the template literal.
           printf 'const t = `mcp__%s__${name}`;\n' "${CONTEXT_MODE_MCP_NAME}" \
             > "${PKG}/hooks/core/tool-naming.mjs"
+          agent_call claude context_mode_build_assert "${PKG}" \
+            || { echo "FAIL: rejected a package whose routing table still names the server"; exit 1; }
 
-          # hooks.json as upstream's installer emits it, derived from the hook
-          # table so the event set matches by construction, then drifted on the
-          # PreToolUse matcher alone.
-          context_mode_hook_table \
-            | jq '{hooks: (to_entries
-                   | map({key: .key, value: [{matcher: .value.matcher}]})
-                   | from_entries)}' \
-            | jq '.hooks.PreToolUse[0].matcher = "Bash|Read"' \
-            > "${PKG}/hooks/hooks.json"
+          # The same file with the prefix renamed, and the old string left in a
+          # doc comment: the grep must read the code, not the prose beside it.
+          printf '// mcp__%s__<tool> was the old name\nconst t = `mcp__plugin_ctxmode_ctxmode__${name}`;\n' \
+            "${CONTEXT_MODE_MCP_NAME}" > "${PKG}/hooks/core/tool-naming.mjs"
 
           rc=0
           err="$(agent_call claude context_mode_build_assert "${PKG}" 2>&1 >/dev/null)" || rc=$?
           [ "${rc}" != "0" ] \
-            || { echo "FAIL: accepted a package whose PreToolUse tool set drifted"; exit 1; }
+            || { echo "FAIL: accepted a package whose routing table no longer names the server"; exit 1; }
           case "${err}" in
-            *"no longer equals CONTEXT_MODE_MATCHER"*) ;;
+            *"no longer appears in hooks/core/tool-naming.mjs"*) ;;
             *) echo "FAIL: failed for the wrong reason: ${err}"; exit 1 ;;
           esac
-          echo "BUILD_ASSERT_MATCHER_OK"
+          # The verb is called on more than one tree — the npm package root and
+          # the staged plugin clone — and nothing obliges a caller to say which
+          # one it handed over, so the diagnostic has to name the root it read
+          # or a build failure does not say which tree drifted.
+          case "${err}" in
+            *"${PKG}"*) ;;
+            *) echo "FAIL: the diagnostic does not name the tree it read: ${err}"; exit 1 ;;
+          esac
+
+          # An unreadable package fails closed. The comparisons this guard
+          # replaced could not: they put two command substitutions on either
+          # side of a `!=`, so a run in which both failed compared "" to "" and
+          # passed.
+          rm -f "${PKG}/hooks/core/tool-naming.mjs"
+          rc=0
+          agent_call claude context_mode_build_assert "${PKG}" >/dev/null 2>&1 || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: accepted a package with no routing table at all"; exit 1; }
+          echo "BUILD_ASSERT_MCP_NAME_OK"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "BUILD_ASSERT_MATCHER_OK"
+          - result.systemout ShouldContainSubstring "BUILD_ASSERT_MCP_NAME_OK"
+
+  # Without the required-argument guard, an empty $1 sends the grep above at
+  # "/hooks/core/tool-naming.mjs" — an absolute path that never exists — so
+  # the function still fails, but blames an upstream rename that never
+  # happened. The guard exists so a missing tree root is diagnosed as a missing
+  # tree root. Deliberately not `set -u` here: the Containerfile's
+  # RUN block that calls this verb is not `set -u` either (see the comment
+  # above its Context Mode block), so this reproduces the same shell the
+  # guard has to hold up under — one where a missing $1 silently becomes "",
+  # not an "unbound variable" abort.
+  - name: the claude build assert rejects a missing tree root
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          declare -F agent_claude_context_mode_build_assert >/dev/null \
+            || { echo "FAIL: agent_claude_context_mode_build_assert is not defined"; exit 1; }
+
+          rc=0
+          err="$(agent_call claude context_mode_build_assert 2>&1 >/dev/null)" || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: accepted a call with no tree root"; exit 1; }
+          case "${err}" in
+            *"no longer appears in hooks/core/tool-naming.mjs"*)
+              echo "FAIL: blamed an upstream rename instead of the missing argument: ${err}"
+              exit 1
+              ;;
+            *"upstream tree root required"*) ;;
+            *) echo "FAIL: failed for the wrong reason: ${err}"; exit 1 ;;
+          esac
+          echo "BUILD_ASSERT_REQUIRES_ROOT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BUILD_ASSERT_REQUIRES_ROOT_OK"
+
+  # Upstream's detectPlatform() cannot tell the two agents apart in an image
+  # that ships both, and a wrong guess resolves getPluginRoot() to a package
+  # cache no riotbox install populates — an import that throws into the stderr
+  # hookDispatch already redirected to /dev/null, so the session routes nothing
+  # and still reports itself healthy. The pin is what removes the guess.
+  - name: setup exports the pinned platform token
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
+          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+          export RIOTBOX_CONTEXT_MODE=1
+          export RIOTBOX_AGENT=claude
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          context_mode_setup
+
+          # Read from a child, which is what a hook is. Reading it in this shell
+          # would pass on a plain assignment too, and a value that is set but not
+          # exported reaches nothing upstream ever runs.
+          got="$(bash -c 'printf %s "${CONTEXT_MODE_PLATFORM-}"')"
+          [ "${got}" = "claude-code" ] || {
+            echo "FAIL: CONTEXT_MODE_PLATFORM='${got:-unset}' in a child, want claude-code"
+            exit 1
+          }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # The verb is an extension point a third-party agent implements, so an empty
+  # answer is reachable even though neither shipped agent can produce one — the
+  # same reason the store and data roots validate what their verbs print. The
+  # stand-in agent is appended to AGENT_REGISTRY the way the "no Context Mode
+  # verbs" case above invents one: every agent riotbox ships answers correctly,
+  # so one that does not is exactly what the fixture has to build. Exporting the
+  # empty string would be worse than not exporting at all — upstream reads it as
+  # "unset" on some paths and as a platform literally named "" on others.
+  - name: setup warns and strips for an agent whose platform verb prints nothing
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_CONTEXT_MODE=1
+          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
+          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          # An earlier session in this same directory, so the degrade below has
+          # wiring to clear rather than an empty config to leave alone.
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" '{hooks: {
+            PreToolUse:   [{matcher:"Bash", hooks:[{type:"command", command:($bin + " hook claude-code pretooluse")}]}],
+            SessionStart: [{matcher:"",     hooks:[{type:"command", command:($bin + " hook claude-code sessionstart")}]}]
+          }}' > "${CLAUDE_CONFIG_DIR}/settings.json"
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" \
+            '{mcpServers: {"plugin_context-mode_context-mode": {type:"stdio", command:$bin, args:[]}}}' \
+            > "${CLAUDE_CONFIG_DIR}/.claude.json"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          # Everything the orchestrator asks for before the platform probe
+          # answers correctly, so the give-up below can only be the probe's.
+          AGENT_REGISTRY+=(mute)
+          agent_mute_context_mode_store_dir() { printf '%s\n' "${HOME}/.mute/context-mode"; }
+          agent_mute_context_mode_platform() { :; }
+          agent_mute_context_mode_wire() { echo "FAIL: wired past an empty platform token"; return 1; }
+          agent_mute_context_mode_strip() { :; }
+          export RIOTBOX_AGENT=mute
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM
+          # Called in this shell, not a subshell: both variables are exports and
+          # the assertions below are on what the session inherits.
+          context_mode_setup 2>"${TEST_DIR}/err" >/dev/null
+          err="$(cat "${TEST_DIR}/err")"
+
+          echo "${err}" | grep -q "mute" \
+            || { echo "FAIL: warning does not name the agent: ${err}"; exit 1; }
+          echo "${err}" | grep -q "no platform token" \
+            || { echo "FAIL: warning does not name the empty token: ${err}"; exit 1; }
+          [ -z "${CONTEXT_MODE_PLATFORM+set}" ] \
+            || { echo "FAIL: exported CONTEXT_MODE_PLATFORM='${CONTEXT_MODE_PLATFORM}' for an agent that named no platform"; exit 1; }
+          [ -z "${CONTEXT_MODE_DIR:-}" ] \
+            || { echo "FAIL: storage root exported for a session that wires nothing"; exit 1; }
+          jq -e '.hooks.PreToolUse == null and .hooks.SessionStart == null' \
+            "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
+            || { echo "FAIL: inherited hooks survived the degrade"; exit 1; }
+          jq -e '.mcpServers["plugin_context-mode_context-mode"] == null' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
+            || { echo "FAIL: inherited MCP entry survived the degrade"; exit 1; }
+          echo "setup_empty_platform=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "setup_empty_platform=pass"

@@ -324,12 +324,48 @@ testcases:
                             "./plugin": "./build/adapters/opencode/plugin.js"}}' \
             > "${PKG}/package.json"
 
+          # Upstream's getAdapter() switch, reduced to the two branches the
+          # assert cares about: the one the pinned platform token selects and
+          # the default it would silently fall into if the token were renamed.
+          DETECT="${PKG}/build/adapters/detect.js"
+          printf '%s\n' \
+            'export async function getAdapter(platform) {' \
+            '  switch (platform) {' \
+            '    case "kilo":' \
+            '    case "opencode": {' \
+            '      const { OpenCodeAdapter } = await import("./opencode/index.js");' \
+            '      return new OpenCodeAdapter(platform);' \
+            '    }' \
+            '    default: {' \
+            '      const { ClaudeCodeAdapter } = await import("./claude-code/index.js");' \
+            '      return new ClaudeCodeAdapter();' \
+            '    }' \
+            '  }' \
+            '}' \
+            > "${DETECT}"
+
           source "{{.riotbox_dir}}/agents/registry.sh"
           declare -F agent_opencode_context_mode_build_assert >/dev/null \
             || { echo "FAIL: agent_opencode_context_mode_build_assert is not defined"; exit 1; }
 
           agent_call opencode context_mode_build_assert "${PKG}" \
             || { echo "FAIL: rejected a well-formed package"; exit 1; }
+
+          # The drift the shim survives and the session does not: the shim loads
+          # the adapter by absolute path, so a renamed platform id still gets a
+          # working plugin, while CONTEXT_MODE_PLATFORM=opencode drops into
+          # getAdapter's default branch and hands the session Claude's adapter —
+          # its Context Mode storage moves and nothing reports it.
+          sed -i 's/case "opencode":/case "opencodex":/' "${DETECT}"
+          rc=0
+          err="$(agent_call opencode context_mode_build_assert "${PKG}" 2>&1 >/dev/null)" || rc=$?
+          [ "${rc}" != "0" ] \
+            || { echo "FAIL: accepted a package whose getAdapter no longer maps opencode"; exit 1; }
+          case "${err}" in
+            *"no longer maps the platform id"*) ;;
+            *) echo "FAIL: failed for the wrong reason: ${err}"; exit 1 ;;
+          esac
+          sed -i 's/case "opencodex":/case "opencode":/' "${DETECT}"
 
           # The one drift the shim cannot survive: it re-exports the name
           # ContextModePlugin by hand, so an upstream rename leaves opencode
@@ -393,10 +429,18 @@ testcases:
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
 
-          export RIOTBOX_AGENT=claude
-          context_mode_setup >/dev/null 2>&1
-          jq -e '.hooks.PreToolUse != null' "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
-            || { echo "FAIL: the claude run did not wire"; exit 1; }
+          # What a claude session of the previous release left here, seeded
+          # directly: claude no longer authors this shape — its hooks and MCP
+          # server come from the registered plugin — but a reused session
+          # directory still carries it, and the opencode run below is one of the
+          # paths that has to clear it.
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" '{hooks: {
+            PreToolUse:   [{matcher:"Bash", hooks:[{type:"command", command:($bin + " hook claude-code pretooluse")}]}],
+            SessionStart: [{matcher:"",     hooks:[{type:"command", command:($bin + " hook claude-code sessionstart")}]}]
+          }}' > "${CLAUDE_CONFIG_DIR}/settings.json"
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" \
+            '{mcpServers: {"plugin_context-mode_context-mode": {type:"stdio", command:$bin, args:[]}}}' \
+            > "${CLAUDE_CONFIG_DIR}/.claude.json"
 
           # Called in this shell, not a subshell: CONTEXT_MODE_DIR is an export
           # and the assertion below is on what the session inherits.
@@ -482,6 +526,64 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "SETUP_PIN_BOTH_OK"
+
+  # Every riotbox image ships both agents, so upstream's detectPlatform() has
+  # two configs to choose between and no way to know which one is running. Left
+  # to guess, it can resolve getPluginRoot() to a package cache no riotbox
+  # install populates, and the failed import lands on a stderr the dispatcher
+  # already pointed at /dev/null — a session that routes nothing and reports
+  # itself healthy. The pin is per agent for the same reason the store path is,
+  # so the negative below matters as much as the positive: claude must not
+  # inherit opencode's token from a session directory opened as opencode first.
+  - name: setup pins the opencode platform token, and claude does not inherit it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_CONTEXT_MODE=1
+          export RIOTBOX_AGENT=opencode
+          PKG="${HOME}/pkg/context-mode"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" \
+            "${OPENCODE_CONFIG_DIR}" "${CLAUDE_CONFIG_DIR}"
+          : > "${PKG}/build/adapters/opencode/plugin.js"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          # Called in this shell, not a subshell: the variable is an export and
+          # the assertion below is on what the session inherits.
+          context_mode_setup >/dev/null 2>&1
+
+          # Read from a child, which is what a hook is. Reading it in this shell
+          # would pass just as well on a plain assignment, and an unexported
+          # value reaches nothing upstream ever runs.
+          got="$(bash -c 'printf %s "${CONTEXT_MODE_PLATFORM-}"')"
+          [ "${got}" = "opencode" ] \
+            || { echo "FAIL: CONTEXT_MODE_PLATFORM is '${got:-unset}' in a child, want 'opencode'"; exit 1; }
+
+          # Same session directory, opened again as claude: the token has to
+          # follow the agent, not the directory.
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM
+          export RIOTBOX_AGENT=claude
+          context_mode_setup >/dev/null 2>&1
+          got="$(bash -c 'printf %s "${CONTEXT_MODE_PLATFORM-}"')"
+          [ "${got}" = "claude-code" ] \
+            || { echo "FAIL: claude inherited platform '${got:-unset}', want 'claude-code'"; exit 1; }
+          echo "SETUP_PIN_PLATFORM_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_PIN_PLATFORM_OK"
 
   # The toggle is opt-in and a session directory is reusable, so turning it off
   # has to take the shim back out. Left behind, it would keep loading a plugin

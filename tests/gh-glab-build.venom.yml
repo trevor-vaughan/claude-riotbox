@@ -351,7 +351,25 @@ testcases:
           set -euo pipefail
           cd "{{.root}}"
           total="$(wc -l <Containerfile)"
-          first_use="$(grep -n 'RIOTBOX_GH_GLAB' Containerfile | head -n 1 | cut -d: -f1)"
+          # Only instruction lines can fork the cache, so only they are
+          # measured. The Dockerfile parser discards every line whose first
+          # non-blank character is '#' before an instruction is assembled —
+          # at the top level and inside a line continuation alike (buildkit
+          # frontend/dockerfile/parser/parser.go, isComment/trimComments).
+          # Matching prose would therefore fail this case over a comment that
+          # merely names the ARG, and — worse — let that comment keep it green
+          # after a real use moved to the top of the file.
+          first_use="$(awk '
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*ARG[[:space:]]+RIOTBOX_GH_GLAB([=[:space:]]|$)/ ||
+            /[$][{]?RIOTBOX_GH_GLAB([^[:alnum:]_]|$)/ { print NR; exit }
+          ' Containerfile)"
+          if [ -z "${first_use}" ]; then
+            echo "FAIL: no Containerfile instruction declares or expands RIOTBOX_GH_GLAB." >&2
+            echo "      build.sh passes --build-arg RIOTBOX_GH_GLAB regardless, so the" >&2
+            echo "      flavor would quietly ship the plain image under the flavor tag." >&2
+            exit 1
+          fi
           threshold=$(( total * 9 / 10 ))
           echo "total=${total} first_use=${first_use} threshold=${threshold}"
           if [ "${first_use}" -lt "${threshold}" ]; then

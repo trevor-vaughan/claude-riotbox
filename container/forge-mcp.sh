@@ -105,6 +105,10 @@ _forge_mcp_gitlab_url() {
 	https://*)
 		host="${host:8}"
 		;;
+	*)
+		# No scheme at all — a bare host. The https:// default above stands
+		# and the host is used whole; this is the ordinary case, not an error.
+		;;
 	esac
 
 	while [[ "${host}" == */ ]]; do

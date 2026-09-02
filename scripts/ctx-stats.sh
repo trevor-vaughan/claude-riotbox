@@ -69,10 +69,12 @@ _print_empty_state() {
 	else
 		echo "no runs recorded yet"
 	fi
+	# shellcheck disable=SC2312  # _plural picks one of two literals and always ends in a successful printf
 	if [[ "${newer_schema}" -gt 0 ]]; then
 		printf '%s %s from a newer schema (upgrade riotbox)\n' \
 			"${newer_schema}" "$(_plural "${newer_schema}" record records)"
 	fi
+	# shellcheck disable=SC2312  # _plural picks one of two literals and always ends in a successful printf
 	if [[ "${skipped}" -gt 0 ]]; then
 		printf '%s %s skipped (unreadable)\n' "${skipped}" "$(_plural "${skipped}" file files)"
 	fi
@@ -86,10 +88,12 @@ _print_empty_state() {
 # disclosure guarantee _print_empty_state already enforces for the zero-rows
 # case.
 _print_disclosures() {
+	# shellcheck disable=SC2312  # _plural picks one of two literals and always ends in a successful printf
 	if [[ "${newer_schema}" -gt 0 ]]; then
 		printf ' %s %s from a newer schema (upgrade riotbox)\n' \
 			"${newer_schema}" "$(_plural "${newer_schema}" record records)"
 	fi
+	# shellcheck disable=SC2312  # _plural picks one of two literals and always ends in a successful printf
 	if [[ "${skipped}" -gt 0 ]]; then
 		printf ' %s %s skipped (unreadable)\n' "${skipped}" "$(_plural "${skipped}" file files)"
 	fi
@@ -193,6 +197,7 @@ trap 'rm -f "${STREAM}"' EXIT
 skipped=0
 newer_schema=0
 if [[ -d "${LEDGER_DIR}" ]]; then
+	# shellcheck disable=SC2312  # find/sort exit codes are masked deliberately — an unreadable ledger yields no records and the loop runs zero times
 	while IFS= read -r -d '' record_file; do
 		class="$(jq -r '
 			if (type == "object") and (.schema == 1) and
@@ -222,6 +227,7 @@ if [[ -d "${LEDGER_DIR}" ]]; then
 	done < <(find "${LEDGER_DIR}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | sort -z)
 fi
 
+# shellcheck disable=SC2249  # VIEW is closed by construction: the three arms below are the only values assigned to it (the default at the top and the two --by-project/--runs branches)
 case "${VIEW}" in
 aggregate)
 	# One reduce over the stream rather than a slurp: the file count is
@@ -257,10 +263,17 @@ aggregate)
 	# `measured` is part of the AGG/--json contract but this text report
 	# derives nothing from it directly, so it is read into `_` rather than an
 	# unused named variable.
-	IFS=$'\t' read -r runs _ excluded zero_saving kept reread hooklog first last <<<"$(
-		jq -r '[.runs, .measured, .excluded, .zero_saving, .kept, .reread, .hooklog,
-		        (.first // "-"), (.last // "-")] | @tsv' <<<"${AGG}"
-	)"
+	#
+	# The line is captured into a variable first, and only then read, so a jq
+	# failure is fatal. Reading straight from `<<<"$(jq ...)"` swallowed it:
+	# `read` succeeds on the empty line jq leaves behind, `runs` ends up empty,
+	# and `[[ "" -eq 0 ]]` is true — so a reader that died mid-report printed
+	# "no runs recorded yet" over a full ledger and exited 0. An empty ledger
+	# is a state; a broken reader is a failure, and set -e plus the ERR trap
+	# say which line it happened on.
+	SUMMARY_ROW="$(jq -r '[.runs, .measured, .excluded, .zero_saving, .kept, .reread, .hooklog,
+	                       (.first // "-"), (.last // "-")] | @tsv' <<<"${AGG}")"
+	IFS=$'\t' read -r runs _ excluded zero_saving kept reread hooklog first last <<<"${SUMMARY_ROW}"
 
 	if [[ "${runs}" -eq 0 ]]; then
 		# "no runs recorded yet" implies an empty ledger. That's misleading
@@ -272,11 +285,17 @@ aggregate)
 	fi
 
 	printf '── context-mode rollup ──────────────────────────────\n'
+	# shellcheck disable=SC2312  # _plural and _humanize_bytes are display helpers that return 0 on every path
 	printf ' %s %s  %s → %s\n' "${runs}" "$(_plural "${runs}" run runs)" "${first%T*}" "${last%T*}"
+	# shellcheck disable=SC2312  # _humanize_bytes is a display formatter — its awk exits 0 on every path
 	printf ' kept out  %s\n' "$(_humanize_bytes "${kept}")"
+	# shellcheck disable=SC2312  # _humanize_bytes is a display formatter — its awk exits 0 on every path
 	printf ' re-read   %s\n' "$(_humanize_bytes "${reread}")"
+	# shellcheck disable=SC2312  # _humanize_bytes is a display formatter — its awk exits 0 on every path
 	printf ' hook log  %s (disk, not tokens)\n' "$(_humanize_bytes "${hooklog}")"
+	# shellcheck disable=SC2312  # _plural picks one of two literals and always ends in a successful printf
 	printf ' %s %s saved nothing\n' "${zero_saving}" "$(_plural "${zero_saving}" run runs)"
+	# shellcheck disable=SC2312  # _plural picks one of two literals and always ends in a successful printf
 	if [[ "${excluded}" -gt 0 ]]; then
 		printf ' %s %s excluded (baseline unknown)\n' "${excluded}" "$(_plural "${excluded}" run runs)"
 	fi
@@ -305,12 +324,17 @@ by-project)
 		exit 0
 	fi
 
-	if [[ "$(jq 'length' <<<"${BY_PROJECT}")" -eq 0 ]]; then
+	# Counted into a variable first so a jq failure is fatal — inline, its
+	# empty output is what `-eq` reads as 0, which is the empty-state path.
+	# See the aggregate view for why that conflation is not acceptable.
+	BY_PROJECT_ROWS="$(jq 'length' <<<"${BY_PROJECT}")"
+	if [[ "${BY_PROJECT_ROWS}" -eq 0 ]]; then
 		_print_empty_state
 		exit 0
 	fi
 
 	printf '── context-mode by project ────────────────────────────\n'
+	# shellcheck disable=SC2312  # _plural returns 0 on every path, and a jq failure in the feeding process substitution yields no rows — the table simply prints none
 	while IFS=$'\t' read -r project_set runs measured kept; do
 		# A project whose every run is baseline_unknown has nothing measured
 		# to sum — "0 B" there would read as "measured and saved nothing",
@@ -344,12 +368,16 @@ runs)
 		exit 0
 	fi
 
-	if [[ "$(jq 'length' <<<"${RUNS_JSON}")" -eq 0 ]]; then
+	# Counted into a variable first so a jq failure is fatal — same reasoning
+	# as --by-project and the aggregate view above.
+	RUNS_ROWS="$(jq 'length' <<<"${RUNS_JSON}")"
+	if [[ "${RUNS_ROWS}" -eq 0 ]]; then
 		_print_empty_state
 		exit 0
 	fi
 
 	printf '── context-mode runs ────────────────────────────────\n'
+	# shellcheck disable=SC2312  # a jq failure in the feeding process substitution yields no rows — the table simply prints none
 	while IFS=$'\t' read -r ended project_set kept unknown; do
 		if [[ "${unknown}" == "true" ]]; then
 			display="baseline unknown"

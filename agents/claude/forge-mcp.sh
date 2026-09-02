@@ -141,7 +141,7 @@ _agent_claude_forge_is_ours() {
 #
 # Everything is parsed, built and formatted before anything is written, so a
 # failure that can be seen at all is seen while the config is still untouched —
-# the rule agent_claude_context_mode_wire follows for the same file.
+# the rule agent_claude_context_mode_strip follows for the same file.
 #
 # A document that already matches is not rewritten. That is what makes a second
 # call a no-op, and it is why re-running an enable script costs nothing.

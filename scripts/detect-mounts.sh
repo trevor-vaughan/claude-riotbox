@@ -224,6 +224,10 @@ for MOUNTS_CONF in "${RIOTBOX_SYSCONF_DIR}/mounts.conf" "${RIOTBOX_CONFIG_DIR}/m
 			line="${line%:rw}"
 			;;
 		*:ro) line="${line%:ro}" ;;
+		*)
+			# No mode suffix — the "ro" default above stands and the whole
+			# line is the path. This is the common form of an entry.
+			;;
 		esac
 
 		# A line of nothing but a mode suffix must not fall through: the

@@ -78,6 +78,72 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "empty=pass"
 
+  # The inverse of the case above, and the reason it needs its own: every view
+  # decided "is this ledger empty?" by reading a count out of a command
+  # substitution that could not report failure. `[[ "" -eq 0 ]]` is true, so a
+  # jq that died mid-report printed the empty-ledger message over a full
+  # ledger and exited 0 — the same answer, and the same exit code, as having
+  # run nothing at all. An empty ledger is a state; a broken reader is not.
+  - name: a jq failure is reported, not rendered as an empty ledger
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          SHIM="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}" "${SHIM}"' EXIT
+          jq -nc '{schema:1, started_at:"2026-07-01T10:00:00Z",
+                   ended_at:"2026-07-01T10:00:00Z", session_id:"s1",
+                   project_set:"riotbox", agent:"claude",
+                   kept_out_bytes:1048576, re_read_bytes:1024,
+                   hook_log_bytes:2048, retained_total_bytes:1048583,
+                   baseline_unknown:false}' > "${LEDGER}/r1.json"
+
+          # Fail jq only where each view reads its row count back — the
+          # aggregate's `@tsv` line and the two `length` probes. Every other
+          # call (record classification, the aggregation itself) passes
+          # through to the real jq, so this reproduces the narrow window the
+          # views could not see rather than a wholesale missing jq.
+          REAL_JQ="$(command -v jq)"
+          export REAL_JQ
+          cat > "${SHIM}/jq" <<'SHIMEOF'
+          #!/usr/bin/env bash
+          for arg in "$@"; do
+            case "${arg}" in
+            *@tsv* | length) exit 5 ;;
+            esac
+          done
+          exec "${REAL_JQ}" "$@"
+          SHIMEOF
+          chmod +x "${SHIM}/jq"
+
+          # Prove the trap is armed: with the real jq this ledger is not empty,
+          # so a later "no runs recorded yet" can only come from the failure.
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}")"
+          printf '%s' "${out}" | grep -q '1 run ' \
+            || { echo "FIXTURE INVALID: the fixture ledger does not report a run without the shim" >&2; exit 1; }
+
+          for view in "" "--by-project" "--runs"; do
+            rc=0
+            # ${view} is deliberately unquoted: the aggregate view is the
+            # empty string and must expand to no argument at all.
+            out="$(PATH="${SHIM}:${PATH}" bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" \
+                     --ledger-dir "${LEDGER}" ${view} 2>&1)" || rc=$?
+            echo "view='${view}' rc=${rc}"
+            printf '%s\n' "${out}"
+            [ "${rc}" -ne 0 ] \
+              || { echo "FAIL: view '${view}' exited 0 with a broken jq"; exit 1; }
+            if printf '%s' "${out}" | grep -q 'no runs recorded yet'; then
+              echo "FAIL: view '${view}' reported a broken reader as an empty ledger"
+              exit 1
+            fi
+          done
+          echo "jq_failure=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "jq_failure=pass"
+          - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
   - name: unreadable records are excluded from totals and disclosed
     steps:
       - type: exec

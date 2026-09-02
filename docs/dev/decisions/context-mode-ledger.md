@@ -121,6 +121,8 @@ On the capture side, one rule: **a ledger failure never reaches the session's ex
 
 On the read side the tradeoff inverts, because a silent skip there corrupts a total. `ctx-stats` skips any file that is not a valid record **and reports the count of skipped files** in its output.
 
+That tolerance covers the *records*, not the reader. A record `ctx-stats` cannot parse is skipped and disclosed; a `jq` that fails outright is a failure, and `ctx-stats` exits non-zero with the line it died on rather than presenting the ledger as empty. The two look identical from the outside otherwise — "no runs recorded yet", exit 0 — which is the one reading a broken reader must never be allowed to produce.
+
 ## Testing
 
 Three venom suites, driving pure seams directly rather than through the image, matching how the existing summary coverage works.

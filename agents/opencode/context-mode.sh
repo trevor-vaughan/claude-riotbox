@@ -3,8 +3,9 @@
 # agents/opencode/context-mode.sh — Context Mode wiring for opencode.
 #
 # Sourced by agents/opencode/manifest.sh, which exposes the optional Context
-# Mode verbs (context_mode_store_dir, context_mode_data_dir, context_mode_wire,
-# context_mode_strip, and the build-time context_mode_build_assert).
+# Mode verbs (context_mode_store_dir, context_mode_data_dir,
+# context_mode_platform, context_mode_wire, context_mode_strip, and the
+# build-time context_mode_build_assert).
 # container/context-mode-setup.sh drives them and holds no agent names of its
 # own.
 #
@@ -32,6 +33,13 @@ _agent_opencode_cm_shim_path() {
 
 agent_opencode_context_mode_store_dir() {
 	printf '%s\n' "${OPENCODE_CONFIG_DIR:-${HOME}/.config/opencode}/context-mode"
+}
+
+# See agents/claude/context-mode.sh for why this is pinned rather than
+# detected. opencode reaches Context Mode as an in-process plugin, so its
+# token is the one upstream maps to that path.
+agent_opencode_context_mode_platform() {
+	printf 'opencode\n'
 }
 
 # The root CONTEXT_MODE_DATA_DIR is pinned to. opencode needs this verb and
@@ -72,6 +80,7 @@ agent_opencode_context_mode_wire() {
 
 	if ! pkg="$(context_mode_pkg_root)"; then
 		echo "  [context-mode] WARN: could not resolve the context-mode package from" >&2
+		# shellcheck disable=SC2154  # CONTEXT_MODE_BIN is set by container/context-mode-setup.sh, which drives this file
 		echo "  [context-mode] ${CONTEXT_MODE_BIN} — opencode wiring skipped." >&2
 		return 1
 	fi
@@ -86,6 +95,7 @@ agent_opencode_context_mode_wire() {
 	# Never overwrite something RiotBox did not write. A user plugin that
 	# happens to sit at this path is theirs; the session runs with the
 	# feature off instead.
+	# shellcheck disable=SC2312  # head failing leaves grep no input, so the marker is not found and the shim is left alone — the safe direction
 	if [[ -e "${shim}" ]] && ! head -n 1 "${shim}" | grep -qF "${_AGENT_OPENCODE_CM_MARKER}"; then
 		echo "  [context-mode] WARN: ${shim} was not written by riotbox —" >&2
 		echo "  [context-mode] refusing to overwrite it; wiring skipped." >&2
@@ -137,6 +147,7 @@ agent_opencode_context_mode_strip() {
 
 	[[ -e "${shim}" ]] || return 0
 
+	# shellcheck disable=SC2312  # head failing leaves grep no input, so the marker is not found and the shim is left in place rather than deleted unverified
 	if ! head -n 1 "${shim}" | grep -qF "${_AGENT_OPENCODE_CM_MARKER}"; then
 		echo "  [context-mode] WARN: ${shim} was not written by riotbox —" >&2
 		echo "  [context-mode] leaving it in place." >&2
@@ -153,9 +164,10 @@ agent_opencode_context_mode_strip() {
 }
 
 # Build-time guard. Takes the installed package root and asserts the contract
-# agent_opencode_context_mode_wire depends on, so an upstream rename fails the
-# image build rather than a user session. Called once per registered agent by
-# the Context Mode block in the Containerfile.
+# agent_opencode_context_mode_wire and agent_opencode_context_mode_platform
+# depend on, so an upstream rename fails the image build rather than a user
+# session. Called once per registered agent by the Context Mode block in the
+# Containerfile.
 agent_opencode_context_mode_build_assert() {
 	local pkg="${1:?package root required}"
 	local adapter="${pkg}/build/adapters/opencode/plugin.js"
@@ -173,6 +185,32 @@ agent_opencode_context_mode_build_assert() {
 	if ! jq -e '.exports["./plugin"] == "./build/adapters/opencode/plugin.js"' \
 		"${pkg}/package.json" >/dev/null 2>&1; then
 		echo "context-mode's package.json no longer maps ./plugin to build/adapters/opencode/plugin.js — the adapter has moved and the shim path is stale" >&2
+		return 1
+	fi
+
+	# The literal platform token agent_opencode_context_mode_platform pins,
+	# asserted where upstream maps it to an adapter: the getAdapter() switch in
+	# build/adapters/detect.js, which container/context-mode-setup.sh reaches by
+	# exporting CONTEXT_MODE_PLATFORM.
+	#
+	# claude has no equivalent check and needs none. Its routing is guarded
+	# directly — the Containerfile's probe runs the real claude-code PreToolUse
+	# hook on a real payload and requires a decision back — and its token cannot
+	# degrade the way this one can: getAdapter's default branch already returns
+	# ClaudeCodeAdapter, so "claude-code" reaches the same adapter whether or not
+	# the switch still names it.
+	#
+	# "opencode" has no such luck, and no probe covers it either: the shim loads
+	# build/adapters/opencode/plugin.js by absolute path and never consults
+	# getPluginRoot(), so a renamed token here does not kill routing. It drops
+	# getAdapter() into that same default branch and hands an opencode session
+	# Claude's adapter, moving its Context Mode storage out from under the pins
+	# the rest of this file exists to place — silently, which is the failure
+	# mode container/context-mode-setup.sh argues against everywhere else.
+	# shellcheck disable=SC2312  # grep -A finding nothing leaves the second grep no input, so the mapping reads as gone — the direction that reports rather than passes
+	if ! grep -A3 -F 'case "opencode":' "${pkg}/build/adapters/detect.js" \
+		| grep -qF 'OpenCodeAdapter'; then
+		echo "context-mode's getAdapter() in build/adapters/detect.js no longer maps the platform id \"opencode\" to OpenCodeAdapter — CONTEXT_MODE_PLATFORM=opencode would fall through to the default branch and hand opencode sessions the Claude Code adapter, silently relocating their Context Mode storage" >&2
 		return 1
 	fi
 }

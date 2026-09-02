@@ -11,7 +11,7 @@ tasks:
     #   SC1090 — Can't follow non-constant source (we source scripts dynamically)
     #   SC1091 — Not following sourced file (sourced files not available as input)
     cmd: |
-      shellcheck -x \
+      shellcheck -S info -o all -x \
         -e SC1090 \
         -e SC1091 \
         {{.ROOT_DIR}}/bin/riotbox \
