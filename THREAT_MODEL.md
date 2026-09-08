@@ -269,12 +269,37 @@ to cost a command that no longer exists; now that the CLI is still installed, a
 surviving MCP entry starts a working second server instead.
 `codegraph_strip_session_wiring` and `codegraph_strip_mcp_entry` in
 `container/codegraph-setup.sh` therefore run on **every** session rather than
-only one that finds no binary on `PATH`. Both prove ownership before deleting —
-the exact hook command and permission string the installer writes, and an MCP
-entry matching the shape it registers — so a hook, permission, or `codegraph`
-server the user configured themselves survives. Deleting the session directory
-clears all of it too, and `CODEGRAPH_NO_PROMPT_HOOK=1` still makes a hook a
-no-op at runtime without removing it.
+only one that finds no binary on `PATH`. All three removals match the exact
+shapes the installer writes — its hook command, its `mcp__codegraph__*`
+permission string, and an MCP entry of the shape it registers — so a hook,
+permission, or `codegraph` server you narrowed yourself survives: a hook wrapped
+in your own command, a permission naming a single tool, a server entry carrying
+extra arguments. **What none of them can do is tell the installer's shape from
+an identical one you wrote.** A `codegraph` server left at CodeGraph's own
+default, or that same wildcard permission, is indistinguishable from riotbox's
+and is removed with it — and the message reporting the removal will attribute it
+to an earlier image. The direction is fail-closed — configuration is lost, never
+widened — but the loss recurs rather than happening once: both strips run at
+every session start, and `agents/claude/sync-settings.sh` re-copies a host
+`.claude.json` into the session ahead of them, so an entry left at the default
+shape is taken back out on every launch. Narrowing it is what makes it survive,
+and there is no flag that suppresses either strip. It is called out for the same
+reason the by-key deletion below is. Deleting the session directory clears
+all of it too, and `CODEGRAPH_NO_PROMPT_HOOK=1` still makes a hook a no-op at
+runtime without removing it.
+
+The installer's other two artifacts are prose, and only one of them is reliably
+regenerated. `agents/claude/sync-settings.sh` copies a host `~/.claude/CLAUDE.md`
+over the session copy every launch and deletes the session copy when there is no
+host file, so a CodeGraph block in it goes either way. The opencode
+`AGENTS.md` block has no such guarantee: `agents/opencode/sync-settings.sh`
+refreshes the session config only when the host has a `~/.config/opencode`
+directory, and `agents/opencode/setup.sh` writes `AGENTS.md` only when none is
+present. A user without that host directory therefore keeps whatever an earlier
+image appended, indefinitely. That is accepted residue rather than a third
+stripper: the block is inert prose describing `mcp__codegraph__*` tools no image
+registers any more, it cannot put a missing command on the critical path the way
+the prompt hook could, and deleting the session directory clears it.
 
 Nothing about an indexed session goes out to the network. Telemetry is off in
 all three layers CodeGraph honors — `DO_NOT_TRACK=1` from the entrypoint (which

@@ -53,8 +53,11 @@ _AGENT_CLAUDE_FORGE_GITHUB_SERVER='github'
 _AGENT_CLAUDE_FORGE_GITLAB_SERVER='gitlab'
 
 # The file Claude Code reads MCP servers from. Same file Context Mode's MCP
-# entry and CodeGraph's relocated entry live in, hence the read-modify-write
-# below rather than a wholesale rewrite: three features share this document.
+# entry, the user's own host-synced entries, and any CodeGraph entry an older
+# image relocated here all live in, hence the read-modify-write below rather
+# than a wholesale rewrite: this document is shared, and riotbox owns only part
+# of it. Nothing writes a CodeGraph entry any more — codegraph_strip_mcp_entry
+# now takes the old one back out — but the sharing is what the rule is for.
 _agent_claude_forge_config() {
 	printf '%s\n' "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/.claude.json"
 }

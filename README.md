@@ -1021,9 +1021,14 @@ Details worth knowing:
   still installed, a surviving MCP entry does not fail quietly; it starts a second code
   intelligence server alongside Context Mode. Every session now strips both back out and
   reports what it removed. Both strips match only the exact shapes the installer wrote,
-  so your own hooks, permissions, and MCP servers are left alone — including a
-  `codegraph` server entry you configured yourself. You never have to run `codegraph
-  uninstall`. See [THREAT_MODEL.md](THREAT_MODEL.md) for the full analysis.
+  so a hook, permission, or `codegraph` server you narrowed yourself is left alone. What
+  they cannot do is tell the installer's shape from an identical one you wrote: a
+  `codegraph` server left at CodeGraph's own default, or the bare `mcp__codegraph__*`
+  wildcard, goes with the rest — and goes again on every session start, not just the
+  first, so re-adding it unchanged will not make it stick. Give it a shape of its own if
+  you want one to survive: an extra argument on the server entry, or a permission naming
+  a single tool rather than the wildcard. You never have to run `codegraph uninstall`.
+  See [THREAT_MODEL.md](THREAT_MODEL.md) for the full analysis.
 - **The index contains your source.** It stores verbatim code and symbol names — treat
   `.codegraph/` with the same sensitivity as the project itself.
 - **In overlay mode**, the index is written into the overlay rather than your project and

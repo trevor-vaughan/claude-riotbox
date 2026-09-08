@@ -123,10 +123,16 @@ codegraph_strip_mcp_entry() {
 # a UserPromptSubmit hook invoking `codegraph prompt-hook` on every prompt, and
 # would keep the `mcp__codegraph__*` permission standing for a server nothing
 # registers any more. Of the four things the installer wrote, this file is the
-# one that persists unconditionally: the CLAUDE.md block and the opencode
-# AGENTS.md block are re-copied from the host each launch, and the .claude.json
-# entry survives only where there is no host copy to overwrite it (see
-# codegraph_strip_mcp_entry, which handles that one).
+# one that persists unconditionally. The .claude.json entry survives only where
+# there is no host copy to overwrite it (see codegraph_strip_mcp_entry, which
+# handles that one). The CLAUDE.md block is re-copied from the host each launch,
+# and removed outright when the host has no CLAUDE.md, so it cannot outlive the
+# image either way. The opencode AGENTS.md block is the one gap: agents/opencode/
+# sync-settings.sh refreshes that config only when the host has a
+# ~/.config/opencode, and agents/opencode/setup.sh writes AGENTS.md only when
+# none is present, so without that host directory an earlier image's block stays.
+# It is left as accepted residue and documented in THREAT_MODEL.md — inert prose
+# naming tools nothing registers, where this file holds an executable hook.
 #
 # The path is under ${HOME}, not ${CLAUDE_CONFIG_DIR}: codegraph 1.5.0 writes
 # settings.json to os.homedir()/.claude and ignores CLAUDE_CONFIG_DIR (checked

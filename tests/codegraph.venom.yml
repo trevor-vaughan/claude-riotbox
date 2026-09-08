@@ -174,6 +174,45 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "strip_malformed=pass"
 
+  - name: strip warns and changes nothing when .claude.json is empty
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+          # A zero-byte config: an interrupted write by another writer of this
+          # bind-mounted file, or a truncation the user did not finish. The case
+          # above trips the exit-status half of the guard; this one is the only
+          # cover for the emptiness half, because `jq -c .` on empty input
+          # SUCCEEDS and prints nothing. Written with printf, not `: >`: a
+          # redirection failure on a POSIX special builtin kills a
+          # non-interactive shell outright.
+          config="${CLAUDE_CONFIG_DIR}/.claude.json"
+          printf '' > "${config}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/codegraph-setup.sh"
+          codegraph_strip_mcp_entry 2>"${TEST_DIR}/stderr"
+
+          [ ! -s "${config}" ] \
+            || { echo "FAIL: empty config was written"; cat "${config}"; exit 1; }
+          grep -q 'not valid JSON' "${TEST_DIR}/stderr" \
+            || { echo "FAIL: no warning for empty config"; \
+                 cat "${TEST_DIR}/stderr"; exit 1; }
+          grep -qF "${config}" "${TEST_DIR}/stderr" \
+            || { echo "FAIL: warning does not name the file"; \
+                 cat "${TEST_DIR}/stderr"; exit 1; }
+          leftovers="$(find "${CLAUDE_CONFIG_DIR}" -maxdepth 1 -name '.claude.json.*')"
+          [ -z "${leftovers}" ] || { echo "FAIL: temp left behind: ${leftovers}"; exit 1; }
+          echo "strip_empty_source=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "strip_empty_source=pass"
+
   - name: hint names each unindexed project in a multi-project workspace
     steps:
       - type: exec
@@ -915,6 +954,66 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "strip_empty_format=pass"
+
+  - name: strip never writes an empty document over .claude.json
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+
+          # The .claude.json half of the case above. codegraph_strip_mcp_entry
+          # carries the same pretty-print guard as codegraph_strip_session_wiring
+          # and needs the same cover, because the file it writes is the one
+          # holding the OAuth account metadata: an unchecked command
+          # substitution yields "" when jq fails, and the writer would put a lone
+          # newline where the credentials were. json-write.sh's own suite cannot
+          # reach this — the failure happens before json_write_atomic is called.
+          config="${CLAUDE_CONFIG_DIR}/.claude.json"
+          cat > "${config}" <<'JSON'
+          {
+            "oauthAccount": {"emailAddress": "a@b.invalid"},
+            "mcpServers": {
+              "codegraph": {"type": "stdio", "command": "codegraph", "args": ["serve", "--mcp"]}
+            }
+          }
+          JSON
+          cp "${config}" "${TEST_DIR}/before"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/codegraph-setup.sh"
+          # Fails only the pretty-print call. The read (`jq -c .`) and the strip
+          # filter both pass more than one argument and go through to real jq, so
+          # the entry IS matched and removed in memory — the guard is the only
+          # thing standing between that and a truncated config.
+          jq() {
+            if [ "$#" -eq 1 ] && [ "$1" = "." ]; then
+              return 0
+            fi
+            command jq "$@"
+          }
+          codegraph_strip_mcp_entry 2>"${TEST_DIR}/stderr"
+          unset -f jq
+
+          cmp -s "${TEST_DIR}/before" "${config}" \
+            || { echo "FAIL: .claude.json truncated by an empty pretty-print"; exit 1; }
+          grep -q 'left in place' "${TEST_DIR}/stderr" \
+            || { echo "FAIL: the failed cleanup was silent"; \
+                 cat "${TEST_DIR}/stderr"; exit 1; }
+          # A failed write must not be reported as a removal: the entry is still
+          # registered, and a session told otherwise stops looking for it.
+          grep -qi 'Removed the CodeGraph MCP server entry' "${TEST_DIR}/stderr" \
+            && { echo "FAIL: announced a removal that did not happen"; exit 1; }
+          leftovers="$(find "${CLAUDE_CONFIG_DIR}" -maxdepth 1 -name '.claude.json.*')"
+          [ -z "${leftovers}" ] || { echo "FAIL: temp left behind: ${leftovers}"; exit 1; }
+          echo "strip_mcp_empty_format=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "strip_mcp_empty_format=pass"
 
   - name: entrypoint calls codegraph_setup after overlay_setup
     steps:

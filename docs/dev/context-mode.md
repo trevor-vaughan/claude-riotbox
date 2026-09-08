@@ -476,7 +476,12 @@ any more. Context Mode's prunes the hook entries a pre-plugin release wrote into
 which of the two it removed. One difference is worth carrying across: CodeGraph
 decides ownership of its MCP entry on the entry's shape, where Context Mode
 deletes by key — see the note in THREAT_MODEL.md on why deleting by key is a
-knowing trade there. They share a shape and no body.
+knowing trade there. Do not read the shape test as the stronger guarantee than
+it is: it distinguishes an entry the user *narrowed* from the installer's, and
+nothing more. An entry left at CodeGraph's own default shape is byte-identical
+to the installer's and is deleted just as a shared key is, so for the common
+case the two mechanisms lose the same thing — THREAT_MODEL.md says so for both.
+They share a shape and no body.
 
 ## Test coverage
 

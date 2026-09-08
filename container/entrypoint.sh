@@ -149,10 +149,14 @@ overlay_setup
 codegraph_setup
 
 # Context Mode: wire the agent-appropriate form when RIOTBOX_CONTEXT_MODE=1, or
-# strip wiring an earlier session left behind. Runs after codegraph_setup so
-# CodeGraph's removal lands in .claude.json before Context Mode writes its own
-# entry to the same file, and after the agent setup loop so opencode's
-# regenerated config is in place.
+# strip wiring an earlier session left behind. Neither feature writes an
+# mcpServers entry to .claude.json any more — Claude Code gets Context Mode from
+# the registered plugin (container/plugin-setup.sh) and CodeGraph is not wired at
+# all — but both still read-modify-write that one document to strip what older
+# images left there. Sequential calls in one shell, so the order decides which
+# removal is applied to which copy: CodeGraph's lands first and Context Mode's
+# strip then reads the settled file. Runs after the agent setup loop as well, so
+# opencode's regenerated config is in place.
 # Agents opt in by implementing the Context Mode verbs; any that does not warns
 # and runs with the feature off.
 context_mode_setup
