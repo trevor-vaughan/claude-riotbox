@@ -1,0 +1,33 @@
+container/codegraph-setup.sh
+  s_d9669fe7fe77d5::t_3f2f1aa6295af4 126-135
+container/entrypoint.sh
+  s_d9669fe7fe77d5::t_f5511c9a0221fb 152-159
+THREAT_MODEL.md
+  s_d9669fe7fe77d5::t_e56ca2c6e0eb8e 272-302
+agents/claude/forge-mcp.sh
+  s_d9669fe7fe77d5::t_16cf6b45ea23da 56-60
+tests/context-mode.venom.yml
+  s_d9669fe7fe77d5::t_74a0ad3bac8cb2 935-940
+tests/codegraph.venom.yml
+  s_d9669fe7fe77d5::t_64744e5d6c7ebd 177-215,958-1017
+docs/dev/context-mode.md
+  s_d9669fe7fe77d5::t_3c32b3ab05fe45 479-484
+README.md
+  s_d9669fe7fe77d5::t_31a0d1ecb4c510 1024-1031
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "84bf6a3876a252d082109a60502b2089ebdbbb1e",
+  "prompts": {},
+  "sessions": {
+    "s_d9669fe7fe77d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1147418-e142-4954-b007-6a46c377b665",
+        "model": "unknown"
+      },
+      "human_author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
