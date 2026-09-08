@@ -465,11 +465,23 @@ says so on stderr.
 | `scripts/lib/json-write.sh` | `json_write_atomic`, shared with CodeGraph |
 | `scripts/preflight.sh` | The `riotbox doctor` checks |
 
-`json_write_atomic` is shared, but **the strippers are not.** CodeGraph's prunes a
-`UserPromptSubmit` command and an `mcp__codegraph__*` permission from
-`settings.json`; Context Mode's prunes the hook entries a pre-plugin release
-wrote into `settings.json` *and* the `mcpServers` entry from `.claude.json`,
-then reports which of the two it removed. They share a shape and no body.
+`json_write_atomic` is shared, but **the strippers are not.** Both features now
+strip the same two files and neither wires an MCP server it did not have to.
+CodeGraph's pair prunes a `UserPromptSubmit` command and an `mcp__codegraph__*`
+permission from `settings.json` (`codegraph_strip_session_wiring`) and its
+relocated `mcpServers` entry from `.claude.json` (`codegraph_strip_mcp_entry`),
+both unconditionally, because the wiring came from an installer no image runs
+any more. Context Mode's prunes the hook entries a pre-plugin release wrote into
+`settings.json` *and* the `mcpServers` entry from `.claude.json`, then reports
+which of the two it removed. One difference is worth carrying across: CodeGraph
+decides ownership of its MCP entry on the entry's shape, where Context Mode
+deletes by key — see the note in THREAT_MODEL.md on why deleting by key is a
+knowing trade there. Do not read the shape test as the stronger guarantee than
+it is: it distinguishes an entry the user *narrowed* from the installer's, and
+nothing more. An entry left at CodeGraph's own default shape is byte-identical
+to the installer's and is deleted just as a shared key is, so for the common
+case the two mechanisms lose the same thing — THREAT_MODEL.md says so for both.
+They share a shape and no body.
 
 ## Test coverage
 

@@ -1,14 +1,16 @@
-name: codegraph-setup.sh — per-session agent wiring and index hint
+name: codegraph-setup.sh — per-session cleanup and index hint
 vars:
   root: "."
   riotbox_dir: "{{.root}}"
 
-# CodeGraph's Claude installer target hardcodes os.homedir()/.claude.json
-# (src/installer/targets/claude.ts) and never reads CLAUDE_CONFIG_DIR, while
-# RiotBox points Claude Code at ${HOME}/.claude — so the MCP entry lands in a
-# file Claude Code does not read. codegraph_relocate_mcp_entry closes that gap.
-# The hint tells the user how to build the first index; indexing is never
-# started automatically.
+# RiotBox does not wire CodeGraph's MCP server (issue #20 — it conflicts with
+# Context Mode, and `codegraph explore` answers the same questions from the
+# shell). What is left is undoing what earlier images wired: `codegraph install`
+# wrote a prompt hook and a permission into the session settings.json, and an
+# mcpServers entry that RiotBox relocated into the .claude.json Claude Code
+# reads. Both outlive the image that wrote them, so both are stripped every
+# session. The hint tells the user how to build the first index; indexing is
+# never started automatically.
 
 # Every case sources scripts/lib/json-write.sh first, the way entrypoint.sh
 # does: the atomic config writer is shared with context-mode-setup.sh, so
@@ -16,7 +18,7 @@ vars:
 # tests/lib-json-write.venom.yml.
 
 testcases:
-  - name: relocate creates the target config when it does not exist
+  - name: strip removes the MCP entry an earlier image relocated
     steps:
       - type: exec
         script: |
@@ -26,23 +28,24 @@ testcases:
           export HOME="${TEST_DIR}"
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           mkdir -p "${CLAUDE_CONFIG_DIR}"
-          cat > "${HOME}/.claude.json" <<'JSON'
+          cat > "${CLAUDE_CONFIG_DIR}/.claude.json" <<'JSON'
           {"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}
           JSON
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
-          codegraph_relocate_mcp_entry
+          codegraph_strip_mcp_entry 2>"${TEST_DIR}/stderr"
 
-          jq -e '.mcpServers.codegraph.command == "codegraph"' \
-            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
-            || { echo "FAIL: entry not relocated"; exit 1; }
-          echo "relocate_create=pass"
+          jq -e '.mcpServers.codegraph' "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
+            && { echo "FAIL: entry survived"; exit 1; }
+          grep -qi 'removed' "${TEST_DIR}/stderr" \
+            || { echo "FAIL: removal not reported"; exit 1; }
+          echo "strip_mcp=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "relocate_create=pass"
+          - result.systemout ShouldContainSubstring "strip_mcp=pass"
 
-  - name: relocate preserves unrelated keys and other MCP servers
+  - name: strip leaves a codegraph entry of another shape alone
     steps:
       - type: exec
         script: |
@@ -52,30 +55,65 @@ testcases:
           export HOME="${TEST_DIR}"
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           mkdir -p "${CLAUDE_CONFIG_DIR}"
-          cat > "${HOME}/.claude.json" <<'JSON'
-          {"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}
-          JSON
+          # The user's own entry under the same key. agents/claude/sync-settings.sh
+          # copies the host's ~/.claude.json into this very file at every launch,
+          # so the key alone cannot say who wrote an entry — only its shape can.
+          # A narrowing the user added is exactly what must not be mistaken for
+          # RiotBox's relocated entry.
           cat > "${CLAUDE_CONFIG_DIR}/.claude.json" <<'JSON'
-          {"oauthAccount":{"emailAddress":"a@b.invalid"},"mcpServers":{"other":{"command":"other"}}}
+          {"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp","--read-only"]}}}
           JSON
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
-          codegraph_relocate_mcp_entry
+          codegraph_strip_mcp_entry 2>"${TEST_DIR}/stderr"
+
+          jq -e '.mcpServers.codegraph.args | index("--read-only")' \
+            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
+            || { echo "FAIL: deleted an entry riotbox did not write"; exit 1; }
+          grep -qi 'removed' "${TEST_DIR}/stderr" \
+            && { echo "FAIL: announced a removal that did not happen"; exit 1; }
+          echo "strip_foreign=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "strip_foreign=pass"
+
+  - name: strip preserves sibling servers and unrelated keys
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+          # oauthAccount is what makes this file load-bearing for auth, and
+          # Context Mode and the forge servers register beside us. Removing one
+          # entry may not disturb any of them.
+          cat > "${CLAUDE_CONFIG_DIR}/.claude.json" <<'JSON'
+          {"oauthAccount":{"emailAddress":"a@b.invalid"},
+           "mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]},
+                         "other":{"command":"other"}}}
+          JSON
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/codegraph-setup.sh"
+          codegraph_strip_mcp_entry
 
           target="${CLAUDE_CONFIG_DIR}/.claude.json"
           jq -e '.oauthAccount.emailAddress == "a@b.invalid"' "${target}" >/dev/null \
             || { echo "FAIL: unrelated key lost"; exit 1; }
           jq -e '.mcpServers.other.command == "other"' "${target}" >/dev/null \
             || { echo "FAIL: sibling MCP server lost"; exit 1; }
-          jq -e '.mcpServers.codegraph.command == "codegraph"' "${target}" >/dev/null \
-            || { echo "FAIL: codegraph entry missing"; exit 1; }
-          echo "relocate_merge=pass"
+          jq -e '.mcpServers | has("codegraph")' "${target}" >/dev/null \
+            && { echo "FAIL: codegraph entry survived"; exit 1; }
+          echo "strip_siblings=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "relocate_merge=pass"
+          - result.systemout ShouldContainSubstring "strip_siblings=pass"
 
-  - name: relocate is idempotent
+  - name: strip is a silent no-op when there is no entry
     steps:
       - type: exec
         script: |
@@ -85,53 +123,33 @@ testcases:
           export HOME="${TEST_DIR}"
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           mkdir -p "${CLAUDE_CONFIG_DIR}"
-          cat > "${HOME}/.claude.json" <<'JSON'
-          {"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}
-          JSON
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
-          codegraph_relocate_mcp_entry
-          first="$(cat "${CLAUDE_CONFIG_DIR}/.claude.json")"
-          codegraph_relocate_mcp_entry
-          second="$(cat "${CLAUDE_CONFIG_DIR}/.claude.json")"
-          [ "${first}" = "${second}" ] || { echo "FAIL: not idempotent"; exit 1; }
-          echo "relocate_idempotent=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "relocate_idempotent=pass"
 
-  - name: relocate is a no-op when the source has no codegraph entry
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          mkdir -p "${CLAUDE_CONFIG_DIR}"
-          echo '{"oauthAccount":{"emailAddress":"a@b.invalid"}}' \
+          # No file at all — the common case on a session that never had
+          # CodeGraph. It must not be told about a cleanup that did not happen.
+          codegraph_strip_mcp_entry 2>"${TEST_DIR}/stderr"
+          [ ! -e "${CLAUDE_CONFIG_DIR}/.claude.json" ] \
+            || { echo "FAIL: created a config that was not there"; exit 1; }
+          [ ! -s "${TEST_DIR}/stderr" ] || { echo "FAIL: spoke about a missing file"; exit 1; }
+
+          # A file with no codegraph entry must not be rewritten at all: this
+          # document is hand-edited, and reflowing it to change nothing is a
+          # larger edit than the one being made.
+          printf '{"mcpServers":{"other":{"command":"other"}}}' \
             > "${CLAUDE_CONFIG_DIR}/.claude.json"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/codegraph-setup.sh"
-          # No ~/.claude.json at all.
-          codegraph_relocate_mcp_entry
-          jq -e 'has("mcpServers") | not' "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
-            || { echo "FAIL: target mutated with no source entry"; exit 1; }
-
-          # Source present but carrying no codegraph entry.
-          echo '{"mcpServers":{"other":{"command":"other"}}}' > "${HOME}/.claude.json"
-          codegraph_relocate_mcp_entry
-          jq -e 'has("mcpServers") | not' "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
-            || { echo "FAIL: unrelated source entry copied"; exit 1; }
-          echo "relocate_noop=pass"
+          before="$(cat "${CLAUDE_CONFIG_DIR}/.claude.json")"
+          codegraph_strip_mcp_entry 2>"${TEST_DIR}/stderr"
+          [ "$(cat "${CLAUDE_CONFIG_DIR}/.claude.json")" = "${before}" ] \
+            || { echo "FAIL: reflowed a document it had nothing to change"; exit 1; }
+          [ ! -s "${TEST_DIR}/stderr" ] || { echo "FAIL: announced a no-op"; exit 1; }
+          echo "strip_absent=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "relocate_noop=pass"
+          - result.systemout ShouldContainSubstring "strip_absent=pass"
 
-  - name: relocate warns and leaves the target alone on malformed JSON
+  - name: strip warns and changes nothing when .claude.json is malformed
     steps:
       - type: exec
         script: |
@@ -141,25 +159,22 @@ testcases:
           export HOME="${TEST_DIR}"
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           mkdir -p "${CLAUDE_CONFIG_DIR}"
-          printf 'not json at all' > "${HOME}/.claude.json"
-          echo '{"oauthAccount":{"emailAddress":"a@b.invalid"}}' \
-            > "${CLAUDE_CONFIG_DIR}/.claude.json"
+          printf '{"mcpServers":' > "${CLAUDE_CONFIG_DIR}/.claude.json"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
-          codegraph_relocate_mcp_entry 2>"${TEST_DIR}/stderr"
+          codegraph_strip_mcp_entry 2>"${TEST_DIR}/stderr"
 
-          jq -e '.oauthAccount.emailAddress == "a@b.invalid"' \
-            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
-            || { echo "FAIL: target damaged by malformed source"; exit 1; }
-          grep -q "codegraph" "${TEST_DIR}/stderr" \
-            || { echo "FAIL: no warning emitted"; exit 1; }
-          echo "relocate_malformed=pass"
+          grep -q 'not valid JSON' "${TEST_DIR}/stderr" \
+            || { echo "FAIL: no warning for malformed config"; exit 1; }
+          [ "$(cat "${CLAUDE_CONFIG_DIR}/.claude.json")" = '{"mcpServers":' ] \
+            || { echo "FAIL: rewrote a file it could not parse"; exit 1; }
+          echo "strip_malformed=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "relocate_malformed=pass"
+          - result.systemout ShouldContainSubstring "strip_malformed=pass"
 
-  - name: relocate warns and leaves the target alone when the target is malformed
+  - name: strip warns and changes nothing when .claude.json is empty
     steps:
       - type: exec
         script: |
@@ -169,152 +184,34 @@ testcases:
           export HOME="${TEST_DIR}"
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           mkdir -p "${CLAUDE_CONFIG_DIR}"
-          cat > "${HOME}/.claude.json" <<'JSON'
-          {"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}
-          JSON
-          # The other malformed case corrupts the source. This is the other
-          # side of the same contract: the target is the file that holds the
-          # user's account metadata, so a merge into a document jq cannot read
-          # must not overwrite it with one built from '{}'.
-          target="${CLAUDE_CONFIG_DIR}/.claude.json"
-          printf '{"oauthAccount": {truncated' > "${target}"
-          cp "${target}" "${TEST_DIR}/before"
+          # A zero-byte config: an interrupted write by another writer of this
+          # bind-mounted file, or a truncation the user did not finish. The case
+          # above trips the exit-status half of the guard; this one is the only
+          # cover for the emptiness half, because `jq -c .` on empty input
+          # SUCCEEDS and prints nothing. Written with printf, not `: >`: a
+          # redirection failure on a POSIX special builtin kills a
+          # non-interactive shell outright.
+          config="${CLAUDE_CONFIG_DIR}/.claude.json"
+          printf '' > "${config}"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
-          codegraph_relocate_mcp_entry 2>"${TEST_DIR}/stderr"
+          codegraph_strip_mcp_entry 2>"${TEST_DIR}/stderr"
 
-          cmp -s "${TEST_DIR}/before" "${target}" \
-            || { echo "FAIL: malformed target was rewritten"; exit 1; }
-          grep -q "\[codegraph\]" "${TEST_DIR}/stderr" \
-            || { echo "FAIL: no warning emitted"; cat "${TEST_DIR}/stderr"; exit 1; }
-          grep -qF "${target}" "${TEST_DIR}/stderr" \
-            || { echo "FAIL: warning does not name the target"; \
+          [ ! -s "${config}" ] \
+            || { echo "FAIL: empty config was written"; cat "${config}"; exit 1; }
+          grep -q 'not valid JSON' "${TEST_DIR}/stderr" \
+            || { echo "FAIL: no warning for empty config"; \
+                 cat "${TEST_DIR}/stderr"; exit 1; }
+          grep -qF "${config}" "${TEST_DIR}/stderr" \
+            || { echo "FAIL: warning does not name the file"; \
                  cat "${TEST_DIR}/stderr"; exit 1; }
           leftovers="$(find "${CLAUDE_CONFIG_DIR}" -maxdepth 1 -name '.claude.json.*')"
           [ -z "${leftovers}" ] || { echo "FAIL: temp left behind: ${leftovers}"; exit 1; }
-          echo "relocate_malformed_target=pass"
+          echo "strip_empty_source=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "relocate_malformed_target=pass"
-
-  - name: relocate warns and leaves the target alone when the target is empty
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          mkdir -p "${CLAUDE_CONFIG_DIR}"
-          cat > "${HOME}/.claude.json" <<'JSON'
-          {"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}
-          JSON
-          # A zero-byte target: an interrupted write by another writer of this
-          # bind-mounted file, or a truncation the user did not finish. It is
-          # not caught by jq's exit status — `jq -c .` on empty input succeeds
-          # and prints nothing — so only the emptiness half of the guard stops
-          # it. Written with printf, not `: >`: a redirection failure on a
-          # POSIX special builtin kills a non-interactive shell outright.
-          target="${CLAUDE_CONFIG_DIR}/.claude.json"
-          printf '' > "${target}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/codegraph-setup.sh"
-          codegraph_relocate_mcp_entry 2>"${TEST_DIR}/stderr"
-
-          [ ! -s "${target}" ] \
-            || { echo "FAIL: empty target was written"; cat "${target}"; exit 1; }
-          grep -q "\[codegraph\]" "${TEST_DIR}/stderr" \
-            || { echo "FAIL: no warning emitted"; cat "${TEST_DIR}/stderr"; exit 1; }
-          grep -qF "${target}" "${TEST_DIR}/stderr" \
-            || { echo "FAIL: warning does not name the target"; \
-                 cat "${TEST_DIR}/stderr"; exit 1; }
-          leftovers="$(find "${CLAUDE_CONFIG_DIR}" -maxdepth 1 -name '.claude.json.*')"
-          [ -z "${leftovers}" ] || { echo "FAIL: temp left behind: ${leftovers}"; exit 1; }
-          echo "relocate_empty_target=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "relocate_empty_target=pass"
-
-  - name: relocate creates the target 0600 and preserves an existing mode
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          mkdir -p "${CLAUDE_CONFIG_DIR}"
-          cat > "${HOME}/.claude.json" <<'JSON'
-          {"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}
-          JSON
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/codegraph-setup.sh"
-
-          # The target holds OAuth account metadata and lives in the host
-          # session directory, so a fresh one must not be born world-readable
-          # under the default umask.
-          umask 022
-          codegraph_relocate_mcp_entry
-          mode="$(stat -c '%a' "${CLAUDE_CONFIG_DIR}/.claude.json")"
-          [ "${mode}" = "600" ] || { echo "FAIL: created mode ${mode}, want 600"; exit 1; }
-
-          # agents/claude/sync-settings.sh chmod 600s this file; a rename
-          # adopts the temp file's mode, which would silently undo that.
-          chmod 600 "${CLAUDE_CONFIG_DIR}/.claude.json"
-          codegraph_relocate_mcp_entry
-          mode="$(stat -c '%a' "${CLAUDE_CONFIG_DIR}/.claude.json")"
-          [ "${mode}" = "600" ] || { echo "FAIL: 600 not preserved, got ${mode}"; exit 1; }
-
-          # Whatever mode the user chose is theirs to keep, not ours to reset.
-          chmod 640 "${CLAUDE_CONFIG_DIR}/.claude.json"
-          codegraph_relocate_mcp_entry
-          mode="$(stat -c '%a' "${CLAUDE_CONFIG_DIR}/.claude.json")"
-          [ "${mode}" = "640" ] || { echo "FAIL: 640 not preserved, got ${mode}"; exit 1; }
-          echo "relocate_mode=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "relocate_mode=pass"
-
-  - name: relocate does not stage the write through a predictable temp path
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          mkdir -p "${CLAUDE_CONFIG_DIR}"
-          cat > "${HOME}/.claude.json" <<'JSON'
-          {"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}
-          JSON
-          # Two concurrent sessions on one project share a session directory
-          # (scripts/mount-projects.sh), hence one /home/llm/.claude. On a fixed
-          # temp name each entrypoint can rename the other's half-written file
-          # over the user's config. Standing in for that second writer: a
-          # directory squatting on the fixed name, which only obstructs an
-          # implementation that still uses it.
-          mkdir -p "${CLAUDE_CONFIG_DIR}/.claude.json.tmp"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/codegraph-setup.sh"
-          codegraph_relocate_mcp_entry 2>"${TEST_DIR}/stderr"
-
-          jq -e '.mcpServers.codegraph.command == "codegraph"' \
-            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
-            || { echo "FAIL: relocation went through the fixed temp path"; \
-                 cat "${TEST_DIR}/stderr"; exit 1; }
-          leftovers="$(find "${CLAUDE_CONFIG_DIR}" -maxdepth 1 -type f -name '.claude.json.*')"
-          [ -z "${leftovers}" ] || { echo "FAIL: temp left behind: ${leftovers}"; exit 1; }
-          echo "relocate_tmp_unique=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "relocate_tmp_unique=pass"
+          - result.systemout ShouldContainSubstring "strip_empty_source=pass"
 
   - name: hint names each unindexed project in a multi-project workspace
     steps:
@@ -344,6 +241,12 @@ testcases:
           printf '%s\n' "${out}" | grep -q "beta" && { echo "FAIL: indexed beta hinted"; exit 1; }
           printf '%s\n' "${out}" | grep -q "codegraph init" \
             || { echo "FAIL: hint does not name the command"; exit 1; }
+          # An index is only worth building if something reads it, and with no
+          # MCP server registered the CLI is the only thing that does. A hint
+          # that stops at `init` leaves the user with a built index and no idea
+          # what to do with it.
+          printf '%s\n' "${out}" | grep -q "codegraph explore" \
+            || { echo "FAIL: hint does not name the CLI that replaced the MCP server"; exit 1; }
           echo "hint_multi=pass"
         assertions:
           - result.code ShouldEqual 0
@@ -450,11 +353,14 @@ testcases:
           # this is the only cover for the strip's absent-file branch.
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
-          codegraph_setup 2>"${TEST_DIR}/stderr"
-          grep -q 'not on PATH' "${TEST_DIR}/stderr" \
-            || { echo "FAIL: no warning about the missing binary"; exit 1; }
-          grep -qi 'removed' "${TEST_DIR}/stderr" \
-            && { echo "FAIL: reported a cleanup with no file to clean"; exit 1; }
+          codegraph_setup >"${TEST_DIR}/stdout" 2>"${TEST_DIR}/stderr"
+          # Nothing to clean and no binary to hint about: silence is the whole
+          # contract. The old "not on PATH — MCP wiring skipped" warning went
+          # with the wiring, because there is no longer anything to skip.
+          [ ! -s "${TEST_DIR}/stderr" ] \
+            || { echo "FAIL: spoke with nothing to say: $(cat "${TEST_DIR}/stderr")"; exit 1; }
+          [ ! -s "${TEST_DIR}/stdout" ] \
+            || { echo "FAIL: hinted with no codegraph on PATH"; exit 1; }
           [ ! -e "${CLAUDE_CONFIG_DIR}/settings.json" ] \
             || { echo "FAIL: created a settings.json that was not there"; exit 1; }
           echo "guard=pass"
@@ -462,7 +368,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "guard=pass"
 
-  - name: setup runs the installer once with the non-interactive flags
+  - name: setup never runs the installer
     steps:
       - type: exec
         script: |
@@ -473,47 +379,37 @@ testcases:
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CODEGRAPH_WORKSPACE="${TEST_DIR}/workspace"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${CODEGRAPH_WORKSPACE}/.git" "${TEST_DIR}/bin"
-          # Fake codegraph records its argv and writes the MCP entry where the
-          # real installer would (the os.homedir() path). Both the joined argv
-          # and the per-argument log are recorded: the per-argument probes below
-          # cannot tell `-t auto -l global` from the transposed `-t global
-          # -l auto`, which installs to the wrong target and leaves the MCP
-          # server unwired.
+          # Records every invocation. RiotBox no longer wires the MCP server, and
+          # the CLI staying on PATH is not a licence to run it: `codegraph
+          # install` is what wrote the prompt hook and the permission this suite
+          # now strips. `init` is covered by the same assertion — indexing was
+          # never automatic and must not become so by accident.
           cat > "${TEST_DIR}/bin/codegraph" <<'FAKE'
           #!/usr/bin/env bash
           printf 'cgargv=%s\n' "$*" >> "${HOME}/argv.log"
-          printf 'cgarg=%s\n' "$@" >> "${HOME}/argv.log"
-          echo '{"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}' \
-            > "${HOME}/.claude.json"
           FAKE
           chmod +x "${TEST_DIR}/bin/codegraph"
           export PATH="${TEST_DIR}/bin:/usr/bin:/bin"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
-          codegraph_setup
+          codegraph_setup >"${TEST_DIR}/stdout" 2>"${TEST_DIR}/stderr"
 
-          grep -qx 'cgarg=install' "${HOME}/argv.log" || { echo "FAIL: install not run"; exit 1; }
-          grep -qx 'cgarg=-t' "${HOME}/argv.log" || { echo "FAIL: -t missing"; exit 1; }
-          grep -qx 'cgarg=auto' "${HOME}/argv.log" || { echo "FAIL: auto target missing"; exit 1; }
-          grep -qx 'cgarg=-l' "${HOME}/argv.log" || { echo "FAIL: -l missing"; exit 1; }
-          grep -qx 'cgarg=global' "${HOME}/argv.log" || { echo "FAIL: global location missing"; exit 1; }
-          grep -qx 'cgarg=-y' "${HOME}/argv.log" || { echo "FAIL: -y missing"; exit 1; }
-          grep -qx 'cgarg=init' "${HOME}/argv.log" && { echo "FAIL: setup indexed automatically"; exit 1; }
-          grep -qx 'cgargv=install -t auto -l global -y' "${HOME}/argv.log" \
-            || { echo "FAIL: argv not exactly 'install -t auto -l global -y'"; exit 1; }
-          # "once" is in this case's name, so assert it: a second invocation
-          # would double the installer's work on every session start.
-          [ "$(grep -c '^cgargv=' "${HOME}/argv.log")" -eq 1 ] \
-            || { echo "FAIL: installer ran more than once"; exit 1; }
-          jq -e '.mcpServers.codegraph' "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
-            || { echo "FAIL: MCP entry not relocated by setup"; exit 1; }
-          echo "setup_install=pass"
+          [ ! -e "${HOME}/argv.log" ] \
+            || { echo "FAIL: invoked codegraph: $(cat "${HOME}/argv.log")"; exit 1; }
+          [ ! -e "${CLAUDE_CONFIG_DIR}/.claude.json" ] \
+            || { echo "FAIL: wrote an MCP config"; exit 1; }
+          [ ! -e "${CLAUDE_CONFIG_DIR}/settings.json" ] \
+            || { echo "FAIL: wrote agent settings"; exit 1; }
+          # The hint is the one thing setup still says on an unindexed workspace.
+          grep -q 'codegraph init' "${TEST_DIR}/stdout" \
+            || { echo "FAIL: index hint missing"; exit 1; }
+          echo "setup_no_install=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "setup_install=pass"
+          - result.systemout ShouldContainSubstring "setup_no_install=pass"
 
-  - name: setup survives an installer failure
+  - name: setup strips stale wiring even when codegraph is on PATH
     steps:
       - type: exec
         script: |
@@ -524,30 +420,41 @@ testcases:
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CODEGRAPH_WORKSPACE="${TEST_DIR}/workspace"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${CODEGRAPH_WORKSPACE}" "${TEST_DIR}/bin"
-          cat > "${TEST_DIR}/bin/codegraph" <<'FAKE'
-          #!/usr/bin/env bash
-          echo "installer progress chatter"
-          echo "installer exploded" >&2
-          exit 3
-          FAKE
+          printf '#!/usr/bin/env bash\nexit 0\n' > "${TEST_DIR}/bin/codegraph"
           chmod +x "${TEST_DIR}/bin/codegraph"
           export PATH="${TEST_DIR}/bin:/usr/bin:/bin"
 
+          # Both artifacts an earlier image's installer left behind. While the
+          # cleanup was gated on the binary being ABSENT, this session — binary
+          # present, wiring stale — was the one shape it could not reach, and it
+          # is the common case on upgrade. With the CLI still installed a
+          # surviving MCP entry starts a working second server, so the strip has
+          # to be unconditional.
+          cat > "${CLAUDE_CONFIG_DIR}/settings.json" <<'JSON'
+          {"permissions":{"allow":["mcp__codegraph__*","Bash(ls:*)"]},
+           "hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"codegraph prompt-hook"}]}]}}
+          JSON
+          cat > "${CLAUDE_CONFIG_DIR}/.claude.json" <<'JSON'
+          {"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}
+          JSON
+
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
-          codegraph_setup >"${TEST_DIR}/stdout" 2>"${TEST_DIR}/stderr"
-          grep -qi "codegraph" "${TEST_DIR}/stderr" || { echo "FAIL: no warning"; exit 1; }
-          grep -q 'installer exploded' "${TEST_DIR}/stderr" \
-            || { echo "FAIL: installer diagnostic discarded"; exit 1; }
-          # Only the diagnostic is worth the session banner. The installer's
-          # progress output has to stay suppressed, so this pins the surviving
-          # >/dev/null as tightly as the assertion above pins the missing 2>&1.
-          grep -q 'installer progress chatter' "${TEST_DIR}/stdout" \
-            && { echo "FAIL: installer stdout reached the user"; exit 1; }
-          echo "setup_failure=pass"
+          codegraph_setup 2>"${TEST_DIR}/stderr"
+
+          settings="${CLAUDE_CONFIG_DIR}/settings.json"
+          jq -e '.hooks.UserPromptSubmit' "${settings}" >/dev/null \
+            && { echo "FAIL: prompt hook survived"; exit 1; }
+          jq -e '.permissions.allow | index("mcp__codegraph__*")' "${settings}" >/dev/null \
+            && { echo "FAIL: permission survived"; exit 1; }
+          jq -e '.permissions.allow | index("Bash(ls:*)")' "${settings}" >/dev/null \
+            || { echo "FAIL: unrelated permission removed"; exit 1; }
+          jq -e '.mcpServers.codegraph' "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
+            && { echo "FAIL: MCP entry survived"; exit 1; }
+          echo "setup_strip_on_path=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "setup_failure=pass"
+          - result.systemout ShouldContainSubstring "setup_strip_on_path=pass"
 
   - name: Containerfile pins the CodeGraph version and asserts the bundle resolved
     steps:
@@ -600,7 +507,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "containerfile_copy=pass"
 
-  - name: relocate warns and cleans up when the target cannot be written
+  - name: strip warns and cleans up when .claude.json cannot be written
     steps:
       - type: exec
         script: |
@@ -610,7 +517,7 @@ testcases:
           export HOME="${TEST_DIR}"
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           mkdir -p "${CLAUDE_CONFIG_DIR}"
-          cat > "${HOME}/.claude.json" <<'JSON'
+          cat > "${CLAUDE_CONFIG_DIR}/.claude.json" <<'JSON'
           {"mcpServers":{"codegraph":{"type":"stdio","command":"codegraph","args":["serve","--mcp"]}}}
           JSON
           chmod a-w "${CLAUDE_CONFIG_DIR}"
@@ -622,25 +529,29 @@ testcases:
           if touch "${CLAUDE_CONFIG_DIR}/.probe" 2>/dev/null; then
             rm -f "${CLAUDE_CONFIG_DIR}/.probe"
             echo "SKIP: running with write override (root?) — cannot stage an unwritable dir"
-            echo "relocate_unwritable=pass"
+            echo "strip_unwritable=pass"
             exit 0
           fi
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
-          codegraph_relocate_mcp_entry 2>"${TEST_DIR}/stderr"
+          codegraph_strip_mcp_entry 2>"${TEST_DIR}/stderr"
 
           grep -q "codegraph" "${TEST_DIR}/stderr" \
             || { echo "FAIL: write failure was silent"; exit 1; }
+          # A failed write must not be reported as a removal: the entry is still
+          # registered, and a session told otherwise stops looking for it.
+          grep -qi 'Removed the CodeGraph MCP server entry' "${TEST_DIR}/stderr" \
+            && { echo "FAIL: announced a removal that did not happen"; exit 1; }
           chmod u+w "${CLAUDE_CONFIG_DIR}"
           # The staging file is uniquely named, so match the whole family.
           leftovers="$(find "${CLAUDE_CONFIG_DIR}" -maxdepth 1 -name '.claude.json.*')"
           [ -z "${leftovers}" ] \
             || { echo "FAIL: temp file left behind: ${leftovers}"; exit 1; }
-          echo "relocate_unwritable=pass"
+          echo "strip_unwritable=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "relocate_unwritable=pass"
+          - result.systemout ShouldContainSubstring "strip_unwritable=pass"
 
   - name: hint treats a non-git single-project mount as one project
     steps:
@@ -732,7 +643,7 @@ testcases:
           mkdir -p "${TEST_DIR}/bin"
 
           # Settings a user might already have, with no CodeGraph wiring in
-          # them. Most sessions on an image without CodeGraph look like this,
+          # them. Most sessions look like this now that RiotBox wires nothing,
           # so this is the path that must stay quiet and must not rewrite the
           # file at all.
           settings="${CLAUDE_CONFIG_DIR}/settings.json"
@@ -748,8 +659,9 @@ testcases:
           source "{{.riotbox_dir}}/container/codegraph-setup.sh"
           codegraph_setup 2>"${TEST_DIR}/stderr"
 
-          grep -q 'not on PATH' "${TEST_DIR}/stderr" \
-            || { echo "FAIL: no missing-binary warning"; exit 1; }
+          [ ! -s "${TEST_DIR}/stderr" ] \
+            || { echo "FAIL: spoke on a session with no wiring to remove"; \
+                 cat "${TEST_DIR}/stderr"; exit 1; }
           cmp -s "${TEST_DIR}/before" "${settings}" \
             || { echo "FAIL: settings.json rewritten with nothing to remove"; exit 1; }
           grep -qi 'removed' "${TEST_DIR}/stderr" \
@@ -1042,6 +954,66 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "strip_empty_format=pass"
+
+  - name: strip never writes an empty document over .claude.json
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          mkdir -p "${CLAUDE_CONFIG_DIR}"
+
+          # The .claude.json half of the case above. codegraph_strip_mcp_entry
+          # carries the same pretty-print guard as codegraph_strip_session_wiring
+          # and needs the same cover, because the file it writes is the one
+          # holding the OAuth account metadata: an unchecked command
+          # substitution yields "" when jq fails, and the writer would put a lone
+          # newline where the credentials were. json-write.sh's own suite cannot
+          # reach this — the failure happens before json_write_atomic is called.
+          config="${CLAUDE_CONFIG_DIR}/.claude.json"
+          cat > "${config}" <<'JSON'
+          {
+            "oauthAccount": {"emailAddress": "a@b.invalid"},
+            "mcpServers": {
+              "codegraph": {"type": "stdio", "command": "codegraph", "args": ["serve", "--mcp"]}
+            }
+          }
+          JSON
+          cp "${config}" "${TEST_DIR}/before"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/codegraph-setup.sh"
+          # Fails only the pretty-print call. The read (`jq -c .`) and the strip
+          # filter both pass more than one argument and go through to real jq, so
+          # the entry IS matched and removed in memory — the guard is the only
+          # thing standing between that and a truncated config.
+          jq() {
+            if [ "$#" -eq 1 ] && [ "$1" = "." ]; then
+              return 0
+            fi
+            command jq "$@"
+          }
+          codegraph_strip_mcp_entry 2>"${TEST_DIR}/stderr"
+          unset -f jq
+
+          cmp -s "${TEST_DIR}/before" "${config}" \
+            || { echo "FAIL: .claude.json truncated by an empty pretty-print"; exit 1; }
+          grep -q 'left in place' "${TEST_DIR}/stderr" \
+            || { echo "FAIL: the failed cleanup was silent"; \
+                 cat "${TEST_DIR}/stderr"; exit 1; }
+          # A failed write must not be reported as a removal: the entry is still
+          # registered, and a session told otherwise stops looking for it.
+          grep -qi 'Removed the CodeGraph MCP server entry' "${TEST_DIR}/stderr" \
+            && { echo "FAIL: announced a removal that did not happen"; exit 1; }
+          leftovers="$(find "${CLAUDE_CONFIG_DIR}" -maxdepth 1 -name '.claude.json.*')"
+          [ -z "${leftovers}" ] || { echo "FAIL: temp left behind: ${leftovers}"; exit 1; }
+          echo "strip_mcp_empty_format=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "strip_mcp_empty_format=pass"
 
   - name: entrypoint calls codegraph_setup after overlay_setup
     steps:

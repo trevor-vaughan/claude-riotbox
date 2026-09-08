@@ -973,8 +973,9 @@ every symbol, call edge, and dependency in a project. Agents answer structural q
 ("how does X reach Y?") from one query instead of a grep-and-read loop, which is where
 most of the token spend on a large codebase goes. It runs entirely locally.
 
-RiotBox ships it in the image (pinned version, telemetry permanently off) and wires its
-MCP server at session start into every agent CodeGraph detects. Building the index is a
+RiotBox ships it in the image (pinned version, telemetry permanently off) and leaves it
+at that — the MCP server is not registered, because it conflicts with Context Mode and
+`codegraph explore` answers the same questions from the shell. Building the index is a
 one-time step per project, and RiotBox does not do it for you:
 
 ```sh
@@ -984,11 +985,17 @@ codegraph init
 ```
 
 The container prints a reminder for any project that has no index yet. After `init`,
-nothing else is needed — the index lives in `.codegraph/` at the project root, and
-CodeGraph brings it up to date at session start and watches for changes for the rest of
-the session. On an ordinary read-write project mount it therefore persists across
-restarts through the same bind mount as your code; the overlay and `:O` cases below are
-the exceptions.
+query it from the shell:
+
+```sh
+codegraph explore "how does the launcher decide which mounts to pass?"
+```
+
+The index lives in `.codegraph/` at the project root. Because nothing runs in the
+background on its behalf, it is brought up to date when you run CodeGraph again rather
+than continuously. On an ordinary read-write project mount it persists across restarts
+through the same bind mount as your code; the overlay and `:O` cases below are the
+exceptions.
 
 Details worth knowing:
 
@@ -1005,20 +1012,23 @@ Details worth knowing:
 - **The index is never committed.** CodeGraph writes a `.codegraph/.gitignore` that
   ignores the whole directory, and RiotBox's managed `.git/info/exclude` block lists
   `.codegraph/` as well.
-- **Session wiring lives in the session directory.** `codegraph install` runs at every
-  session start and writes into the session's `~/.claude/settings.json`: an
-  `mcp__codegraph__*` permissions entry and a `UserPromptSubmit` hook that runs
-  `codegraph prompt-hook` on every prompt. It also appends a marker-fenced block to
-  `~/.claude/CLAUDE.md` and `~/.config/opencode/AGENTS.md`; `CLAUDE.md` is re-synced from
-  the host every launch, as is `AGENTS.md` whenever you have a host `~/.config/opencode`,
-  so those blocks do not pile up. None of it reaches your host configuration.
-  `settings.json` is the exception — RiotBox never syncs it in either direction, so wiring
-  written by an earlier image would outlive that image and keep invoking `codegraph
-  prompt-hook` on every prompt after you roll back to one without CodeGraph. The first
-  session that starts with no `codegraph` on `PATH` therefore strips that hook and the
-  `mcp__codegraph__*` entry back out and reports what it removed, leaving your own hooks
-  and permissions untouched. You never have to run `codegraph uninstall` from an image
-  that no longer ships it. See [THREAT_MODEL.md](THREAT_MODEL.md) for the full analysis.
+- **RiotBox registers no MCP server, and cleans up after the images that did.** Releases
+  before this one ran `codegraph install` at every session start, which wrote an
+  `mcp__codegraph__*` permission and a `UserPromptSubmit` hook running `codegraph
+  prompt-hook` into the session's `~/.claude/settings.json`, plus an `mcpServers` entry
+  into the session `.claude.json`. RiotBox never syncs `settings.json` in either
+  direction, so that wiring outlives the image that wrote it — and because the CLI is
+  still installed, a surviving MCP entry does not fail quietly; it starts a second code
+  intelligence server alongside Context Mode. Every session now strips both back out and
+  reports what it removed. Both strips match only the exact shapes the installer wrote,
+  so a hook, permission, or `codegraph` server you narrowed yourself is left alone. What
+  they cannot do is tell the installer's shape from an identical one you wrote: a
+  `codegraph` server left at CodeGraph's own default, or the bare `mcp__codegraph__*`
+  wildcard, goes with the rest — and goes again on every session start, not just the
+  first, so re-adding it unchanged will not make it stick. Give it a shape of its own if
+  you want one to survive: an extra argument on the server entry, or a permission naming
+  a single tool rather than the wildcard. You never have to run `codegraph uninstall`.
+  See [THREAT_MODEL.md](THREAT_MODEL.md) for the full analysis.
 - **The index contains your source.** It stores verbatim code and symbol names — treat
   `.codegraph/` with the same sensitivity as the project itself.
 - **In overlay mode**, the index is written into the overlay rather than your project and

@@ -932,10 +932,12 @@ testcases:
   # tests/doctor-context-mode.venom.yml. context_mode_setup is a bare call in
   # container/entrypoint.sh: delete or comment it and every case above still
   # passes while no session ever wires. The order is load-bearing too —
-  # codegraph_setup writes the same .claude.json, so this runs after it and
-  # merges into a settled file instead of racing for it. tests/
-  # lib-json-write.venom.yml pins the *sourcing* order of these files; this
-  # pins the call.
+  # codegraph_strip_mcp_entry read-modify-writes the same .claude.json this
+  # feature's strip does, so this runs after it and reads a settled file.
+  # Neither writes an mcpServers entry any more; both only take out what an
+  # older image left, which is why the order still has to be pinned rather than
+  # having stopped mattering. tests/lib-json-write.venom.yml pins the *sourcing*
+  # order of these files; this pins the call.
   #
   # The check is textual — grep over entrypoint.sh, the same mechanism as
   # "entrypoint calls codegraph_setup after overlay_setup" in

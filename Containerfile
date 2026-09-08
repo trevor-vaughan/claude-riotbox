@@ -845,7 +845,7 @@ RUN bash -o pipefail -c '\
 # ── Claude Code (LAST — changes most frequently, preserves layer cache) ─────
 RUN bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && claude --version'
 
-# ── CodeGraph (pre-indexed code knowledge graph, MCP server per session) ─────
+# ── CodeGraph (pre-indexed code knowledge graph, CLI only) ──────────────────
 # The published npm package is a thin launcher: the payload ships as a
 # per-platform optionalDependency (@colbymchenry/codegraph-linux-x64). When a
 # registry or proxy silently skips that optional dep, the launcher falls back
