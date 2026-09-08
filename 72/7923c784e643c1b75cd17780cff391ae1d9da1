@@ -1,0 +1,31 @@
+README.md
+  s_1bb0356cce6779::t_db2109c165accf 976-978,988-998,1015-1026
+docs/dev/context-mode.md
+  s_1bb0356cce6779::t_9daa5114fd9a81 468-479
+container/entrypoint.sh
+  s_1bb0356cce6779::t_2dc7c265a9e81a 145-148,153-155
+Containerfile
+  s_1bb0356cce6779::t_abe9589a540ea5 848
+tests/codegraph.venom.yml
+  s_1bb0356cce6779::t_f3c53885f86d07 1,6-13,21,31,37,39-43,46,48,58-62,64,69,71,73-76,79,81,91-97,102,105-111,114,116,130-147,150,152,162,166,168-172,175,205-210,317-324,332,343-347,357-368,371,373,384,388-401,404-415,418,471,481,493,499,503-506,512,515,607,623-625
+container/codegraph-setup.sh
+  s_1bb0356cce6779::t_dce0124067111c 3,6-14,25-26,30-32,38,40-45,47-62,64-66,70-84,86-90,94-110,113-115,120-129,139-141,306,310-316,318-319,321
+THREAT_MODEL.md
+  s_1bb0356cce6779::t_16bd89a9b91ad8 235-239,243-244,250-256,258-277
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "727923c784e643c1b75cd17780cff391ae1d9da1",
+  "prompts": {},
+  "sessions": {
+    "s_1bb0356cce6779": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b47ce45d-a05e-469e-aba9-ff146c7609b7",
+        "model": "unknown"
+      },
+      "human_author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
