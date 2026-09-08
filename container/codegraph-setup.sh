@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# codegraph-setup.sh — CodeGraph wiring for a RiotBox session.
+# codegraph-setup.sh — CodeGraph cleanup and index hint for a RiotBox session.
 #
 # Sourced by entrypoint.sh. Provides:
-#   codegraph_setup — wire the MCP server into every detected agent, move the
-#                     Claude MCP entry to the file Claude Code actually reads,
-#                     and hint at unindexed projects. When the binary is gone,
-#                     strip the wiring an earlier image left in this session.
+#   codegraph_setup — remove the MCP wiring an earlier image left in this
+#                     session directory, then hint at unindexed projects.
+#
+# RiotBox ships the `codegraph` CLI and registers nothing. It used to run
+# `codegraph install` every session; that server conflicted with Context Mode,
+# and `codegraph explore` answers the same questions from the shell for none of
+# the per-session overhead. Removing the call is only half the job — the
+# installer wrote into a session directory that outlives the image, so the other
+# half is taking those artifacts back, which is what this file now does.
 #
 # Depends on json_write_atomic (scripts/lib/json-write.sh), which entrypoint.sh
 # sources ahead of this file. Not sourced from here: the same writer is shared
@@ -17,79 +22,111 @@
 # ~/.config/opencode are replaced by session bind mounts (see
 # scripts/mount-projects.sh), so agent config written into the image is
 # invisible at runtime — the same reason plugin-setup.sh copies from a staging
-# directory. `codegraph install` is idempotent, so re-running it every session
-# is correct, not wasteful.
+# directory. A session directory can arrive carrying wiring from any older
+# image, so the cleanup has to run every time, not once.
 #
 # Indexing is never started automatically. `codegraph init` writes a
 # multi-megabyte index into the user's project tree and takes real time on a
-# large repo; that stays an explicit, once-per-project choice. Once an index
-# exists it stays current on its own — CodeGraph's MCP server runs a catch-up
-# sync at startup and watches the tree for the rest of the session.
+# large repo; that stays an explicit, once-per-project choice. With no MCP
+# server running there is nothing to sync an index in the background either: it
+# is refreshed when the user runs CodeGraph again.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Workspace root. Overridable so the behavior can be tested without /workspace.
 CODEGRAPH_WORKSPACE="${CODEGRAPH_WORKSPACE:-/workspace}"
 
-# Move CodeGraph's Claude MCP entry into the config file Claude Code reads.
+# Remove the MCP entry an earlier image's `codegraph install` left behind.
 #
-# CodeGraph writes the global entry to ${HOME}/.claude.json (hardcoded to the
-# home directory in its Claude installer target) and does not honor
-# CLAUDE_CONFIG_DIR, which RiotBox points at ${HOME}/.claude — the
-# bind-mounted session directory. Without this step the MCP server is
-# configured in a file nothing loads.
+# RiotBox used to run that installer every session and relocate its entry into
+# ${CLAUDE_CONFIG_DIR}/.claude.json, the file Claude Code actually reads — the
+# installer writes to ${HOME}/.claude.json and does not honor CLAUDE_CONFIG_DIR.
+# It no longer does either: the server conflicts with Context Mode, and
+# `codegraph explore` answers the same questions from the shell. What is left is
+# taking back what RiotBox wrote.
 #
-# Merges rather than replaces: the target holds account metadata and any other
-# MCP servers. A missing or entry-free source is a no-op; malformed JSON on
-# either side warns and changes nothing.
-codegraph_relocate_mcp_entry() {
-	local source_file="${HOME}/.claude.json"
-	local target_dir="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
-	local target_file="${target_dir}/.claude.json"
+# The host copy normally does that for us — agents/claude/sync-settings.sh
+# overwrites this file from the host's ~/.claude.json at every launch. It cannot
+# when there is no host file to copy, which is the case for anyone who
+# authenticated inside the container, and there the relocated entry would
+# persist for the life of the session directory. That used to be nearly
+# harmless: an image without the binary registered a server that could not
+# start. It is not harmless now. The CLI is still installed, so a leftover entry
+# starts a working second server — the exact conflict this change exists to end.
+#
+# Ownership is decided on the entry's SHAPE, never on the key name;
+# agents/claude/forge-mcp.sh sets out the reasoning at length. The same file
+# holds whatever the user configured on the host, under this very key, and an
+# entry they narrowed themselves is theirs to keep.
+codegraph_strip_mcp_entry() {
+	local config="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/.claude.json"
+	[[ -f "${config}" ]] || return 0
 
-	[[ -f "${source_file}" ]] || return 0
-
-	local entry
-	if ! entry="$(jq -c '.mcpServers.codegraph // empty' "${source_file}" 2>/dev/null)"; then
-		echo "  [codegraph] WARN: ${source_file} is not valid JSON — MCP entry not relocated." >&2
-		return 0
-	fi
-	[[ -n "${entry}" ]] || return 0
-
-	local existing='{}'
-	if [[ -f "${target_file}" ]]; then
-		if ! existing="$(jq -c '.' "${target_file}" 2>/dev/null)" || [[ -z "${existing}" ]]; then
-			echo "  [codegraph] WARN: ${target_file} is not valid JSON — MCP entry not relocated." >&2
-			return 0
-		fi
-	fi
-
-	local merged
-	if ! merged="$(jq -c --argjson entry "${entry}" \
-		'.mcpServers = ((.mcpServers // {}) | .codegraph = $entry)' \
-		<<<"${existing}" 2>/dev/null)"; then
-		echo "  [codegraph] WARN: could not merge the MCP entry into ${target_file}." >&2
+	local current
+	if ! current="$(jq -c '.' "${config}" 2>/dev/null)" || [[ -z "${current}" ]]; then
+		echo "  [codegraph] WARN: ${config} is not valid JSON — MCP entry not removed." >&2
 		return 0
 	fi
 
-	# Every failure here warns: a session that silently lost its MCP wiring
-	# looks identical to one that never had any, which is the hardest kind of
-	# problem to notice.
-	if ! json_write_atomic "${target_file}" "${merged}"; then
-		echo "  [codegraph] WARN: could not write ${target_file} — MCP entry not relocated." >&2
+	# The shape `codegraph install` writes, read off a live session:
+	# {"type":"stdio","command":"codegraph","args":["serve","--mcp"]}. A
+	# directory in front of the binary is allowed for the same reason
+	# is_installer_hook allows one below — the installer resolves the command
+	# differently on some targets — and nothing else is. The .command type test
+	# guards the endswith: jq raises on a non-string, and an error here would
+	# abort the whole filter and strand the entry this exists to remove.
+	local stripped
+	if ! stripped="$(jq -c '
+		def is_ours:
+			type == "object"
+			and .type == "stdio"
+			and (.command | type) == "string"
+			and (.command == "codegraph" or (.command | endswith("/codegraph")))
+			and .args == ["serve", "--mcp"];
+
+		if (.mcpServers | type) == "object"
+			and (.mcpServers.codegraph | is_ours)
+		then del(.mcpServers.codegraph) else . end
+		' <<<"${current}" 2>/dev/null)"; then
+		echo "  [codegraph] WARN: could not clean ${config} — MCP entry left in place." >&2
 		return 0
 	fi
+
+	# An untouched document is what tells this function to stay silent: a
+	# session that never had CodeGraph must not hear about a cleanup, and one
+	# whose entry is the user's own must not have its file reflowed to say so.
+	[[ "${stripped}" != "${current}" ]] || return 0
+
+	# Compact for the comparison above, pretty-printed for the write. Same split
+	# as codegraph_strip_session_wiring and agents/claude/forge-mcp.sh, for the
+	# same reason: this document is hand-edited, and collapsing it onto one line
+	# to delete a single entry is a far larger change than the one being made.
+	#
+	# Checked for emptiness as well as exit status — an unchecked command
+	# substitution yields "" when jq fails, and the writer would put a lone
+	# newline where the account metadata was.
+	local pretty
+	if ! pretty="$(jq . <<<"${stripped}")" || [[ -z "${pretty}" ]] ||
+		! json_write_atomic "${config}" "${pretty}"; then
+		echo "  [codegraph] WARN: could not write ${config} — MCP entry left in place." >&2
+		return 0
+	fi
+
+	echo "  [codegraph] Removed the CodeGraph MCP server entry that an earlier image left" >&2
+	echo "  [codegraph] in ${config}. The 'codegraph' CLI is unaffected." >&2
 }
 
 # Remove the wiring `codegraph install` left in the session settings.json.
 #
-# Called only when the binary has gone missing. A session directory outlives
-# the image, and a host settings.json is deliberately never synced into it
-# (plugin-setup.sh), so nothing regenerates this file — a session wired by an
-# earlier image would keep a UserPromptSubmit hook invoking `codegraph
-# prompt-hook` on every prompt. That makes it the only artifact the installer
-# writes that can put a missing command on the critical path: the CLAUDE.md
-# block and the .claude.json entry are re-copied from the host each launch by
-# agents/claude/sync-settings.sh, and neither is executable.
+# Called on every session. A session directory outlives the image, and a host
+# settings.json is deliberately never synced into it (plugin-setup.sh), so
+# nothing regenerates this file — a session wired by an earlier image would keep
+# a UserPromptSubmit hook invoking `codegraph prompt-hook` on every prompt, and
+# would keep the `mcp__codegraph__*` permission standing for a server nothing
+# registers any more. Of the four things the installer wrote, this file is the
+# one that persists unconditionally: the CLAUDE.md block and the opencode
+# AGENTS.md block are re-copied from the host each launch, and the .claude.json
+# entry survives only where there is no host copy to overwrite it (see
+# codegraph_strip_mcp_entry, which handles that one).
 #
 # The path is under ${HOME}, not ${CLAUDE_CONFIG_DIR}: codegraph 1.5.0 writes
 # settings.json to os.homedir()/.claude and ignores CLAUDE_CONFIG_DIR (checked
@@ -99,9 +136,9 @@ codegraph_relocate_mcp_entry() {
 # only one the installer can reach and therefore the only one that can hold a
 # stale hook.
 #
-# Silent when there is nothing to remove: the common case on an image without
-# CodeGraph is a session that never had it, and that session must not be told
-# about a cleanup that did not happen.
+# Silent when there is nothing to remove: now that no image wires CodeGraph, the
+# overwhelmingly common case is a session that never had it, and that session
+# must not be told about a cleanup that did not happen.
 codegraph_strip_session_wiring() {
 	local settings_file="${HOME}/.claude/settings.json"
 	[[ -f "${settings_file}" ]] || return 0
@@ -266,33 +303,21 @@ codegraph_index_hint() {
 	while IFS= read -r root; do
 		[[ -f "${root}/.codegraph/codegraph.db" ]] && continue
 		name="$(basename "${root}")"
-		echo "  [codegraph] ${name}: no index — run 'codegraph init' to enable graph-backed exploration."
+		echo "  [codegraph] ${name}: no index — run 'codegraph init', then query it with 'codegraph explore'."
 	done < <(codegraph_project_roots)
 }
 
+# Clean up after CodeGraph's installer, then point at the CLI.
+#
+# Both strips run unconditionally, and neither is gated on the binary. A session
+# directory outlives the image, and what they remove was written by an installer
+# this image never runs — so whether codegraph is on PATH right now says nothing
+# about whether stale wiring is present. Only the hint needs the binary, because
+# only the hint names a command for the user to run.
 codegraph_setup() {
-	if ! command -v codegraph >/dev/null 2>&1; then
-		# A session directory outlives the image, so wiring from an earlier
-		# session may still be here, pointing at a command that is gone.
-		# Telling the user to run `codegraph uninstall` would be telling them
-		# to run a binary this image no longer ships, so clean it up instead.
-		echo "  [codegraph] WARN: codegraph is not on PATH — MCP wiring skipped." >&2
-		codegraph_strip_session_wiring
-		return 0
-	fi
+	codegraph_strip_session_wiring
+	codegraph_strip_mcp_entry
 
-	# -t auto configures every agent CodeGraph detects; -l global writes to the
-	# session-mounted config dirs; -y keeps it non-interactive. A failure here
-	# costs graph-backed exploration, never the session.
-	#
-	# Only stdout is discarded. The installer's stderr is the only thing that
-	# distinguishes an unwritable bind mount from a malformed settings.json
-	# from a broken bundle, and the warning below carries no cause of its own.
-	if ! codegraph install -t auto -l global -y >/dev/null; then
-		echo "  [codegraph] WARN: 'codegraph install' failed — MCP server not wired this session." >&2
-		return 0
-	fi
-
-	codegraph_relocate_mcp_entry
+	command -v codegraph >/dev/null 2>&1 || return 0
 	codegraph_index_hint
 }

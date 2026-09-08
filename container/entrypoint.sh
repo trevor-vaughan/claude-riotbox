@@ -142,16 +142,17 @@ unset _agent
 # Overlay: mount fuse-overlayfs at /workspace (sets SESSION_BRANCH=0 if active)
 overlay_setup
 
-# CodeGraph: wire the MCP server into every detected agent and hint at any
-# unindexed project. Runs after the agent setup loop so opencode's regenerated
-# config is already in place, and after overlay_setup so the hint sees the
-# final /workspace.
+# CodeGraph: remove MCP wiring an earlier image left in this session directory
+# and hint at any unindexed project. RiotBox registers no MCP server for
+# CodeGraph — the CLI covers the same ground without conflicting with Context
+# Mode. Runs after overlay_setup so the hint sees the final /workspace.
 codegraph_setup
 
 # Context Mode: wire the agent-appropriate form when RIOTBOX_CONTEXT_MODE=1, or
 # strip wiring an earlier session left behind. Runs after codegraph_setup so
-# both MCP entries merge into a settled .claude.json instead of racing for it,
-# and after the agent setup loop so opencode's regenerated config is in place.
+# CodeGraph's removal lands in .claude.json before Context Mode writes its own
+# entry to the same file, and after the agent setup loop so opencode's
+# regenerated config is in place.
 # Agents opt in by implementing the Context Mode verbs; any that does not warns
 # and runs with the feature off.
 context_mode_setup

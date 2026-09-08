@@ -232,37 +232,49 @@ tree, and riotbox's managed `.git/info/exclude` block lists `.codegraph/` as a
 second layer, so an index never reaches a checkpoint snapshot.
 
 An index changes retrieval efficiency, not reach: the agent can already read
-every file in the project, and the index only lets it do so in one MCP call
-instead of many. The MCP server runs as a child of the agent process, but the
-sync daemon behind it does not: CodeGraph spawns it detached, in its own
-process group, and it listens on a **Unix domain socket** (mode 0600) with a
+every file in the project, and the index only lets it do so in one query
+instead of many. riotbox registers no MCP server for CodeGraph (see below), so
+nothing runs persistently on its behalf — but a `codegraph` command still
+leaves something behind it. The sync daemon is spawned detached, in its own
+process group, and listens on a **Unix domain socket** (mode 0600) with a
 300-second idle timeout. The socket normally sits inside `.codegraph/`, but
 when that path would exceed `UNIX_PATH_MAX` CodeGraph falls back to a hashed
 name under the container's temp directory. No TCP port is opened and nothing
-leaves the container, but "a child process that dies with the agent" is not an
-accurate description of its lifetime — the container exiting is what reaps it.
+leaves the container, but the daemon outlives the command that started it: the
+idle timeout, or the container exiting, is what reaps it.
 
 Indexing is never started automatically — a session only prints a reminder
 naming `codegraph init` for a project that has none — so no project is indexed
 without an explicit decision.
 
-`codegraph install`, which the entrypoint runs once per session, writes more
-than an MCP entry. Into the session `~/.claude/settings.json` it adds
-`mcp__codegraph__*` to `permissions.allow` **and a `UserPromptSubmit` command
-hook that runs `codegraph prompt-hook` on every prompt**; it also appends a
-marker-fenced CodeGraph block to `~/.claude/CLAUDE.md` and to
-`~/.config/opencode/AGENTS.md`. All of it is confined to the session directory
-and none of it reaches the host, but it deserves explicit mention here: riotbox
+riotbox does not run `codegraph install`. It used to, once per session, and that
+installer writes considerably more than an MCP entry: into the session
+`~/.claude/settings.json` it adds `mcp__codegraph__*` to `permissions.allow`
+**and a `UserPromptSubmit` command hook that runs `codegraph prompt-hook` on
+every prompt**, and it appends a marker-fenced CodeGraph block to
+`~/.claude/CLAUDE.md` and to `~/.config/opencode/AGENTS.md`. None of that ever
+reached the host, but it deserved the explicit mention it had here: riotbox
 otherwise refuses to sync a host `settings.json` precisely because it can carry
-hooks, and this is a third-party installer writing one. Two consequences worth
-knowing. The hook is written once into a persistent session directory and is
-never regenerated away by the installer, so an image rebuilt without CodeGraph
-would leave a session whose every prompt invokes a command that no longer
-exists; `codegraph_strip_session_wiring` in `container/codegraph-setup.sh`
-removes the hook and the `mcp__codegraph__*` entry on the first session that
-finds no `codegraph` on `PATH`, and deleting the session directory also clears
-them. And `CODEGRAPH_NO_PROMPT_HOOK=1` makes the hook a no-op at runtime
-without removing the entry.
+hooks, and this was a third-party installer writing one. The wiring is gone as
+of issue #20 — the server conflicted with Context Mode, and the CLI covers the
+same ground — so what remains in this section is the cleanup.
+
+That cleanup is not optional, because two of those artifacts outlive the image
+that wrote them. The hook and the `mcp__codegraph__*` entry went into a
+persistent session directory that nothing regenerates. The `mcpServers` entry
+riotbox relocated into the session `.claude.json` is normally overwritten from
+the host at every launch, but there is no host copy to overwrite it on a machine
+where the user authenticated inside the container. Leaving either in place used
+to cost a command that no longer exists; now that the CLI is still installed, a
+surviving MCP entry starts a working second server instead.
+`codegraph_strip_session_wiring` and `codegraph_strip_mcp_entry` in
+`container/codegraph-setup.sh` therefore run on **every** session rather than
+only one that finds no binary on `PATH`. Both prove ownership before deleting —
+the exact hook command and permission string the installer writes, and an MCP
+entry matching the shape it registers — so a hook, permission, or `codegraph`
+server the user configured themselves survives. Deleting the session directory
+clears all of it too, and `CODEGRAPH_NO_PROMPT_HOOK=1` still makes a hook a
+no-op at runtime without removing it.
 
 Nothing about an indexed session goes out to the network. Telemetry is off in
 all three layers CodeGraph honors — `DO_NOT_TRACK=1` from the entrypoint (which
