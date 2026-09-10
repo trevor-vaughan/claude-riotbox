@@ -1,0 +1,21 @@
+tests/locale.venom.yml
+  s_3732137f85a099::t_408bff619ccb61 1-142
+Containerfile
+  s_3732137f85a099::t_aa8b04d504370b 163-171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "13574b0a6eac8b96a2e840188e27401d79228c70",
+  "prompts": {},
+  "sessions": {
+    "s_3732137f85a099": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da3924b4-9b8c-4364-b72d-210a596c95d9",
+        "model": "claude-opus-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
