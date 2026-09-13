@@ -1,0 +1,23 @@
+agents/opencode/git-ai.sh
+  s_3732137f85a099::t_361d2c02426c14 1-86
+agents/opencode/manifest.sh
+  s_3732137f85a099::t_d95cb1547eb7bf 27-30
+tests/git-ai.venom.yml
+  s_3732137f85a099::t_aa837680a4262f 445-547
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f4e9c7d0e9af652d4cadde84c4e401433f6fea85",
+  "prompts": {},
+  "sessions": {
+    "s_3732137f85a099": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da3924b4-9b8c-4364-b72d-210a596c95d9",
+        "model": "unknown"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
