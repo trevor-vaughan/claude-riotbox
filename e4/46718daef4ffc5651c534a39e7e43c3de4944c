@@ -1,0 +1,23 @@
+Containerfile
+  s_3732137f85a099::t_89003060aafb1a 680,695
+container/entrypoint.sh
+  s_3732137f85a099::t_5594870c4fbdc6 109-110,166-173
+tests/git-ai.venom.yml
+  s_3732137f85a099::t_568ec9547a5c9c 548-582
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e446718daef4ffc5651c534a39e7e43c3de4944c",
+  "prompts": {},
+  "sessions": {
+    "s_3732137f85a099": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da3924b4-9b8c-4364-b72d-210a596c95d9",
+        "model": "unknown"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
