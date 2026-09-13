@@ -1,0 +1,23 @@
+README.md
+  s_3732137f85a099::t_1458c00d51f540 242,577-611
+THREAT_MODEL.md
+  s_3732137f85a099::t_574eac4fcfed29 620-680
+docs/dev/agent-contract.md
+  s_3732137f85a099::t_767023ed4c8f4c 36,793-857
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d84fc7dfb8baba4d754d7ac2e2d9d7992aa49fa3",
+  "prompts": {},
+  "sessions": {
+    "s_3732137f85a099": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da3924b4-9b8c-4364-b72d-210a596c95d9",
+        "model": "unknown"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
