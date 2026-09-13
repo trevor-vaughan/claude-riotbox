@@ -1,0 +1,19 @@
+tests/git-ai.venom.yml
+  s_3732137f85a099::t_d5a1990e2bbad8 700-782
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2f5d0742826df361817fea9d008ba1988bd95ae1",
+  "prompts": {},
+  "sessions": {
+    "s_3732137f85a099": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da3924b4-9b8c-4364-b72d-210a596c95d9",
+        "model": "unknown"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
