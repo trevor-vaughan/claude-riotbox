@@ -578,7 +578,13 @@ older image, so:
 - **It under-removes rather than over-removes.** Touch only what can be
   positively identified as riotbox's own; leave anything else — a
   user-written hook that merely mentions `context-mode`, a user's own file
-  at the shim path — exactly as found.
+  at the shim path — exactly as found. For a hook command that means two
+  things. The shim path has to appear as a whole whitespace-delimited token
+  once quote characters are stripped, so a user's `<shim>-wrapper` beside
+  ours is theirs and stays. And the verdict is per hook entry, not per
+  stanza: Claude Code groups hooks under a shared matcher, so a hook the
+  user added under the same matcher as ours survives, and the stanza around
+  it goes only once pruning has emptied it.
 
 This verb is what keeps a session directory from outliving the image that
 wired it while still holding wiring that points at a binary that is gone.

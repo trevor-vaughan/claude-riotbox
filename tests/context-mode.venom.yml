@@ -188,6 +188,90 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "non_string_command=pass"
 
+  # Ownership is decided on a whole path token and applied to the individual
+  # hook entry, not to the stanza around it. Both halves are load-bearing:
+  # a substring test deletes a user's `<shim>-wrapper` hook because our path is
+  # a prefix of theirs, and a stanza-level verdict takes the user's own hook
+  # down with ours whenever the two share a matcher. Either one over-removes,
+  # which is the failure this verb's ownership rule exists to prevent.
+  #
+  # The quoted PostToolUse command is the shape a live session actually holds:
+  # the previous release wrote the shim path in double quotes, so a token test
+  # that does not strip quotes recognises none of our own wiring and silently
+  # strips nothing — a worse outcome than the over-removal it fixes.
+  - name: the Claude strip prunes only our inner hooks and respects path boundaries
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
+          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          # PreToolUse[0] mixes one of ours with one of the user's under a
+          # single matcher; PreToolUse[1] is a sibling script of the user's
+          # whose path merely starts with ours. PostToolUse holds nothing but
+          # ours, quoted the way the previous release wrote it. Notification
+          # holds an argv array — a shape this filter cannot read, and
+          # therefore not ours.
+          jq -n --arg bin "${CONTEXT_MODE_BIN}" '{hooks: {
+            PreToolUse: [
+              {matcher:"Bash", hooks:[
+                {type:"command", command:($bin + " hook claude-code pretooluse")},
+                {type:"command", command:"echo user-own-hook-should-survive"}
+              ]},
+              {matcher:"Write", hooks:[{type:"command", command:($bin + "-wrapper hook claude-code pretooluse")}]}
+            ],
+            PostToolUse: [
+              {matcher:"*", hooks:[{type:"command", command:("\"" + $bin + "\" hook claude-code posttooluse")}]}
+            ],
+            Notification: [
+              {matcher:"*", hooks:[{type:"command", command:["/bin/sh","-c","echo argv-array"]}]}
+            ]
+          }}' > "${CLAUDE_CONFIG_DIR}/settings.json"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          agent_call claude context_mode_strip 2>/dev/null
+
+          settings="${CLAUDE_CONFIG_DIR}/settings.json"
+          jq -e '.' "${settings}" >/dev/null \
+            || { echo "FAIL: settings.json is no longer valid JSON"; exit 1; }
+
+          # 1. The mixed stanza keeps its matcher and the user's inner hook.
+          jq -e '.hooks.PreToolUse[0].matcher == "Bash"
+                 and (.hooks.PreToolUse[0].hooks | length) == 1
+                 and .hooks.PreToolUse[0].hooks[0].command == "echo user-own-hook-should-survive"' \
+            "${settings}" >/dev/null \
+            || { echo "FAIL: the user's inner hook did not survive beside ours: $(jq -c '.hooks.PreToolUse' "${settings}")"; exit 1; }
+
+          # 2. A longer path that merely begins with ours is not ours.
+          jq -e --arg bin "${CONTEXT_MODE_BIN}" \
+            '(.hooks.PreToolUse | length) == 2
+             and .hooks.PreToolUse[1].hooks[0].command == ($bin + "-wrapper hook claude-code pretooluse")' \
+            "${settings}" >/dev/null \
+            || { echo "FAIL: the user's sibling wrapper hook was removed: $(jq -c '.hooks.PreToolUse' "${settings}")"; exit 1; }
+
+          # 3. A stanza holding only ours goes, and with it the emptied key.
+          jq -e '.hooks | has("PostToolUse") | not' "${settings}" >/dev/null \
+            || { echo "FAIL: a stanza holding only our hook survived: $(jq -c '.hooks.PostToolUse' "${settings}")"; exit 1; }
+
+          # 4. The unreadable command is carried through untouched.
+          jq -e '.hooks.Notification[0].hooks[0].command == ["/bin/sh","-c","echo argv-array"]' \
+            "${settings}" >/dev/null \
+            || { echo "FAIL: the argv-array hook was altered or removed: $(jq -c '.hooks.Notification' "${settings}")"; exit 1; }
+
+          echo "strip_inner_prune=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "strip_inner_prune=pass"
+
   - name: strip is silent and inert on a session that never had context-mode
     steps:
       - type: exec

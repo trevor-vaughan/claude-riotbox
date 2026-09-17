@@ -53,8 +53,11 @@ CONTEXT_MODE_MCP_NAME='plugin_context-mode_context-mode'
 # what converges a reused session on exactly one form of wiring.
 #
 # The same rule as codegraph_strip_session_wiring applies — under-remove rather
-# than over-remove. Only entries whose command names the shim are touched, so a
-# user-written hook that merely mentions context-mode survives.
+# than over-remove. Only the individual hook entries whose command names the
+# shim as a whole path token are touched: a user-written hook that merely
+# mentions context-mode survives, so does one naming a longer path the shim's
+# own is a prefix of, and so does the user's own hook sharing a stanza with
+# ours. The jq filter below spells out what each of those decisions rests on.
 #
 # Every key actually present in .hooks is pruned, rather than a fixed list of
 # the six this project once wrote. A list would strand a stanza forever the day
@@ -83,22 +86,67 @@ agent_claude_context_mode_strip() {
 		if ! current="$(jq -c '.' "${settings_file}" 2>/dev/null)" || [[ -z "${current}" ]]; then
 			echo "  [context-mode] WARN: ${settings_file} is not valid JSON — stale hooks left in place." >&2
 		elif ! stripped="$(jq -c --arg bin "${bin}" '
-			# Type-gated because `contains` raises on a non-string instead of
+			# Strip the quote characters a command may carry: 34 and 39 are
+			# the double and the single quote, named by codepoint because
+			# this whole jq program is one single-quoted shell word — a
+			# literal single quote anywhere in it, comments included, ends
+			# that word and hands jq a fragment that will not compile.
+			def unquoted: [explode[] | select(. != 34 and . != 39)] | implode;
+			# One hook entry is ours when its command names the shim as a
+			# whole whitespace-delimited token. `contains($bin)` stood here
+			# and over-removed: the path of the shim is a prefix of every
+			# sibling script a user might keep beside it, so a command
+			# naming `<shim>-wrapper` read as ours and its hook was deleted.
+			#
+			# Quotes come off before the split because the commands the
+			# previous release wrote quote the shim path —
+			# `"<shim>" hook claude-code <event>` — and a token test that
+			# leaves them attached recognises none of our own wiring. That
+			# failure is worse than the one being fixed: it strips nothing
+			# and says nothing, and the session goes on dispatching every
+			# event twice.
+			#
+			# A word-boundary regex was the alternative and was rejected.
+			# $bin is a filesystem path, so it is full of `.` and `/`, and
+			# using it as a pattern means escaping every metacharacter in it
+			# first; an escape that missed one would fail open on a path
+			# chosen by whoever set CONTEXT_MODE_BIN. Splitting on whitespace
+			# and comparing strings has no pattern to escape.
+			#
+			# Type-gated because `explode` raises on a non-string instead of
 			# answering false, and one raise fails the whole program and
 			# strands the hooks this function exists to remove. settings.json
 			# is hand-editable, so an argv array — `["/bin/sh", …]` — is a
 			# shape a person plausibly writes there. A command this filter
 			# cannot read is not ours.
-			def is_ours: [.hooks[]? | (.command? // null) as $c
-				| select(($c | type) == "string" and ($c | contains($bin)))] | length > 0;
-			# Drop our entries from one hook array, and drop the array itself
-			# only if that emptied one that had content to begin with. A key
-			# that is absent, of another type, or already empty is left exactly
-			# as found — pruning it would rewrite the file and announce a
-			# cleanup on a session that never had Context Mode.
+			def is_ours: (.command? // null) as $c
+				| ($c | type) == "string"
+				and ([$c | unquoted | splits("[[:space:]]+")] | any(. == $bin));
+			# Drop our own hooks from inside one stanza, and drop the stanza
+			# only if that emptied one that had content to begin with.
+			#
+			# The verdict is per hook entry, not per stanza. Claude Code
+			# groups hooks under a shared matcher, so one stanza can hold ours
+			# next to one the user added; the form that stood here asked
+			# whether *any* entry in the stanza was ours and dropped the whole
+			# stanza when one was, taking the hook the user wrote with it.
+			#
+			# A stanza whose `hooks` is missing, of another type, or already
+			# empty is left exactly as found: emptiness this code did not
+			# cause is not ours to tidy.
+			def prune_stanza:
+				if ((.hooks? // null) | type) == "array" and (.hooks | length) > 0 then
+					.hooks |= map(select(is_ours | not))
+					| if (.hooks | length) == 0 then empty else . end
+				else . end;
+			# Drop the emptied stanzas from one hook array, and drop the array
+			# itself only if that emptied one that had content to begin with.
+			# A key that is absent, of another type, or already empty is left
+			# exactly as found — pruning it would rewrite the file and
+			# announce a cleanup on a session that never had Context Mode.
 			def prune(key):
 				if (.hooks[key] | type) == "array" and (.hooks[key] | length) > 0 then
-					.hooks[key] |= map(select(is_ours | not))
+					.hooks[key] |= map(prune_stanza)
 					| if (.hooks[key] | length) == 0 then del(.hooks[key]) else . end
 				else . end;
 
