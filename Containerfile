@@ -205,6 +205,15 @@ ARG RIOTBOX_DIAGRAMS=0
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         bash \
         curl \
+        # The shell config below exports LANG/LC_ALL=en_US.UTF-8, and this is
+        # what makes that locale exist. glibc requires the virtual provide
+        # `glibc-langpack`, which glibc-minimal-langpack — all the base layer
+        # ships — satisfies with C.utf8 alone. Left to dnf, whether en_US.UTF-8
+        # landed in an image was an accident of how that provide resolved on
+        # build day, and an image that lost the coin flip printed
+        # "setlocale: LC_ALL: cannot change locale" from every shell it started.
+        # 5.7 MB installed, against the size hygiene noted above.
+        glibc-langpack-en \
         wget \
         git \
         git-lfs \

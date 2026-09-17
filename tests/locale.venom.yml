@@ -1,0 +1,142 @@
+name: image locale
+vars:
+  root: "."
+
+# The image exports LANG/LC_ALL into every shell (Containerfile's .bashrc
+# block, sourced by container/entrypoint.sh). Nothing in the build ever asked
+# for that locale to exist: glibc requires the virtual provide
+# `glibc-langpack`, and glibc-minimal-langpack — the only provider the
+# CentOS Stream base layer ships — satisfies it with C.utf8 alone. Whether an
+# image ended up with en_US.UTF-8 was therefore an accident of how dnf
+# resolved that provide on the day it was built, which is why riotbox and
+# riotbox-gh-glab disagreed: every shell, and every `sh -c` a tool or MCP
+# server spawns, printed
+#
+#   bash: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8)
+#
+# These cases are structural — they read the Containerfile rather than a
+# built image, because building one costs 15-60 minutes and the property
+# being pinned is a build-input property, not a runtime one.
+
+testcases:
+  # /usr/share/locale (which the Containerfile strips down to en*) holds
+  # gettext MESSAGE CATALOGS. setlocale() reads compiled locale DEFINITIONS
+  # from /usr/lib/locale, which arrive only with a langpack rpm. Confusing the
+  # two is what makes this failure mode survive review, so the case asserts on
+  # the package that actually supplies the locale.
+  - name: the image installs the locale its shells export
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+
+          lc="$(awk -F= '/^export LC_ALL=/ { print $2; exit }' Containerfile)"
+          if [ -z "${lc}" ]; then
+            echo "FAIL: no 'export LC_ALL=' line in the Containerfile." >&2
+            echo "      This case pins the locale that line names; without it," >&2
+            echo "      it has nothing to check and must not stay green." >&2
+            exit 1
+          fi
+          echo "exported=${lc}"
+
+          # C and POSIX are built into glibc itself and need no langpack.
+          case "${lc}" in
+            C | C.UTF-8 | C.utf8 | POSIX)
+              echo "LOCALE_IS_AVAILABLE"
+              exit 0
+              ;;
+          esac
+
+          # en_US.UTF-8 -> en -> glibc-langpack-en
+          pkg="glibc-langpack-$(printf '%s' "${lc}" | sed 's/[_.@].*//')"
+
+          # Comment lines are discarded by the Dockerfile parser before an
+          # instruction is assembled, so a comment merely naming the package
+          # must not satisfy this — otherwise the case stays green while the
+          # real install is gone.
+          if ! awk -v pkg="${pkg}" '
+                /^[[:space:]]*#/ { next }
+                $0 ~ "(^|[[:space:]])" pkg "([[:space:]]|\\\\|$)" { found = 1 }
+                END { exit !found }
+              ' Containerfile; then
+            echo "FAIL: the image exports LC_ALL=${lc} but never installs ${pkg}." >&2
+            echo "      glibc-minimal-langpack ships C.utf8 only, so every shell" >&2
+            echo "      will warn: cannot change locale (${lc})." >&2
+            exit 1
+          fi
+          echo "LOCALE_IS_AVAILABLE"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LOCALE_IS_AVAILABLE"
+
+  # riotbox-gh-glab is the same Containerfile with RIOTBOX_GH_GLAB=1, and ARG
+  # forks the layer cache from the point it is consumed. A langpack installed
+  # after that point would reach the flavor and leave the base image warning —
+  # the exact asymmetry that surfaced this bug, back again with the fix in
+  # place. tests/gh-glab-build.venom.yml pins the ARG's position; this pins
+  # what has to sit above it.
+  - name: the locale package lands in a layer both flavors share
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+
+          lc="$(awk -F= '/^export LC_ALL=/ { print $2; exit }' Containerfile)"
+          case "${lc}" in
+            C | C.UTF-8 | C.utf8 | POSIX)
+              echo "SHARED_BY_BOTH_FLAVORS"
+              exit 0
+              ;;
+          esac
+          pkg="glibc-langpack-$(printf '%s' "${lc}" | sed 's/[_.@].*//')"
+
+          install_line="$(awk -v pkg="${pkg}" '
+            /^[[:space:]]*#/ { next }
+            $0 ~ "(^|[[:space:]])" pkg "([[:space:]]|\\\\|$)" { print NR; exit }
+          ' Containerfile)"
+          flavor_line="$(awk '
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*ARG[[:space:]]+RIOTBOX_GH_GLAB([=[:space:]]|$)/ ||
+            /[$][{]?RIOTBOX_GH_GLAB([^[:alnum:]_]|$)/ { print NR; exit }
+          ' Containerfile)"
+
+          if [ -z "${install_line}" ] || [ -z "${flavor_line}" ]; then
+            echo "FAIL: expected both ${pkg} (${install_line:-none}) and a" >&2
+            echo "      RIOTBOX_GH_GLAB instruction (${flavor_line:-none})." >&2
+            exit 1
+          fi
+          echo "install=${install_line} flavor=${flavor_line}"
+
+          if [ "${install_line}" -gt "${flavor_line}" ]; then
+            echo "FAIL: ${pkg} is installed at line ${install_line}, below the" >&2
+            echo "      flavor ARG at line ${flavor_line}. Only riotbox-gh-glab" >&2
+            echo "      would get the locale; the base image would still warn." >&2
+            exit 1
+          fi
+          echo "SHARED_BY_BOTH_FLAVORS"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SHARED_BY_BOTH_FLAVORS"
+
+  # Setting one and not the other half-fixes the warning: LC_ALL overrides
+  # LANG for every category, so a stale LANG hides until something unsets
+  # LC_ALL, and a stale LC_ALL keeps warning no matter what LANG says.
+  - name: LANG and LC_ALL name the same locale
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          lang="$(awk -F= '/^export LANG=/ { print $2; exit }' Containerfile)"
+          lc="$(awk -F= '/^export LC_ALL=/ { print $2; exit }' Containerfile)"
+          echo "LANG=${lang} LC_ALL=${lc}"
+          if [ "${lang}" != "${lc}" ]; then
+            echo "FAIL: LANG=${lang} and LC_ALL=${lc} disagree." >&2
+            exit 1
+          fi
+          echo "LOCALE_VARS_AGREE"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LOCALE_VARS_AGREE"
