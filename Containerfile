@@ -91,6 +91,51 @@ RUN bash -o pipefail -c '\
     chmod +x /tools/bin/venom && \
     /tools/bin/venom version'
 
+# ── git-ai (AI-authorship attribution via git notes) ─────────────────────────
+# The release asset, not https://usegitai.com/install.sh: RIOTBOX-20260312-001
+# asks every download in this image for download-then-verify against a pinned
+# SHA256, which a piped installer cannot give. The installer would also drop the
+# binary in ~/.git-ai/bin — the exact directory scripts/mount-projects.sh turns
+# into a session bind mount, so the mount would shadow the binary at runtime.
+# /tools/bin is where venom, task, trivy, grype and syft already land, and the
+# COPY --from=tools below places the whole directory at ~/.local/bin, which is
+# also where upstream's own installer symlinks git-ai.
+#
+# Upstream publishes SHA256SUMS per release, so the digests below are
+# transcribed from it rather than self-computed. As with bun, they are
+# transcribed at review time, not fetched beside the artifact at build time: a
+# checksum pulled from the same place as the file it describes, in the same
+# build, proves only that the two agree. What the pin buys is narrower than
+# "verified" suggests — it catches the bytes behind a fixed tag changing after
+# transcription. It cannot notice a release already compromised at the moment of
+# transcription.
+#
+# Note the arch translation. The tools stage normalises uname -m to amd64/arm64
+# for venom, but upstream names its assets git-ai-linux-x64 and
+# git-ai-linux-arm64 — so amd64 has to be translated back or the URL 404s.
+#
+# To refresh:
+#   1. Pick a new tag at https://github.com/git-ai-project/git-ai/releases
+#   2. Read the digests for both assets out of upstream's checksum file:
+#      curl -fsSL https://github.com/git-ai-project/git-ai/releases/download/v<VER>/SHA256SUMS \
+#        | grep -E 'git-ai-linux-(x64|arm64)$'
+#   3. Update GIT_AI_VERSION + GIT_AI_SHA256_AMD64 + GIT_AI_SHA256_ARM64 below
+ARG GIT_AI_VERSION=v1.7.4
+ARG GIT_AI_SHA256_AMD64=1f80c4affa44d9a21667e930b7aa6ac94f7c2f46bf216d7664bab84c7a8b62c2
+ARG GIT_AI_SHA256_ARM64=d6972d11dda038ac5ba245ac91e0f6a1cbcbe5eec136f0578c91b81ec908a0ac
+RUN bash -o pipefail -c '\
+    ARCH=$(uname -m | sed "s/x86_64/amd64/" | sed "s/aarch64/arm64/") && \
+    case "${ARCH}" in \
+        amd64) EXPECTED_SHA="${GIT_AI_SHA256_AMD64}"; ASSET_ARCH="x64" ;; \
+        arm64) EXPECTED_SHA="${GIT_AI_SHA256_ARM64}"; ASSET_ARCH="arm64" ;; \
+        *) echo "unsupported arch: ${ARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSLo /tmp/git-ai "https://github.com/git-ai-project/git-ai/releases/download/${GIT_AI_VERSION}/git-ai-linux-${ASSET_ARCH}" && \
+    echo "${EXPECTED_SHA}  /tmp/git-ai" | sha256sum -c - && \
+    mv /tmp/git-ai /tools/bin/git-ai && \
+    chmod +x /tools/bin/git-ai && \
+    /tools/bin/git-ai --version'
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Stage 2: Runtime image
@@ -632,6 +677,7 @@ COPY --chown=llm:llm container/headroom-summary.sh /home/llm/.riotbox/headroom-s
 COPY --chown=llm:llm container/codegraph-setup.sh /home/llm/.riotbox/codegraph-setup.sh
 COPY --chown=llm:llm container/context-mode-setup.sh /home/llm/.riotbox/context-mode-setup.sh
 COPY --chown=llm:llm container/context-mode-summary.sh /home/llm/.riotbox/context-mode-summary.sh
+COPY --chown=llm:llm container/git-ai-setup.sh /home/llm/.riotbox/git-ai-setup.sh
 # The entrypoint sources lib/overlay-ignore.sh from this path, so the shared
 # shell library has to exist inside the image as well as on the host. The
 # directory is copied wholesale rather than file by file, so anything added
@@ -646,7 +692,7 @@ RUN chmod +x /home/llm/.riotbox/entrypoint.sh \
     /home/llm/.riotbox/plugin-setup.sh /home/llm/.riotbox/startup-scripts.sh \
     /home/llm/.riotbox/nested-podman-setup.sh /home/llm/.riotbox/headroom-summary.sh \
     /home/llm/.riotbox/codegraph-setup.sh /home/llm/.riotbox/context-mode-setup.sh \
-    /home/llm/.riotbox/context-mode-summary.sh
+    /home/llm/.riotbox/context-mode-summary.sh /home/llm/.riotbox/git-ai-setup.sh
 ENTRYPOINT ["/home/llm/.riotbox/entrypoint.sh"]
 CMD ["bash"]
 

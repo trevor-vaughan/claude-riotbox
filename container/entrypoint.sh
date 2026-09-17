@@ -106,6 +106,8 @@ source "${RIOTBOX_SCRIPT_DIR}/codegraph-setup.sh"
 source "${RIOTBOX_SCRIPT_DIR}/context-mode-setup.sh"
 # shellcheck source=./context-mode-summary.sh disable=SC1091
 source "${RIOTBOX_SCRIPT_DIR}/context-mode-summary.sh"
+# shellcheck source=./git-ai-setup.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/git-ai-setup.sh"
 
 # Nested podman setup: file caps on newuidmap/newgidmap and /etc/sub{u,g}id
 # alignment with the outer keep-id user namespace. Only run when nested mode
@@ -160,6 +162,14 @@ codegraph_setup
 # Agents opt in by implementing the Context Mode verbs; any that does not warns
 # and runs with the feature off.
 context_mode_setup
+
+# git-ai: install upstream's attribution wiring, or strip what an earlier
+# session left when RIOTBOX_GIT_AI is off. Runs after the agent setup loop so
+# opencode's regenerated config is already in place for the plugin to sit
+# beside, and after context_mode_setup because both read-modify-write
+# settings.json — the later writer has to see the settled file. Runs before
+# session_branch_setup so the trace2 socket is live for the branch it creates.
+git_ai_setup
 
 # Session branch: create a dedicated branch for this session (if repo detected
 # and not suppressed). Must run after all setup is complete, before the main

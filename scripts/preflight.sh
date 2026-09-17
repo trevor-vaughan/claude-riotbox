@@ -52,6 +52,8 @@
 #   21  RIOTBOX_HEADROOM set but invalid, or image lacks headroom/model cache
 #   22  RIOTBOX_CONTEXT_MODE set but invalid, set alongside RIOTBOX_HEADROOM,
 #       or the image lacks a working Context Mode
+#   23  RIOTBOX_GIT_AI set but invalid, or the image's git-ai does not match
+#       the Containerfile's pinned version
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Strict mode applies only when this file is run as a script. When sourced as
@@ -473,6 +475,62 @@ preflight_check_context_mode() {
 	return 0
 }
 
+preflight_check_git_ai() {
+	local image="${IMAGE_NAME:-riotbox}"
+	local label="git-ai available in image"
+
+	# Inverted default. Every other RiotBox feature is opt-in, so its check
+	# reports a no-op when the flag is unset; git-ai is on by default, so
+	# unset means enabled and only an explicit 0 is the no-op.
+	if [[ "${RIOTBOX_GIT_AI:-1}" = "0" ]]; then
+		_preflight_report git_ai ok "git-ai disabled (RIOTBOX_GIT_AI=0)"
+		return 0
+	fi
+
+	# Consumers gate on the literal "1" — any other value silently disables
+	# the feature. Fail loudly so RIOTBOX_GIT_AI=true does not read as
+	# "enabled", the same trap preflight_check_headroom guards against.
+	if [[ "${RIOTBOX_GIT_AI:-1}" != "1" ]]; then
+		_preflight_report git_ai fail "${label}" 23 \
+			"RIOTBOX_GIT_AI='${RIOTBOX_GIT_AI}' is not recognized — set RIOTBOX_GIT_AI=1 to enable, 0 to disable, or unset it"
+		return 23
+	fi
+
+	if ! command -v podman >/dev/null 2>&1 ||
+		! podman image exists "${image}" 2>/dev/null; then
+		_preflight_report git_ai fail "${label}" 23 \
+			"Build the image first (riotbox build), then re-run doctor"
+		return 23
+	fi
+
+	# The image's binary must match the Containerfile pin. A stale image is
+	# the common failure here — the pin moved and nobody rebuilt — and it is
+	# invisible without comparing the two.
+	local pinned actual
+	pinned="$(sed -n 's/^ARG GIT_AI_VERSION=v\(.*\)$/\1/p' \
+		"${PREFLIGHT_SCRIPT_DIR}/../Containerfile" 2>/dev/null | head -1)"
+	if [[ -z "${pinned}" ]]; then
+		_preflight_report git_ai fail "${label}" 23 \
+			"Could not read GIT_AI_VERSION from the Containerfile"
+		return 23
+	fi
+
+	# Absolute path, not a bare `git-ai`: the image's runtime ENTRYPOINT is
+	# an exec-form script (container/entrypoint.sh), and --entrypoint here
+	# replaces it outright. A bare name relies on podman resolving it against
+	# the image's PATH before exec, which is unverified in this environment;
+	# the absolute install location (Containerfile COPY --from=tools) is not.
+	actual="$(podman run --rm --entrypoint /home/llm/.local/bin/git-ai "${image}" --version 2>/dev/null | tr -d '[:space:]')"
+	if [[ "${actual}" != "${pinned}" ]]; then
+		_preflight_report git_ai fail "${label}" 23 \
+			"Image has git-ai '${actual:-none}' but the Containerfile pins '${pinned}' — run riotbox build"
+		return 23
+	fi
+
+	_preflight_report git_ai ok "${label} (${actual})"
+	return 0
+}
+
 # ── Composition ─────────────────────────────────────────────────────────────
 
 # preflight_run: invokes every check in order. By default runs every
@@ -495,6 +553,7 @@ preflight_run() {
 		preflight_check_skills_dir
 		preflight_check_headroom
 		preflight_check_context_mode
+		preflight_check_git_ai
 	)
 	for fn in "${checks[@]}"; do
 		rc=0

@@ -239,6 +239,7 @@ The image comes with a broad set of tools pre-installed so the agent can start w
 
 - [`lola`](https://github.com/LobsterTrap/lola) — AI Skills Package Manager (cross-assistant skill distribution)
 - [`context-mode`](https://github.com/mksglu/context-mode) — context-window optimization (opt-in per session, see [Context Mode](#context-mode-opt-in))
+- [`git-ai`](https://github.com/git-ai-project/git-ai) v1.7.4 — AI-authorship attribution via git notes, pinned per-arch and SHA256-verified (**on by default**, see [AI-authorship attribution](#ai-authorship-attribution-git-ai))
 - [`bun`](https://github.com/oven-sh/bun) — JS/TS runtime, pinned and SHA256-verified. It is here for Context Mode's `ctx_execute` sandbox, which cannot run TypeScript snippets without it; it is on `PATH` and usable directly. Context Mode's Claude hooks do **not** use it — they run the image's pinned Node.
 
 **Diagram validation:**
@@ -572,6 +573,41 @@ riotbox install-hooks global
 ```
 
 The hook checks the push range for any container-identity commits and aborts the push with a hint to run `riotbox reown` if it finds any. Existing hook managers (lefthook, husky, pre-commit) are detected and a snippet is printed so you can chain the RiotBox hook from your manager's config. `riotbox install-hooks --help` lists the options.
+
+## AI-authorship attribution (git-ai)
+
+RiotBox ships [git-ai](https://usegitai.com/) and wires it into every session
+automatically — unlike every other feature in this file, it is **on by default**:
+
+| Variable | Effect |
+|---|---|
+| `RIOTBOX_GIT_AI` | AI-authorship attribution via git-ai (**on by default**; set `0` to disable) |
+
+The check is a strict `1` comparison — enabled when unset or exactly `1`, and
+**any other value disables it, including `RIOTBOX_GIT_AI=true`.** Every other
+RiotBox flag uses the same strict compare; adding truthy parsing for one feature
+would make git-ai the odd one out.
+
+What lands where:
+
+- Attribution lands in **`refs/notes/ai`** in your repo — not `refs/notes/git-ai`.
+  Because the repo is bind-mounted, the notes reach the host with the rest of your
+  commits; nothing extra has to be shared.
+- `git ai stats`, `git ai blame`, `git ai log`, and `git ai show-prompt` work on the
+  host with no extra setup — they read the notes straight out of the repository.
+- The daemon's own analytics store (`~/.git-ai` in-container, bind-mounted from the
+  session directory) is **session-local**, so `git ai usage` and `git ai analyze`
+  reflect one session's activity.
+- RiotBox disables telemetry, version checks, auto-updates, and daemon log upload
+  before the daemon ever starts.
+
+Prompt records are embedded directly in the note: its JSON body follows the
+`authorship/3.0.0` schema and carries a `prompts` object alongside `sessions`.
+`refs/notes/*` is **not pushed by default** — `git push` ignores it absent
+explicit configuration — so this stays local to your clone unless you push it
+deliberately. Upstream's `exclude_prompts_in_repositories` setting suppresses
+prompt capture per repo if you would rather conversation content never land in a
+note at all.
 
 ## Headroom context compression (opt-in)
 
