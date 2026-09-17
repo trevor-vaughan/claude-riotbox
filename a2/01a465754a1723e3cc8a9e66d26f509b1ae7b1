@@ -1,0 +1,38 @@
+tests/locale.venom.yml
+  s_3732137f85a099::t_408bff619ccb61 1-142
+Containerfile
+  s_3732137f85a099::t_aa8b04d504370b 208-216
+tests/git-ai.venom.yml
+  s_38f2d7c9d83b8f::t_52b68f6ca59840 524-637
+  s_38f2d7c9d83b8f::t_62e9d55465ec68 638-685
+  s_38f2d7c9d83b8f::t_50ae38dd10334a 39-115
+  s_38f2d7c9d83b8f::t_302a0e67c92992 38
+container/git-ai-setup.sh
+  s_38f2d7c9d83b8f::t_2ed246275332c1 115,117-118,122-130,132-140,142,146-149,152
+tests/Containerfile.test
+  s_38f2d7c9d83b8f::t_b3aa40ab395013 56-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a201a465754a1723e3cc8a9e66d26f509b1ae7b1",
+  "prompts": {},
+  "sessions": {
+    "s_3732137f85a099": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da3924b4-9b8c-4364-b72d-210a596c95d9",
+        "model": "claude-opus-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    },
+    "s_38f2d7c9d83b8f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "656b8b0b-0e9e-40a4-83fe-8d45f192d9d8",
+        "model": "claude-opus-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
