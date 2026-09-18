@@ -12,8 +12,19 @@ FROM quay.io/centos/centos:stream10
 # below happen to pull the full util-linux in transitively today — listing it
 # makes that a declared dependency instead of something a future dependency
 # resolution can quietly take away.
+#
+# diffutils is here for `cmp` and `diff`, which eight cases across
+# lib-json-write, codegraph and headroom-opencode use to assert a file came
+# through byte-identical. It is the same lesson as util-linux above, learned
+# the hard way: the base image used to ship it, the stream10 tag was
+# republished on 2026-09-09 without it, and every one of those cases turned
+# red. They fail deceptively, because `cmp -s a b || { echo "FAIL: changed"; }`
+# cannot tell "files differ" (exit 1) from "cmp is not installed" (exit 127) —
+# the suite reports a corrupted file rather than a missing tool. Declared here
+# so the next republish cannot take it away silently.
 RUN dnf -y install \
         bash \
+        diffutils \
         git \
         gnupg2 \
         podman \
@@ -52,6 +63,39 @@ RUN curl --proto '=https' --tlsv1.2 -sSfL \
     tar -xzf /tmp/git-cliff.tar.gz -C /tmp && \
     install -m 0755 "/tmp/git-cliff-${GIT_CLIFF_VERSION}/git-cliff" /usr/local/bin/git-cliff && \
     rm -rf /tmp/git-cliff.tar.gz "/tmp/git-cliff-${GIT_CLIFF_VERSION}"
+
+# git-ai — the real binary, not a fixture.
+#
+# Five cases in tests/git-ai.venom.yml exercise upstream directly: the config
+# writes, `install-hooks`, the end-to-end note on refs/notes/ai, and the drift
+# guard that is this project's early warning for upstream reshaping what the
+# strip verbs read. Each skips when the binary is absent, so without this
+# install they all reported PASS in CI having run nothing — and the drift guard,
+# whose entire value is running against the real thing, was the biggest loss.
+#
+# The pin is duplicated from the runtime Containerfile because the two images
+# are separate builds with no shared ARG. A case in the suite asserts the two
+# agree, so a drift is a red test rather than a test image quietly exercising a
+# release RiotBox does not ship. Refresh both together — the runtime
+# Containerfile carries the instructions.
+#
+# amd64 only: this image's venom download is already amd64-only, and upstream
+# names that asset git-ai-linux-x64.
+ARG GIT_AI_VERSION=v1.7.4
+ARG GIT_AI_SHA256_AMD64=1f80c4affa44d9a21667e930b7aa6ac94f7c2f46bf216d7664bab84c7a8b62c2
+RUN curl --proto '=https' --tlsv1.2 -sSfL \
+        -o /tmp/git-ai \
+        "https://github.com/git-ai-project/git-ai/releases/download/${GIT_AI_VERSION}/git-ai-linux-x64" && \
+    echo "${GIT_AI_SHA256_AMD64}  /tmp/git-ai" | sha256sum -c - && \
+    install -m 0755 /tmp/git-ai /usr/local/bin/git-ai && \
+    rm -f /tmp/git-ai && \
+    git-ai --version
+
+# Declares that this environment provides git-ai, which turns the suite's SKIP
+# branches into failures here while leaving them intact for a maintainer running
+# the suite on a bare host. Kept next to the install above so the claim and the
+# binary are edited together.
+ENV RIOTBOX_REQUIRE_GIT_AI=1
 
 # Non-root test user
 ARG HOST_UID=1000

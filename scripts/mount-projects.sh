@@ -402,6 +402,31 @@ setup_projects() {
 		PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${riotbox_session_dir}/headroom:/home/llm/.headroom:z"
 	fi
 
+	# ── git-ai store (on by default) ────────────────────────────────────
+	# The daemon, its unix sockets, and the metrics/token-usage/transcript
+	# SQLite DBs live under ~/.git-ai in-container. The store cannot be
+	# relocated by configuration — only HOME moves it — so runtime state
+	# and durable state necessarily share one mount.
+	#
+	# Session-local, deliberately NOT the host's ~/.git-ai. Attribution and
+	# prompt records land in refs/notes/ai inside the bind-mounted repo, so
+	# they already reach the host; sharing the store would add only the
+	# local analytics DBs. It would cost correctness: the directory holds
+	# trace2.sock, and the host's ~/.gitconfig names that exact path, so a
+	# container that judged the host's daemon dead would unlink and rebind
+	# it — breaking git-ai on the host. See the spec's "Why the store is
+	# session-local".
+	#
+	# Unlike every other RiotBox flag this one defaults ON, so the gate
+	# reads :-1 rather than :-0. The spelling stays a strict "1" compare to
+	# match the rest of the codebase; any other value disables.
+	if [[ "${RIOTBOX_GIT_AI:-1}" = "1" ]]; then
+		if [[ "${RIOTBOX_DRY_RUN:-0}" != "1" ]]; then
+			mkdir -p "${riotbox_session_dir}/git-ai"
+		fi
+		PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${riotbox_session_dir}/git-ai:/home/llm/.git-ai:z"
+	fi
+
 	# ── Context Mode ledger (opt-in) ────────────────────────────────────
 	# One JSON record per session exit, for `riotbox ctx-stats`. Lives
 	# OUTSIDE riotbox_session_dir on purpose: the counters it accumulates

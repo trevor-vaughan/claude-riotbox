@@ -33,6 +33,7 @@ Function names are mechanical: `agent_<name>_<verb>`.
 | [`github_mcp_strip`](#agent_name_github_mcp_strip) | no | `disable_github_mcp` |
 | [`gitlab_mcp_wire`](#agent_name_gitlab_mcp_wire) | no | `enable_gitlab_mcp` |
 | [`gitlab_mcp_strip`](#agent_name_gitlab_mcp_strip) | no | `disable_gitlab_mcp` |
+| [`git_ai_strip`](#agent_name_git_ai_strip) | no | session start |
 
 ## Required verbs
 
@@ -578,7 +579,13 @@ older image, so:
 - **It under-removes rather than over-removes.** Touch only what can be
   positively identified as riotbox's own; leave anything else — a
   user-written hook that merely mentions `context-mode`, a user's own file
-  at the shim path — exactly as found.
+  at the shim path — exactly as found. For a hook command that means two
+  things. The shim path has to appear as a whole whitespace-delimited token
+  once quote characters are stripped, so a user's `<shim>-wrapper` beside
+  ours is theirs and stays. And the verdict is per hook entry, not per
+  stanza: Claude Code groups hooks under a shared matcher, so a hook the
+  user added under the same matcher as ours survives, and the stanza around
+  it goes only once pruning has emptied it.
 
 This verb is what keeps a session directory from outliving the image that
 wired it while still holding wiring that points at a binary that is gone.
@@ -782,6 +789,71 @@ From that rule, two obligations:
 forges, including a GitHub entry narrowed through its environment block, a
 GitLab entry on a different endpoint, and riotbox's own GitLab entry stripped
 after the host it was wired against changed.
+
+## Optional verbs: git-ai
+
+One optional verb carries [git-ai](../../README.md#ai-authorship-attribution-git-ai)
+cleanup for an agent — there is no `wire` verb, and that absence is deliberate rather
+than a gap.
+
+| Verb | When | Contract |
+|------|------|----------|
+| `git_ai_strip` | session start | Remove wiring this project's binary owns, deciding on the entry's shape and under-removing. Idempotent, always returns 0. |
+
+**RiotBox does not write git-ai's wiring — upstream's `install-hooks` does.**
+`container/git-ai-setup.sh` calls it once per session and lets it write the Claude
+hook stanzas, the opencode plugin, and the `~/.gitconfig` Trace2 target. RiotBox
+does not hand-author any of those shapes, for the same reason
+`agent_<name>_context_mode_wire` is missing on Claude Code: upstream's own docs
+have already drifted from what its binary installs once — the documented Claude
+matcher is `Write|Edit|MultiEdit`, the matcher v1.7.4 actually writes is `"*"` — so
+a hand-maintained stanza in this repo would be one more place that drift could go
+unnoticed. Letting upstream own the shape keeps RiotBox out of it. What upstream
+cannot do is clean up a session directory that outlives the image: a session wired
+by an on-run and reopened with `RIOTBOX_GIT_AI=0` would otherwise keep firing hooks
+at a binary whose config this session stopped maintaining. That gap is what
+`git_ai_strip` exists to close, and it is the only thing this verb set owns.
+
+**An agent with no git-ai verbs simply gets no cleanup, which is safe.** Nothing
+calls `install-hooks` on behalf of an agent riotbox does not register, so an agent
+missing from `AGENT_REGISTRY` never gets wiring in the first place and has nothing
+for a stripper to remove.
+
+Put the body in `agents/<name>/git-ai.sh` and have `manifest.sh` source it, the
+same layout as the Context Mode and forge-MCP verb sets.
+
+### `agent_<name>_git_ai_strip`
+
+Remove only what this project's own git-ai binary could have written, deciding on
+the entry's **shape** — never a key name — and under-removing rather than
+over-removing, the same rule `agent_<name>_context_mode_strip` and the forge-MCP
+strip verbs follow. It is idempotent, silent when there is nothing to remove, and
+always returns 0: a failure to clean is a warning on stderr, not a non-zero status,
+because nothing upstream of it has a better answer than carrying on.
+
+The two shipped agents decide ownership by different means, because the wiring
+upstream writes for each one has a different shape:
+
+- **`agents/claude/git-ai.sh`** matches the binary as a **whole
+  whitespace-delimited token** inside a hook's `command`, after stripping quote
+  characters — not a substring match. A `contains($bin)` test was tried first and
+  over-removed: the binary's path is a prefix of any sibling script a user might
+  keep beside it, so a hook naming `<bin>-wrapper` read as ours and was deleted.
+  Token comparison leaves that hook alone. The verdict is per hook **entry**, not
+  per stanza — Claude Code groups hooks under a shared matcher, so a hook the user
+  added under the same matcher as ours survives, and the stanza around it is
+  removed only once pruning has emptied it of every entry.
+- **`agents/opencode/git-ai.sh`** is content-gated, not path-gated. Upstream
+  regenerates `~/.config/opencode/plugins/git-ai.ts` on every session — the
+  binary's absolute path is baked into the file at install time, so path alone
+  cannot identify a stale copy left by an older image — so the strip instead
+  requires upstream's own banner, `git-ai plugin for OpenCode`, to appear as a
+  **block-comment line within the first 10 lines** of the file. A free-substring
+  match was tried first and deleted a user's own plugin whose comment read
+  `// replaces the git-ai plugin for OpenCode`: the phrase appears, but not as a
+  block-comment line at the position upstream's generator actually writes it. The
+  tighter gate leaves that file alone and only takes the file whose shape matches
+  what a real `git-ai install-hooks` run produces.
 
 ### `agent_<name>_github_mcp_wire`
 

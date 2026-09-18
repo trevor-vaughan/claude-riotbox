@@ -24,6 +24,10 @@ source "${_AGENT_OPENCODE_DIR}/context-mode.sh"
 # shellcheck source=./forge-mcp.sh
 source "${_AGENT_OPENCODE_DIR}/forge-mcp.sh"
 
+# git-ai verbs (optional contract — see docs/dev/agent-contract.md).
+# shellcheck source=./git-ai.sh
+source "${_AGENT_OPENCODE_DIR}/git-ai.sh"
+
 # Name of the binary on PATH inside the container.
 agent_opencode_real_binary() {
 	printf 'opencode\n'

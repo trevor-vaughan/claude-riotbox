@@ -617,6 +617,67 @@ A session that sets `XDG_CONFIG_HOME` to a writable directory moves the config p
 outside both sentinels. That requires deliberate action inside the container and is
 recorded here rather than defended against.
 
+## git-ai daemon and attribution store
+
+git-ai is **on by default** (`RIOTBOX_GIT_AI=0` opts out) rather than opt-in like
+Headroom and Context Mode, so its surface is live in every session unless a user
+turns it off.
+
+**A new binary and its provenance.** `git-ai` is a static-PIE ELF pulled from a
+GitHub release asset, pinned by version (`v1.7.4`) and per-arch SHA256 in the
+`Containerfile` — the same download-then-verify shape venom, bun, and
+`github-mcp-server` already get, in place of upstream's own curl-to-shell
+installer. The same limit applies as everywhere else in this image: the digest is
+transcribed from upstream's own `SHA256SUMS` at review time rather than fetched
+alongside the artifact, so it catches the bytes behind a fixed tag changing after
+transcription. It cannot notice a release that was already compromised at the
+moment of transcription.
+
+**A long-lived daemon inside the session.** `install-hooks` starts a daemon that
+owns two unix sockets (`control.sock`, `trace2.sock`) and several SQLite DBs —
+`metrics`, `token-usage`, and `transcript` — under `~/.git-ai`, all on the session
+bind mount. The store is deliberately **not** shared with the host. `~/.git-ai`
+holds `trace2.sock`, and a host that also runs git-ai natively names that exact
+path in its own `~/.gitconfig`; a container that judged the host's daemon dead
+would unlink and rebind the socket, breaking git-ai on the host. `~/.git-ai` also
+cannot be relocated by configuration — only `HOME` moves it — so runtime state
+(the sockets, the lock, the pid file) and durable state (the analytics DBs)
+necessarily share one mount.
+
+**The Trace2 channel.** `install-hooks` adds a `[trace2] eventTarget =
+af_unix:stream:$HOME/.git-ai/internal/daemon/trace2.sock` block to
+`~/.gitconfig`, so every git invocation in the session streams its own activity
+to that daemon — a new path by which git activity leaves git. Consequence for
+testing: this project's convention of setting `GIT_CONFIG_GLOBAL=/dev/null` in
+git-touching tests silently disables attribution, because Trace2 lives in the
+global config that convention nulls out.
+
+**Telemetry.** Upstream ships `telemetry_oss` enabled, `disable_version_checks:
+false`, `disable_auto_updates: false`, and `feature_flags.daemon_log_upload:
+true` by default. `container/git-ai-setup.sh` disables all four with `git-ai
+config set` before `install-hooks` ever starts the daemon, so the daemon never
+runs with the phoning-home defaults. The version check and the auto-update would
+otherwise violate this image's offline-after-build rule outright.
+
+**Prompt records travel in the repository.** Attribution lands in
+`refs/notes/ai`, and the note's JSON body — schema `authorship/3.0.0` — carries a
+`prompts` object alongside `sessions`, so agent conversation content can live in
+the repository itself rather than only in a local store. Scoped accurately:
+`refs/notes/*` is not pushed by default (`git push` ignores it absent explicit
+configuration), upstream scans and redacts what it captures, and
+`exclude_prompts_in_repositories` suppresses capture per repo for anyone who
+would rather conversation content never land in a note at all.
+
+**Operational hazard: two variables, not one, and subcommands that are not
+read-only despite appearing to be.** git-ai reads `HOME` *and*
+`CLAUDE_CONFIG_DIR` independently — the hook stanzas it writes into Claude's
+`settings.json` follow `CLAUDE_CONFIG_DIR`, so overriding only `HOME` does not
+contain where it writes. And some subcommands that look read-only are not:
+`git-ai install-hooks --help` performs the real installation rather than
+printing help text. Anyone probing git-ai from a shell has to sandbox both
+variables and treat every subcommand as potentially mutating — this is a real
+trap that has bitten this project twice.
+
 ## Forge credentials and the gh-glab flavor
 
 The `riotbox-gh-glab` image adds the `gh` and `glab` CLIs and can register the
