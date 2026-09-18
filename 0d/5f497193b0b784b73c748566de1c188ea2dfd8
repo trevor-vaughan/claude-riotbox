@@ -1,0 +1,25 @@
+README.md
+  s_fbaeec96eba963::t_0a527ead7bb959 1292
+tests/managed-excludes.venom.yml
+  s_fbaeec96eba963::t_d6f60248fac958 667-722
+libexec/checkpoint.sh
+  s_fbaeec96eba963::t_c609a704a11e41 50
+.gitignore
+  s_fbaeec96eba963::t_e8becbb446ab47 40-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0d5f497193b0b784b73c748566de1c188ea2dfd8",
+  "prompts": {},
+  "sessions": {
+    "s_fbaeec96eba963": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "44852731-ce9b-4c51-89de-5c9c8ffc23ac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
