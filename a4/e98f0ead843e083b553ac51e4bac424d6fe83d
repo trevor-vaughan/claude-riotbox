@@ -1,0 +1,19 @@
+tests/Containerfile.test
+  s_37497cad8d273f::t_9ce98bda09e584 15-24,27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a4e98f0ead843e083b553ac51e4bac424d6fe83d",
+  "prompts": {},
+  "sessions": {
+    "s_37497cad8d273f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "eb39c64c-a246-49f8-b873-789133f82313",
+        "model": "claude-opus-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
