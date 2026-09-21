@@ -1,0 +1,23 @@
+tests/git-ai-aggregate.venom.yml
+  s_fbaeec96eba963::t_08440c671b7178 336-397
+scripts/git-ai-riotbox.sh
+  s_fbaeec96eba963::t_71ed968316bd13 23-43,111-117,255-263,265-266,268-271
+README.md
+  s_fbaeec96eba963::t_959757cc09eb74 631-644,657-663
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "83381db196a6071967226f5b0b28524f535dc3ef",
+  "prompts": {},
+  "sessions": {
+    "s_fbaeec96eba963": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "44852731-ce9b-4c51-89de-5c9c8ffc23ac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
