@@ -1,0 +1,35 @@
+scripts/git-ai-riotbox.sh
+  s_fbaeec96eba963::t_280f96bfb3c8b1 1-139,144-150,152-155,159-170,173-217,221-237,239-255,259-289,292-345
+  s_fbaeec96eba963::t_d67647ed040d26 156-158
+  s_fbaeec96eba963::t_2b5cd17573cd53 140-143,151,171-172,218-220,238,256-258,290-291
+README.md
+  s_fbaeec96eba963::t_e19e10a9f4faf1 220
+  s_fbaeec96eba963::t_d23ca3b4ecbebb 619-628,631-644
+scripts/lib/git-ai-merge.jq
+  s_fbaeec96eba963::t_c0387cba6bfbe2 157-158,160
+  s_fbaeec96eba963::t_829df3620e1ba3 148-150
+  s_fbaeec96eba963::t_70bd5219ea13d8 1-147,151-156,159,161-229
+bin/riotbox
+  s_fbaeec96eba963::t_2c252b2f623ce3 100,193-206,263
+tests/git-ai-aggregate.venom.yml
+  s_fbaeec96eba963::t_126cf07fa6a823 1-200
+  s_fbaeec96eba963::t_33bf02172af493 201-335
+tests/lib/git-ai-usage-fixtures.sh
+  s_fbaeec96eba963::t_2bc9934e917725 1-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d7b099c1e2f37494cceac70d55739dbf7cc89c7a",
+  "prompts": {},
+  "sessions": {
+    "s_fbaeec96eba963": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "44852731-ce9b-4c51-89de-5c9c8ffc23ac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
