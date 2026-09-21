@@ -1,0 +1,28 @@
+tests/install-hooks.venom.yml
+  s_fbaeec96eba963::t_28b0bb98ee090f 1-115
+README.md
+  s_fbaeec96eba963::t_e3d6a8a76f7f4b 604-610
+  s_fbaeec96eba963::t_5809241d2ffc32 577-584
+scripts/reown-commits.sh
+  s_fbaeec96eba963::t_56f16608f79851 419-453
+tests/reown-commits.venom.yml
+  s_fbaeec96eba963::t_e7b0af2787d97a 991-1056
+libexec/install-hooks.sh
+  s_fbaeec96eba963::t_f509e78fa804be 157-207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f43a7d998a8f1d2614076b21f2c0a472cfe62f72",
+  "prompts": {},
+  "sessions": {
+    "s_fbaeec96eba963": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "44852731-ce9b-4c51-89de-5c9c8ffc23ac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
