@@ -1,0 +1,40 @@
+tests/git-ai.venom.yml
+  s_fbaeec96eba963::t_81cb78f88f8126 290-423
+README.md
+  s_fbaeec96eba963::t_2e5bf88276152b 612-618,629-630
+  s_fbaeec96eba963::t_959757cc09eb74 631-644,657-663
+  s_fbaeec96eba963::t_5543862ae2d9cc 1348
+scripts/reown-commits.sh
+  s_fbaeec96eba963::t_b8bc6be02eaf1e 338
+  s_fbaeec96eba963::t_63da9dc62b5db5 278-284
+  s_fbaeec96eba963::t_5f22007c477d3f 258
+  s_fbaeec96eba963::t_763c4e9615047d 234-257,259-277,285-304,306-311
+  s_fbaeec96eba963::t_6b0dc696c8adb5 305
+  s_fbaeec96eba963::t_af92e1dded467f 336-337
+  s_fbaeec96eba963::t_50d09fd0dc4712 373-384,394-410
+  s_fbaeec96eba963::t_eee475d69f88f0 411
+tests/reown-commits.venom.yml
+  s_fbaeec96eba963::t_cc67e0cf89b316 868-990
+tests/git-ai-aggregate.venom.yml
+  s_fbaeec96eba963::t_08440c671b7178 336-397
+scripts/git-ai-riotbox.sh
+  s_fbaeec96eba963::t_71ed968316bd13 23-43,111-117,255-263,265-266,268-271
+tests/managed-excludes.venom.yml
+  s_fbaeec96eba963::t_2178c235320d27 167-175,194,593-597,622-623
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c04482d366730845b583ba9c61dc575fb319c927",
+  "prompts": {},
+  "sessions": {
+    "s_fbaeec96eba963": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "44852731-ce9b-4c51-89de-5c9c8ffc23ac",
+        "model": "claude-opus-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
