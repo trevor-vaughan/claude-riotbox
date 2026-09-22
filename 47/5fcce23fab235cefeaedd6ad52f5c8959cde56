@@ -1,16 +1,16 @@
-tests/git-ai.venom.yml
-  s_fbaeec96eba963::t_35b190a0601e25 240,278-291
-  s_fbaeec96eba963::t_151530e014f6db 292
-container/git-ai-setup.sh
-  s_fbaeec96eba963::t_503ad52c00df71 48-64
-  s_fbaeec96eba963::t_349fb0b8f9f02c 72-74
 README.md
   s_fbaeec96eba963::t_7e2da60a3658b6 665-687
+tests/git-ai.venom.yml
+  s_fbaeec96eba963::t_151530e014f6db 292
+  s_fbaeec96eba963::t_35b190a0601e25 240,278-291
+container/git-ai-setup.sh
+  s_fbaeec96eba963::t_349fb0b8f9f02c 72-74
+  s_fbaeec96eba963::t_503ad52c00df71 48-64
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.4",
-  "base_commit_sha": "f768d4a2e7c133e22963af41b8fe297263760e3e",
+  "base_commit_sha": "475fcce23fab235cefeaedd6ad52f5c8959cde56",
   "prompts": {},
   "sessions": {
     "s_fbaeec96eba963": {
