@@ -1,0 +1,19 @@
+scripts/repair-ai-notes.sh
+  s_3a0629ab999ee1::t_692ff0a3c5147a 82-90,93,95-100,116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bba9a1b339c0d9fb6bcf46268c79b3e83a296aba",
+  "prompts": {},
+  "sessions": {
+    "s_3a0629ab999ee1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "12f06ea8-f637-4ef6-bf2d-f18eb0bc300b",
+        "model": "claude-opus-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
