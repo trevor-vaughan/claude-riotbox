@@ -1,0 +1,20 @@
+tests/lib/git-test-helpers.sh
+  s_3a0629ab999ee1::t_c5a6b9b804266f 364-367,369-374
+  s_3a0629ab999ee1::t_4e5df034292110 343-346
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fa89624dd3f6bcd216f757f079680a43b2734ead",
+  "prompts": {},
+  "sessions": {
+    "s_3a0629ab999ee1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "12f06ea8-f637-4ef6-bf2d-f18eb0bc300b",
+        "model": "claude-opus-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
