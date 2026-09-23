@@ -267,6 +267,15 @@ _is_backup_repo() {
 # timestamps are unique per launch, so force would only ever let a tampered local
 # ref overwrite a pristine backup copy. Returns 0 always — the local snapshot ref
 # already exists, so a backup problem must not take the session down.
+#
+# refs/notes/* IS forced, unlike the snapshots. git-ai records AI authorship
+# there, and notes are legitimately rewritten — every `riotbox reown` remaps them
+# onto the new SHAs — so an unforced notes refspec would push once and then be
+# rejected for the life of the repo, silently freezing the backup at whatever
+# attribution looked like before the user's first reown. The immutable record
+# stays the snapshot refs; notes track the working state, like heads and tags.
+# Nothing else protects them: refs/notes/* is outside git's default push
+# refspec, so an unbacked-up notes ref lives in exactly one place on disk.
 _backup_project() {
 	local dir="$1" project_name="$2" ref="$3"
 	local backup_root backup_key backup_dir legacy_dir err
@@ -441,6 +450,7 @@ then relaunch. Do NOT delete the store — it is the other project's backup."
 	if err="$(LC_ALL=C git -c push.gpgSign=false -C "${dir}" push --no-verify "${backup_dir}" \
 		'+refs/heads/*:refs/heads/*' \
 		'+refs/tags/*:refs/tags/*' \
+		'+refs/notes/*:refs/notes/*' \
 		'refs/riotbox/checkpoints/*:refs/riotbox/checkpoints/*' 2>&1)"; then
 		# Surface forced branch rewrites — the only notice the user gets that a
 		# backed-up branch was replaced rather than extended.
