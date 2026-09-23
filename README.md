@@ -217,6 +217,7 @@ the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent na
 | `riotbox agents`                      | List registered agents (riotbox name + binary)                                                                                              |
 | `riotbox tokscale [args...]`          | Unified [tokscale](https://github.com/IvGolovach/tokscale) usage across your native agent home + every riotbox session, offline (no telemetry); args pass through to tokscale                     |
 | `riotbox ctx-stats [args...]`         | Context Mode savings recorded across sessions, read on the host from the run ledger — see [Context Mode](#context-mode-opt-in)               |
+| `riotbox git-ai [args...]`            | Unified [git-ai](https://usegitai.com/) usage merged across every session store plus your own `~/.git-ai` — see [AI-authorship attribution](#ai-authorship-attribution-git-ai)                     |
 | `riotbox doctor`                      | Walks every preflight check; prints each result with a fix hint. Exits with the first failure's code (0 on full pass).                      |
 
 ## Pre-installed tools
@@ -593,13 +594,58 @@ What lands where:
 - Attribution lands in **`refs/notes/ai`** in your repo — not `refs/notes/git-ai`.
   Because the repo is bind-mounted, the notes reach the host with the rest of your
   commits; nothing extra has to be shared.
-- `git ai stats`, `git ai blame`, `git ai log`, and `git ai show-prompt` work on the
-  host with no extra setup — they read the notes straight out of the repository.
-- The daemon's own analytics store (`~/.git-ai` in-container, bind-mounted from the
-  session directory) is **session-local**, so `git ai usage` and `git ai analyze`
-  reflect one session's activity.
+- `git ai stats`, `git ai blame`, `git ai log`, and `git ai show-prompt` need nothing
+  but the repository — they read the notes straight out of it, so no store has to be
+  shared. The **binary** is a different matter: RiotBox installs git-ai into the
+  image, never onto the host, so these verbs run there only if you have installed
+  git-ai on the host yourself. Until you do, the host answers every one of them with
+  `git: 'ai' is not a git command` — which looks like missing attribution and is not.
+- The daemon's own analytics store (`~/.git-ai` in-container, bind-mounted from
+  `~/.local/share/riotbox/<session>/git-ai`) is **session-local**, so a bare
+  `git ai usage` on the host reports on the host's own store and sees no session at
+  all. **`riotbox git-ai`** closes that gap — it merges every session store plus
+  your own `~/.git-ai` into one report:
+
+  ```sh
+  riotbox git-ai                 # merged summary, last 30 days
+  riotbox git-ai --period 7d     # narrow the window
+  riotbox git-ai --json          # the merged document
+  riotbox git-ai --list          # which stores exist, and what can read them
+  ```
+
+  Each store is read through a temporary `HOME` holding a **copy**, never the
+  store itself. Reading is not read-only for git-ai — it creates its metrics DB
+  and caches a pricing catalogue under `$HOME/.git-ai` — so reading in place
+  would make every report mutate the sessions it reports on, archived ones
+  included. Reflink makes the copy near-free where the filesystem supports it,
+  and only one store is copied at a time. Stores are still read where they live
+  rather than registered anywhere, so a `riotbox reset-session` drops that
+  session from the report.
+
+  The read also runs with **no network** (`unshare -rn`, the same rule
+  [`riotbox tokscale`](#commands) applies). git-ai fetches a models.dev pricing
+  catalogue at runtime and offers no setting to stop it — see the note below.
+  Every row already carries its cost priced at the time it was written, so
+  removing the network leaves every reported figure identical.
+
+  Each store records the git-ai release that wrote it in `.riotbox-version`, and
+  that release is the correct reader for its SQLite files, so stores are grouped by
+  version. A group with no matching binary is **named and skipped** rather than read
+  with a mismatched one, as is a store with no stamp at all. Resolution order per
+  group is `$GIT_AI_BIN`, a previously cached binary, a matching `git-ai` on `PATH`,
+  then a one-time download verified against the release `SHA256SUMS`. Set
+  `RIOTBOX_GIT_AI_NO_FETCH=1` to refuse that download.
+
+  `git ai analyze` has no `--json`, so there is nothing machine-readable to merge; it
+  stays a per-session command.
 - RiotBox disables telemetry, version checks, auto-updates, and daemon log upload
-  before the daemon ever starts.
+  before the daemon ever starts. **That is not the same as offline.** git-ai also
+  fetches a [models.dev](https://models.dev) pricing catalogue at runtime, into
+  `~/.git-ai/internal/models_dev_pricing.json`, and exposes no config key to
+  disable it — the four settings above do not cover it. Commit and token figures
+  do not depend on it: each usage row stores the cost computed from the release's
+  *embedded* price table when the row was written. `riotbox git-ai` reads with the
+  network removed for this reason; a session container does not.
 
 Prompt records are embedded directly in the note: its JSON body follows the
 `authorship/3.0.0` schema and carries a `prompts` object alongside `sessions`.

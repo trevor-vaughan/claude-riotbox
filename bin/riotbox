@@ -97,6 +97,7 @@ Setup / maintenance:
 Info:
   agents                       List registered agents (name + binary)
   tokscale [args...]           Unified tokscale usage across native + riotbox sessions
+  git-ai [args...]             Unified git-ai usage across every session store
   ctx-stats [args...]          Context Mode savings recorded across sessions
   doctor                       Verify host setup (preflight checks)
   version                      Show the current version
@@ -189,6 +190,20 @@ print_command_help() {
 		echo "  RIOTBOX_NONINTERACTIVE_BUILD=1  Skip the proceed prompt"
 		echo "  IMAGE_NAME=<tag>           Override the image tag"
 		;;
+	git-ai)
+		echo "Usage: riotbox git-ai [--period 1d|3d|7d|30d] [--json] [--list]"
+		echo ""
+		echo "Merge git-ai usage across every riotbox session store plus your"
+		echo "own ~/.git-ai. Each store is read with the git-ai release that"
+		echo "wrote it, named in its .riotbox-version stamp."
+		echo "  riotbox git-ai                        # merged summary, last 30d"
+		echo "  riotbox git-ai --period 7d            # narrow the window"
+		echo "  riotbox git-ai --json                 # merged document"
+		echo "  riotbox git-ai --list                 # stores found, and who can read them"
+		echo ""
+		echo "Attribution itself needs none of this: git ai log/blame/stats read"
+		echo "refs/notes/ai straight out of the repo."
+		;;
 	tokscale)
 		echo "Usage: riotbox tokscale [tokscale args...]"
 		echo ""
@@ -245,6 +260,7 @@ agents)
 	done
 	;;
 tokscale) exec "${SCRIPTS}/tokscale-riotbox.sh" "$@" ;;
+git-ai) exec "${SCRIPTS}/git-ai-riotbox.sh" "$@" ;;
 ctx-stats) exec "${SCRIPTS}/ctx-stats.sh" "$@" ;;
 
 build) exec "${SCRIPTS}/build.sh" ;;
