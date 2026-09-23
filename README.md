@@ -575,6 +575,14 @@ riotbox install-hooks global
 
 The hook checks the push range for any container-identity commits and aborts the push with a hint to run `riotbox reown` if it finds any. Existing hook managers (lefthook, husky, pre-commit) are detected and a snippet is printed so you can chain the RiotBox hook from your manager's config. `riotbox install-hooks --help` lists the options.
 
+`install-hooks` also sets **`notes.rewriteRef`**, which is what keeps [git-ai attribution](#ai-authorship-attribution-git-ai) alive through the rewrites this workflow depends on. git carries notes across `rebase` and `commit --amend` on its own, but only for the refs that key names — and it defaults to `refs/notes/commits`, leaving `refs/notes/ai` out. Rebase before reowning, as most people do, and every attribution note is orphaned before `reown` runs, where nothing can recover it. The value written is the glob:
+
+```sh
+git config --global notes.rewriteRef 'refs/notes/*'
+```
+
+Use the glob rather than `refs/notes/ai`: setting this key **replaces** git's default instead of adding to it, so naming only the git-ai ref would silently stop carrying your own `git notes` across rebases. An existing value that already covers `refs/notes/ai` is left alone; any other existing value is appended to, never overwritten. `reown` warns if it finds the key unset in a repo that has attribution notes.
+
 ## AI-authorship attribution (git-ai)
 
 RiotBox ships [git-ai](https://usegitai.com/) and wires it into every session
@@ -594,6 +602,13 @@ What lands where:
 - Attribution lands in **`refs/notes/ai`** in your repo — not `refs/notes/git-ai`.
   Because the repo is bind-mounted, the notes reach the host with the rest of your
   commits; nothing extra has to be shared.
+- **Notes are keyed by commit SHA, so every history rewrite has to carry them.**
+  Two mechanisms cover the two rewrites in the usual workflow, and both are
+  needed: `notes.rewriteRef` (set by [`riotbox install-hooks`](#reclaiming-authorship))
+  covers your `rebase`, and `riotbox reown` remaps them itself across its
+  `filter-repo` pass — filter-repo is neither `rebase` nor `amend`, so git's own
+  machinery never fires for it. Without the config, a rebase orphans every note
+  before `reown` can help.
 - `git ai stats`, `git ai blame`, `git ai log`, and `git ai show-prompt` need nothing
   but the repository — they read the notes straight out of it, so no store has to be
   shared. The **binary** is a different matter: RiotBox installs git-ai into the
