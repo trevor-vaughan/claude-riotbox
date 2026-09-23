@@ -1,0 +1,23 @@
+tests/repair-ai-notes.venom.yml
+  s_f06084abb11305::t_906902eb83a0f9 277-311
+scripts/repair-ai-notes.sh
+  s_f06084abb11305::t_c8e6f1bba91f7e 312-313
+  s_f06084abb11305::t_5925ac857d603b 253-258
+  s_f06084abb11305::t_b7e00243fc48bf 337-349
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f31017751f24feef01f7ffda1fbb1019a56152ef",
+  "prompts": {},
+  "sessions": {
+    "s_f06084abb11305": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f3cd990b-6c43-4a32-9447-dda701e4317e",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
