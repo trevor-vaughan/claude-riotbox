@@ -154,3 +154,54 @@ if [[ -n "${detected_manager}" ]]; then
 	echo "pre-push (if any) may shadow the RiotBox hook depending on which"
 	echo "config wins on your install. Verify with: git push --dry-run."
 fi
+
+# ── git-ai attribution notes across rewrites ────────────────────────────────
+#
+# git already carries notes through `rebase` and `commit --amend`, but only for
+# the refs named in notes.rewriteRef — which defaults to refs/notes/commits.
+# That leaves refs/notes/ai, where git-ai records AI authorship, excluded: the
+# rebase half of the documented rebase-then-reown workflow orphans every note
+# before `riotbox reown` ever runs, and the notes are then on SHAs filter-repo
+# never sees, so nothing downstream can recover them. reown's own filter-repo
+# rewrite is handled separately in scripts/reown-commits.sh, because
+# filter-repo is neither rebase nor amend and git's machinery never fires for it.
+#
+# Configured here because this script is already the host-side step that arms
+# the authorship workflow, and already knows the repo/global split git config
+# needs.
+AI_NOTES_REF="refs/notes/ai"
+NOTES_REF_GLOB="refs/notes/*"
+
+if [[ "${global}" = true ]]; then
+	notes_scope=(--global)
+else
+	notes_scope=(--local)
+fi
+
+# Setting this key REPLACES git's default rather than extending it, so what is
+# already there decides what is safe to write.
+notes_refs_raw="$(git config "${notes_scope[@]}" --get-all notes.rewriteRef 2>/dev/null || true)"
+
+if [[ -z "${notes_refs_raw}" ]]; then
+	# Unset: the glob covers the ai ref AND keeps refs/notes/commits working,
+	# which naming the ai ref alone would silently switch off.
+	git config "${notes_scope[@]}" notes.rewriteRef "${NOTES_REF_GLOB}"
+	echo "Set notes.rewriteRef to ${NOTES_REF_GLOB} so attribution notes survive a rebase."
+else
+	notes_covered=false
+	while IFS= read -r ref; do
+		if [[ "${ref}" = "${AI_NOTES_REF}" || "${ref}" = "${NOTES_REF_GLOB}" ]]; then
+			notes_covered=true
+			break
+		fi
+	done <<<"${notes_refs_raw}"
+
+	if [[ "${notes_covered}" = true ]]; then
+		echo "notes.rewriteRef already carries ${AI_NOTES_REF} — left as configured."
+	else
+		# Appended, never overwritten: the existing value is carrying the
+		# user's own notes and replacing it would strand those instead.
+		git config "${notes_scope[@]}" --add notes.rewriteRef "${AI_NOTES_REF}"
+		echo "Added ${AI_NOTES_REF} to notes.rewriteRef so attribution notes survive a rebase."
+	fi
+fi

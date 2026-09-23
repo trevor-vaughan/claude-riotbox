@@ -1,0 +1,397 @@
+name: git-ai aggregator — cross-session merge semantics
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# `git ai usage --json` returns DERIVED aggregates, not raw rows, so a naive
+# deep-merge produces numbers that look plausible and are wrong. Each field
+# class needs its own rule, and the ones that are ratios or streaks cannot be
+# combined from the summands at all — they have to be recomputed from the
+# merged data underneath them.
+#
+# The merge is a standalone jq program rather than a shell function so it can be
+# driven straight from JSON fixtures here, without standing up real SQLite
+# stores. The fixtures are deliberately ASYMMETRIC — different magnitudes,
+# partially overlapping tools/models/repos/dates — because a merge bug that sums
+# where it should recompute is invisible when both inputs are identical.
+testcases:
+  - name: Additive fields sum and keyed collections merge per key
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          bash "{{.riotbox_dir}}/tests/lib/git-ai-usage-fixtures.sh" "${W}"
+
+          jq -s -f "{{.riotbox_dir}}/scripts/lib/git-ai-merge.jq" \
+            "${W}/a.json" "${W}/b.json" > "${W}/m.json"
+
+          check() {
+            got="$(jq -r "$2" "${W}/m.json")"
+            [ "${got}" = "$3" ] || { echo "FAIL: $1 expected '$3', got '${got}'"; exit 1; }
+          }
+
+          # Plain sums.
+          check "commits.total"        '.commits.total'            6
+          check "commits.ai_lines"     '.commits.ai_lines'         400
+          check "commits.human_lines"  '.commits.human_lines'      30
+          check "checkpoints.total"    '.checkpoints.total'        15
+          check "sessions.total"       '.sessions.total'           9
+          check "shipped"              '.sessions.yield_stats.shipped'   4
+          check "tokens.output"        '.tokens.output'            600
+          check "tokens.cost"          '.tokens.estimated_cost_usd'  4.5
+
+          # [key, count] pairs: summed per key, and a key present in only one
+          # side must survive rather than be dropped by an intersection.
+          check "by_tool claude"       '.commits.by_tool | map(select(.[0]=="claude"))[0][1]'   300
+          check "by_tool codex"        '.commits.by_tool | map(select(.[0]=="codex"))[0][1]'    100
+          check "sessions by_tool"     '.sessions.by_tool | map(select(.[0]=="claude"))[0][1]'  7
+
+          # Index-wise arrays keep their fixed length.
+          check "hourly length"        '.hourly | length'          24
+          check "hourly[3]"            '.hourly[3]'                7
+          check "daily length"         '.daily | length'           7
+          check "daily[0]"             '.daily[0]'                 4
+
+          echo "additive_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "additive_ok=true"
+
+  - name: Object collections group by their identity key and sum members
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          bash "{{.riotbox_dir}}/tests/lib/git-ai-usage-fixtures.sh" "${W}"
+          jq -s -f "{{.riotbox_dir}}/scripts/lib/git-ai-merge.jq" \
+            "${W}/a.json" "${W}/b.json" > "${W}/m.json"
+
+          check() {
+            got="$(jq -r "$2" "${W}/m.json")"
+            [ "${got}" = "$3" ] || { echo "FAIL: $1 expected '$3', got '${got}'"; exit 1; }
+          }
+
+          # tokens.by_model and repos are arrays of OBJECTS, not [key,count]
+          # pairs — the shared model appears in both fixtures and must be
+          # summed into one entry, not listed twice.
+          check "by_model count"       '.tokens.by_model | length'   2
+          check "shared model output"  '.tokens.by_model | map(select(.model=="m-shared"))[0].output'   500
+          check "shared model sessions" '.tokens.by_model | map(select(.model=="m-shared"))[0].sessions' 5
+
+          # cache_hit_ratio is a RATIO. Averaging 0.5 and 0.9 would give 0.7;
+          # the truth is recomputed from the summed reads and creations:
+          # 450 / (450 + 50) = 0.9
+          check "cache_hit_ratio"      '.tokens.by_model | map(select(.model=="m-shared"))[0].cache_hit_ratio' 0.9
+
+          check "repos count"          '.repos | length'             2
+          check "shared repo lines"    '.repos | map(select(.repo_url=="r-shared"))[0].ai_lines'  300
+          check "buckets count"        '.buckets | length'           2
+          check "shared bucket lines"  '.buckets | map(select(.label=="week-1"))[0].ai_lines'     300
+
+          # wow_spend: the two week totals sum, but change_pct is derived and
+          # must be recomputed from them — (33-22)/22*100 = 50
+          check "wow this_week"        '.tokens.wow_spend.this_week_usd'  33
+          check "wow change_pct"       '.tokens.wow_spend.change_pct'     50
+
+          echo "grouped_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "grouped_ok=true"
+
+  - name: Calendar merges per date and the summary is recomputed from it
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          bash "{{.riotbox_dir}}/tests/lib/git-ai-usage-fixtures.sh" "${W}"
+          jq -s -f "{{.riotbox_dir}}/scripts/lib/git-ai-merge.jq" \
+            "${W}/a.json" "${W}/b.json" > "${W}/m.json"
+
+          check() {
+            got="$(jq -r "$2" "${W}/m.json")"
+            [ "${got}" = "$3" ] || { echo "FAIL: $1 expected '$3', got '${got}'"; exit 1; }
+          }
+
+          # Fixture dates: A has 09-01 and 09-02; B has 09-02 and 09-03.
+          # 09-02 is the overlap and must be summed, not duplicated.
+          check "calendar days"        '.calendar | length'          3
+          check "overlap day lines"    '.calendar | map(select(.date=="2026-09-02"))[0].ai_lines'  250
+
+          # Streaks CANNOT be combined from the inputs: A alone has a 2-day
+          # run and B alone has a 2-day run, but merged they form one
+          # unbroken 3-day run. Taking a max (2) or a sum (4) are both wrong.
+          check "active_days"          '.summary.active_days'        3
+          check "longest_streak"       '.summary.longest_streak'     3
+
+          # most_active_day is recomputed too: 09-02 only becomes the busiest
+          # day once the two stores' contributions to it are added together.
+          check "most_active date"     '.summary.most_active_day.date'      2026-09-02
+          check "most_active lines"    '.summary.most_active_day.ai_lines'  250
+
+          # longest_session_secs is a max across stores, never a sum.
+          check "longest_session"      '.summary.longest_session_secs'  900
+
+          # favorite_model is recomputed from the merged by_model totals, not
+          # taken from whichever store happened to be read first.
+          check "favorite_model"       '.summary.favorite_model'     m-shared
+
+          echo "calendar_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "calendar_ok=true"
+
+  - name: A period mismatch is a hard error rather than a silent merge
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          bash "{{.riotbox_dir}}/tests/lib/git-ai-usage-fixtures.sh" "${W}"
+
+          # Same shape, different window. Merging a 7-day store into a 30-day
+          # one yields a total that describes no real period at all, so it
+          # must fail loudly instead of producing a number.
+          jq '.period_label = "last 30 days"' "${W}/b.json" > "${W}/b-30d.json"
+
+          if jq -s -f "{{.riotbox_dir}}/scripts/lib/git-ai-merge.jq" \
+               "${W}/a.json" "${W}/b-30d.json" > "${W}/out.json" 2>"${W}/err"; then
+            echo "FAIL: mismatched periods merged instead of erroring"; cat "${W}/out.json"; exit 1
+          fi
+          grep -qi 'period' "${W}/err" \
+            || { echo "FAIL: the error does not say what disagreed"; cat "${W}/err"; exit 1; }
+
+          echo "period_guard_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "period_guard_ok=true"
+
+  - name: A single store merges to itself unchanged
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          bash "{{.riotbox_dir}}/tests/lib/git-ai-usage-fixtures.sh" "${W}"
+
+          # The identity case. It is the one input where the right answer is
+          # already known exactly, so it catches a recompute rule that is
+          # subtly wrong in a way the two-store cases average out.
+          jq -s -f "{{.riotbox_dir}}/scripts/lib/git-ai-merge.jq" "${W}/a.json" > "${W}/m.json"
+
+          for q in '.commits.ai_lines' '.summary.longest_streak' '.summary.active_days' \
+                   '.tokens.by_model | length' '.calendar | length' '.hourly' '.daily'; do
+            want="$(jq -c "${q}" "${W}/a.json")"
+            got="$(jq -c "${q}" "${W}/m.json")"
+            [ "${want}" = "${got}" ] \
+              || { echo "FAIL: ${q} changed under identity merge: ${want} -> ${got}"; exit 1; }
+          done
+
+          echo "identity_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "identity_ok=true"
+
+  # ── The wrapper around the merge ──────────────────────────────────────────
+  # These drive the script rather than the jq program. A stub binary stands in
+  # for git-ai: GIT_AI_BIN short-circuits version matching, so a case can prove
+  # discovery, grouping and merging without a real store or a real release.
+  - name: Discovery finds session stores and groups them by version stamp
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          export HOME="${W}/home"; mkdir -p "${HOME}"
+          export RIOTBOX_DATA_DIR="${W}/data"
+
+          # Two sessions on one release, one on another, plus a store with no
+          # stamp at all — the shape a pre-stamp session leaves behind.
+          for s in s1 s2; do
+            mkdir -p "${RIOTBOX_DATA_DIR}/${s}/git-ai"
+            echo '{}' > "${RIOTBOX_DATA_DIR}/${s}/git-ai/config.json"
+            echo "1.7.4" > "${RIOTBOX_DATA_DIR}/${s}/git-ai/.riotbox-version"
+          done
+          mkdir -p "${RIOTBOX_DATA_DIR}/s3/git-ai"
+          echo '{}' > "${RIOTBOX_DATA_DIR}/s3/git-ai/config.json"
+          echo "1.8.0" > "${RIOTBOX_DATA_DIR}/s3/git-ai/.riotbox-version"
+          mkdir -p "${RIOTBOX_DATA_DIR}/s4/git-ai"
+          echo '{}' > "${RIOTBOX_DATA_DIR}/s4/git-ai/config.json"
+          # A directory that is not a store at all must not be listed.
+          mkdir -p "${RIOTBOX_DATA_DIR}/s5/headroom"
+
+          printf '#!/bin/sh\nexit 0\n' > "${W}/stub"; chmod +x "${W}/stub"
+          GIT_AI_BIN="${W}/stub" bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" --list > "${W}/out"
+
+          grep -q '1.7.4' "${W}/out" || { echo "FAIL: 1.7.4 group missing"; cat "${W}/out"; exit 1; }
+          grep -q '1.8.0' "${W}/out" || { echo "FAIL: 1.8.0 group missing"; cat "${W}/out"; exit 1; }
+          grep -q 'unstamped' "${W}/out" || { echo "FAIL: unstamped store not flagged"; cat "${W}/out"; exit 1; }
+          grep -q 'headroom' "${W}/out" && { echo "FAIL: a non-store directory was listed"; cat "${W}/out"; exit 1; }
+          [ "$(grep -c 'git-ai$' "${W}/out")" -eq 4 ] \
+            || { echo "FAIL: expected 4 stores"; cat "${W}/out"; exit 1; }
+
+          echo "discovery_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "discovery_ok=true"
+
+  - name: Readable stores merge and an unstamped one is skipped with a notice
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          export HOME="${W}/home"; mkdir -p "${HOME}"
+          export RIOTBOX_DATA_DIR="${W}/data"
+          bash "{{.riotbox_dir}}/tests/lib/git-ai-usage-fixtures.sh" "${W}"
+
+          for s in s1 s2; do
+            mkdir -p "${RIOTBOX_DATA_DIR}/${s}/git-ai"
+            echo '{}' > "${RIOTBOX_DATA_DIR}/${s}/git-ai/config.json"
+            echo "1.7.4" > "${RIOTBOX_DATA_DIR}/${s}/git-ai/.riotbox-version"
+          done
+          # No stamp: must be skipped, and must NOT contribute to the totals.
+          mkdir -p "${RIOTBOX_DATA_DIR}/s9/git-ai"
+          echo '{}' > "${RIOTBOX_DATA_DIR}/s9/git-ai/config.json"
+
+          # The stub answers `usage ... --json` with fixture A regardless of
+          # which store it is pointed at, so two readable stores must produce
+          # exactly double fixture A.
+          cat > "${W}/stub" <<EOF
+          #!/bin/sh
+          case "\$1" in
+            --version) echo 1.7.4 ;;
+            usage) cat "${W}/a.json" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod +x "${W}/stub"
+
+          GIT_AI_BIN="${W}/stub" bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" \
+            --json > "${W}/out.json" 2>"${W}/err"
+
+          got="$(jq -r '.commits.ai_lines' "${W}/out.json")"
+          [ "${got}" = "200" ] \
+            || { echo "FAIL: expected 2x100 AI lines, got ${got}"; cat "${W}/err"; exit 1; }
+          grep -qF 'no .riotbox-version' "${W}/err" \
+            || { echo "FAIL: the unstamped store was skipped silently"; cat "${W}/err"; exit 1; }
+
+          echo "merge_via_script_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "merge_via_script_ok=true"
+
+  # Reading a store with the wrong release risks mis-parsing its SQLite silently,
+  # which is worse than not reporting it — a number nobody can tell is wrong.
+  - name: A version with no available reader is reported rather than guessed at
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          export HOME="${W}/home"; mkdir -p "${HOME}"
+          export RIOTBOX_DATA_DIR="${W}/data"
+          mkdir -p "${RIOTBOX_DATA_DIR}/s1/git-ai"
+          echo '{}' > "${RIOTBOX_DATA_DIR}/s1/git-ai/config.json"
+          echo "99.99.99" > "${RIOTBOX_DATA_DIR}/s1/git-ai/.riotbox-version"
+
+          # No GIT_AI_BIN, no cache, and fetching disabled, so nothing can read
+          # a 99.99.99 store. An empty PATH entry keeps any host git-ai out.
+          set +e
+          env -u GIT_AI_BIN RIOTBOX_GIT_AI_NO_FETCH=1 PATH="/usr/bin:/bin" \
+            bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" >"${W}/out" 2>"${W}/err"
+          rc=$?
+          set -e
+          [ "${rc}" -ne 0 ] || { echo "FAIL: exited 0 with nothing readable"; cat "${W}/err"; exit 1; }
+          grep -qF '99.99.99' "${W}/err" \
+            || { echo "FAIL: the unreadable version was not named"; cat "${W}/err"; exit 1; }
+          grep -qF "${RIOTBOX_DATA_DIR}/s1/git-ai" "${W}/err" \
+            || { echo "FAIL: the affected store was not named"; cat "${W}/err"; exit 1; }
+
+          echo "unreadable_reported_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "unreadable_reported_ok=true"
+
+  - name: riotbox dispatches the git-ai verb and prints its own help
+    steps:
+      - type: exec
+        script: |
+          "{{.riotbox_dir}}/bin/riotbox" git-ai --help
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "riotbox git-ai"
+          - result.systemout ShouldContainSubstring "--list"
+          - result.systemout ShouldContainSubstring "refs/notes/ai"
+
+  # A report must not alter what it reports on. Reading a store live does:
+  # git-ai creates its metrics DB and fetches a pricing catalogue into whatever
+  # $HOME/.git-ai resolves to, so a symlinked shim writes straight into the
+  # session's own store — including archived sessions the user has finished
+  # with, and leaving a WAL behind if the read is interrupted.
+  - name: Reading a store leaves it byte-for-byte unchanged
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          export HOME="${W}/home"; mkdir -p "${HOME}"
+          export RIOTBOX_DATA_DIR="${W}/data"
+          bash "{{.riotbox_dir}}/tests/lib/git-ai-usage-fixtures.sh" "${W}"
+
+          store="${RIOTBOX_DATA_DIR}/s1/git-ai"
+          mkdir -p "${store}/internal"
+          echo '{}' > "${store}/config.json"
+          echo "1.7.4" > "${store}/.riotbox-version"
+          printf 'original\n' > "${store}/internal/token-usage-db"
+
+          # The stub writes into its own $HOME/.git-ai exactly as the real
+          # binary does, so this case fails against a symlinked shim and
+          # passes against a copied one.
+          cat > "${W}/stub" <<EOF
+          #!/bin/sh
+          case "\$1" in
+            --version) echo 1.7.4 ;;
+            usage)
+              mkdir -p "\${HOME}/.git-ai/internal"
+              echo scribble > "\${HOME}/.git-ai/internal/metrics-db"
+              echo tampered > "\${HOME}/.git-ai/internal/token-usage-db"
+              cat "${W}/a.json"
+              ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod +x "${W}/stub"
+
+          fingerprint() { find "${store}" -type f -exec md5sum {} + | sort -k2 | sed "s|${store}||"; }
+          fingerprint > "${W}/before"
+
+          GIT_AI_BIN="${W}/stub" bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" \
+            --json > "${W}/out.json" 2>"${W}/err"
+
+          fingerprint > "${W}/after"
+          if ! diff -u "${W}/before" "${W}/after" > "${W}/delta"; then
+            echo "FAIL: the scan modified the store it read"; cat "${W}/delta"; exit 1
+          fi
+
+          # And it still actually read it — a scan that reports nothing would
+          # trivially leave the store alone.
+          got="$(jq -r '.commits.ai_lines' "${W}/out.json")"
+          [ "${got}" = "100" ] \
+            || { echo "FAIL: store was not read, got '${got}'"; cat "${W}/err"; exit 1; }
+
+          echo "store_unchanged_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "store_unchanged_ok=true"

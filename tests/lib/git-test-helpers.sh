@@ -324,3 +324,52 @@ init_test_repo_staged_and_unstaged() {
 	printf 'unstaged\n' >>"${REPO_DIR}/tracked.txt"
 	printf 'new\n' >"${REPO_DIR}/untracked.txt"
 }
+
+# Session and turn IDs used by the attribution-note helpers. Fixed values, so
+# a test can assert on the exact text a note carries.
+# shellcheck disable=SC2034  # consumed by callers that source this helper
+AI_SESSION="s_testsession0001"
+AI_TURN="t_testturn00000001"
+
+# attach_ai_note <commit> <path> <ranges> [<path> <ranges>...]
+# Write a git-ai authorship note onto <commit> in refs/notes/ai. The note has
+# the two-part shape git-ai uses: a text section naming each path and the line
+# ranges a turn authored, then a `---` separator and the JSON document.
+# Paths and ranges are positional pairs, e.g.
+#   attach_ai_note HEAD f1.txt 1-3 f2.txt 5,9-11
+attach_ai_note() {
+	local commit="${1}"
+	shift
+	if [[ $(($# % 2)) -ne 0 ]]; then
+		echo "attach_ai_note: each path needs a matching range; got an odd number of arguments: $*" >&2
+		return 1
+	fi
+	local sha
+	sha="$(git rev-parse "${commit}")"
+	{
+		while [[ $# -gt 0 ]]; do
+			printf '%s\n  %s::%s %s\n' "${1}" "${AI_SESSION}" "${AI_TURN}" "${2}"
+			shift 2
+		done
+		printf -- '---\n'
+		printf '{"schema_version":"authorship/3.0.0","git_ai_version":"1.7.4",'
+		printf '"base_commit_sha":"%s","prompts":{},"sessions":{"%s":' "${sha}" "${AI_SESSION}"
+		printf '{"agent_id":{"tool":"claude","id":"test","model":"claude-opus-5"},'
+		printf '"human_author":"%s <%s>"}}}\n' "${HUMAN_NAME}" "${HUMAN_EMAIL}"
+	} | git notes --ref=ai add -f -F - "${commit}"
+}
+
+# ai_note_paths <commit>
+# Echo the paths a commit's attribution note names, one per line, in order.
+# Unindented lines before the `---` separator are the paths. A commit with no
+# note yields no output and succeeds: tests assert on the absence of a note as
+# readily as on its presence, and an abort there would carry no diagnostic.
+# A ref that does not resolve is still an error.
+ai_note_paths() {
+	if ! git rev-parse --verify --quiet "${1}^{commit}" >/dev/null; then
+		echo "ai_note_paths: no such commit: ${1}" >&2
+		return 1
+	fi
+	git notes --ref=ai list "${1}" >/dev/null 2>&1 || return 0
+	git notes --ref=ai show "${1}" | sed -n '/^---$/q; /^[^ \t]/p'
+}
