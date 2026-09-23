@@ -164,8 +164,15 @@ testcases:
           GIT_COMMITTER_NAME="${HUMAN_NAME}" GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
           git -C "${REPO_DIR}" commit -m "initial"
 
-          # Modify the tracked file — checkpoint must capture the change
-          echo '{"version":2}' > "${REPO_DIR}/.claude/settings.local.json"
+          # Modify the tracked file — checkpoint must capture the change.
+          # The replacement is a DIFFERENT LENGTH on purpose. git compares the
+          # cached stat data first, and a same-size rewrite landing in the same
+          # second as the index write falls in the racily-clean window, where
+          # `git add -A` can stage nothing at all: the snapshot then equals HEAD
+          # and this case fails intermittently for a reason that has nothing to
+          # do with excludes. Size is part of that stat comparison, so changing
+          # it makes the edit detectable regardless of timing.
+          echo '{"version":2222}' > "${REPO_DIR}/.claude/settings.local.json"
 
           out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
                  RIOTBOX_CHECKPOINT_QUIET=1 \
@@ -184,7 +191,7 @@ testcases:
           [ "$(git -C "${REPO_DIR}" rev-parse "${ref}")" != "$(git -C "${REPO_DIR}" rev-parse HEAD)" ]
           content="$(git -C "${REPO_DIR}" show "${ref}:.claude/settings.local.json")"
           echo "snapshot content: ${content}"
-          [ "${content}" = '{"version":2}' ]
+          [ "${content}" = '{"version":2222}' ]
 
           echo "tracked_file_ok=true"
         assertions:
@@ -583,9 +590,11 @@ testcases:
           GIT_COMMITTER_NAME="${HUMAN_NAME}" GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
           git -C "${REPO_DIR}" commit -m "initial"
 
-          # Edit both — the snapshot must carry the NEW content.
-          echo "package x // v2" > "${REPO_DIR}/vendor/github.com/x/y.go"
-          echo "TOKEN=v2" > "${REPO_DIR}/.env"
+          # Edit both — the snapshot must carry the NEW content. Both
+          # replacements change LENGTH, not just bytes, for the racily-clean
+          # reason documented on the .claude/settings.local.json case above.
+          echo "package x // v2 edited" > "${REPO_DIR}/vendor/github.com/x/y.go"
+          echo "TOKEN=v2-edited" > "${REPO_DIR}/.env"
 
           out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
                  RIOTBOX_CHECKPOINT_QUIET=1 \
@@ -610,8 +619,8 @@ testcases:
           # Modified tracked files make the snapshot a NEW commit, so these read
           # the snapshot's own tree rather than HEAD's.
           [ "$(git -C "${REPO_DIR}" rev-parse "${ref}")" != "$(git -C "${REPO_DIR}" rev-parse HEAD)" ]
-          [ "$(git -C "${REPO_DIR}" show "${ref}:vendor/github.com/x/y.go")" = "package x // v2" ]
-          [ "$(git -C "${REPO_DIR}" show "${ref}:.env")" = "TOKEN=v2" ]
+          [ "$(git -C "${REPO_DIR}" show "${ref}:vendor/github.com/x/y.go")" = "package x // v2 edited" ]
+          [ "$(git -C "${REPO_DIR}" show "${ref}:.env")" = "TOKEN=v2-edited" ]
 
           echo "tracked_survives_patterns_ok=true"
         assertions:
@@ -664,3 +673,59 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "codegraph_excluded_ok=true"
+
+  # The third tool the image ships that writes per-project state into the
+  # working directory, alongside headroom and CodeGraph. `lola mod add` drops
+  # extracted copies of upstream skill repos into .lola/modules/ — tens of
+  # megabytes of third-party source in a real checkout.
+  #
+  # It needs the managed block more than the other two do, not less: CodeGraph
+  # writes its own .gitignore into its index directory, and lola writes
+  # nothing. With no pattern here, a snapshot of any project someone has run
+  # `lola mod add` in carries the whole module cache off-host, one file at a
+  # time, for every file under the RIOTBOX_SNAPSHOT_MAX_MB per-file cap — and
+  # the cap is what hides it, since no single skill file is large enough to be
+  # dropped.
+  - name: Checkpoint commit omits .lola/ when exclude block is injected
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          echo "src" > "${REPO_DIR}/main.go"
+          git -C "${REPO_DIR}" add main.go
+          GIT_AUTHOR_NAME="${HUMAN_NAME}" GIT_AUTHOR_EMAIL="${HUMAN_EMAIL}" \
+          GIT_COMMITTER_NAME="${HUMAN_NAME}" GIT_COMMITTER_EMAIL="${HUMAN_EMAIL}" \
+          git -C "${REPO_DIR}" commit -m "initial"
+
+          # Shaped like the real cache: a module directory holding files small
+          # enough that the size cap lets every one of them through.
+          mkdir -p "${REPO_DIR}/.lola/modules/some-skill"
+          echo "# a vendored skill" > "${REPO_DIR}/.lola/modules/some-skill/SKILL.md"
+
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+
+          exclude_path="${REPO_DIR}/.git/info/exclude"
+          grep -q '>>> riotbox managed excludes' "${exclude_path}"
+
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          echo "ref=${ref}"
+          [ -n "${ref}" ]
+          tree_out="$(git -C "${REPO_DIR}" ls-tree -r --name-only "${ref}")"
+          echo "snapshot tree: ${tree_out}"
+          if echo "${tree_out}" | grep -q '^\.lola/'; then
+            echo "FAIL: .lola/ appeared in the snapshot"; exit 1
+          fi
+          echo "${tree_out}" | grep -qx 'main.go'
+
+          echo "lola_excluded_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "lola_excluded_ok=true"

@@ -47,6 +47,7 @@ resolve_projects "${RIOTBOX_PROJECTS:-}"
 _MANAGED_BLOCK='# >>> riotbox managed excludes (do not edit between markers) >>>
 .headroom/
 .codegraph/
+.lola/
 .claude/settings.local.json
 CLAUDE.local.md
 venom.log
