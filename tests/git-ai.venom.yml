@@ -287,6 +287,140 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
 
+  # ── Degrading instead of failing ──────────────────────────────────────────
+  # git_ai_stamp_version and git_ai_check_daemon both promise the same thing in
+  # prose: warn, return 0, let the session continue. Nothing held them to it.
+  # The case above proves only that the stamp works when everything works, and
+  # a `return 0` silently turned into a `return 1` — or a warning deleted as
+  # noise — would take the whole entrypoint down with it, because git_ai_setup
+  # runs `git_ai_install_hooks || return 0` and nothing else guards the two
+  # calls around it.
+  #
+  # All three cases drive a stub binary rather than the real git-ai. That is
+  # not a convenience: `--version` failing and `bg status` failing are states a
+  # working install cannot be asked to produce, and the contract under test is
+  # exactly what happens when it does. It also means these run unconditionally
+  # — no `command -v git-ai` SKIP branch to hide them on a bare host.
+  - name: the version stamp warns and continues when the binary cannot report a version
+    steps:
+      - type: exec
+        script: |
+          set -e
+          FAKE="$(mktemp -d)"
+          trap 'rm -rf "${FAKE}"' EXIT
+          export HOME="${FAKE}"
+          export RIOTBOX_GIT_AI_BIN="${FAKE}/bin/git-ai"
+          mkdir -p "${FAKE}/bin"
+
+          cat > "${RIOTBOX_GIT_AI_BIN}" <<'EOF'
+          #!/bin/sh
+          [ "$1" = "--version" ] && exit 1
+          exit 0
+          EOF
+          chmod +x "${RIOTBOX_GIT_AI_BIN}"
+
+          # shellcheck disable=SC1091
+          . "{{.riotbox_dir}}/container/git-ai-setup.sh"
+
+          git_ai_stamp_version 2>"${FAKE}/err" \
+            || { echo "FAIL: an unreadable version aborted the caller"; cat "${FAKE}/err"; exit 1; }
+
+          grep -qF 'store left unstamped' "${FAKE}/err" \
+            || { echo "FAIL: the unreadable version was not reported"; cat "${FAKE}/err"; exit 1; }
+
+          # No marker at all beats a marker holding the empty string: Phase 3's
+          # aggregator picks a binary by reading this file, and an unstamped
+          # store is a case it can recognise where a blank one is not.
+          [ ! -e "${FAKE}/.git-ai/.riotbox-version" ] \
+            || { echo "FAIL: a marker was written from a failed version read"; exit 1; }
+
+          echo "PASS"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PASS"
+
+  # The second branch of the same function: the version reads fine and the
+  # write is what fails. Blocked with a regular file where the store directory
+  # belongs, deliberately, rather than by dropping write permission on a parent
+  # — `task test:as-root` runs suites as uid 0, and root walks straight through
+  # a chmod. `mkdir -p` over an existing non-directory fails for root too, so
+  # this case means the same thing under both uids.
+  - name: the version stamp warns and continues when the marker cannot be written
+    steps:
+      - type: exec
+        script: |
+          set -e
+          FAKE="$(mktemp -d)"
+          trap 'rm -rf "${FAKE}"' EXIT
+          export HOME="${FAKE}"
+          export RIOTBOX_GIT_AI_BIN="${FAKE}/bin/git-ai"
+          mkdir -p "${FAKE}/bin"
+
+          cat > "${RIOTBOX_GIT_AI_BIN}" <<'EOF'
+          #!/bin/sh
+          [ "$1" = "--version" ] && { echo "1.7.4"; exit 0; }
+          exit 0
+          EOF
+          chmod +x "${RIOTBOX_GIT_AI_BIN}"
+
+          printf 'not a directory\n' > "${FAKE}/.git-ai"
+
+          # shellcheck disable=SC1091
+          . "{{.riotbox_dir}}/container/git-ai-setup.sh"
+
+          git_ai_stamp_version 2>"${FAKE}/err" \
+            || { echo "FAIL: an unwritable store aborted the caller"; cat "${FAKE}/err"; exit 1; }
+
+          grep -qF 'store left unstamped' "${FAKE}/err" \
+            || { echo "FAIL: the unwritable store was not reported"; cat "${FAKE}/err"; exit 1; }
+          [ "$(cat "${FAKE}/.git-ai")" = "not a directory" ] \
+            || { echo "FAIL: the blocking file was clobbered"; exit 1; }
+
+          echo "PASS"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PASS"
+
+  # A dead daemon is the quietest failure git-ai has: every hook still fires,
+  # every commit still lands, and not one of them is attributed. The warning is
+  # the only signal the user gets, so it is worth a case — and so is its
+  # absence, which is why the reachable half runs here too. A warning printed
+  # unconditionally would train the user to ignore it.
+  - name: an unreachable daemon warns without failing the session
+    steps:
+      - type: exec
+        script: |
+          set -e
+          FAKE="$(mktemp -d)"
+          trap 'rm -rf "${FAKE}"' EXIT
+          export RIOTBOX_GIT_AI_BIN="${FAKE}/bin/git-ai"
+          mkdir -p "${FAKE}/bin"
+
+          # `bg status` is the whole probe; $1 is all it takes to decide.
+          cat > "${RIOTBOX_GIT_AI_BIN}" <<'EOF'
+          #!/bin/sh
+          [ "$1" = "bg" ] && exit "${STUB_BG_CODE:-0}"
+          exit 0
+          EOF
+          chmod +x "${RIOTBOX_GIT_AI_BIN}"
+
+          # shellcheck disable=SC1091
+          . "{{.riotbox_dir}}/container/git-ai-setup.sh"
+
+          STUB_BG_CODE=1 git_ai_check_daemon 2>"${FAKE}/dead" \
+            || { echo "FAIL: a dead daemon aborted the session"; cat "${FAKE}/dead"; exit 1; }
+          grep -qF 'commits will not be attributed' "${FAKE}/dead" \
+            || { echo "FAIL: a dead daemon was not reported"; cat "${FAKE}/dead"; exit 1; }
+
+          STUB_BG_CODE=0 git_ai_check_daemon 2>"${FAKE}/alive"
+          [ ! -s "${FAKE}/alive" ] \
+            || { echo "FAIL: a reachable daemon warned anyway"; cat "${FAKE}/alive"; exit 1; }
+
+          echo "PASS"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PASS"
+
   - name: wiring installs Claude hooks, the opencode plugin and the trace2 target
     steps:
       - type: exec
