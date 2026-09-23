@@ -98,6 +98,7 @@ Info:
   agents                       List registered agents (name + binary)
   tokscale [args...]           Unified tokscale usage across native + riotbox sessions
   git-ai [args...]             Unified git-ai usage across every session store
+  repair-notes [--all]         Reattach orphaned git-ai attribution notes
   ctx-stats [args...]          Context Mode savings recorded across sessions
   doctor                       Verify host setup (preflight checks)
   version                      Show the current version
@@ -203,6 +204,17 @@ print_command_help() {
 		echo ""
 		echo "Attribution itself needs none of this: git ai log/blame/stats read"
 		echo "refs/notes/ai straight out of the repo."
+		;;
+	repair-notes)
+		echo "Usage: riotbox repair-notes [--all] [--force]"
+		echo ""
+		echo "Reattach orphaned git-ai attribution notes to the commits that"
+		echo "replaced them, after a rewrite git could not carry them across."
+		echo "Matches on content alone: identical tree, then identical patch,"
+		echo "then per-file byte identity for squashes."
+		echo "  riotbox repair-notes                  # repair the current branch"
+		echo "  riotbox repair-notes --all            # every local branch and tag"
+		echo "  riotbox repair-notes --force          # no confirmation prompt"
 		;;
 	tokscale)
 		echo "Usage: riotbox tokscale [tokscale args...]"
@@ -341,6 +353,7 @@ checkpoint-tag) exec "${LIBEXEC}/checkpoints.sh" tag "$@" ;;
 checkpoint-prune) exec "${LIBEXEC}/checkpoints.sh" prune "$@" ;;
 
 reown) exec "${SCRIPTS}/reown-commits.sh" "$@" ;;
+repair-notes) exec "${SCRIPTS}/repair-ai-notes.sh" "$@" ;;
 install-hooks) exec "${LIBEXEC}/install-hooks.sh" "$@" ;;
 mounts)
 	# Two groups, surfaced together so the output matches what a real

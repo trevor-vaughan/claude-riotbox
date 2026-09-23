@@ -218,6 +218,7 @@ the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent na
 | `riotbox tokscale [args...]`          | Unified [tokscale](https://github.com/IvGolovach/tokscale) usage across your native agent home + every riotbox session, offline (no telemetry); args pass through to tokscale                     |
 | `riotbox ctx-stats [args...]`         | Context Mode savings recorded across sessions, read on the host from the run ledger — see [Context Mode](#context-mode-opt-in)               |
 | `riotbox git-ai [args...]`            | Unified [git-ai](https://usegitai.com/) usage merged across every session store plus your own `~/.git-ai` — see [AI-authorship attribution](#ai-authorship-attribution-git-ai)                     |
+| `riotbox repair-notes [--all]`        | Reattach orphaned git-ai attribution notes to the commits that replaced them after a history rewrite — see [AI-authorship attribution](#ai-authorship-attribution-git-ai) |
 | `riotbox doctor`                      | Walks every preflight check; prints each result with a fix hint. Exits with the first failure's code (0 on full pass).                      |
 
 ## Pre-installed tools
@@ -609,6 +610,29 @@ What lands where:
   `filter-repo` pass — filter-repo is neither `rebase` nor `amend`, so git's own
   machinery never fires for it. Without the config, a rebase orphans every note
   before `reown` can help.
+- **What goes wrong beyond that.** `notes.rewriteRef` only carries notes across
+  `rebase` and `commit --amend`. A cherry-pick, a squash, a `reset --soft` and
+  recommit, or a rebase whose `--exec` amends each commit orphans the note
+  anyway — as does any rewrite done where no git-ai daemon was running to
+  re-derive it. **`riotbox repair-notes`** reattaches what content alone can
+  still prove:
+
+  ```sh
+  riotbox repair-notes            # repair the current branch
+  riotbox repair-notes --all      # every local branch and tag
+  ```
+
+  It matches in order: an identical tree, then an identical `git patch-id`,
+  then per-file byte identity for a squash. A match that is not unique is
+  refused and reported rather than guessed — it will not pick a side of a tie
+  for you. No line range is ever recomputed: a file's entries transpose only
+  where the blob is byte-identical on both sides of the rewrite, which is what
+  keeps the recorded line numbers true, and files that churned contribute
+  nothing and read `unknown`. It never overwrites a commit that already
+  carries a note, because the in-session daemon re-derives notes from its own
+  checkpoint store and does that better than any reconstruction here. It
+  exits non-zero if any orphan is left unrepaired, so it is usable from a
+  script.
 - `git ai stats`, `git ai blame`, `git ai log`, and `git ai show-prompt` need nothing
   but the repository — they read the notes straight out of it, so no store has to be
   shared. The **binary** is a different matter: RiotBox installs git-ai into the
