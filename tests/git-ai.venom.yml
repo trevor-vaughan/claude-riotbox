@@ -237,7 +237,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PASS"
 
-  - name: session config disables telemetry, version checks and auto-updates
+  - name: session config disables telemetry, version checks, auto-updates and prompts-in-notes
     steps:
       - type: exec
         script: |
@@ -274,6 +274,21 @@ testcases:
             || { echo "FAIL: auto updates not disabled"; exit 1; }
           [ "$(jq -r '.feature_flags.daemon_log_upload' "${cfg}")" = "false" ] \
             || { echo "FAIL: daemon log upload not disabled"; exit 1; }
+
+          # Prompt text must never reach refs/notes/ai. The note is the one
+          # git-ai artifact that travels with the repository, so a prompt
+          # embedded there is conversation content a later `git push` can
+          # publish without anyone deciding to. `local` is the enumerated mode
+          # that keeps prompts out of the note; there is no "off".
+          #
+          # Both keys, not just one: prompt_storage is the mode, and
+          # default_prompt_storage is the fallback upstream applies to repos
+          # that are not in include_prompts_in_repositories. Pinning only the
+          # first leaves that fallback on whatever upstream ships.
+          [ "$(jq -r '.prompt_storage' "${cfg}")" = "local" ] \
+            || { echo "FAIL: prompt_storage is not local"; exit 1; }
+          [ "$(jq -r '.default_prompt_storage' "${cfg}")" = "local" ] \
+            || { echo "FAIL: default_prompt_storage is not local"; exit 1; }
 
           # The store records which release wrote it. Phase 3's host-side
           # aggregator reads container-written SQLite DBs and needs to know

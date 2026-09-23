@@ -662,13 +662,29 @@ What lands where:
   *embedded* price table when the row was written. `riotbox git-ai` reads with the
   network removed for this reason; a session container does not.
 
-Prompt records are embedded directly in the note: its JSON body follows the
-`authorship/3.0.0` schema and carries a `prompts` object alongside `sessions`.
-`refs/notes/*` is **not pushed by default** — `git push` ignores it absent
-explicit configuration — so this stays local to your clone unless you push it
-deliberately. Upstream's `exclude_prompts_in_repositories` setting suppresses
-prompt capture per repo if you would rather conversation content never land in a
-note at all.
+**Prompts are kept out of the note.** The `authorship/3.0.0` schema carries a
+`prompts` object alongside `sessions`, and git-ai can populate it with your
+prompt text — the transcript's `user_message` values. The note is the one git-ai
+artifact that travels with the repository, so a prompt embedded there is
+conversation content a later `git push` could publish without anyone deciding
+to. RiotBox therefore pins both `prompt_storage` and `default_prompt_storage` to
+`local`, the mode that keeps prompts out of the note. The second key matters
+because it is the fallback upstream applies to repositories absent from
+`include_prompts_in_repositories`; pinning only the first leaves that path on
+whatever upstream ships.
+
+Two honest limits. Upstream offers no `off` — the modes are `default`, `notes`
+and `local` — so this keeps prompts out of the shared artifact rather than
+stopping capture; prompts may still reach the session-local store, which is
+disposable and wiped by `riotbox reset-session`. And
+`exclude_prompts_in_repositories` is deliberately **not** used: upstream's help
+describes other keys as globs and this one only as "Repos", so there is no
+evidence a `*` entry matches anything, and a setting that looks protective while
+matching nothing is worse than none.
+
+Independently of all this, `refs/notes/*` is **not pushed by default** — `git
+push` ignores it absent explicit configuration — so notes stay in your clone
+unless you push them deliberately.
 
 ## Headroom context compression (opt-in)
 
