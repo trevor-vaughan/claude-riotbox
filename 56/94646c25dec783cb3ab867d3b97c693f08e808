@@ -1,0 +1,27 @@
+Containerfile
+  s_dc332029dee3a0::t_7a6b355a394be3 123-125,152,806,942,997,1000-1002,1153,1643-1645
+README.md
+  s_dc332029dee3a0::t_63c0f93c4c0edb 244
+THREAT_MODEL.md
+  s_dc332029dee3a0::t_8db00c3a4b2e8d 627
+scripts/build.sh
+  s_dc332029dee3a0::t_901c16100db067 58,135
+tests/Containerfile.test
+  s_dc332029dee3a0::t_703b07d406de44 84-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "34bbdc227ed1b3715b1d464d14aff58ca62c24a8",
+  "prompts": {},
+  "sessions": {
+    "s_dc332029dee3a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a22124c1-3b99-48ef-af3e-8507bf48588d",
+        "model": "unknown"
+      },
+      "human_author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
