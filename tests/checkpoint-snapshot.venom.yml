@@ -1337,3 +1337,88 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "add_equivalence_ok=true"
           - result.systemerr ShouldNotContainSubstring "FIXTURE INVALID"
+
+  # git-ai records AI authorship in refs/notes/ai. The backup exists so that
+  # "even if the agent deletes every file and rewrites all history" the work
+  # survives — but it pushed heads, tags and checkpoint snapshots only, so the
+  # one class of data RiotBox itself generates was the one thing outside the
+  # safety net. Nothing else holds it: notes are not pushed to origin by a
+  # default refspec either, so an unbacked-up notes ref exists in exactly one
+  # place on disk.
+  - name: Attribution notes are backed up with the project
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          human_commit "initial"
+          llm_commit "llm work"
+          git notes --ref=ai add -m "attribution-payload" HEAD
+
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+            RIOTBOX_CHECKPOINT_QUIET=1 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+
+          backup="$(backup_path "${REPO_DIR}")"
+          [ -d "${backup}" ] || { echo "FIXTURE INVALID: no backup at ${backup}"; exit 1; }
+
+          want="$(git -C "${REPO_DIR}" rev-parse refs/notes/ai)"
+          got="$(git --git-dir="${backup}" rev-parse refs/notes/ai 2>/dev/null || echo MISSING)"
+          [ "${got}" = "${want}" ] \
+            || { echo "FAIL: notes ref not backed up (want ${want}, got ${got})"; exit 1; }
+
+          # The note's content must be reachable in the backup, not just the
+          # ref: a ref without its blob is a dangling promise.
+          body="$(git --git-dir="${backup}" notes --ref=ai show "$(git -C "${REPO_DIR}" rev-parse HEAD)" 2>/dev/null || echo MISSING)"
+          [ "${body}" = "attribution-payload" ] \
+            || { echo "FAIL: note content missing from the backup (got: ${body})"; exit 1; }
+
+          echo "notes_backed_up_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "notes_backed_up_ok=true"
+
+  # Notes are legitimately REWRITTEN — every reown remaps them onto new SHAs —
+  # so the notes refspec has to be forced like heads and tags. Left unforced it
+  # would push once and then be rejected forever, silently freezing the backup
+  # at whatever the attribution looked like before the user's first reown.
+  - name: A rewritten notes ref replaces the backed-up one
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          human_commit "initial"
+          llm_commit "llm work"
+          git notes --ref=ai add -m "first" HEAD
+
+          run_checkpoint() {
+            ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+              RIOTBOX_CHECKPOINT_QUIET=1 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1
+          }
+          run_checkpoint
+
+          # Replace the note, as a remap does: same commit, new note object,
+          # and a notes ref whose history does not fast-forward.
+          git notes --ref=ai remove HEAD >/dev/null 2>&1
+          git notes --ref=ai add -m "second" HEAD
+
+          # Checkpoint refs are named to the second, and a second launch in the
+          # same second aborts the project before it ever reaches the backup
+          # push — the collision guard doing its job. Without this wait the
+          # case fails on the fixture rather than on the refspec under test.
+          sleep 1
+          run_checkpoint
+
+          backup="$(backup_path "${REPO_DIR}")"
+          body="$(git --git-dir="${backup}" notes --ref=ai show "$(git -C "${REPO_DIR}" rev-parse HEAD)" 2>/dev/null || echo MISSING)"
+          [ "${body}" = "second" ] \
+            || { echo "FAIL: backup kept the stale note (got: ${body})"; exit 1; }
+
+          echo "notes_rewrite_backed_up_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "notes_rewrite_backed_up_ok=true"

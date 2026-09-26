@@ -865,3 +865,192 @@ testcases:
           - result.systemout ShouldContainSubstring "RC=1"
           - result.systemout ShouldContainSubstring "git-filter-repo is not installed"
           - result.systemout ShouldContainSubstring "pip install git-filter-repo"
+
+  # -- git-ai attribution notes (refs/notes/ai) --
+  #
+  # reown scopes filter-repo to `<ref>..refs/heads/<branch>`, so refs/notes/ai
+  # is outside the rewritten ref set and every note is left pointing at a
+  # pre-rewrite SHA. git-ai attribution is on by default and reown is the
+  # documented way to take ownership of a session's work, so without the remap
+  # a user loses all attribution the first time they finish a piece of work.
+  #
+  # Notes are keyed by the commit they annotate, so "following the commit" is
+  # the whole contract: same content, new SHA, and nothing touched outside the
+  # rewritten range.
+  - name: Notes on refs/notes/ai follow their commits through a reown
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          human_commit "initial"
+          human_sha="$(git rev-parse HEAD)"
+          git notes --ref=ai add -m "note-human" "${human_sha}"
+
+          llm_commit "llm work one"
+          git notes --ref=ai add -m "note-one" HEAD
+          llm_commit "llm work two"
+          git notes --ref=ai add -m "note-two" HEAD
+
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
+
+          # Correlate old to new by subject: reown rewrites identity, never
+          # the message, so the subject is the stable handle across the
+          # rewrite. Reading the SHA back out of the log is also what proves
+          # the rewrite happened at all.
+          sha_of() {
+            git log --format='%H%x09%s' | grep -F "$(printf '\t%s' "$1")" | head -1 | cut -f1
+          }
+
+          new_one="$(sha_of 'llm work one')"
+          new_two="$(sha_of 'llm work two')"
+          [ -n "${new_one}" ] && [ -n "${new_two}" ] \
+            || { echo "FIXTURE INVALID: rewritten commits not found by subject"; exit 1; }
+
+          got_one="$(git notes --ref=ai show "${new_one}" 2>/dev/null || echo MISSING)"
+          got_two="$(git notes --ref=ai show "${new_two}" 2>/dev/null || echo MISSING)"
+          [ "${got_one}" = "note-one" ] \
+            || { echo "FAIL: note did not follow 'llm work one' (got: ${got_one})"; exit 1; }
+          [ "${got_two}" = "note-two" ] \
+            || { echo "FAIL: note did not follow 'llm work two' (got: ${got_two})"; exit 1; }
+
+          # The human commit is outside the rewritten range: its SHA is
+          # unchanged, so its note must be left exactly as it was rather than
+          # re-added or dropped by the remap.
+          [ "$(git rev-parse HEAD~2)" = "${human_sha}" ] \
+            || { echo "FIXTURE INVALID: the human commit was rewritten too"; exit 1; }
+          got_human="$(git notes --ref=ai show "${human_sha}" 2>/dev/null || echo MISSING)"
+          [ "${got_human}" = "note-human" ] \
+            || { echo "FAIL: an unrewritten note was disturbed (got: ${got_human})"; exit 1; }
+
+          # No orphans left behind: three commits carried notes going in, and
+          # exactly three notes must exist coming out. A remap that copied
+          # instead of moving would pass every check above and fail this one.
+          n="$(git notes --ref=ai list | wc -l)"
+          [ "${n}" -eq 3 ] \
+            || { echo "FAIL: expected 3 notes after remap, found ${n}"; git notes --ref=ai list; exit 1; }
+
+          echo "notes_followed_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "notes_followed_ok=true"
+
+  # Pass 2 rewrites every SHA a second time. `git rebase --exec 'git commit
+  # --amend -S'` re-signs each commit in the range, and amending changes the
+  # commit object, so a remap that runs against Pass 1's commit-map alone
+  # leaves the notes pointing at the intermediate SHAs — correct for the
+  # unsigned majority and silently broken for anyone who signs their commits.
+  # filter-repo's commit-map does not and cannot describe that second rewrite.
+  - name: Notes survive the GPG re-signing pass
+    steps:
+      - type: exec
+        script: |
+          command -v gpg &>/dev/null || { echo "SKIP gpg not installed"; exit 0; }
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export GNUPGHOME="${TEST_DIR}/gnupg"
+          mkdir -p "${GNUPGHOME}"
+          chmod 700 "${GNUPGHOME}"
+          gpg --batch --pinentry-mode loopback --passphrase '' \
+              --quick-generate-key "Test User <${HUMAN_EMAIL}>" default default never 2>/dev/null
+          key_fp="$(gpg --list-keys --with-colons "${HUMAN_EMAIL}" 2>/dev/null \
+              | awk -F: '/^fpr:/ { print $10; exit }')"
+          [ -n "${key_fp}" ] || { echo "SKIP failed to generate GPG key"; exit 0; }
+
+          human_commit "initial"
+          llm_commit "signed llm work"
+          git notes --ref=ai add -m "note-signed" HEAD
+
+          git config user.signingkey "${key_fp}"
+          git config commit.gpgsign true
+          git config gpg.program gpg
+
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force
+
+          # Prove Pass 2 actually ran, or this case would pass for the wrong
+          # reason on a host where signing silently no-ops.
+          sig_status="$(git log -1 --format='%G?')"
+          [ "${sig_status}" != "N" ] \
+            || { echo "FIXTURE INVALID: commits are unsigned, Pass 2 did not run"; exit 1; }
+
+          got="$(git notes --ref=ai show HEAD 2>/dev/null || echo MISSING)"
+          [ "${got}" = "note-signed" ] \
+            || { echo "FAIL: the note did not survive re-signing (got: ${got})"; exit 1; }
+
+          n="$(git notes --ref=ai list | wc -l)"
+          [ "${n}" -eq 1 ] \
+            || { echo "FAIL: expected 1 note after remap, found ${n}"; git notes --ref=ai list; exit 1; }
+
+          echo "notes_survived_signing_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "notes_survived_signing_ok=true"
+
+  # The remap above saves the notes through reown's own rewrite. It cannot save
+  # them through the rebase the user did first: those notes are already on dead
+  # SHAs that filter-repo's commit-map has never heard of, so they are skipped
+  # and the attribution stays lost. git carries notes across a rebase by itself,
+  # but only for refs listed in notes.rewriteRef, which defaults to
+  # refs/notes/commits. reown is the last point in the workflow where anyone is
+  # looking, so it is where the gap gets named.
+  - name: Reown warns when notes.rewriteRef does not cover refs/notes/ai
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          human_commit "initial"
+          llm_commit "llm work"
+          git notes --ref=ai add -m "note" HEAD
+
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>"${TEST_DIR}/err" >/dev/null
+
+          grep -qF 'notes.rewriteRef' "${TEST_DIR}/err" \
+            || { echo "FAIL: the rebase gap was not reported"; cat "${TEST_DIR}/err"; exit 1; }
+          # The warning has to carry the fix, not just the diagnosis.
+          grep -qF 'refs/notes/*' "${TEST_DIR}/err" \
+            || { echo "FAIL: the warning does not name the value to set"; cat "${TEST_DIR}/err"; exit 1; }
+
+          echo "rewrite_ref_warning_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "rewrite_ref_warning_ok=true"
+
+  # The other half of that contract. A warning that fires when the user has
+  # already done the thing is noise, and noise is what gets warnings ignored.
+  - name: Reown is silent about notes.rewriteRef once it covers refs/notes/ai
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          git config notes.rewriteRef 'refs/notes/*'
+          human_commit "initial"
+          llm_commit "llm work"
+          git notes --ref=ai add -m "note" HEAD
+
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>"${TEST_DIR}/err" >/dev/null
+
+          ! grep -qF 'notes.rewriteRef' "${TEST_DIR}/err" \
+            || { echo "FAIL: warned despite a covering config"; cat "${TEST_DIR}/err"; exit 1; }
+
+          # A repo that never used git-ai has no attribution to lose, so the
+          # warning must not fire there either.
+          init_test_repo
+          human_commit "initial"
+          llm_commit "llm work"
+          "{{.riotbox_dir}}/scripts/reown-commits.sh" --force 2>"${TEST_DIR}/err2" >/dev/null
+          ! grep -qF 'notes.rewriteRef' "${TEST_DIR}/err2" \
+            || { echo "FAIL: warned in a repo with no attribution notes"; cat "${TEST_DIR}/err2"; exit 1; }
+
+          echo "no_spurious_warning_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "no_spurious_warning_ok=true"

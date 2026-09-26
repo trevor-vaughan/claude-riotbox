@@ -1,0 +1,115 @@
+name: install-hooks — host-side authorship setup
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# git carries notes across `rebase` and `commit --amend` on its own, but
+# notes.rewriteRef defaults to refs/notes/commits — so refs/notes/ai, where
+# git-ai records AI authorship, is excluded and a rebase orphans it. The
+# documented workflow is to rebase and then reown locally, which means the
+# rebase destroys attribution before reown ever sees it.
+#
+# install-hooks is where this belongs: it already exists to arm the authorship
+# workflow (the pre-push guard that blocks un-reowned commits), and it already
+# distinguishes repo scope from `global`, which is the same split `git config`
+# needs. These cases cover only the notes config; the pre-push hook behaviour
+# this script also has predates them and is not retrofitted here.
+testcases:
+  - name: Sets notes.rewriteRef when the repo has none
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          ROOT_DIR="{{.riotbox_dir}}" bash "{{.riotbox_dir}}/libexec/install-hooks.sh" >/dev/null
+
+          # The glob, not refs/notes/ai: setting this key REPLACES git's
+          # default of refs/notes/commits, so naming only the ai ref would
+          # silently stop carrying the user's own notes across rebases.
+          got="$(git config --get-all notes.rewriteRef | paste -sd, -)"
+          [ "${got}" = "refs/notes/*" ] \
+            || { echo "FAIL: expected refs/notes/*, got '${got}'"; exit 1; }
+
+          echo "notes_ref_set_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "notes_ref_set_ok=true"
+
+  - name: Leaves a config that already covers refs/notes/ai untouched
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          # An exact ref, not the glob: this is a user who configured the ai
+          # ref deliberately and must not have a second entry appended.
+          git config notes.rewriteRef 'refs/notes/ai'
+
+          ROOT_DIR="{{.riotbox_dir}}" bash "{{.riotbox_dir}}/libexec/install-hooks.sh" >/dev/null
+
+          got="$(git config --get-all notes.rewriteRef | paste -sd, -)"
+          [ "${got}" = "refs/notes/ai" ] \
+            || { echo "FAIL: an already-covering config was modified, got '${got}'"; exit 1; }
+
+          echo "existing_cover_untouched_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "existing_cover_untouched_ok=true"
+
+  - name: Adds refs/notes/ai beside a value that does not cover it
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+
+          # A user who set the key for their own notes. Overwriting it would
+          # stop those notes surviving a rebase, so the ai ref is appended to
+          # the multivar rather than replacing what is there.
+          git config notes.rewriteRef 'refs/notes/commits'
+
+          ROOT_DIR="{{.riotbox_dir}}" bash "{{.riotbox_dir}}/libexec/install-hooks.sh" >/dev/null
+
+          git config --get-all notes.rewriteRef | grep -qx 'refs/notes/commits' \
+            || { echo "FAIL: the user's own value was lost"; git config --get-all notes.rewriteRef; exit 1; }
+          git config --get-all notes.rewriteRef | grep -qx 'refs/notes/ai' \
+            || { echo "FAIL: refs/notes/ai was not added"; git config --get-all notes.rewriteRef; exit 1; }
+
+          echo "appended_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "appended_ok=true"
+
+  - name: global scope writes the global config and not the repo
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # `global` also sets core.hooksPath under ~/.config/git/hooks, so
+          # HOME is redirected or the run writes into the caller's home.
+          export HOME="${TEST_DIR}/home"
+          mkdir -p "${HOME}"
+
+          ROOT_DIR="{{.riotbox_dir}}" bash "{{.riotbox_dir}}/libexec/install-hooks.sh" global >/dev/null
+
+          got="$(git config --global --get-all notes.rewriteRef | paste -sd, -)"
+          [ "${got}" = "refs/notes/*" ] \
+            || { echo "FAIL: global config not set, got '${got}'"; exit 1; }
+
+          # A global install must not also pin the value into this one repo —
+          # that would survive the user later changing their global choice.
+          local_got="$(git config --local --get-all notes.rewriteRef | paste -sd, - || true)"
+          [ -z "${local_got}" ] \
+            || { echo "FAIL: global scope also wrote the repo config: '${local_got}'"; exit 1; }
+
+          echo "global_scope_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "global_scope_ok=true"

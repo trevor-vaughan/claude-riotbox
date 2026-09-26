@@ -37,6 +37,13 @@ venom.*.log
 # tree; never commit.
 .codegraph/
 
+# lola's per-project module cache — extracted copies of upstream skill repos
+# that `lola mod add` writes into the working directory. Tens of megabytes of
+# third-party source; never project code, never commit. Unlike CodeGraph, lola
+# writes no self-ignore, so without this rule it shows up untracked in every
+# checkout someone has added a module in.
+.lola/
+
 # Scratch space for spikes / one-off experiments
 tmp/
 

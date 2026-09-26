@@ -217,6 +217,8 @@ the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent na
 | `riotbox agents`                      | List registered agents (riotbox name + binary)                                                                                              |
 | `riotbox tokscale [args...]`          | Unified [tokscale](https://github.com/IvGolovach/tokscale) usage across your native agent home + every riotbox session, offline (no telemetry); args pass through to tokscale                     |
 | `riotbox ctx-stats [args...]`         | Context Mode savings recorded across sessions, read on the host from the run ledger — see [Context Mode](#context-mode-opt-in)               |
+| `riotbox git-ai [args...]`            | Unified [git-ai](https://usegitai.com/) usage merged across every session store plus your own `~/.git-ai` — see [AI-authorship attribution](#ai-authorship-attribution-git-ai)                     |
+| `riotbox repair-notes [--all]`        | Reattach orphaned git-ai attribution notes to the commits that replaced them after a history rewrite — see [AI-authorship attribution](#ai-authorship-attribution-git-ai) |
 | `riotbox doctor`                      | Walks every preflight check; prints each result with a fix hint. Exits with the first failure's code (0 on full pass).                      |
 
 ## Pre-installed tools
@@ -574,6 +576,14 @@ riotbox install-hooks global
 
 The hook checks the push range for any container-identity commits and aborts the push with a hint to run `riotbox reown` if it finds any. Existing hook managers (lefthook, husky, pre-commit) are detected and a snippet is printed so you can chain the RiotBox hook from your manager's config. `riotbox install-hooks --help` lists the options.
 
+`install-hooks` also sets **`notes.rewriteRef`**, which is what keeps [git-ai attribution](#ai-authorship-attribution-git-ai) alive through the rewrites this workflow depends on. git carries notes across `rebase` and `commit --amend` on its own, but only for the refs that key names — and it defaults to `refs/notes/commits`, leaving `refs/notes/ai` out. Rebase before reowning, as most people do, and every attribution note is orphaned before `reown` runs, where nothing can recover it. The value written is the glob:
+
+```sh
+git config --global notes.rewriteRef 'refs/notes/*'
+```
+
+Use the glob rather than `refs/notes/ai`: setting this key **replaces** git's default instead of adding to it, so naming only the git-ai ref would silently stop carrying your own `git notes` across rebases. An existing value that already covers `refs/notes/ai` is left alone; any other existing value is appended to, never overwritten. `reown` warns if it finds the key unset in a repo that has attribution notes.
+
 ## AI-authorship attribution (git-ai)
 
 RiotBox ships [git-ai](https://usegitai.com/) and wires it into every session
@@ -593,21 +603,112 @@ What lands where:
 - Attribution lands in **`refs/notes/ai`** in your repo — not `refs/notes/git-ai`.
   Because the repo is bind-mounted, the notes reach the host with the rest of your
   commits; nothing extra has to be shared.
-- `git ai stats`, `git ai blame`, `git ai log`, and `git ai show-prompt` work on the
-  host with no extra setup — they read the notes straight out of the repository.
-- The daemon's own analytics store (`~/.git-ai` in-container, bind-mounted from the
-  session directory) is **session-local**, so `git ai usage` and `git ai analyze`
-  reflect one session's activity.
-- RiotBox disables telemetry, version checks, auto-updates, and daemon log upload
-  before the daemon ever starts.
+- **Notes are keyed by commit SHA, so every history rewrite has to carry them.**
+  Two mechanisms cover the two rewrites in the usual workflow, and both are
+  needed: `notes.rewriteRef` (set by [`riotbox install-hooks`](#reclaiming-authorship))
+  covers your `rebase`, and `riotbox reown` remaps them itself across its
+  `filter-repo` pass — filter-repo is neither `rebase` nor `amend`, so git's own
+  machinery never fires for it. Without the config, a rebase orphans every note
+  before `reown` can help.
+- **What goes wrong beyond that.** `notes.rewriteRef` only carries notes across
+  `rebase` and `commit --amend`. A cherry-pick, a squash, a `reset --soft` and
+  recommit, or a rebase whose `--exec` amends each commit orphans the note
+  anyway — as does any rewrite done where no git-ai daemon was running to
+  re-derive it. **`riotbox repair-notes`** reattaches what content alone can
+  still prove:
 
-Prompt records are embedded directly in the note: its JSON body follows the
-`authorship/3.0.0` schema and carries a `prompts` object alongside `sessions`.
-`refs/notes/*` is **not pushed by default** — `git push` ignores it absent
-explicit configuration — so this stays local to your clone unless you push it
-deliberately. Upstream's `exclude_prompts_in_repositories` setting suppresses
-prompt capture per repo if you would rather conversation content never land in a
-note at all.
+  ```sh
+  riotbox repair-notes            # repair the current branch
+  riotbox repair-notes --all      # every local branch and tag
+  ```
+
+  It matches in order: an identical tree, then an identical `git patch-id`,
+  then per-file byte identity for a squash. A match that is not unique is
+  refused and reported rather than guessed — it will not pick a side of a tie
+  for you. No line range is ever recomputed: a file's entries transpose only
+  where the blob is byte-identical on both sides of the rewrite, which is what
+  keeps the recorded line numbers true, and files that churned contribute
+  nothing and read `unknown`. It never overwrites a commit that already
+  carries a note, because the in-session daemon re-derives notes from its own
+  checkpoint store and does that better than any reconstruction here. It
+  exits non-zero if any orphan is left unrepaired, so it is usable from a
+  script.
+- `git ai stats`, `git ai blame`, `git ai log`, and `git ai show-prompt` need nothing
+  but the repository — they read the notes straight out of it, so no store has to be
+  shared. The **binary** is a different matter: RiotBox installs git-ai into the
+  image, never onto the host, so these verbs run there only if you have installed
+  git-ai on the host yourself. Until you do, the host answers every one of them with
+  `git: 'ai' is not a git command` — which looks like missing attribution and is not.
+- The daemon's own analytics store (`~/.git-ai` in-container, bind-mounted from
+  `~/.local/share/riotbox/<session>/git-ai`) is **session-local**, so a bare
+  `git ai usage` on the host reports on the host's own store and sees no session at
+  all. **`riotbox git-ai`** closes that gap — it merges every session store plus
+  your own `~/.git-ai` into one report:
+
+  ```sh
+  riotbox git-ai                 # merged summary, last 30 days
+  riotbox git-ai --period 7d     # narrow the window
+  riotbox git-ai --json          # the merged document
+  riotbox git-ai --list          # which stores exist, and what can read them
+  ```
+
+  Each store is read through a temporary `HOME` holding a **copy**, never the
+  store itself. Reading is not read-only for git-ai — it creates its metrics DB
+  and caches a pricing catalogue under `$HOME/.git-ai` — so reading in place
+  would make every report mutate the sessions it reports on, archived ones
+  included. Reflink makes the copy near-free where the filesystem supports it,
+  and only one store is copied at a time. Stores are still read where they live
+  rather than registered anywhere, so a `riotbox reset-session` drops that
+  session from the report.
+
+  The read also runs with **no network** (`unshare -rn`, the same rule
+  [`riotbox tokscale`](#commands) applies). git-ai fetches a models.dev pricing
+  catalogue at runtime and offers no setting to stop it — see the note below.
+  Every row already carries its cost priced at the time it was written, so
+  removing the network leaves every reported figure identical.
+
+  Each store records the git-ai release that wrote it in `.riotbox-version`, and
+  that release is the correct reader for its SQLite files, so stores are grouped by
+  version. A group with no matching binary is **named and skipped** rather than read
+  with a mismatched one, as is a store with no stamp at all. Resolution order per
+  group is `$GIT_AI_BIN`, a previously cached binary, a matching `git-ai` on `PATH`,
+  then a one-time download verified against the release `SHA256SUMS`. Set
+  `RIOTBOX_GIT_AI_NO_FETCH=1` to refuse that download.
+
+  `git ai analyze` has no `--json`, so there is nothing machine-readable to merge; it
+  stays a per-session command.
+- RiotBox disables telemetry, version checks, auto-updates, and daemon log upload
+  before the daemon ever starts. **That is not the same as offline.** git-ai also
+  fetches a [models.dev](https://models.dev) pricing catalogue at runtime, into
+  `~/.git-ai/internal/models_dev_pricing.json`, and exposes no config key to
+  disable it — the four settings above do not cover it. Commit and token figures
+  do not depend on it: each usage row stores the cost computed from the release's
+  *embedded* price table when the row was written. `riotbox git-ai` reads with the
+  network removed for this reason; a session container does not.
+
+**Prompts are kept out of the note.** The `authorship/3.0.0` schema carries a
+`prompts` object alongside `sessions`, and git-ai can populate it with your
+prompt text — the transcript's `user_message` values. The note is the one git-ai
+artifact that travels with the repository, so a prompt embedded there is
+conversation content a later `git push` could publish without anyone deciding
+to. RiotBox therefore pins both `prompt_storage` and `default_prompt_storage` to
+`local`, the mode that keeps prompts out of the note. The second key matters
+because it is the fallback upstream applies to repositories absent from
+`include_prompts_in_repositories`; pinning only the first leaves that path on
+whatever upstream ships.
+
+Two honest limits. Upstream offers no `off` — the modes are `default`, `notes`
+and `local` — so this keeps prompts out of the shared artifact rather than
+stopping capture; prompts may still reach the session-local store, which is
+disposable and wiped by `riotbox reset-session`. And
+`exclude_prompts_in_repositories` is deliberately **not** used: upstream's help
+describes other keys as globs and this one only as "Repos", so there is no
+evidence a `*` entry matches anything, and a setting that looks protective while
+matching nothing is worse than none.
+
+Independently of all this, `refs/notes/*` is **not pushed by default** — `git
+push` ignores it absent explicit configuration — so notes stay in your clone
+unless you push them deliberately.
 
 ## Headroom context compression (opt-in)
 
@@ -1284,12 +1385,12 @@ The agent runs autonomously with full write access to your project directory and
 
 RiotBox includes several layers of protection, but none are foolproof:
 
-- **Local bare backup**: Before every read-write session (`run`, `shell`, `resume`, and the `nested-`/`socket-` variants), every branch, tag and checkpoint snapshot is pushed to a bare clone under `~/.local/share/riotbox/backups/`. The store is named after the project's full path with each `/` turned into `-`, so `/home/you/work/my-project` is backed up to `home-you-work-my-project.git` and two projects that share a basename never share a store. It is cloned with `--no-hardlinks --dissociate`, so it shares no objects with the project, and it lives outside the container's mount tree — the agent cannot access or modify it. Even if the agent deletes every file and rewrites all history, the backup is intact.
+- **Local bare backup**: Before every read-write session (`run`, `shell`, `resume`, and the `nested-`/`socket-` variants), every branch, tag, git-notes ref and checkpoint snapshot is pushed to a bare clone under `~/.local/share/riotbox/backups/`. Notes are included because [git-ai attribution](#ai-authorship-attribution-git-ai) lives in `refs/notes/ai`, which is outside git's default push refspec and so exists in only one place on disk otherwise; like branches and tags they are force-pushed, since a `riotbox reown` legitimately rewrites them. The store is named after the project's full path with each `/` turned into `-`, so `/home/you/work/my-project` is backed up to `home-you-work-my-project.git` and two projects that share a basename never share a store. It is cloned with `--no-hardlinks --dissociate`, so it shares no objects with the project, and it lives outside the container's mount tree — the agent cannot access or modify it. Even if the agent deletes every file and rewrites all history, the backup is intact.
 - **Checkpoint snapshots**: Before each session RiotBox writes a snapshot of the project — tracked, staged, unstaged and untracked files alike — to `refs/riotbox/checkpoints/<timestamp>`. It is built in a throwaway index and sealed with `git commit-tree`, so **nothing is committed to your branch, no tag is created, and your working tree, index and HEAD are left exactly as they were.** Because the ref lives outside `refs/heads` and `refs/tags`, it never appears in `git tag`, never affects `git describe`, and is never published by `git push --tags` (or `git push --all`). One place git does surface it: `--all` means every ref under `refs/`, so `git log --all`, `gitk --all` and any GUI defaulting to all refs show the snapshot *commits* — undecorated, with no ref name attached, because no branch or tag points at them. Nothing in git names the snapshots, which is what `riotbox checkpoints` is for. See [Recovery](#recovery).
 - **Session branches**: On `shell` sessions, the container offers to create a `riotbox/<id>` branch. The agent works there; on exit the branch is fast-forward merged back so the full commit history lands seamlessly on your branch. See [Session branches](#session-branches).
 - **Git repo bootstrapping**: If a project directory isn't a git repo, RiotBox offers to create one so the checkpoint mechanism has something to protect. Empty repos (no commits yet) are handled gracefully — see [Initializing a git repo](#initializing-a-git-repo).
 - **Managed `.git/info/exclude` block**: Before each snapshot, RiotBox injects a managed block into the project's `.git/info/exclude` file so three classes of file are never swept into a snapshot or pushed to the backup:
-  - **Runtime artifacts** — `.headroom/`, `.codegraph/`, `.claude/settings.local.json`, `CLAUDE.local.md`, `venom.log`, `venom.*.log`.
+  - **Runtime artifacts** — `.headroom/`, `.codegraph/`, `.lola/`, `.claude/settings.local.json`, `CLAUDE.local.md`, `venom.log`, `venom.*.log`.
   - **Dependency and build trees** — `node_modules/`, `.venv/`, `venv/`, `__pycache__/`, `target/`, `.next/`, `.nuxt/`, `vendor/`, `.gradle/`, `.m2/`, `Pods/`, `.terraform/`, `*.egg-info/`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`. These are reproducible from a lockfile and cost real time and disk: one unignored `node_modules` measured 3.4 s and an 83 MB backup on *every* launch, against 70 ms and 8 KB with it excluded. `dist/` and `build/` are deliberately **not** excluded — they are real source directories often enough that guessing would be worse.
   - **Secrets** — `.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `.npmrc`, `.netrc`, `*.p12`, `*.pfx`. A snapshot is copied to the off-host backup, so a credential the project forgot to gitignore would otherwise be copied out of the project on every launch.
 

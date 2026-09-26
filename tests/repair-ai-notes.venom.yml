@@ -1,0 +1,408 @@
+name: repair-ai-notes.sh tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  helpers: "{{.root}}/tests/lib/git-test-helpers.sh"
+
+testcases:
+  # -- Nothing to do --
+
+  - name: Reports nothing to repair when there are no notes
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --force
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Nothing to repair"
+
+  - name: Reports nothing to repair when every note is still attached
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          llm_commit "feature"
+          attach_ai_note HEAD history.txt 2
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --force
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Nothing to repair"
+
+  - name: Rejects an unknown option
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --bogus
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "Unknown option"
+
+  - name: Refuses to run outside a git repository
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${WORK_DIR}"
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --force
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "not inside a git repository"
+
+  # -- Pass 1: identical tree --
+
+  - name: Moves a note onto a reworded commit and clears the orphan
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          llm_commit "feature"
+          old="$(git rev-parse HEAD)"
+          attach_ai_note "${old}" history.txt 2
+          git commit -q --amend -m "feature, reworded"
+          new="$(git rev-parse HEAD)"
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --force
+          echo "new_paths=$(ai_note_paths "${new}" | tr '\n' ',')"
+          if git notes --ref=ai show "${old}" >/dev/null 2>&1; then
+            echo "orphan_still_present"
+            exit 1
+          fi
+          echo "orphan_cleared=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "new_paths=history.txt,"
+          - result.systemout ShouldContainSubstring "orphan_cleared=true"
+
+  - name: Refuses an ambiguous tree tie that eligibility filtering would have hidden
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          llm_commit "feature"
+          old="$(git rev-parse HEAD)"
+          attach_ai_note "${old}" history.txt 2
+          git commit -q --amend -m "feature, reworded"
+          new1="$(git rev-parse HEAD)"
+          attach_ai_note "${new1}" history.txt 2
+          tree="$(git rev-parse "${new1}^{tree}")"
+          new2="$(git commit-tree "${tree}" -p "${new1}" -m "unrelated commit with the same tree")"
+          git update-ref refs/heads/main "${new2}"
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --force || true
+          echo "orphan_kept=$(git notes --ref=ai show "${old}" >/dev/null 2>&1 && echo yes || echo no)"
+          echo "wrong_target_note=$(git notes --ref=ai show "${new2}" >/dev/null 2>&1 && echo yes || echo no)"
+          echo "true_target_note=$(ai_note_paths "${new1}" | tr '\n' ',')"
+        assertions:
+          # The defect this guards is a note landing on a commit that did not
+          # produce it. Assert that guarantee, not the wording of the refusal:
+          # a later pass may legitimately resolve a tie an earlier pass refused,
+          # which changes the message while leaving the guarantee intact.
+          - result.systemout ShouldContainSubstring "orphan_kept=yes"
+          - result.systemout ShouldContainSubstring "wrong_target_note=no"
+          - result.systemout ShouldNotContainSubstring "Repaired 1 of"
+
+  - name: Refuses a unique match whose destination already carries a note
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          llm_commit "feature"
+          old="$(git rev-parse HEAD)"
+          attach_ai_note "${old}" history.txt 2
+          git commit -q --amend -m "feature, reworded"
+          new="$(git rev-parse HEAD)"
+          attach_ai_note "${new}" history.txt 2
+          before="$(git notes --ref=ai show "${new}")"
+          if "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --force; then
+            code=0
+          else
+            code=$?
+          fi
+          after="$(git notes --ref=ai show "${new}")"
+          if [[ "${before}" == "${after}" ]]; then
+            echo "dest_note_unchanged=true"
+          else
+            echo "dest_note_unchanged=false"
+          fi
+          if git notes --ref=ai show "${old}" >/dev/null 2>&1; then
+            echo "orphan_still_present=true"
+          fi
+          exit "${code}"
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldContainSubstring "destination already has a note"
+          - result.systemout ShouldContainSubstring "dest_note_unchanged=true"
+          - result.systemout ShouldContainSubstring "orphan_still_present=true"
+
+  - name: Reports no terminal to confirm on rather than dying silently at EOF
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          llm_commit "feature"
+          old="$(git rev-parse HEAD)"
+          attach_ai_note "${old}" history.txt 2
+          git commit -q --amend -m "feature, reworded"
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" </dev/null
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "no terminal to confirm on"
+
+  - name: Refuses when two orphans match the same commit
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          base="$(git rev-parse HEAD)"
+          # An empty commit shares its parent's tree, so every commit here has
+          # the same tree. Two of them are then orphaned, leaving two orphans
+          # whose evidence points at the same place.
+          git commit -q --allow-empty -m "one"
+          one="$(git rev-parse HEAD)"
+          git commit -q --allow-empty -m "two"
+          two="$(git rev-parse HEAD)"
+          attach_ai_note "${one}" history.txt 1
+          attach_ai_note "${two}" history.txt 1
+          git reset -q --hard "${base}"
+          git commit -q --allow-empty -m "replacement"
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --force || true
+          echo "one_kept=$(git notes --ref=ai show "${one}" >/dev/null 2>&1 && echo yes || echo no)"
+          echo "two_kept=$(git notes --ref=ai show "${two}" >/dev/null 2>&1 && echo yes || echo no)"
+        assertions:
+          - result.systemout ShouldContainSubstring "ambiguous"
+          - result.systemout ShouldContainSubstring "one_kept=yes"
+          - result.systemout ShouldContainSubstring "two_kept=yes"
+
+  # -- Pass 2: identical patch --
+
+  - name: Moves a note onto a commit replayed on a new base
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          git checkout -q -b topic
+          printf 'topic change\n' > topic.txt
+          git add topic.txt
+          # Deliberately NOT llm_commit: that appends to history.txt, which
+          # mainline also edits, and the rebase below would conflict instead of
+          # replaying cleanly.
+          git -c user.name="${LLM_NAME}" -c user.email="${LLM_EMAIL}" commit -qm "topic work"
+          old="$(git rev-parse HEAD)"
+          attach_ai_note "${old}" topic.txt 1
+          git checkout -q main
+          human_commit "mainline moves on"
+          git checkout -q topic
+          git rebase -q main
+          new="$(git rev-parse HEAD)"
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --force
+          echo "new_paths=$(ai_note_paths "${new}" | tr '\n' ',')"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "(patch)"
+          - result.systemout ShouldContainSubstring "new_paths=topic.txt,"
+
+  # -- Pass 3: per-file salvage --
+
+  - name: Salvages the file entries a squash left byte-identical
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          base="$(git rev-parse HEAD)"
+          printf 'kept line\n' > kept.txt
+          git add kept.txt
+          llm_commit "adds kept.txt"
+          first="$(git rev-parse HEAD)"
+          attach_ai_note "${first}" kept.txt 1
+          printf 'first\n' > churned.txt
+          git add churned.txt
+          llm_commit "adds churned.txt"
+          second="$(git rev-parse HEAD)"
+          attach_ai_note "${second}" churned.txt 1
+          # Squash both into one commit whose churned.txt differs from either
+          # source, while kept.txt stays byte-identical to the first commit's.
+          git reset -q --soft "${base}"
+          printf 'first\nsecond\n' > churned.txt
+          git add -A
+          llm_commit "squashed"
+          new="$(git rev-parse HEAD)"
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --force || true
+          echo "salvaged_paths=$(ai_note_paths "${new}" | tr '\n' ',')"
+          # The fuller record stays on the orphans: a partial transpose is not
+          # a move.
+          echo "first_kept=$(git notes --ref=ai show "${first}" >/dev/null 2>&1 && echo yes || echo no)"
+          echo "second_kept=$(git notes --ref=ai show "${second}" >/dev/null 2>&1 && echo yes || echo no)"
+          # The composed JSON must be ONE valid document anchored to the target.
+          git notes --ref=ai show "${new}" | sed -n '/^---$/,$p' | tail -n +2 | jq -e ".base_commit_sha == \"${new}\"" >/dev/null
+          echo "json_ok=true"
+        assertions:
+          - result.systemout ShouldContainSubstring "salvaged_paths=kept.txt,"
+          - result.systemout ShouldNotContainSubstring "churned.txt,"
+          - result.systemout ShouldContainSubstring "first_kept=yes"
+          - result.systemout ShouldContainSubstring "second_kept=yes"
+          - result.systemout ShouldContainSubstring "json_ok=true"
+
+  # A real squash leaves the target's tree identical to its last source commit,
+  # so Pass 1 claims the target for that one orphan. The earlier orphans' entries
+  # must still be salvaged onto it rather than locked out by the claim.
+  - name: Salvages every source of a squash whose tree matches its last commit
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          base="$(git rev-parse HEAD)"
+          printf 'first line\n' > first.txt
+          git add first.txt
+          llm_commit "adds first.txt"
+          first="$(git rev-parse HEAD)"
+          attach_ai_note "${first}" first.txt 1
+          printf 'last line\n' > last.txt
+          git add last.txt
+          llm_commit "adds last.txt"
+          last="$(git rev-parse HEAD)"
+          attach_ai_note "${last}" last.txt 1
+          git reset -q --soft "${base}"
+          git commit -q -m "squashed"
+          new="$(git rev-parse HEAD)"
+          [[ "$(git rev-parse "${new}^{tree}")" = "$(git rev-parse "${last}^{tree}")" ]]
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --force
+          echo "salvaged_paths=$(ai_note_paths "${new}" | sort | tr '\n' ',')"
+          git notes --ref=ai show "${new}" | sed -n '/^---$/,$p' | tail -n +2 | jq -e ".base_commit_sha == \"${new}\"" >/dev/null
+          echo "json_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "salvaged_paths=first.txt,last.txt,"
+          - result.systemout ShouldContainSubstring "json_ok=true"
+
+  # -- Refusals --
+
+  - name: Reports an unmatched orphan and exits non-zero
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          base="$(git rev-parse HEAD)"
+          printf 'gone\n' > gone.txt
+          git add gone.txt
+          llm_commit "work that gets discarded"
+          old="$(git rev-parse HEAD)"
+          attach_ai_note "${old}" gone.txt 1
+          git reset -q --hard "${base}"
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --force
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldContainSubstring "no candidate"
+
+  - name: Names an orphan whose commit was garbage collected
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          base="$(git rev-parse HEAD)"
+          printf 'gone\n' > gone.txt
+          git add gone.txt
+          llm_commit "work that gets discarded"
+          old="$(git rev-parse HEAD)"
+          attach_ai_note "${old}" gone.txt 1
+          git reset -q --hard "${base}"
+          # A note references its commit by FILENAME in the notes tree, not as a
+          # real object link, so gc prunes the commit and leaves the note behind.
+          git reflog expire --expire=now --all
+          git gc --prune=now --quiet
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --force
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldContainSubstring "unrecoverable"
+
+  # -- Confirmation --
+
+  - name: Declining the prompt writes nothing and exits zero
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          llm_commit "feature"
+          old="$(git rev-parse HEAD)"
+          attach_ai_note "${old}" history.txt 2
+          git commit -q --amend -m "feature, reworded"
+          new="$(git rev-parse HEAD)"
+          if run_under_pty "n" "{{.riotbox_dir}}/scripts/repair-ai-notes.sh"; then
+            code=0
+          else
+            code=$?
+          fi
+          echo "exit=${code}"
+          echo "target_has_note=$(git notes --ref=ai show "${new}" >/dev/null 2>&1 && echo yes || echo no)"
+          echo "orphan_kept=$(git notes --ref=ai show "${old}" >/dev/null 2>&1 && echo yes || echo no)"
+        assertions:
+          - result.systemout ShouldContainSubstring "exit=0"
+          - result.systemout ShouldContainSubstring "target_has_note=no"
+          - result.systemout ShouldContainSubstring "orphan_kept=yes"
+
+  - name: Accepting the prompt applies the repair
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          llm_commit "feature"
+          old="$(git rev-parse HEAD)"
+          attach_ai_note "${old}" history.txt 2
+          git commit -q --amend -m "feature, reworded"
+          new="$(git rev-parse HEAD)"
+          if run_under_pty "y" "{{.riotbox_dir}}/scripts/repair-ai-notes.sh"; then
+            code=0
+          else
+            code=$?
+          fi
+          echo "exit=${code}"
+          echo "new_paths=$(ai_note_paths "${new}" | tr '\n' ',')"
+        assertions:
+          - result.systemout ShouldContainSubstring "exit=0"
+          - result.systemout ShouldContainSubstring "new_paths=history.txt,"

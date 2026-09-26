@@ -45,6 +45,23 @@ git_ai_enabled() {
 # version check and the auto-update both violate this image's offline-after-build
 # rule outright; the log upload is a surface nobody asked for.
 #
+# Prompt storage is pinned here too, which is not a network setting but belongs
+# to the same "decide the default, do not inherit it" rule. git-ai can embed the
+# user's prompt text — the transcript's user_message values — directly in the
+# authorship note. The note is the one git-ai artifact that travels with the
+# repository, so a prompt embedded there is conversation content that a later
+# `git push` can publish without anyone deciding to. `local` is the enumerated
+# mode that keeps prompts out of the note; upstream offers no "off", so this is
+# the most restrictive setting available rather than a way to stop capture.
+#
+# Both keys are set. prompt_storage is the mode; default_prompt_storage is the
+# fallback upstream applies to repositories absent from
+# include_prompts_in_repositories, so pinning only the first would leave that
+# path on whatever upstream ships. exclude_prompts_in_repositories is NOT used:
+# upstream's own help calls other keys "globs" and this one only "Repos", so
+# there is no evidence a "*" entry matches anything, and a setting that looks
+# protective while matching nothing is worse than none.
+#
 # `git-ai config set` is used rather than writing JSON directly so upstream owns
 # the file's schema. The result is sparse — only overridden keys are stored.
 git_ai_write_config() {
@@ -52,7 +69,9 @@ git_ai_write_config() {
 	for k in "telemetry_oss off" \
 		"disable_version_checks true" \
 		"disable_auto_updates true" \
-		"feature_flags.daemon_log_upload false"; do
+		"feature_flags.daemon_log_upload false" \
+		"prompt_storage local" \
+		"default_prompt_storage local"; do
 		# Word-splitting is intended: each entry is a key/value pair.
 		# shellcheck disable=SC2086
 		if ! "${RIOTBOX_GIT_AI_BIN}" config set ${k} >/dev/null 2>&1; then

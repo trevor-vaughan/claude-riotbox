@@ -231,6 +231,84 @@ done < <(git remote)
 # shellcheck disable=SC1083  # braces are part of git @{upstream} syntax
 UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name @{upstream} 2>/dev/null || true)"
 
+# ── git-ai attribution notes ────────────────────────────────────────────────
+#
+# git-ai records AI authorship in refs/notes/ai, keyed by the SHA of the commit
+# each note annotates. Both passes below rewrite SHAs, and filter-repo scopes
+# itself to --refs, so the notes ref is never in the rewritten set: without this
+# every note is left pointing at a commit that no longer exists and the
+# attribution silently disappears. Attribution is on by default and reown is the
+# documented way to take ownership of a session's work, so the loss would land
+# on the user at the moment they finish something.
+AI_NOTES_REF="refs/notes/ai"
+
+# remap_ai_notes <map-file>
+#
+# <map-file> is filter-repo's commit-map shape: a "old new" header line followed
+# by one "old new" pair per rewritten commit. Each note is MOVED — copied to the
+# new SHA, removed from the old — so a note is never left behind to be counted
+# twice. A commit absent from the map keeps its note exactly where it is, which
+# is what leaves history outside the rewritten range untouched.
+#
+# Iterates the notes rather than the map: the map holds every commit in the
+# rewritten range, which in an old repo is thousands, while the notes on them
+# are a handful.
+remap_ai_notes() {
+	local map_file="$1"
+	local old new annotated blob notes_list
+	local moved=0
+	local -A commit_map=()
+
+	# Nothing to do in a repo that has never been attributed — the common
+	# case for anyone who does not use git-ai.
+	git rev-parse --verify --quiet "${AI_NOTES_REF}" >/dev/null 2>&1 || return 0
+	[[ -f "${map_file}" ]] || {
+		echo "WARNING: ${map_file} is missing — git-ai attribution notes were not remapped." >&2
+		return 0
+	}
+
+	while read -r old new; do
+		# The header line, and any short/blank line a future
+		# filter-repo might add.
+		[[ "${old}" == "old" ]] && continue
+		[[ -n "${old}" && -n "${new}" ]] || continue
+		commit_map["${old}"]="${new}"
+	done <"${map_file}"
+
+	# Listed into a variable first so a failure of `git notes list` is
+	# visible here rather than masked by the redirection.
+	notes_list="$(git notes --ref="${AI_NOTES_REF}" list)" || {
+		echo "WARNING: could not list ${AI_NOTES_REF} — attribution notes were not remapped." >&2
+		return 0
+	}
+
+	while read -r blob annotated; do
+		: "${blob}" # `git notes list` emits "<note-blob> <annotated-object>"
+		new="${commit_map[${annotated}]:-}"
+		[[ -n "${new}" ]] || continue
+		[[ "${new}" != "${annotated}" ]] || continue
+
+		# filter-repo writes an all-zero target for a commit it dropped.
+		# The note is the only surviving record that the work was
+		# AI-authored, so say so rather than deleting it quietly.
+		if [[ "${new}" =~ ^0+$ ]]; then
+			echo "NOTE: ${annotated} was dropped by the rewrite — its attribution note is left in place." >&2
+			continue
+		fi
+
+		if git notes --ref="${AI_NOTES_REF}" copy -f "${annotated}" "${new}" >/dev/null 2>&1 &&
+			git notes --ref="${AI_NOTES_REF}" remove "${annotated}" >/dev/null 2>&1; then
+			moved=$((moved + 1))
+		else
+			echo "WARNING: could not move the attribution note for ${annotated} to ${new}." >&2
+		fi
+	done <<<"${notes_list}"
+
+	if [[ "${moved}" -gt 0 ]]; then
+		echo "Remapped ${moved} git-ai attribution note(s)."
+	fi
+}
+
 # ── Pass 1: Rewrite author/committer via filter-repo ────────────────────────
 
 MAILMAP="$(mktemp)"
@@ -254,6 +332,9 @@ FILTER_REPO_ARGS=(
 git filter-repo "${FILTER_REPO_ARGS[@]}"
 
 echo "Pass 1 complete."
+
+GIT_DIR_PATH="$(git rev-parse --git-dir)"
+remap_ai_notes "${GIT_DIR_PATH}/filter-repo/commit-map"
 
 # ── Restore remotes ─────────────────────────────────────────────────────────
 
@@ -289,6 +370,18 @@ if [[ "$(git config --bool commit.gpgsign 2>/dev/null)" == "true" ]]; then
 
 		REBASE_ARGS=(--committer-date-is-author-date --exec 'git commit --amend --no-edit -S -n')
 
+		# Amending to add a signature changes the commit object, so this
+		# pass rewrites every SHA a SECOND time and orphans the notes
+		# Pass 1's remap just fixed. filter-repo's commit-map describes
+		# only its own rewrite and cannot describe this one, so the map
+		# is derived by listing the history either side of the rebase.
+		# Whole history rather than the range: the --root branch below
+		# re-signs commits outside TOTAL_IN_RANGE too.
+		PRE_SIGN_SHAS="$(mktemp)"
+		POST_SIGN_SHAS="$(mktemp)"
+		SIGN_MAP="$(mktemp)"
+		git rev-list HEAD >"${PRE_SIGN_SHAS}"
+
 		# Re-verify the upstream ref post-filter-repo: filter-repo only rewrites
 		# commits unique to this branch, so HEAD~N may not exist if the range
 		# abuts or includes the root of the rewritten portion.
@@ -298,11 +391,64 @@ if [[ "$(git config --bool commit.gpgsign 2>/dev/null)" == "true" ]]; then
 			git rebase "${REBASE_ARGS[@]}" --root
 		fi
 
+		git rev-list HEAD >"${POST_SIGN_SHAS}"
+
+		# rebase replays a linear history in order and drops nothing
+		# here, so the two listings correspond index for index. A length
+		# mismatch means that assumption no longer holds; pairing them
+		# anyway would attach every note to the wrong commit, which is
+		# worse than the orphaning this function exists to prevent.
+		if [[ "$(wc -l <"${PRE_SIGN_SHAS}")" -eq "$(wc -l <"${POST_SIGN_SHAS}")" ]]; then
+			{
+				echo "old new"
+				paste -d' ' "${PRE_SIGN_SHAS}" "${POST_SIGN_SHAS}"
+			} >"${SIGN_MAP}"
+			remap_ai_notes "${SIGN_MAP}"
+		else
+			echo "WARNING: the re-signing pass changed the commit count — git-ai attribution notes were left at their pre-signing commits." >&2
+		fi
+		rm -f "${PRE_SIGN_SHAS}" "${POST_SIGN_SHAS}" "${SIGN_MAP}"
+
 		echo "Pass 2 complete. Commits signed with key ${SIGNING_KEY}."
 	fi
 else
 	echo ""
 	echo "GPG signing not enabled — skipping Pass 2."
+fi
+
+# ── Warn when the next rebase will orphan attribution ───────────────────────
+#
+# The remap above carries notes through THIS rewrite. It cannot carry them
+# through a rebase that already happened: those notes sit on SHAs filter-repo
+# never saw, so remap_ai_notes skips them and they stay lost. git will carry
+# them itself across rebase and amend, but only for refs named in
+# notes.rewriteRef, which defaults to refs/notes/commits.
+#
+# Checked here rather than up front because the fix applies to the user's NEXT
+# session, not this one, and this is the point in the workflow where they are
+# still reading output. Silent for repos with no attribution to lose.
+if git rev-parse --verify --quiet "${AI_NOTES_REF}" >/dev/null 2>&1; then
+	NOTES_REFS_RAW="$(git config --get-all notes.rewriteRef 2>/dev/null || true)"
+	NOTES_COVERED=false
+	if [[ -n "${NOTES_REFS_RAW}" ]]; then
+		while IFS= read -r ref; do
+			if [[ "${ref}" = "${AI_NOTES_REF}" || "${ref}" = "refs/notes/*" ]]; then
+				NOTES_COVERED=true
+				break
+			fi
+		done <<<"${NOTES_REFS_RAW}"
+	fi
+	if [[ "${NOTES_COVERED}" = false ]]; then
+		echo "" >&2
+		echo "WARNING: git will not carry ${AI_NOTES_REF} across a rebase." >&2
+		echo "  This run remapped the attribution notes, but a rebase done BEFORE" >&2
+		echo "  reown orphans them first, and nothing downstream can recover them." >&2
+		echo "  Fix it once:" >&2
+		echo "    git config --global notes.rewriteRef 'refs/notes/*'" >&2
+		echo "  Use the glob, not ${AI_NOTES_REF}: setting this key replaces git's" >&2
+		echo "  default of refs/notes/commits instead of adding to it." >&2
+		echo "  Or run: riotbox install-hooks" >&2
+	fi
 fi
 
 echo ""
