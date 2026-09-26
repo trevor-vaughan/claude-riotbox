@@ -1,0 +1,21 @@
+scripts/build.sh
+  s_914969194edc06::t_a8a5f7f5ad585e 58,135
+Containerfile
+  s_914969194edc06::t_a8a5f7f5ad585e 152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f1c38348e79e680060f17cb89b19ff3adf460865",
+  "prompts": {},
+  "sessions": {
+    "s_914969194edc06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f15db4f9-ee37-4020-8032-7faa625a6e3f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
