@@ -81,8 +81,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSfL \
 #
 # amd64 only: this image's venom download is already amd64-only, and upstream
 # names that asset git-ai-linux-x64.
-ARG GIT_AI_VERSION=v1.7.4
-ARG GIT_AI_SHA256_AMD64=1f80c4affa44d9a21667e930b7aa6ac94f7c2f46bf216d7664bab84c7a8b62c2
+ARG GIT_AI_VERSION=v1.7.5
+ARG GIT_AI_SHA256_AMD64=6cf68a83cc948fbd4675e46bc5e3c50973c04257bb43a954a6712a2107206695
 RUN curl --proto '=https' --tlsv1.2 -sSfL \
         -o /tmp/git-ai \
         "https://github.com/git-ai-project/git-ai/releases/download/${GIT_AI_VERSION}/git-ai-linux-x64" && \

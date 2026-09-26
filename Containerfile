@@ -120,9 +120,9 @@ RUN bash -o pipefail -c '\
 #      curl -fsSL https://github.com/git-ai-project/git-ai/releases/download/v<VER>/SHA256SUMS \
 #        | grep -E 'git-ai-linux-(x64|arm64)$'
 #   3. Update GIT_AI_VERSION + GIT_AI_SHA256_AMD64 + GIT_AI_SHA256_ARM64 below
-ARG GIT_AI_VERSION=v1.7.4
-ARG GIT_AI_SHA256_AMD64=1f80c4affa44d9a21667e930b7aa6ac94f7c2f46bf216d7664bab84c7a8b62c2
-ARG GIT_AI_SHA256_ARM64=d6972d11dda038ac5ba245ac91e0f6a1cbcbe5eec136f0578c91b81ec908a0ac
+ARG GIT_AI_VERSION=v1.7.5
+ARG GIT_AI_SHA256_AMD64=6cf68a83cc948fbd4675e46bc5e3c50973c04257bb43a954a6712a2107206695
+ARG GIT_AI_SHA256_ARM64=b340005b4d1c7d4c1c3383d94b092627bced9b4f2f767e2125927c58279cdba9
 RUN bash -o pipefail -c '\
     ARCH=$(uname -m | sed "s/x86_64/amd64/" | sed "s/aarch64/arm64/") && \
     case "${ARCH}" in \
@@ -149,7 +149,7 @@ FROM quay.io/centos/centos:stream10 AS runtime
 # Dockerfile SHELL directive (which OCI image config doesn't support).
 
 # ── Build args (populated by build.sh from host introspection) ────────────────
-ARG NVM_INSTALLER_VERSION=0.40.7
+ARG NVM_INSTALLER_VERSION=0.40.8
 ARG NODE_VERSIONS="20"
 ARG NODE_DEFAULT="20"
 ARG UV_VERSION="latest"
@@ -803,7 +803,7 @@ RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 # an image-wide ENV: in a session the canary is what catches a degraded ONNX
 # runtime before live traffic depends on it, which is the whole reason it
 # exists. tests/headroom.venom.yml pins both halves of that.
-ARG HEADROOM_VERSION=0.36.5
+ARG HEADROOM_VERSION=0.39.0
 RUN pip3 install --user --no-cache-dir --break-system-packages \
         "headroom-ai[proxy,code]==${HEADROOM_VERSION}" && \
     /home/llm/.local/bin/headroom --version && \
@@ -939,7 +939,7 @@ RUN bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && claud
 # config" mkdir, and NPM_CONFIG_CACHE is pinned to it by the "Tool configs"
 # block. Dropping it from that mkdir list fails the first npm layer instead of
 # silently skipping the strip, which is the behaviour to keep.
-ARG CODEGRAPH_VERSION=1.5.0
+ARG CODEGRAPH_VERSION=1.6.0
 RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
     CODEGRAPH_NO_DOWNLOAD=1 codegraph version && \
     codegraph telemetry off && \
@@ -994,12 +994,12 @@ RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
 # amd64/arm64, and each arm sets upstream's asset name beside the digest
 # that goes with it, so the two cannot drift apart. And BUN_VERSION is bare
 # where VENOM_VERSION and GITHUB_MCP_SERVER_VERSION both carry a leading v —
-# `bun --version` prints 1.3.14, so the bare form is what the check at the end
+# `bun --version` prints 1.4.2, so the bare form is what the check at the end
 # can compare against, and the URL puts the v back as part of the
 # bun-v${BUN_VERSION} tag.
-ARG BUN_VERSION=1.3.14
-ARG BUN_SHA256_AMD64=a063908ae08b7852ca10939bbdc6ceed3ddabce8fb9402dce83d65d73b36e6c7
-ARG BUN_SHA256_ARM64=a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b
+ARG BUN_VERSION=1.4.2
+ARG BUN_SHA256_AMD64=c678040f14fe0440eb839d37cbd0ce4c051a32da72806ac97de6a6aab6bf728f
+ARG BUN_SHA256_ARM64=54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7
 RUN bash -o pipefail -c '\
     set -e; \
     case "$(uname -m)" in \
@@ -1150,7 +1150,7 @@ RUN bash -o pipefail -c '\
 # /home/llm/.npm" explains. It runs last because `context-mode doctor` checks
 # the published npm version and would repopulate the cache behind an earlier
 # strip.
-ARG CONTEXT_MODE_NODE=22.23.2
+ARG CONTEXT_MODE_NODE=22.23.3
 ARG CONTEXT_MODE_VERSION=1.0.169
 RUN bash -c '\
     set -e; \
@@ -1640,9 +1640,9 @@ ARG RIOTBOX_GH_GLAB=0
 #          | grep -E 'Linux_(x86_64|arm64)'
 #   3. Update the three ARGs below (VERSION carries the leading v, the
 #      tarball name does not)
-ARG GITHUB_MCP_SERVER_VERSION=v1.10.1
-ARG GITHUB_MCP_SERVER_SHA256_AMD64=c2629e850a344275cfc5a1590acdfd8c11476a44b688812d460163768e05572d
-ARG GITHUB_MCP_SERVER_SHA256_ARM64=c51dc6cf192c35a328b9f71696d42c38a9a3ba3c2ffe010da836bed071d1ac8a
+ARG GITHUB_MCP_SERVER_VERSION=v1.12.2
+ARG GITHUB_MCP_SERVER_SHA256_AMD64=95843162759da2c31dde082dd145be35db82164594796c294414b69790c2290e
+ARG GITHUB_MCP_SERVER_SHA256_ARM64=2b30f9fcc061b57456cbe38ddc0f13c88863bad49557508a9196f2d1c4cb17a5
 
 # Root for the rpm install and for writing to /usr/local/bin; back to llm at the
 # end, since the entrypoint and every agent run as llm.
