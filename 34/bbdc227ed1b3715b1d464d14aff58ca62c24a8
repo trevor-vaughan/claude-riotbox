@@ -1,0 +1,148 @@
+Containerfile
+  s_914969194edc06::t_a8a5f7f5ad585e 123-125
+THREAT_MODEL.md
+  s_914969194edc06::t_a8a5f7f5ad585e 627
+tests/Containerfile.test
+  s_914969194edc06::t_a8a5f7f5ad585e 84-85
+README.md
+  s_914969194edc06::t_a8a5f7f5ad585e 244
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f5ec7c7b6ed709e2e7ab35df7a6c6bdc9e9c441f",
+  "prompts": {},
+  "sessions": {
+    "s_914969194edc06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f15db4f9-ee37-4020-8032-7faa625a6e3f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+scripts/build.sh
+  s_914969194edc06::t_a8a5f7f5ad585e 58,135
+Containerfile
+  s_914969194edc06::t_a8a5f7f5ad585e 152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f1c38348e79e680060f17cb89b19ff3adf460865",
+  "prompts": {},
+  "sessions": {
+    "s_914969194edc06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f15db4f9-ee37-4020-8032-7faa625a6e3f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+Containerfile
+  s_914969194edc06::t_a8a5f7f5ad585e 806
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "133f643f60b2b5363096946b9c6f1a04c1e35cf4",
+  "prompts": {},
+  "sessions": {
+    "s_914969194edc06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f15db4f9-ee37-4020-8032-7faa625a6e3f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+Containerfile
+  s_914969194edc06::t_a8a5f7f5ad585e 942
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "980da6a28fba7e1582f28ff1aa87bae9266ba34a",
+  "prompts": {},
+  "sessions": {
+    "s_914969194edc06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f15db4f9-ee37-4020-8032-7faa625a6e3f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+Containerfile
+  s_914969194edc06::t_bd1c1bcb18612d 997
+  s_914969194edc06::t_a8a5f7f5ad585e 1000-1002
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "062e1d5bc978f4fe39d3c809c53cb2885e84bf1a",
+  "prompts": {},
+  "sessions": {
+    "s_914969194edc06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f15db4f9-ee37-4020-8032-7faa625a6e3f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+Containerfile
+  s_914969194edc06::t_a8a5f7f5ad585e 1153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "fa6122860a6ca1e8e8e9e78dd288b9df43684e90",
+  "prompts": {},
+  "sessions": {
+    "s_914969194edc06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f15db4f9-ee37-4020-8032-7faa625a6e3f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+Containerfile
+  s_914969194edc06::t_a8a5f7f5ad585e 1643-1645
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4eabb9b1d676f3429f1f038b3b415146f94a64bc",
+  "prompts": {},
+  "sessions": {
+    "s_914969194edc06": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f15db4f9-ee37-4020-8032-7faa625a6e3f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
