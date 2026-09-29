@@ -624,7 +624,7 @@ Headroom and Context Mode, so its surface is live in every session unless a user
 turns it off.
 
 **A new binary and its provenance.** `git-ai` is a static-PIE ELF pulled from a
-GitHub release asset, pinned by version (`v1.7.4`) and per-arch SHA256 in the
+GitHub release asset, pinned by version (`v1.7.5`) and per-arch SHA256 in the
 `Containerfile` — the same download-then-verify shape venom, bun, and
 `github-mcp-server` already get, in place of upstream's own curl-to-shell
 installer. The same limit applies as everywhere else in this image: the digest is

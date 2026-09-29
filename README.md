@@ -241,7 +241,7 @@ The image comes with a broad set of tools pre-installed so the agent can start w
 
 - [`lola`](https://github.com/LobsterTrap/lola) — AI Skills Package Manager (cross-assistant skill distribution)
 - [`context-mode`](https://github.com/mksglu/context-mode) — context-window optimization (opt-in per session, see [Context Mode](#context-mode-opt-in))
-- [`git-ai`](https://github.com/git-ai-project/git-ai) v1.7.4 — AI-authorship attribution via git notes, pinned per-arch and SHA256-verified (**on by default**, see [AI-authorship attribution](#ai-authorship-attribution-git-ai))
+- [`git-ai`](https://github.com/git-ai-project/git-ai) v1.7.5 — AI-authorship attribution via git notes, pinned per-arch and SHA256-verified (**on by default**, see [AI-authorship attribution](#ai-authorship-attribution-git-ai))
 - [`bun`](https://github.com/oven-sh/bun) — JS/TS runtime, pinned and SHA256-verified. It is here for Context Mode's `ctx_execute` sandbox, which cannot run TypeScript snippets without it; it is on `PATH` and usable directly. Context Mode's Claude hooks do **not** use it — they run the image's pinned Node.
 
 **Diagram validation:**
