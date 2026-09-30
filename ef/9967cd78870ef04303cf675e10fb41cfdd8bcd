@@ -1,16 +1,16 @@
-install.sh
-  s_0c3baeab17bec0::t_835a760ad60728 92
-  s_0c3baeab17bec0::t_899d2c97e8cd07 113,118-145
-  s_0c3baeab17bec0::t_3b5ad658f46f38 86-88,90
 README.md
   s_0c3baeab17bec0::t_38733c7a0b4d99 116-121
+install.sh
+  s_0c3baeab17bec0::t_3b5ad658f46f38 86-88,90
+  s_0c3baeab17bec0::t_899d2c97e8cd07 113,118-145
+  s_0c3baeab17bec0::t_835a760ad60728 92
 tests/install-rootless.venom.yml
   s_0c3baeab17bec0::t_4b5fb1fd5859cf 225,229,236-240,242-247,255-259
 ---
 {
   "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.5",
-  "base_commit_sha": "bf61b69f52f3457e224a39c3a0fce5dcf724af33",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ef9967cd78870ef04303cf675e10fb41cfdd8bcd",
   "prompts": {},
   "sessions": {
     "s_0c3baeab17bec0": {
