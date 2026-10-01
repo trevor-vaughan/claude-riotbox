@@ -531,6 +531,8 @@ RUN mkdir -p \
     git config --global advice.detachedHead false && \
     git config --global advice.addIgnoredFile false && \
     git config --global init.defaultBranch main && \
+    git config --global init.defaultBranch main && \
+    git config --global worktree.useRelativePaths true && \
     # safe.directory covers both single-project (`/workspace`) and the
     # multi-project layout where each project is mounted at
     # `/workspace/<dirname>`. The wildcard is needed because:
