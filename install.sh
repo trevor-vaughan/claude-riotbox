@@ -83,23 +83,13 @@ for stub in config mounts.conf plugins.conf; do
 	src="${STUBS_DIR}/${stub}"
 	dst="${CONFIG_DIR}/${stub}"
 	[[ -f "${src}" ]] || continue
+	# Where the shipped stub gets written: the config itself on first install,
+	# `<name>.new` beside it when a newer version ships, nowhere otherwise.
+	target=""
 	if [[ ! -f "${dst}" ]]; then
-		# `config` is sourced as shell by the launcher and is the documented
-		# home of RIOTBOX_PASSTHROUGH_VARS, where users put API keys and
-		# tokens — it must never be world-readable, whatever the umask of the
-		# shell running this installer. `install -m` sets the mode as the file
-		# is created, so it is never briefly readable the way cp-then-chmod
-		# would leave it. mounts.conf and plugins.conf carry no credentials,
-		# so their mode is left to the user's umask: tightening them too
-		# would be scope creep, not defence.
-		if [[ "${stub}" == "config" ]]; then
-			install -m 600 "${src}" "${dst}"
-		else
-			cp "${src}" "${dst}"
-		fi
-		echo "  Config: ${dst} (created)"
+		target="${dst}"
 	else
-		# A `config` seeded before the 0600 rule above would keep its loose
+		# A `config` seeded before the 0600 rule below would keep its loose
 		# mode forever: this block re-runs on every install but never rewrites
 		# an existing file. Removing group/world access from a per-user config
 		# that only its owner ever reads is safe, so do it in place and say
@@ -120,14 +110,38 @@ for stub in config mounts.conf plugins.conf; do
 		installed_ver="$(grep -m1 '^# riotbox-config-version:' "${dst}" 2>/dev/null | awk '{print $NF}' || true)"
 		if [[ -n "${shipped_ver}" ]] && [[ -n "${installed_ver}" ]] &&
 			[[ "${shipped_ver}" -gt "${installed_ver}" ]] 2>/dev/null; then
-			echo "  Config: ${dst} (exists, v${installed_ver} — v${shipped_ver} available)"
-			echo "          Your config is preserved. To see what changed:"
-			echo "            diff ${dst} ${src}"
-			echo "          Merge new options manually, or back up and re-init:"
-			echo "            mv ${dst} ${dst}.bak && cp ${src} ${dst}"
+			target="${dst}.new"
 		else
 			echo "  Config: ${dst} (exists, up to date)"
 		fi
+	fi
+	[[ -n "${target}" ]] || continue
+
+	# `config` is sourced as shell by the launcher and is the documented
+	# home of RIOTBOX_PASSTHROUGH_VARS, where users put API keys and
+	# tokens — it must never be world-readable, whatever the umask of the
+	# shell running this installer. `install -m` sets the mode as the file
+	# is created, so it is never briefly readable the way cp-then-chmod
+	# would leave it; config.new gets the same treatment because users
+	# merge it into (or rename it over) config. mounts.conf and plugins.conf
+	# carry no credentials, so their mode is left to the user's umask:
+	# tightening them too would be scope creep, not defence. Both paths
+	# replace whatever sits at the target (a leftover .new from an earlier
+	# upgrade, or a symlink) rather than writing through it.
+	if [[ "${stub}" == "config" ]]; then
+		install -m 600 "${src}" "${target}"
+	else
+		cp --remove-destination "${src}" "${target}"
+	fi
+
+	if [[ "${target}" == "${dst}" ]]; then
+		echo "  Config: ${dst} (created)"
+	else
+		echo "  Config: ${dst} (exists, v${installed_ver} — v${shipped_ver} available)"
+		echo "          Your config is preserved; the new version is at:"
+		echo "            ${target}"
+		echo "          Review the changes and merge them into your config:"
+		echo "            diff ${dst} ${target}"
 	fi
 done
 

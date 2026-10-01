@@ -113,6 +113,12 @@ If you prefer to set things up yourself:
    `~/.local/share/riotbox`); only the entrypoint symlink's directory is
    configurable.
 
+   Re-running `./install.sh` never overwrites your files in
+   `$XDG_CONFIG_HOME/riotbox`. When a newer version of `config`,
+   `mounts.conf`, or `plugins.conf` ships, the installer writes it beside
+   yours as `<name>.new` (for example `config.new`) and prints the `diff`
+   command to review it. Merge what you want, then delete the `.new` file.
+
 1. Configure podman (see [Podman setup](#podman-setup))
 
 1. Build the image:

@@ -222,18 +222,29 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
 
-  - name: Warns when shipped config version is newer
+  - name: Drops a .new copy beside a config whose shipped version is newer
     steps:
       - type: exec
         script: |
+          set -e
           root="$(mktemp -d)"
           trap 'rm -rf "${root}"' EXIT
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
           mkdir -p "${XDG_CONFIG_HOME}/riotbox"
-          echo "# riotbox-config-version: 0" > "${XDG_CONFIG_HOME}/riotbox/config"
+          umask 022
+          cfg="${XDG_CONFIG_HOME}/riotbox/config"
+          echo "# riotbox-config-version: 0" > "${cfg}"
+          # A stale .new from an earlier upgrade is replaced, not kept.
+          echo "stale" > "${cfg}.new"
           "{{.riotbox_dir}}/install.sh" 2>&1
+          [ "$(cat "${cfg}")" = "# riotbox-config-version: 0" ]
+          cmp -s "${cfg}.new" "{{.riotbox_dir}}/scripts/configs/config"
+          echo "new_mode=$(stat -c '%a' "${cfg}.new")"
+          # Up-to-date files get no .new.
+          [ ! -e "${XDG_CONFIG_HOME}/riotbox/mounts.conf.new" ]
+          echo "NEW_OK"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "v0"
@@ -241,6 +252,11 @@ testcases:
           # increment. Don't pin to a specific newer-version number; assert the
           # general "newer version available" shape instead.
           - result.systemout ShouldContainSubstring "available"
+          - result.systemout ShouldContainSubstring "config.new"
+          # config.new is a copy of the file users put credentials into; it
+          # must be as private as config itself.
+          - result.systemout ShouldContainSubstring "new_mode=600"
+          - result.systemout ShouldContainSubstring "NEW_OK"
 
   - name: Shows up-to-date when config versions match
     steps:
