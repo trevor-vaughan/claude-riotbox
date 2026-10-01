@@ -5,6 +5,51 @@ generated from [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org); do not edit it by hand — run
 `task release:bump` instead.
 
+## [0.5.2] - 2026-10-01
+
+### 🚀 Features
+
+- *(context-mode)* [**breaking**] Adopt the upstream plugin as Claude's wiring
+- *(startup)* Report elapsed time for slow startup steps
+- *(git-ai)* Wire git-ai attribution into the image and session
+- *(git-ai)* Add `riotbox git-ai` to merge usage across sessions
+- *(git-ai)* Keep prompt text out of the authorship note
+- *(repair-notes)* Reattach orphaned git-ai attribution notes
+- *(install)* Drop newer config stubs in as .new files
+
+### 🐛 Bug Fixes
+
+- *(headroom)* Disable the kompress canary in one-shot preloads
+- *(checkpoints)* Match backup stores only for real repositories
+- *(ctx-stats)* Report a jq failure instead of an empty ledger
+- *(codegraph)* Stop registering the MCP server at session start
+- *(context-mode)* Scope the Claude strip to the hooks it owns
+- *(container)* Install the locale the image tells shells to use
+- *(tests)* Declare diffutils the test image stopped inheriting
+- *(checkpoint)* Exclude lola's module cache from snapshots
+- *(git-ai)* Keep attribution notes attached across history rewrites
+- *(checkpoint)* Back up attribution notes with the project
+
+### 💼 Other
+
+- *(containerfile)* Bump pinned tool versions
+
+### 🚜 Refactor
+
+- *(opencode)* Delegate headroom routing to wrap opencode
+
+### 📚 Documentation
+
+- *(codegraph)* Narrow the cleanup's claims to what the strips prove
+
+### 🧪 Testing
+
+- *(git-ai)* Cover the setup's warn-and-continue paths
+
+### ⚙️ Miscellaneous Tasks
+
+- *(lint)* Raise shellcheck to -S info -o all
+
 ## [0.5.1] - 2026-08-23
 
 ### 🚀 Features
