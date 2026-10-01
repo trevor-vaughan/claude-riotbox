@@ -224,6 +224,7 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         python3 \
         python3-pip \
         python3-devel \
+        python3-jsonschema \
         openssl-devel \
         zlib-devel \
         bzip2-devel \
