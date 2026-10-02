@@ -1,0 +1,29 @@
+scripts/repair-ai-notes.sh
+  s_825b58b58017b2::t_f9fa0de288045b 361,390
+  s_825b58b58017b2::t_6fa220643e0f43 229-231
+  s_825b58b58017b2::t_d2814673ecbf3d 306-309,324,326-332,335,357-360,389
+  s_825b58b58017b2::t_d2c35d87cb6e29 333-334,336-337
+  s_825b58b58017b2::t_9d0d4d5e09b01b 241
+  s_825b58b58017b2::t_3d9a0b840ad12f 291-305,310-319,322,325,338-341,347-352,355-356,362-369,371-388,391-405,408-417
+tests/repair-ai-notes.venom.yml
+  s_825b58b58017b2::t_84589c95f1ce1a 352,356-358,361
+  s_825b58b58017b2::t_0b9548e3ce756f 334-351,353-355,359-360,362
+README.md
+  s_825b58b58017b2::t_ea437d6d24832f 641-642
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "162d6ca8e837e4eadef1876b28680170fdfaf04b",
+  "prompts": {},
+  "sessions": {
+    "s_825b58b58017b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "137297f6-8483-48ae-bbf3-f37e99d97c93",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
