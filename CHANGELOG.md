@@ -5,6 +5,17 @@ generated from [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org); do not edit it by hand — run
 `task release:bump` instead.
 
+## [0.5.3] - 2026-10-02
+
+### 💼 Other
+
+- *(containerfile)* Add python3-jsonschema to image dependencies
+- *(containerfile)* Enable relative paths for git worktrees
+
+### ⚡ Performance
+
+- *(repair-notes)* Batch Pass 3 blob lookups into one git call per commit
+
 ## [0.5.2] - 2026-10-01
 
 ### 🚀 Features
