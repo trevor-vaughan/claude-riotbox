@@ -331,6 +331,35 @@ testcases:
           - result.code ShouldEqual 1
           - result.systemout ShouldContainSubstring "no candidate"
 
+  # Pass 3 is quadratic in orphans x commits and can run for a long time on a
+  # real repository; without progress it is indistinguishable from a hang.
+  - name: Reports progress through every pass on stderr, leaving stdout for the report
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          human_commit "initial"
+          base="$(git rev-parse HEAD)"
+          for f in one two; do
+            printf '%s\n' "${f}" > "${f}.txt"
+            git add "${f}.txt"
+            llm_commit "adds ${f}.txt"
+            attach_ai_note HEAD "${f}.txt" 1
+          done
+          git reset -q --hard "${base}"
+          human_commit "unrelated"
+          "{{.riotbox_dir}}/scripts/repair-ai-notes.sh" --force
+        assertions:
+          - result.code ShouldEqual 1
+          - 'result.systemerr ShouldContainSubstring "Pass 1/3: matching 2 orphan(s) against 2 commit(s) by tree"'
+          - 'result.systemerr ShouldContainSubstring "Pass 2/3: matching 2 orphan(s) against 2 commit(s) by patch-id"'
+          - 'result.systemerr ShouldContainSubstring "Pass 3/3: salvaging per-file entries for 2 orphan(s) across 2 commit(s)"'
+          - result.systemerr ShouldContainSubstring "[1/2]"
+          - result.systemerr ShouldContainSubstring "[2/2]"
+          - result.systemout ShouldNotContainSubstring "Pass"
+
   - name: Names an orphan whose commit was garbage collected
     steps:
       - type: exec
