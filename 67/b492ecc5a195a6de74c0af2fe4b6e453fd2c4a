@@ -1,0 +1,16 @@
+CHANGELOG.md
+  h_4db53f42b9be42 8-18
+VERSION
+  h_4db53f42b9be42 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "67b492ecc5a195a6de74c0af2fe4b6e453fd2c4a",
+  "prompts": {},
+  "humans": {
+    "h_4db53f42b9be42": {
+      "author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
