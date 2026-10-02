@@ -638,7 +638,8 @@ What lands where:
   carries a note, because the in-session daemon re-derives notes from its own
   checkpoint store and does that better than any reconstruction here. It
   exits non-zero if any orphan is left unrepaired, so it is usable from a
-  script.
+  script. Progress for each pass goes to stderr and the plan goes to stdout,
+  so redirecting stdout captures just the plan.
 - `git ai stats`, `git ai blame`, `git ai log`, and `git ai show-prompt` need nothing
   but the repository — they read the notes straight out of it, so no store has to be
   shared. The **binary** is a different matter: RiotBox installs git-ai into the

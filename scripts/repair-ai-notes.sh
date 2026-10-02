@@ -226,6 +226,9 @@ match_pass() {
 # shellcheck disable=SC2317  # invoked indirectly via match_pass's keycmd parameter
 key_tree() { git rev-parse "${1}^{tree}"; }
 
+# Progress goes to stderr so stdout stays the plan report. PLAN_DEST holds only
+# orphans, so the difference is exactly the orphans a pass still has to try.
+echo "Pass 1/3: matching $((${#ORPHANS[@]} - ${#PLAN_DEST[@]})) orphan(s) against ${#IN_SCOPE[@]} commit(s) by tree..." >&2
 match_pass "tree" key_tree
 
 # `--root` is required, or a root commit produces no patch-id at all and would
@@ -235,6 +238,7 @@ key_patch() {
 	git diff-tree -p --root "${1}" | git patch-id --stable | cut -d' ' -f1
 }
 
+echo "Pass 2/3: matching $((${#ORPHANS[@]} - ${#PLAN_DEST[@]})) orphan(s) against ${#IN_SCOPE[@]} commit(s) by patch-id..." >&2
 match_pass "patch" key_patch
 
 # ── Pass 3: per-file salvage ─────────────────────────────────────────────────
@@ -284,42 +288,133 @@ entries_for_path() {
 	'
 }
 
+# object_ids <commit> <path>...
+# The object id at each path in <commit>, one line per path in argument order,
+# `-` where the path is absent. One git process answers every path: a process
+# per path is what made this pass run for hours on a real repository.
+# cat-file reads the whole input line as the name, so spaces in a path are
+# safe; a note is line-based, so a path never holds a newline.
+object_ids() {
+	local commit="${1}" path line i=0
+	shift
+	local -a queries=()
+	for path in "$@"; do
+		queries+=("${commit}:${path}")
+	done
+	[[ ${#queries[@]} -gt 0 ]] || return 0
+	local out
+	if ! out="$(printf '%s\n' "${queries[@]}" | git cat-file --batch-check='%(objectname)')"; then
+		echo "ERROR: could not read the files of ${commit:0:9}." >&2
+		return 1
+	fi
+	while IFS= read -r line; do
+		if [[ "${line}" = "${queries[i]} missing" ]]; then
+			echo "-"
+		else
+			echo "${line%% *}"
+		fi
+		i=$((i + 1))
+	done <<<"${out}"
+}
+
 # qualifying_paths <orphan> <target>
 # The paths whose blob is byte-identical in both commits.
-# shellcheck disable=SC2317  # invoked below, in the salvage pass
+# shellcheck disable=SC2317  # invoked below, in the salvage compose step
 qualifying_paths() {
-	local orphan="${1}" target="${2}" path orphan_blob target_blob paths
-	paths="$(note_paths_of "${orphan}")"
-	while IFS= read -r path; do
-		[[ -n "${path}" ]] || continue
-		orphan_blob="$(git rev-parse --quiet --verify "${orphan}:${path}" || true)"
-		target_blob="$(git rev-parse --quiet --verify "${target}:${path}" || true)"
-		[[ -n "${orphan_blob}" && "${orphan_blob}" = "${target_blob}" ]] || continue
-		printf '%s\n' "${path}"
-	done <<<"${paths}"
+	local orphan="${1}" target="${2}" i text ids
+	local -a paths=() orphan_ids=() target_ids=()
+	# Called inside $(...), where bash clears set -e, so each failure is
+	# returned explicitly; the helpers report their own failure.
+	# shellcheck disable=SC2310
+	text="$(note_paths_of "${orphan}")" || return 1
+	[[ -n "${text}" ]] || return 0
+	mapfile -t paths <<<"${text}"
+	# shellcheck disable=SC2310
+	ids="$(object_ids "${orphan}" "${paths[@]}")" || return 1
+	mapfile -t orphan_ids <<<"${ids}"
+	# shellcheck disable=SC2310
+	ids="$(object_ids "${target}" "${paths[@]}")" || return 1
+	mapfile -t target_ids <<<"${ids}"
+	for i in "${!paths[@]}"; do
+		[[ "${orphan_ids[i]:--}" != "-" && "${orphan_ids[i]}" = "${target_ids[i]:--}" ]] || continue
+		printf '%s\n' "${paths[i]}"
+	done
 }
 
 # SALVAGE maps a target to newline-separated "<orphan> <path>" pairs.
 declare -A SALVAGE=()
 
+# Every pending orphan's note flattened into parallel arrays of (orphan, path,
+# object id), so scoring a target is one git call plus string compares rather
+# than a git call per orphan, per target, per path.
+PENDING=()
+PAIR_ORPHAN=() PAIR_PATH=() PAIR_OBJECT=()
+declare -A NEEDED_PATHS=() BEST_TARGET=() BEST_COUNT=() TIED=()
 for orphan in "${ORPHANS[@]}"; do
 	[[ -n "${PLAN_DEST[${orphan}]:-}" ]] && continue
+	PENDING+=("${orphan}")
+	BEST_COUNT["${orphan}"]=0
+	text="$(note_paths_of "${orphan}")"
+	[[ -n "${text}" ]] || continue
+	mapfile -t paths <<<"${text}"
+	out="$(object_ids "${orphan}" "${paths[@]}")"
+	mapfile -t ids <<<"${out}"
+	for i in "${!paths[@]}"; do
+		[[ -n "${paths[i]}" ]] || continue
+		PAIR_ORPHAN+=("${orphan}")
+		PAIR_PATH+=("${paths[i]}")
+		PAIR_OBJECT+=("${ids[i]:--}")
+		NEEDED_PATHS["${paths[i]}"]=1
+	done
+done
 
-	best_target=""
-	best_count=0
-	tied=false
-	for target in "${IN_SCOPE[@]}"; do
-		claimer="${CLAIMED_BY[${target}]:-}"
-		[[ -n "${claimer}" && "${PLAN_PASS[${claimer}]}" = "patch" ]] && continue
-		count="$(qualifying_paths "${orphan}" "${target}" | wc -l | tr -d ' ')"
-		if [[ ${count} -gt ${best_count} ]]; then
-			best_target="${target}"
-			best_count=${count}
-			tied=false
-		elif [[ ${count} -gt 0 && ${count} -eq ${best_count} ]]; then
-			tied=true
+echo "Pass 3/3: salvaging per-file entries for ${#PENDING[@]} orphan(s) across ${#IN_SCOPE[@]} commit(s)..." >&2
+
+# Targets are scanned in IN_SCOPE order, so each orphan's best/tie bookkeeping
+# sees them in the same order a per-orphan scan would.
+needed=("${!NEEDED_PATHS[@]}")
+scanned=0
+for target in "${IN_SCOPE[@]}"; do
+	[[ ${#PAIR_PATH[@]} -gt 0 ]] || break
+	scanned=$((scanned + 1))
+	if [[ -t 2 ]]; then
+		printf '\r  [%d/%d] %s' "${scanned}" "${#IN_SCOPE[@]}" "${target:0:9}" >&2
+	else
+		printf '  [%d/%d] %s\n' "${scanned}" "${#IN_SCOPE[@]}" "${target:0:9}" >&2
+	fi
+
+	claimer="${CLAIMED_BY[${target}]:-}"
+	[[ -n "${claimer}" && "${PLAN_PASS[${claimer}]}" = "patch" ]] && continue
+
+	out="$(object_ids "${target}" "${needed[@]}")"
+	mapfile -t ids <<<"${out}"
+	declare -A target_object=() count=()
+	for i in "${!needed[@]}"; do
+		target_object["${needed[i]}"]="${ids[i]:--}"
+	done
+	for i in "${!PAIR_PATH[@]}"; do
+		[[ "${PAIR_OBJECT[i]}" != "-" && "${PAIR_OBJECT[i]}" = "${target_object[${PAIR_PATH[i]}]}" ]] || continue
+		count["${PAIR_ORPHAN[i]}"]=$((${count["${PAIR_ORPHAN[i]}"]:-0} + 1))
+	done
+	for orphan in "${!count[@]}"; do
+		if [[ ${count[${orphan}]} -gt ${BEST_COUNT[${orphan}]} ]]; then
+			BEST_TARGET["${orphan}"]="${target}"
+			BEST_COUNT["${orphan}"]=${count[${orphan}]}
+			TIED["${orphan}"]=false
+		elif [[ ${count[${orphan}]} -eq ${BEST_COUNT[${orphan}]} ]]; then
+			TIED["${orphan}"]=true
 		fi
 	done
+	unset target_object count
+done
+if [[ -t 2 && ${scanned} -gt 0 ]]; then
+	printf '\n' >&2
+fi
+
+for orphan in "${PENDING[@]}"; do
+	best_target="${BEST_TARGET[${orphan}]:-}"
+	best_count=${BEST_COUNT[${orphan}]}
+	tied="${TIED[${orphan}]:-false}"
 
 	if [[ ${best_count} -eq 0 ]]; then
 		continue
