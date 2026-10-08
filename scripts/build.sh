@@ -252,8 +252,15 @@ strip_and_copy "${HOME}/.pip/pip.conf" ".pip/pip.conf" '^\s*(password|client.cer
 strip_and_copy "${HOME}/.config/pip/pip.conf" ".config/pip/pip.conf" '^\s*(password|client.cert)\s*='
 # .gitconfig is intentionally NOT copied — it often contains GPG signing,
 # credential helpers, and user identity that don't belong in the riotbox.
-# Git settings are configured in container/entrypoint.sh instead.
-copy_if_exists "${HOME}/.gitignore_global" ".gitignore_global"
+# Git settings are baked by the Containerfile instead.
+# The image's core.excludesFile names ~/.gitignore_global; a host without one
+# gets the shipped stub so agents still skip OS, editor, and secret files.
+if [[ -f "${HOME}/.gitignore_global" ]]; then
+	copy_if_exists "${HOME}/.gitignore_global" ".gitignore_global"
+else
+	cp "${PROJECT_DIR}/container/gitignore_global" "${CONFIGS_DIR}/.gitignore_global"
+	echo "  ✓ container/gitignore_global → configs/.gitignore_global (no host file)"
+fi
 copy_if_exists "${HOME}/.editorconfig" ".editorconfig"
 copy_if_exists "${HOME}/.ripgreprc" ".ripgreprc"
 # cargo config: strip registry tokens

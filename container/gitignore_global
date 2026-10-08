@@ -1,0 +1,31 @@
+# Global ignores for RiotBox, staged as ~/.gitignore_global by build.sh when
+# the host has none of its own. The image's core.excludesFile names that path,
+# so these apply to every repository an agent touches: list only files that
+# no project commits on purpose. `git add -f` still overrides any of them.
+
+# OS metadata
+.DS_Store
+._*
+Thumbs.db
+
+# Editor swap, backup, and merge leftovers
+*.swp
+*.swo
+*~
+*.orig
+*.rej
+
+# Local secrets. Templates such as .env.example are not matched.
+.env
+.env.local
+
+# Per-user agent and tool state
+.claude/settings.local.json
+.headroom/
+.codegraph/
+.test-output/
+
+# Language caches
+__pycache__/
+*.py[cod]
+node_modules/

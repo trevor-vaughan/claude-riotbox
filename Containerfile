@@ -533,6 +533,12 @@ RUN mkdir -p \
     git config --global init.defaultBranch main && \
     git config --global init.defaultBranch main && \
     git config --global worktree.useRelativePaths true && \
+    # build.sh stages ~/.gitignore_global (the host's own, or the shipped
+    # container/gitignore_global when the host has none), but git only reads a
+    # global ignore file that core.excludesFile names. Not include.path: that
+    # parses its target as config, and ignore patterns are not config. git
+    # also tolerates the file being absent, so deleting it is safe.
+    git config --global core.excludesFile '~/.gitignore_global' && \
     # safe.directory covers both single-project (`/workspace`) and the
     # multi-project layout where each project is mounted at
     # `/workspace/<dirname>`. The wildcard is needed because:
