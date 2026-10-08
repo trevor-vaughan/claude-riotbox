@@ -1,0 +1,26 @@
+container/gitignore_global
+  s_9f362fde920c23::t_bcaebfc148a1fa 1-31
+tests/build-gitignore-global.venom.yml
+  s_9f362fde920c23::t_b5681121ed9c12 1-99
+scripts/build.sh
+  s_9f362fde920c23::t_6530cb573c4c6c 256-263
+  s_9f362fde920c23::t_d684bae411cc23 255
+README.md
+  s_9f362fde920c23::t_3cd229e012d2be 1681
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3b244cd4bae1df1d93cf9c0b1844759b62206f80",
+  "prompts": {},
+  "sessions": {
+    "s_9f362fde920c23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "15a1cf83-4d0a-4098-a5a8-921c2b60d54c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
