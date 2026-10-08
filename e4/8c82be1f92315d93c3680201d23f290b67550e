@@ -1,0 +1,24 @@
+Containerfile
+  s_9f362fde920c23::t_1101274a746f75 536-540
+tests/gitconfig.venom.yml
+  s_9f362fde920c23::t_e384fa8021df07 1-9,12-46,55,58-64
+  s_9f362fde920c23::t_d27b04b46e47b9 10-11,47-54,56-57,65
+README.md
+  s_9f362fde920c23::t_a8d26f712e09e3 1681
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "37c3f4cffe4046c51237cc375e54ad371429e754",
+  "prompts": {},
+  "sessions": {
+    "s_9f362fde920c23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "15a1cf83-4d0a-4098-a5a8-921c2b60d54c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
