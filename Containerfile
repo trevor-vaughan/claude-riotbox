@@ -500,6 +500,9 @@ RUN if command -v go >/dev/null 2>&1; then \
 
 # ── User-phase config (mount targets, podman, gem, git, shell) ───────────────
 # All lightweight config writes combined into one layer.
+# SC2088: the quoted ~ in core.excludesFile is deliberate. git expands it at
+# read time, so the setting follows $HOME rather than baking the build's path.
+# hadolint ignore=SC2088
 RUN mkdir -p \
         /home/llm/.riotbox/bin \
         /home/llm/bin \
