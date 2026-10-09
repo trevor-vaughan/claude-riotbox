@@ -1,0 +1,99 @@
+name: build.sh global gitignore staging
+vars:
+  root: "."
+
+# The image's gitconfig points core.excludesFile at ~/.gitignore_global, so
+# what build.sh stages into configs/ decides what every agent commit ignores.
+# The host's own file wins; a host without one gets the shipped stub instead
+# of no global ignores at all.
+#
+# Each case runs the real build.sh against a copy of the tree, a sandboxed
+# HOME, and a fake podman that records its arguments, so nothing is built and
+# the host's real ~/.gitignore_global is never read.
+testcases:
+  - name: a host without ~/.gitignore_global gets the shipped stub
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          root="$(cd "{{.root}}" && pwd)"
+          sb="$(mktemp -d)"
+          trap 'rm -rf "${sb}"' EXIT
+          mkdir -p "${sb}/bin" "${sb}/home" "${sb}/repo"
+          printf '#!/bin/sh\nexit 0\n' >"${sb}/bin/podman"
+          chmod +x "${sb}/bin/podman"
+          cp -a "${root}/." "${sb}/repo/"
+          rm -rf "${sb}/repo/configs"
+
+          ( cd "${sb}/repo" && HOME="${sb}/home" PATH="${sb}/bin:${PATH}" \
+              RIOTBOX_NONINTERACTIVE_BUILD=1 bash scripts/build.sh </dev/null >"${sb}/build.log" 2>&1 ) \
+            || { cat "${sb}/build.log" >&2; exit 1; }
+
+          staged="${sb}/repo/configs/.gitignore_global"
+          [ -f "${staged}" ] || { echo "FAIL: nothing staged at configs/.gitignore_global" >&2; exit 1; }
+          cmp -s "${staged}" "${root}/container/gitignore_global" \
+            || { echo "FAIL: staged file is not the shipped stub" >&2; exit 1; }
+          echo "STUB_STAGED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "STUB_STAGED"
+
+  - name: a host ~/.gitignore_global is staged verbatim instead of the stub
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          root="$(cd "{{.root}}" && pwd)"
+          sb="$(mktemp -d)"
+          trap 'rm -rf "${sb}"' EXIT
+          mkdir -p "${sb}/bin" "${sb}/home" "${sb}/repo"
+          printf '#!/bin/sh\nexit 0\n' >"${sb}/bin/podman"
+          chmod +x "${sb}/bin/podman"
+          cp -a "${root}/." "${sb}/repo/"
+          rm -rf "${sb}/repo/configs"
+          printf '%s\n' 'host-only-pattern/' >"${sb}/home/.gitignore_global"
+
+          ( cd "${sb}/repo" && HOME="${sb}/home" PATH="${sb}/bin:${PATH}" \
+              RIOTBOX_NONINTERACTIVE_BUILD=1 bash scripts/build.sh </dev/null >"${sb}/build.log" 2>&1 ) \
+            || { cat "${sb}/build.log" >&2; exit 1; }
+
+          cmp -s "${sb}/repo/configs/.gitignore_global" "${sb}/home/.gitignore_global" \
+            || { echo "FAIL: host file was not staged verbatim" >&2; exit 1; }
+          echo "HOST_FILE_STAGED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "HOST_FILE_STAGED"
+
+  # The stub applies to every repository an agent touches, so a pattern in it
+  # can hide a file a project means to commit. It must hold only patterns that
+  # no project tracks on purpose, and git must be able to parse every line.
+  - name: the shipped stub is valid ignore syntax and hides no project config
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          stub=container/gitignore_global
+          [ -s "${stub}" ] || { echo "FAIL: ${stub} is missing or empty" >&2; exit 1; }
+
+          sb="$(mktemp -d)"
+          trap 'rm -rf "${sb}"' EXIT
+          export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+          git init -q "${sb}/repo"
+          mkdir -p "${sb}/repo/.claude" "${sb}/repo/.vscode"
+          for f in .gitignore .claude/settings.json .vscode/settings.json .env.example; do
+            : >"${sb}/repo/${f}"
+            if git -C "${sb}/repo" -c core.excludesFile="${PWD}/${stub}" check-ignore -q "${f}"; then
+              echo "FAIL: stub ignores ${f}, which projects commit on purpose" >&2
+              exit 1
+            fi
+          done
+          for f in .DS_Store x.swp .env .claude/settings.local.json; do
+            : >"${sb}/repo/${f}"
+            git -C "${sb}/repo" -c core.excludesFile="${PWD}/${stub}" check-ignore -q "${f}" \
+              || { echo "FAIL: stub does not ignore ${f}" >&2; exit 1; }
+          done
+          echo "STUB_SCOPED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "STUB_SCOPED"

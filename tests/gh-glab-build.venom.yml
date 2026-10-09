@@ -21,11 +21,13 @@ testcases:
           TMP="$(mktemp -d)"
           trap 'rm -rf "${TMP}"' EXIT
 
-          # Minimal project tree: build.sh needs a writable root, a VERSION
-          # and a Containerfile. Copying the whole repo would be slow and
+          # Minimal project tree: build.sh needs a writable root, a VERSION,
+          # a Containerfile, and the shipped gitignore_global it stages when
+          # $HOME has none. Copying the whole repo would be slow and
           # would drag in a .git it has no use for.
-          mkdir -p "${TMP}/proj/scripts" "${TMP}/bin" "${TMP}/home"
+          mkdir -p "${TMP}/proj/scripts" "${TMP}/proj/container" "${TMP}/bin" "${TMP}/home"
           cp "{{.root}}/scripts/build.sh" "${TMP}/proj/scripts/build.sh"
+          cp "{{.root}}/container/gitignore_global" "${TMP}/proj/container/gitignore_global"
           echo "0.0.0-test" >"${TMP}/proj/VERSION"
           : >"${TMP}/proj/Containerfile"
 
@@ -66,8 +68,9 @@ testcases:
           set -euo pipefail
           TMP="$(mktemp -d)"
           trap 'rm -rf "${TMP}"' EXIT
-          mkdir -p "${TMP}/proj/scripts" "${TMP}/bin" "${TMP}/home"
+          mkdir -p "${TMP}/proj/scripts" "${TMP}/proj/container" "${TMP}/bin" "${TMP}/home"
           cp "{{.root}}/scripts/build.sh" "${TMP}/proj/scripts/build.sh"
+          cp "{{.root}}/container/gitignore_global" "${TMP}/proj/container/gitignore_global"
           echo "0.0.0-test" >"${TMP}/proj/VERSION"
           : >"${TMP}/proj/Containerfile"
           cat >"${TMP}/bin/podman" <<'STUB'
@@ -101,8 +104,9 @@ testcases:
           set -euo pipefail
           TMP="$(mktemp -d)"
           trap 'rm -rf "${TMP}"' EXIT
-          mkdir -p "${TMP}/proj/scripts" "${TMP}/bin" "${TMP}/home"
+          mkdir -p "${TMP}/proj/scripts" "${TMP}/proj/container" "${TMP}/bin" "${TMP}/home"
           cp "{{.root}}/scripts/build.sh" "${TMP}/proj/scripts/build.sh"
+          cp "{{.root}}/container/gitignore_global" "${TMP}/proj/container/gitignore_global"
           echo "0.0.0-test" >"${TMP}/proj/VERSION"
           : >"${TMP}/proj/Containerfile"
           cat >"${TMP}/bin/podman" <<'STUB'
@@ -141,9 +145,10 @@ testcases:
           # bin/riotbox self-locates from its own path and sources the agent
           # registry, so the throwaway tree needs bin/ and agents/ on top of
           # what build.sh alone requires.
-          mkdir -p "${TMP}/proj/bin" "${TMP}/proj/scripts" "${TMP}/bin" "${TMP}/home"
+          mkdir -p "${TMP}/proj/bin" "${TMP}/proj/scripts" "${TMP}/proj/container" "${TMP}/bin" "${TMP}/home"
           cp "{{.root}}/bin/riotbox" "${TMP}/proj/bin/riotbox"
           cp "{{.root}}/scripts/build.sh" "${TMP}/proj/scripts/build.sh"
+          cp "{{.root}}/container/gitignore_global" "${TMP}/proj/container/gitignore_global"
           cp -r "{{.root}}/agents" "${TMP}/proj/agents"
           echo "0.0.0-test" >"${TMP}/proj/VERSION"
           : >"${TMP}/proj/Containerfile"
@@ -187,9 +192,10 @@ testcases:
           set -euo pipefail
           TMP="$(mktemp -d)"
           trap 'rm -rf "${TMP}"' EXIT
-          mkdir -p "${TMP}/proj/bin" "${TMP}/proj/scripts" "${TMP}/bin" "${TMP}/home"
+          mkdir -p "${TMP}/proj/bin" "${TMP}/proj/scripts" "${TMP}/proj/container" "${TMP}/bin" "${TMP}/home"
           cp "{{.root}}/bin/riotbox" "${TMP}/proj/bin/riotbox"
           cp "{{.root}}/scripts/build.sh" "${TMP}/proj/scripts/build.sh"
+          cp "{{.root}}/container/gitignore_global" "${TMP}/proj/container/gitignore_global"
           cp -r "{{.root}}/agents" "${TMP}/proj/agents"
           echo "0.0.0-test" >"${TMP}/proj/VERSION"
           : >"${TMP}/proj/Containerfile"
@@ -229,9 +235,10 @@ testcases:
           set -euo pipefail
           TMP="$(mktemp -d)"
           trap 'rm -rf "${TMP}"' EXIT
-          mkdir -p "${TMP}/proj/bin" "${TMP}/proj/scripts" "${TMP}/bin" "${TMP}/home"
+          mkdir -p "${TMP}/proj/bin" "${TMP}/proj/scripts" "${TMP}/proj/container" "${TMP}/bin" "${TMP}/home"
           cp "{{.root}}/bin/riotbox" "${TMP}/proj/bin/riotbox"
           cp "{{.root}}/scripts/build.sh" "${TMP}/proj/scripts/build.sh"
+          cp "{{.root}}/container/gitignore_global" "${TMP}/proj/container/gitignore_global"
           cp -r "{{.root}}/agents" "${TMP}/proj/agents"
           echo "0.0.0-test" >"${TMP}/proj/VERSION"
           : >"${TMP}/proj/Containerfile"

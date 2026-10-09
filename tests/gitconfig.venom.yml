@@ -1,0 +1,65 @@
+name: image gitconfig
+vars:
+  root: "."
+
+# build.sh copies the host's ~/.gitignore_global into the image, but git never
+# reads a file by that name on its own: the built-in global ignore path is
+# $XDG_CONFIG_HOME/git/ignore. Without core.excludesFile naming it, the copied
+# file is inert and agents commit what the user ignores everywhere else.
+#
+# This case replays the Containerfile's own `git config --global` lines into a
+# throwaway HOME rather than grepping for a key, so it proves what git does
+# with the result. That also catches the tempting wrong fix: an
+# `[include] path = ~/.gitignore_global` makes git parse ignore patterns as
+# config, and every git command then dies with "bad config line".
+testcases:
+  - name: the baked gitconfig makes git honor ~/.gitignore_global
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+
+          # Comment lines never reach the Dockerfile parser, so only live
+          # `git config --global` lines count. The trailing `&& \` joins them
+          # into one RUN instruction and is stripped to run each on its own.
+          cmds="$(awk '
+                /^[[:space:]]*#/ { next }
+                /^[[:space:]]*git config --global / {
+                  sub(/^[[:space:]]+/, ""); sub(/[[:space:]]*&&[[:space:]]*\\$/, "")
+                  print
+                }' Containerfile)"
+          if [ -z "${cmds}" ]; then
+            echo "FAIL: no 'git config --global' lines found in the Containerfile." >&2
+            exit 1
+          fi
+
+          sb="$(mktemp -d)"
+          trap 'rm -rf "${sb}"' EXIT
+          export HOME="${sb}/home" GIT_CONFIG_SYSTEM=/dev/null
+          unset GIT_CONFIG_GLOBAL XDG_CONFIG_HOME
+          mkdir -p "${HOME}"
+          ( cd "${HOME}" && eval "${cmds}" )
+
+          git init -q "${sb}/repo"
+          mkdir -p "${sb}/repo/global-only-pattern"
+          : >"${sb}/repo/global-only-pattern/f"
+
+          # build.sh always stages the file, but it can still go missing (removed
+          # in-container, or an older image), so git must keep working without it.
+          if ! git -C "${sb}/repo" status --porcelain >/dev/null; then
+            echo "FAIL: git fails when ~/.gitignore_global is absent." >&2
+            exit 1
+          fi
+          echo "GIT_WORKS_WITHOUT_EXCLUDES_FILE"
+
+          printf '%s\n' 'global-only-pattern/' >"${HOME}/.gitignore_global"
+          if ! git -C "${sb}/repo" check-ignore -v global-only-pattern/f; then
+            echo "FAIL: ~/.gitignore_global is not consulted by the baked gitconfig." >&2
+            exit 1
+          fi
+          echo "GLOBAL_IGNORE_HONORED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "GIT_WORKS_WITHOUT_EXCLUDES_FILE"
+          - result.systemout ShouldContainSubstring "GLOBAL_IGNORE_HONORED"
