@@ -1,0 +1,22 @@
+container/pi/lock-integrity.sh
+  s_3e1b642aa1bee7::t_fcd96d0849c148 66-67
+  s_3e1b642aa1bee7::t_b78b7aabe5a0fb 11-23,25-35,54-65,68-81,83-86,88,91-94,96-98,100-102,104-106
+tests/pi.venom.yml
+  s_3e1b642aa1bee7::t_ec78b97822f432 719-727
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "816edf1ff94022dcec6235c71b621485e28ff8d9",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
