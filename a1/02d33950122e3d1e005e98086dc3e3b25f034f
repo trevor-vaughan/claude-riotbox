@@ -1,0 +1,21 @@
+tests/lib-json-write.venom.yml
+  s_3e1b642aa1bee7::t_2c66a67deb522b 183-257
+scripts/lib/json-write.sh
+  s_3e1b642aa1bee7::t_c6dd57d8ec49f0 32-37,72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a102d33950122e3d1e005e98086dc3e3b25f034f",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
