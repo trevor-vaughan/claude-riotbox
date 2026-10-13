@@ -8,11 +8,52 @@ README.md
   s_3e1b642aa1bee7::t_8798fba5e398dc 398
   s_3e1b642aa1bee7::t_7e90db4c2d7e10 1715-1716
   s_3e1b642aa1bee7::t_acae376ebc6f90 230
+  s_3e1b642aa1bee7::t_7a1d758dce09af 201,212,218-219,226,234-235,850
+  s_3e1b642aa1bee7::t_b088b18a0cb082 225
+  s_3e1b642aa1bee7::t_352c2035951766 223
 THREAT_MODEL.md
   s_3e1b642aa1bee7::t_55b9052c222760 184,192-200
   s_3e1b642aa1bee7::t_1463145a641370 201
+  s_3e1b642aa1bee7::t_bb99237ce3a717 184,192,195,197-198,387-395,484-488
+  s_3e1b642aa1bee7::t_46f904a327ce12 194
 tests/pi.venom.yml
   s_3e1b642aa1bee7::t_a6e85e1b80a365 735-748
+  s_3e1b642aa1bee7::t_c99892b42fd67b 511
+  s_3e1b642aa1bee7::t_1aa09db7a68cd1 316,327-349
+  s_3e1b642aa1bee7::t_76ea606e654010 350
+docs/dev/decisions/pi-support.md
+  s_3e1b642aa1bee7::t_1eb0296ad6c83e 60,123
+  s_3e1b642aa1bee7::t_69b32aeb8f1bea 2-9,11-13,15-35,37-59,61-79,86,90-91,96-122,124-150,153-171,175,180-181
+  s_3e1b642aa1bee7::t_33582e2f7a0947 1,10,14,36,80-85,87-89,92,151-152,172-174,182-192
+  s_3e1b642aa1bee7::t_dfb5d02f6a4738 93-95,176-179
+docs/dev/context-mode.md
+  s_3e1b642aa1bee7::t_a0b8e843c578f9 43-44,146-181,185-186,190-192,218-222,258-259,465-466,510,545
+docs/dev/agent-contract.md
+  s_3e1b642aa1bee7::t_efd4328cd23d5c 72,88,119-120,133-134,175-176,216-224,250-254,429-431,484-485,541-543,653,655,830,859,882-890
+  s_3e1b642aa1bee7::t_86db7a8f740d36 357,483,540,654
+  s_3e1b642aa1bee7::t_7c8ef61b9da712 432-433,510,831
+  s_3e1b642aa1bee7::t_6f5e9fd262c785 511-512
+docs/dev/adding-an-agent.md
+  s_3e1b642aa1bee7::t_c4aa653b2a6a5d 3-4,22-24,67-71
+  s_3e1b642aa1bee7::t_2292a3f08caddb 75
+docs/dev/decisions/README.md
+  s_3e1b642aa1bee7::t_33582e2f7a0947 21
+agents/pi/setup.sh
+  s_3e1b642aa1bee7::t_352c2035951766 13,15-16,86
+  s_3e1b642aa1bee7::t_ba244b28373ccf 14
+Containerfile
+  s_3e1b642aa1bee7::t_352c2035951766 923-925,1005
+container/pi/lock-integrity.sh
+  s_3e1b642aa1bee7::t_f2c76ee27cfefd 18,20,23-24,114
+container/git-ai-setup.sh
+  s_3e1b642aa1bee7::t_352c2035951766 18
+  s_3e1b642aa1bee7::t_f2c76ee27cfefd 19
+  s_3e1b642aa1bee7::t_0c3aef747742e6 20-22
+agents/registry.sh
+  s_3e1b642aa1bee7::t_352c2035951766 113
+tests/git-ai.venom.yml
+  s_3e1b642aa1bee7::t_21bc1f8c09a4a0 439,457-464,483-485,1274-1278,1320-1336
+  s_3e1b642aa1bee7::t_fb298fd894dd9d 1337
 ---
 {
   "schema_version": "authorship/3.0.0",

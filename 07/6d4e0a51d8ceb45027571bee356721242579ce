@@ -1,11 +1,15 @@
 tests/agents.venom.yml
   s_3e1b642aa1bee7::t_fe7d8cd764c73d 429-464
 tests/context-mode-pi.venom.yml
-  s_3e1b642aa1bee7::t_fe7d8cd764c73d 319-352
+  s_3e1b642aa1bee7::t_fe7d8cd764c73d 319-352,319-332,334-352
+  s_3e1b642aa1bee7::t_836a89ee08bad0 24,51,80,108,135,167,195,222,249,277,333
 tests/pi.venom.yml
-  s_3e1b642aa1bee7::t_fe7d8cd764c73d 495-562
+  s_3e1b642aa1bee7::t_fe7d8cd764c73d 495-562,519-528,531-532,537-543,545-546,547,550-552,554-576,584-601
+  s_3e1b642aa1bee7::t_836a89ee08bad0 529-530,533-536,544,548-549,553,577-583
 agents/pi/manifest.sh
-  s_3e1b642aa1bee7::t_271fbd3cfb61f0 1-124
+  s_3e1b642aa1bee7::t_271fbd3cfb61f0 1-124,1-59,65-72,73-98,102-103,112-121,123-130,132
+  s_3e1b642aa1bee7::t_e98c59df06ba5e 60-64,99-101,104-105,108-111,122,131
+  s_3e1b642aa1bee7::t_0a4e292501830c 106-107
 ---
 {
   "schema_version": "authorship/3.0.0",

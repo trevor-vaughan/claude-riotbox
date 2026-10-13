@@ -1,7 +1,18 @@
 agents/pi/sync-settings.sh
-  s_3e1b642aa1bee7::t_13d5efd3d51e44 1-84
+  s_3e1b642aa1bee7::t_13d5efd3d51e44 1-84,1-27,36-37,39-49,55-65,75-106
+  s_3e1b642aa1bee7::t_52c397e33242e0 28-35,38,50-54,66-73
+  s_3e1b642aa1bee7::t_4e6b92f31161a8 74
 tests/pi.venom.yml
-  s_3e1b642aa1bee7::t_13d5efd3d51e44 69-202
+  s_3e1b642aa1bee7::t_13d5efd3d51e44 69-202,69-153,156-199,226
+  s_3e1b642aa1bee7::t_63d531fb9c5b85 1-21,23-28,30-36,46-56,65-68
+  s_3e1b642aa1bee7::t_390a5c6e5aae87 22,29,37-45,57-64
+  s_3e1b642aa1bee7::t_8a789531b80ff6 154-155,200-225,227-270
+container/pi/package.json
+  s_3e1b642aa1bee7::t_d588af54cb2acc 1-14
+.gitattributes
+  s_3e1b642aa1bee7::t_28e901d8de1008 12
+container/pi/package-lock.json
+  s_3e1b642aa1bee7::t_2e2a1224e82564 1-170
 ---
 {
   "schema_version": "authorship/3.0.0",
