@@ -1,0 +1,27 @@
+README.md
+  s_380b81642d99d4::t_78bd2d771a92ec 531
+tests/session-state.venom.yml
+  s_380b81642d99d4::t_def84dea7d0047 315-353,358-424
+  s_380b81642d99d4::t_3b45e8415e893a 354-357
+THREAT_MODEL.md
+  s_380b81642d99d4::t_78bd2d771a92ec 343-350,2909
+scripts/mount-projects.sh
+  s_380b81642d99d4::t_6af482a38c2407 156-158,164,245-249,255,257-259,262-264,268,270-288,327,582
+  s_380b81642d99d4::t_03f8ae12321c3a 250-254,256,260-261,265-267,269
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fe9557ffe21425d8526bbd511a8a97f73d57aa3d",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
