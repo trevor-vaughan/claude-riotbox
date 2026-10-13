@@ -1,0 +1,34 @@
+scripts/mount-projects.sh
+  s_380b81642d99d4::t_3124676bca92ee 308-318,321-360,368-371,397,399,418,420,482,508
+  s_380b81642d99d4::t_dc013d3c4ee04e 319-320
+  s_380b81642d99d4::t_3cdc2649248661 396,398,417,419,481,507
+  s_380b81642d99d4::t_a13e4d7a555137 564,568-574
+scripts/lib/session-state.sh
+  s_380b81642d99d4::t_a13e4d7a555137 224-230
+  s_380b81642d99d4::t_b4829493915cee 71-76
+  s_380b81642d99d4::t_b54eb3f5c12b59 120-122
+tests/session-state.venom.yml
+  s_380b81642d99d4::t_8dbc75a6def8b9 231-233,315-346,348-363,370-375
+  s_380b81642d99d4::t_1bb74977abf50c 347,364-369
+  s_380b81642d99d4::t_3dd3ad9dd606fc 376
+agents/pi/sync-settings.sh
+  s_380b81642d99d4::t_a13e4d7a555137 41-42
+agents/opencode/sync-settings.sh
+  s_380b81642d99d4::t_a13e4d7a555137 31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a372790d9baa0b55ed6d381a4197b3099e6f0c4a",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
