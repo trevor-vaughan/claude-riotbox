@@ -1,0 +1,34 @@
+tests/session-state.venom.yml
+  s_3e1b642aa1bee7::t_51515872a079cf 572-577,579,581
+tests/opencode.venom.yml
+  s_3e1b642aa1bee7::t_edee5f37bc7bf5 1141-1172
+tests/agents.venom.yml
+  s_3e1b642aa1bee7::t_51515872a079cf 219,221-229
+agents/opencode/sync-settings.sh
+  s_3e1b642aa1bee7::t_ed8751a6b2a9e7 68-69,72
+  s_3e1b642aa1bee7::t_8aefc3c212805c 60-67,99-101
+  s_3e1b642aa1bee7::t_f4bfd5ba58b210 70-71
+tests/pi.venom.yml
+  s_3e1b642aa1bee7::t_51515872a079cf 214
+  s_3e1b642aa1bee7::t_c90b6ccbd457c6 273-274,277-280
+  s_3e1b642aa1bee7::t_edee5f37bc7bf5 262-272,275-276,281-295
+agents/pi/sync-settings.sh
+  s_3e1b642aa1bee7::t_8aefc3c212805c 73,77-83,96,102-109
+  s_3e1b642aa1bee7::t_95a3ffce47981c 110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6ebc560c1321a022cecad61e25223f9b67770a01",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
