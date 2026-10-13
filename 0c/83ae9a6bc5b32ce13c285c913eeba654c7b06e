@@ -1,7 +1,10 @@
 tests/git-ai.venom.yml
-  s_3e1b642aa1bee7::t_797c87924105d3 938-1030
+  s_3e1b642aa1bee7::t_797c87924105d3 938-1030,949-1026,1077-1091
+  s_3e1b642aa1bee7::t_b912887db21f02 1023-1025,1027-1072
+  s_3e1b642aa1bee7::t_cddf3f903d2bdb 1026
 agents/pi/git-ai.sh
-  s_3e1b642aa1bee7::t_7f2cfc9cc7aeb7 1-41
+  s_3e1b642aa1bee7::t_7f2cfc9cc7aeb7 1-41,1-16,26,28-38,41-47
+  s_3e1b642aa1bee7::t_d572886fd63a78 17-25,27,39-40
 ---
 {
   "schema_version": "authorship/3.0.0",

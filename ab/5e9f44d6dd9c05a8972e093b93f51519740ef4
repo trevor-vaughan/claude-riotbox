@@ -1,12 +1,17 @@
 tests/tokscale.venom.yml
-  s_3e1b642aa1bee7::t_159b9fbbb9cd62 1-41
+  s_3e1b642aa1bee7::t_159b9fbbb9cd62 1-41,1-23,25-40
+  s_3e1b642aa1bee7::t_0418527f566655 24,41
 .taskfiles/container.yml
   s_3e1b642aa1bee7::t_a2b948e7e85f76 30
+  s_3e1b642aa1bee7::t_0418527f566655 30
 scripts/tokscale-riotbox.sh
-  s_3e1b642aa1bee7::t_a2b948e7e85f76 10,12,90-91,107-108,134
+  s_3e1b642aa1bee7::t_a2b948e7e85f76 10,12,90-91,91,107-108,108-109,134
+  s_3e1b642aa1bee7::t_0418527f566655 10,12-13,92-94,135-137
 bin/riotbox
   s_3e1b642aa1bee7::t_b1740f010141e1 183-184
   s_3e1b642aa1bee7::t_a2b948e7e85f76 57,94,178-182,390-391
+  s_3e1b642aa1bee7::t_0418527f566655 373,390-393
+  s_3e1b642aa1bee7::t_ac14c9b13665b2 394
 scripts/configs/config
   s_3e1b642aa1bee7::t_a2b948e7e85f76 110-111,150-152
 ---

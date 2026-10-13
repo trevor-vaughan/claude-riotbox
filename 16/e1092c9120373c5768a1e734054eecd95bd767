@@ -1,7 +1,9 @@
 agents/pi/context-mode.sh
-  s_3e1b642aa1bee7::t_e70406ff4a1b46 1-142
+  s_3e1b642aa1bee7::t_e70406ff4a1b46 1-142,1-66,68-72,75-119,122-132,144-147,155-158
+  s_3e1b642aa1bee7::t_f490381e2ea149 67,73-74,120-121,133-143,148-154
 tests/context-mode-pi.venom.yml
-  s_3e1b642aa1bee7::t_9c7973e02d7534 1-218
+  s_3e1b642aa1bee7::t_9c7973e02d7534 1-218,1-181,183-200,315-318
+  s_3e1b642aa1bee7::t_d39cb9b9a78239 182,201-314
 ---
 {
   "schema_version": "authorship/3.0.0",
