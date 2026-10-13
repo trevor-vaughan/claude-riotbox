@@ -1,0 +1,19 @@
+docs/dev/decisions/pi-support.md
+  s_380b81642d99d4::t_f51ece029423de 13-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8c406c521e52708f317aa61715e909849c23c122",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
