@@ -1,0 +1,23 @@
+tests/pi.venom.yml
+  s_3e1b642aa1bee7::t_c99892b42fd67b 511
+  s_3e1b642aa1bee7::t_1aa09db7a68cd1 316,327-349
+  s_3e1b642aa1bee7::t_76ea606e654010 350
+agents/pi/setup.sh
+  s_3e1b642aa1bee7::t_352c2035951766 13-16,86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "572645a1b282ccf2475a6919f9a029799a401130",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
