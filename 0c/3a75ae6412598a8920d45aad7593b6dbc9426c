@@ -1,0 +1,25 @@
+tests/mount-format-triple.venom.yml
+  s_3e1b642aa1bee7::t_46b1d3d18c9b82 125,128-131,154
+scripts/git-ai-riotbox.sh
+  s_3e1b642aa1bee7::t_cdd219b9e84114 136-146,157-168,174,179,221-222,264-265
+  s_3e1b642aa1bee7::t_6b437adcb87c7e 148,153-156
+tests/git-ai-aggregate.venom.yml
+  s_3e1b642aa1bee7::t_6b437adcb87c7e 330
+  s_3e1b642aa1bee7::t_46b1d3d18c9b82 276-329,331-360
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0c3a75ae6412598a8920d45aad7593b6dbc9426c",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
