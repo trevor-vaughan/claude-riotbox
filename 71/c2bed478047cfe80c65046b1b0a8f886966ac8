@@ -1,0 +1,22 @@
+tests/session-state.venom.yml
+  s_3e1b642aa1bee7::t_7edaf03eb1786c 66-85,228,236-286
+  s_3e1b642aa1bee7::t_068eaf27124435 287
+scripts/lib/session-state.sh
+  s_3e1b642aa1bee7::t_db86a084822dc3 41-42,63-65,68-72,98-103,108-115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "71c2bed478047cfe80c65046b1b0a8f886966ac8",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
