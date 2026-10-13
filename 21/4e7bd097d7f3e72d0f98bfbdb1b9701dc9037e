@@ -1,0 +1,24 @@
+README.md
+  s_3e1b642aa1bee7::t_352c2035951766 223
+container/git-ai-setup.sh
+  s_3e1b642aa1bee7::t_352c2035951766 18
+  s_3e1b642aa1bee7::t_f2c76ee27cfefd 19-20
+agents/registry.sh
+  s_3e1b642aa1bee7::t_352c2035951766 113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "214e7bd097d7f3e72d0f98bfbdb1b9701dc9037e",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
