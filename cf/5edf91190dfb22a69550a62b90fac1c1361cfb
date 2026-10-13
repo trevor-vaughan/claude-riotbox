@@ -1,0 +1,28 @@
+container/pi/lock-integrity.sh
+  s_3e1b642aa1bee7::t_28f88eda04a920 1-73
+.taskfiles/lint.yml
+  s_3e1b642aa1bee7::t_0827cfe44f2f2c 24
+tests/pi.venom.yml
+  s_3e1b642aa1bee7::t_fbbed5130c3fca 617-694
+container/pi/smoke.mjs
+  s_3e1b642aa1bee7::t_1716cd3565ac59 18-19,47,50
+  s_3e1b642aa1bee7::t_3148400a0df403 16-17,23,55
+Containerfile
+  s_3e1b642aa1bee7::t_9f0bcd9037fdb1 918-924,939-946,981,987,1000-1003
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cf5edf91190dfb22a69550a62b90fac1c1361cfb",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
