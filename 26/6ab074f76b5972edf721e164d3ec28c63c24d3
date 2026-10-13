@@ -1,0 +1,45 @@
+docs/dev/agent-contract.md
+  s_380b81642d99d4::t_4bcf982b02f0a0 509-512
+tests/opencode.venom.yml
+  s_380b81642d99d4::t_bc22de3c9cc325 1098-1117,1125-1127
+  s_380b81642d99d4::t_1104dee2d223fa 1118-1124
+docs/dev/context-mode.md
+  s_380b81642d99d4::t_86874f28dc1890 216-220,230-244
+agents/opencode/context-mode.sh
+  s_380b81642d99d4::t_3ae1cca53d225f 34-42,44,58-63,72-76,78-110,112-115
+  s_380b81642d99d4::t_97a5b4eddd6156 111
+agents/opencode/manifest.sh
+  s_380b81642d99d4::t_3ae1cca53d225f 159-160,165
+tests/context-mode-ledger.venom.yml
+  s_380b81642d99d4::t_ace4cd4f455794 257
+README.md
+  s_380b81642d99d4::t_053865950e64fa 935,975,977-980,989,996-1002
+docs/dev/decisions/context-mode-opencode.md
+  s_380b81642d99d4::t_4bcf982b02f0a0 205-212
+tests/context-mode-opencode.venom.yml
+  s_380b81642d99d4::t_827f1c7e1b3bcd 5,995-1138,1140-1141,1144-1149
+  s_380b81642d99d4::t_b78f9fb2c4613e 1139,1142-1143
+  s_380b81642d99d4::t_a99d7e50e42a74 15-20,28,36,46,54-55,62,64-67,70,468-469,514-518,525-533
+  s_380b81642d99d4::t_b881a1bda70160 478-481
+agents/opencode/sync-settings.sh
+  s_380b81642d99d4::t_ac7ef023addec8 89-90
+  s_380b81642d99d4::t_8a5026aa0ebaa8 85-88,95
+THREAT_MODEL.md
+  s_380b81642d99d4::t_86874f28dc1890 313-316,573,596-604
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "266ab074f76b5972edf721e164d3ec28c63c24d3",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
