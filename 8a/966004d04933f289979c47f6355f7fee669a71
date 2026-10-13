@@ -1,0 +1,21 @@
+agents/pi/context-mode.sh
+  s_3e1b642aa1bee7::t_e70406ff4a1b46 1-142
+tests/context-mode-pi.venom.yml
+  s_3e1b642aa1bee7::t_9c7973e02d7534 1-218
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "60070943b295e5e7dff82d363ef3a92bae9dc659",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}

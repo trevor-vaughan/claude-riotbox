@@ -1,0 +1,25 @@
+container/pi/smoke.mjs
+  s_3e1b642aa1bee7::t_9acf57279162a6 10-12
+  s_3e1b642aa1bee7::t_107f4e243a0ad6 1-9,13-70
+tests/pi.venom.yml
+  s_3e1b642aa1bee7::t_4313173d37d239 578-616
+Containerfile
+  s_3e1b642aa1bee7::t_c24fbd9736ca9d 252,254
+  s_3e1b642aa1bee7::t_0fb30df88b590d 913-999
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "872ea63b6f7d25f64c160b7fe20dd965becb393e",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
