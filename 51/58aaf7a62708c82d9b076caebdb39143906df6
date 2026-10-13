@@ -1,0 +1,34 @@
+scripts/overlay.sh
+  s_3e1b642aa1bee7::t_9c6af008501798 30-32,59-63,67,97-109,115,119-121,123,139-141
+tests/lib/overlay-test-helpers.sh
+  s_3e1b642aa1bee7::t_002cfba192c382 6-7,10,23-25
+tests/session-state.venom.yml
+  s_3e1b642aa1bee7::t_002cfba192c382 419-497
+scripts/lib/session-state.sh
+  s_3e1b642aa1bee7::t_9c6af008501798 27,120-141
+  s_3e1b642aa1bee7::t_5c80980ee97bfb 142
+libexec/launch.sh
+  s_3e1b642aa1bee7::t_9c6af008501798 83
+tests/mount-modes.venom.yml
+  s_3e1b642aa1bee7::t_002cfba192c382 101-102,113-145,164-165,418,452,457,503-504,506-507
+scripts/mount-projects.sh
+  s_3e1b642aa1bee7::t_9c6af008501798 317,322-323,340-345,359-364
+tests/overlay.venom.yml
+  s_3e1b642aa1bee7::t_002cfba192c382 336-337,423-498,748,775,826,874
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5158aaf7a62708c82d9b076caebdb39143906df6",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
