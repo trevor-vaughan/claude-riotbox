@@ -1,0 +1,26 @@
+agents/claude/sync-settings.sh
+  s_380b81642d99d4::t_64fff41ef6c5cc 23-26,29,39-40,45-77,92-94,101,103-104,106,114-115,117,147-150,162-164,166
+tests/sync-claude-settings.venom.yml
+  s_380b81642d99d4::t_82981725d274b7 312-315
+  s_380b81642d99d4::t_16b51dbd04b504 206-311,316-396
+agents/claude/manifest.sh
+  s_380b81642d99d4::t_0948e6d0ddf513 130-133
+tests/lib/sync-settings-test-helpers.sh
+  s_380b81642d99d4::t_16b51dbd04b504 41-63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "84ff934d7010524fc1671c14de3d84fd4d3b8c6d",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
