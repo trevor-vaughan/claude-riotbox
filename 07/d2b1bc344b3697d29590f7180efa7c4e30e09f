@@ -1,0 +1,32 @@
+README.md
+  s_3e1b642aa1bee7::t_ea703d3e7dc645 1349-1352
+  s_3e1b642aa1bee7::t_290f34ce3ab9a7 159,165,194-223,225-229
+  s_3e1b642aa1bee7::t_d0ab5c7c7d3525 825-834,840-847,889-891,897,899-900,1058,1061-1063,1072,1076-1077,1104-1106,1111-1113,1951
+  s_3e1b642aa1bee7::t_dd5c899682ef5d 224
+  s_3e1b642aa1bee7::t_8c36015c1c13a3 13,28,32,237
+  s_3e1b642aa1bee7::t_5fc38a45adfba4 375,399-400,506,783-784
+  s_3e1b642aa1bee7::t_8798fba5e398dc 398
+  s_3e1b642aa1bee7::t_7e90db4c2d7e10 1715-1716
+  s_3e1b642aa1bee7::t_acae376ebc6f90 230
+THREAT_MODEL.md
+  s_3e1b642aa1bee7::t_55b9052c222760 184,192-200
+  s_3e1b642aa1bee7::t_1463145a641370 201
+tests/pi.venom.yml
+  s_3e1b642aa1bee7::t_a6e85e1b80a365 735-748
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "07d2b1bc344b3697d29590f7180efa7c4e30e09f",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
