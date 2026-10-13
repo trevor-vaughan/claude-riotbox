@@ -1,0 +1,26 @@
+bin/riotbox
+  s_3e1b642aa1bee7::t_0418527f566655 373,390-393
+  s_3e1b642aa1bee7::t_ac14c9b13665b2 394
+tests/tokscale.venom.yml
+  s_3e1b642aa1bee7::t_0418527f566655 24,41
+.taskfiles/container.yml
+  s_3e1b642aa1bee7::t_0418527f566655 30
+scripts/tokscale-riotbox.sh
+  s_3e1b642aa1bee7::t_0418527f566655 10,12-13,92-94,135-137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1fff18303693161d021dad50e48a29d695227e47",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
