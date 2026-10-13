@@ -1,0 +1,24 @@
+tests/doctor.venom.yml
+  s_380b81642d99d4::t_050c4f076c00a3 45-57,177-193,195-198
+  s_380b81642d99d4::t_790ab2bad56b08 194,199
+scripts/mount-projects.sh
+  s_380b81642d99d4::t_260cb81d568efa 524-527
+scripts/preflight.sh
+  s_380b81642d99d4::t_260cb81d568efa 57,193-202,561
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f3675c8d387808173c235d542eb2b4590cc1afb6",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
