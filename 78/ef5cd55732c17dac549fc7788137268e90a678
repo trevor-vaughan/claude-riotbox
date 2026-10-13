@@ -1,0 +1,31 @@
+tests/lib/session-commands-helpers.sh
+  s_3e1b642aa1bee7::t_2258b4c8101b18 12-13,27,34,39,42
+libexec/session-summary.sh
+  s_3e1b642aa1bee7::t_edbd1bd8afd8ad 3-18,21,23,25
+libexec/list-sessions.sh
+  s_3e1b642aa1bee7::t_edbd1bd8afd8ad 4,6-9,40-41
+tests/session-commands.venom.yml
+  s_3e1b642aa1bee7::t_2258b4c8101b18 280-381
+libexec/reset-session.sh
+  s_3e1b642aa1bee7::t_268c8b37c9a124 53
+  s_3e1b642aa1bee7::t_edbd1bd8afd8ad 9-11,46,68,75-80
+libexec/remove-session.sh
+  s_3e1b642aa1bee7::t_268c8b37c9a124 87,102
+  s_3e1b642aa1bee7::t_edbd1bd8afd8ad 8-11,15-17,84,86,93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "78ef5cd55732c17dac549fc7788137268e90a678",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
