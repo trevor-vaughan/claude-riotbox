@@ -1,0 +1,22 @@
+tests/tokscale.venom.yml
+  s_3e1b642aa1bee7::t_74645bee0678bf 68-87,89-92
+  s_3e1b642aa1bee7::t_e63d6915443380 88
+scripts/tokscale-riotbox.sh
+  s_3e1b642aa1bee7::t_2dcba2acf3cc19 99-101,107,114,117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "41e28a8989f9fc776b2d150630480395f178402f",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
