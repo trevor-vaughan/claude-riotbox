@@ -1,0 +1,24 @@
+tests/pi.venom.yml
+  s_3e1b642aa1bee7::t_836a89ee08bad0 505-506,509-512,520,524-525,529,553-559
+agents/pi/manifest.sh
+  s_3e1b642aa1bee7::t_e98c59df06ba5e 60-64,99-101,104-105,108-111,122,131
+  s_3e1b642aa1bee7::t_0a4e292501830c 106-107
+tests/context-mode-pi.venom.yml
+  s_3e1b642aa1bee7::t_836a89ee08bad0 24,51,80,108,135,167,195,222,249,277,333
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6d5a418107749ae39e8a9ac48d590db07c97ccdf",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
