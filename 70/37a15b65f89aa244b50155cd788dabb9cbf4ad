@@ -1,0 +1,21 @@
+tests/fixtures/pi/riotbox-faux-provider.js
+  s_3e1b642aa1bee7::t_b07581fb7e717f 1-15
+tests/pi-integration.venom.yml
+  s_3e1b642aa1bee7::t_b07581fb7e717f 1-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7037a15b65f89aa244b50155cd788dabb9cbf4ad",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
