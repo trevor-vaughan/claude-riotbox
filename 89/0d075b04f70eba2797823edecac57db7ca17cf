@@ -1,0 +1,25 @@
+container/pi/package.json
+  s_3e1b642aa1bee7::t_d588af54cb2acc 1-14
+tests/pi.venom.yml
+  s_3e1b642aa1bee7::t_63d531fb9c5b85 1-60
+.gitattributes
+  s_3e1b642aa1bee7::t_28e901d8de1008 12
+container/pi/package-lock.json
+  s_3e1b642aa1bee7::t_2e2a1224e82564 1-170
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "890d075b04f70eba2797823edecac57db7ca17cf",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
