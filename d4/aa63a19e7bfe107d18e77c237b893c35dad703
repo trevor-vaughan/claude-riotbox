@@ -1,0 +1,46 @@
+container/agent-wrapper.sh
+  s_380b81642d99d4::t_391a8e5feda298 67
+  s_380b81642d99d4::t_ceea7f401fd800 52-59
+agents/opencode/headroom-exec.sh
+  s_380b81642d99d4::t_184ef8d9e91b04 31-35
+THREAT_MODEL.md
+  s_380b81642d99d4::t_4c28e15623c5c2 507-512
+tests/headroom.venom.yml
+  s_380b81642d99d4::t_de33cedd290cd7 124,129,134-137,144-146,148
+  s_380b81642d99d4::t_75e30e53432c31 216-259,480-531
+  s_380b81642d99d4::t_7706fc7b12de28 532
+scripts/mount-projects.sh
+  s_380b81642d99d4::t_eb3e821ad838d4 874-880,885-890
+README.md
+  s_380b81642d99d4::t_6b5f9d441a81b5 933-937
+  s_380b81642d99d4::t_7c5a65657f73bf 913-923
+tests/agents.venom.yml
+  s_380b81642d99d4::t_0849cbd31b370e 576,581-585
+  s_380b81642d99d4::t_2e449f1429f26f 586
+agents/claude/manifest.sh
+  s_380b81642d99d4::t_94a87bce83a9f2 90-101,118
+docs/dev/agent-contract.md
+  s_380b81642d99d4::t_2fe0869777b02f 363-365
+  s_380b81642d99d4::t_96842515a61c99 340-343
+tests/headroom-opencode.venom.yml
+  s_380b81642d99d4::t_7356665874d0f3 292-339
+  s_380b81642d99d4::t_96842515a61c99 18-19
+scripts/lib/session-state.sh
+  s_380b81642d99d4::t_03d56ffb981800 308-341
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "72f053e3e02d08f411622fae4a3be3cd07af490a",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
