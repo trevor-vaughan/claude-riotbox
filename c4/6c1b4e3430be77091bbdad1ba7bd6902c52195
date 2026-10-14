@@ -1,0 +1,21 @@
+THREAT_MODEL.md
+  s_380b81642d99d4::t_a891993130452d 337
+docs/dev/mount-projects.md
+  s_380b81642d99d4::t_46e8f271f41a7b 128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c46c1b4e3430be77091bbdad1ba7bd6902c52195",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
