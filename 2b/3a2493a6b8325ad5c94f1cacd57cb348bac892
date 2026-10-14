@@ -1,0 +1,54 @@
+THREAT_MODEL.md
+  s_380b81642d99d4::t_76990baafc7691 280-282,290-311
+scripts/overlay.sh
+  s_380b81642d99d4::t_0ee0b16023885a 537
+  s_380b81642d99d4::t_4e697a7337a47c 674
+  s_380b81642d99d4::t_92b8a88fcb717d 214
+  s_380b81642d99d4::t_3d5f187f6eac75 14-18
+  s_380b81642d99d4::t_a9908f5bb1bb95 623-628,630,648-652,662-673,675-678
+  s_380b81642d99d4::t_b1a25a1fef5bf5 97-98,160-163,187-213,215-232,235-237,239,241-243
+  s_380b81642d99d4::t_a1962c5c92ffee 515-521,523-524
+tests/overlay.venom.yml
+  s_380b81642d99d4::t_4cf25fdc4659b1 341-342,1859-1860,2027-2035,2040
+  s_380b81642d99d4::t_0ee0b16023885a 2274
+  s_380b81642d99d4::t_451110229a00a4 2099-2101,2112
+  s_380b81642d99d4::t_8af21942fa6b99 2165-2181,2183-2186,2189-2273,2275-2281,2284-2354,2357-2360
+  s_380b81642d99d4::t_805cffcb848582 2187-2188,2355-2356
+  s_380b81642d99d4::t_b3f4140e2827cc 2182,2282-2283
+scripts/lib/overlay-ignore.sh
+  s_380b81642d99d4::t_e22a7fb3226802 8
+  s_380b81642d99d4::t_b4e4028fbc4f14 5-6,57-60
+  s_380b81642d99d4::t_a7de296d37f663 126-138
+libexec/launch.sh
+  s_380b81642d99d4::t_0ee0b16023885a 76
+  s_380b81642d99d4::t_0ab3e7d94c905e 67-75,77-85,100,136-138
+scripts/mount-projects.sh
+  s_380b81642d99d4::t_92b8a88fcb717d 260
+  s_380b81642d99d4::t_b1a25a1fef5bf5 322-333,336,338,340-341
+  s_380b81642d99d4::t_a7de296d37f663 37-38,249-259,261-301,555-556
+tests/lib/overlay-test-helpers.sh
+  s_380b81642d99d4::t_92b8a88fcb717d 142
+  s_380b81642d99d4::t_3c8221f4e94332 8-10,45,124
+  s_380b81642d99d4::t_8af21942fa6b99 126-141,143-147
+  s_380b81642d99d4::t_6788d31c6fe067 125
+README.md
+  s_380b81642d99d4::t_76990baafc7691 1525-1547
+tests/session-commands.venom.yml
+  s_380b81642d99d4::t_923ddf660cb39e 400-402,455,457
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2b3a2493a6b8325ad5c94f1cacd57cb348bac892",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
