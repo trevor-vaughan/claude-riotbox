@@ -1,0 +1,21 @@
+README.md
+  s_380b81642d99d4::t_365c6af3cf23ff 958-961
+docs/dev/agent-contract.md
+  s_380b81642d99d4::t_a4556b077ca701 343-344
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "77e51fe9b7b0837f92203d6ad2a08f546e0e3bdf",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
