@@ -4,6 +4,47 @@ tests/lib/session-commands-helpers.sh
   s_380b81642d99d4::t_3b31bf9588dc70 10-14,43
 tests/lib/session-state-helpers.sh
   s_380b81642d99d4::t_3344a013fa9a7f 12-15,41,99-100,125
+scripts/mount-projects.sh
+  s_380b81642d99d4::t_09898eb63307b1 433-435
+  s_380b81642d99d4::t_5921f97aa1ba7c 42-43,48,58,66,90-94
+  s_380b81642d99d4::t_51b3871408d929 84-85,125-126
+  s_380b81642d99d4::t_34288b3eb53b8d 412-422,438-441,472-478,483-491
+  s_380b81642d99d4::t_380527205a7db8 479-482
+scripts/lib/running-sessions.sh
+  s_380b81642d99d4::t_6afe88300d9c21 3,6-7,16-24,36-41
+tests/overlay.venom.yml
+  s_380b81642d99d4::t_6b7aa762f9ca2e 1013-1037
+scripts/overlay.sh
+  s_380b81642d99d4::t_bccdcb6dd39b64 31-33,310,761-762
+  s_380b81642d99d4::t_09898eb63307b1 344-345,353,365,744-745
+  s_380b81642d99d4::t_eea745f9c11c2b 399-411,421-425,428-429,431-435
+THREAT_MODEL.md
+  s_380b81642d99d4::t_bccdcb6dd39b64 360-364,462-465,480-481
+  s_380b81642d99d4::t_56a30aaff9986e 355-359
+  s_380b81642d99d4::t_a891993130452d 337
+tests/lib/engine-stub.sh
+  s_380b81642d99d4::t_c2fe37d0f4b30c 14-18,20-22,48-50,59-60
+tests/session-key-migration.venom.yml
+  s_380b81642d99d4::t_6b7aa762f9ca2e 455-461
+  s_380b81642d99d4::t_0e63df128f3c63 16-44
+  s_380b81642d99d4::t_fa77e1ce9243ee 399-434
+  s_380b81642d99d4::t_6da03f9b227f6d 169-229,491-492
+  s_380b81642d99d4::t_56a30aaff9986e 130
+  s_380b81642d99d4::t_b1ed7aaa05779a 305-322,325-326,328,330-333
+docs/dev/decisions/session-state-dir.md
+  s_380b81642d99d4::t_bccdcb6dd39b64 200
+README.md
+  s_380b81642d99d4::t_bccdcb6dd39b64 569,1632-1634
+  s_380b81642d99d4::t_56a30aaff9986e 567-568
+  s_380b81642d99d4::t_45879890c09ad7 580,616-619,624
+  s_380b81642d99d4::t_9ce96007d78a76 593
+scripts/lib/session-state.sh
+  s_380b81642d99d4::t_09898eb63307b1 287,533-535
+  s_380b81642d99d4::t_afe350431ca7ac 344-346,352-356
+tests/session-dir-name.venom.yml
+  s_380b81642d99d4::t_0e63df128f3c63 173-193
+docs/dev/mount-projects.md
+  s_380b81642d99d4::t_46e8f271f41a7b 128
 ---
 {
   "schema_version": "authorship/3.0.0",

@@ -10,7 +10,8 @@ tests/headroom.venom.yml
   s_380b81642d99d4::t_75e30e53432c31 216-259,480-531
   s_380b81642d99d4::t_7706fc7b12de28 532
 scripts/mount-projects.sh
-  s_380b81642d99d4::t_eb3e821ad838d4 874-880,885-890
+  s_380b81642d99d4::t_eb3e821ad838d4 874-880,885-890,890-896,901-906
+  s_380b81642d99d4::t_9af36cf742696d 136-144,153-160,162,186-190,216-217
 README.md
   s_380b81642d99d4::t_6b5f9d441a81b5 933-937
   s_380b81642d99d4::t_7c5a65657f73bf 913-923
@@ -27,6 +28,9 @@ tests/headroom-opencode.venom.yml
   s_380b81642d99d4::t_96842515a61c99 18-19
 scripts/lib/session-state.sh
   s_380b81642d99d4::t_03d56ffb981800 308-341
+tests/container-name.venom.yml
+  s_380b81642d99d4::t_f827e7834c79ce 11-14,27,67,96,126,155-214
+  s_380b81642d99d4::t_2691b747c538a7 215-233
 ---
 {
   "schema_version": "authorship/3.0.0",
