@@ -1,0 +1,28 @@
+scripts/mount-projects.sh
+  s_380b81642d99d4::t_812c0d34f0afb1 249,255-267,269-270,272-288,291-296,307,310-316,557-561,595
+  s_380b81642d99d4::t_8276acb52c1040 271,308-309
+README.md
+  s_380b81642d99d4::t_5d501ceb804a91 1527,1548-1554
+THREAT_MODEL.md
+  s_380b81642d99d4::t_5d501ceb804a91 317-325
+scripts/overlay.sh
+  s_380b81642d99d4::t_92d689e6de1990 576,605
+tests/overlay.venom.yml
+  s_380b81642d99d4::t_900ec5d22fade1 1966-1967,1978,2159-2160,2315,2361-2437
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cc4f769773f3cfbab14befe517f0a0e2e93a8f07",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
