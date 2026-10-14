@@ -2,6 +2,24 @@ scripts/tokscale-riotbox.sh
   s_3e1b642aa1bee7::t_3ca72bcd756f08 7-8,10-11,43-45,54,90-92,95-99,102-103,106-109,115
 tests/tokscale.venom.yml
   s_3e1b642aa1bee7::t_597a0370cf435d 15-17,19-21,37,39,45-67
+tests/lib/session-commands-helpers.sh
+  s_3e1b642aa1bee7::t_2258b4c8101b18 12-13,27,34,39,42
+libexec/session-summary.sh
+  s_3e1b642aa1bee7::t_edbd1bd8afd8ad 3-18,21,23,25
+libexec/list-sessions.sh
+  s_3e1b642aa1bee7::t_edbd1bd8afd8ad 4,6-9,44-45
+  s_3e1b642aa1bee7::t_960226b2b762cd 11-16
+tests/session-commands.venom.yml
+  s_3e1b642aa1bee7::t_2258b4c8101b18 280-381
+  s_3e1b642aa1bee7::t_960226b2b762cd 382-396
+libexec/reset-session.sh
+  s_3e1b642aa1bee7::t_268c8b37c9a124 60
+  s_3e1b642aa1bee7::t_edbd1bd8afd8ad 9-11,46,75,86-88
+  s_3e1b642aa1bee7::t_960226b2b762cd 53-59,82-85
+libexec/remove-session.sh
+  s_3e1b642aa1bee7::t_268c8b37c9a124 107
+  s_3e1b642aa1bee7::t_edbd1bd8afd8ad 8-11,15-17,98
+  s_3e1b642aa1bee7::t_960226b2b762cd 85-92
 ---
 {
   "schema_version": "authorship/3.0.0",

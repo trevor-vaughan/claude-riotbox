@@ -1,10 +1,13 @@
 scripts/lib/session-state.sh
-  s_3e1b642aa1bee7::t_239a48f166aa1a 1-98
+  s_3e1b642aa1bee7::t_239a48f166aa1a 1-98,1-40,43-62,66-67,73-97,104-107,116-118
+  s_3e1b642aa1bee7::t_db86a084822dc3 41-42,63-65,68-72,98-103,108-115
 scripts/mount-projects.sh
   s_3e1b642aa1bee7::t_239a48f166aa1a 15-16,35-37,152-166,225,239,308-314
   s_3e1b642aa1bee7::t_dae00d3c8c94ea 315-316
 tests/session-state.venom.yml
-  s_3e1b642aa1bee7::t_b619fbf82311ef 1-238
+  s_3e1b642aa1bee7::t_b619fbf82311ef 1-238,1-65,86-227,229-235,288-310
+  s_3e1b642aa1bee7::t_7edaf03eb1786c 66-85,228,236-286
+  s_3e1b642aa1bee7::t_068eaf27124435 287
 tests/session-dir-name.venom.yml
   s_3e1b642aa1bee7::t_b619fbf82311ef 219-244
 tests/mount-modes.venom.yml

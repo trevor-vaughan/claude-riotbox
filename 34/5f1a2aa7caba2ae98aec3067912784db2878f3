@@ -2,6 +2,26 @@ tests/lib-json-write.venom.yml
   s_3e1b642aa1bee7::t_2c66a67deb522b 183-257
 scripts/lib/json-write.sh
   s_3e1b642aa1bee7::t_c6dd57d8ec49f0 32-37,72
+tests/lib/session-commands-helpers.sh
+  s_3e1b642aa1bee7::t_c25982fbed8693 1-54
+tests/session-commands.venom.yml
+  s_3e1b642aa1bee7::t_c25982fbed8693 1-146
+  s_3e1b642aa1bee7::t_118677682d5536 147-184,191-193,195,197-222,226-279
+  s_3e1b642aa1bee7::t_532054e769e273 185-190,194,196,223-224
+  s_3e1b642aa1bee7::t_23bec7594dda92 225
+libexec/remove-session.sh
+  s_3e1b642aa1bee7::t_7e3d37c7f22713 6-10,38-41,52-56,62,66-73
+  s_3e1b642aa1bee7::t_8865dcc49d70b2 48-51,81-87,98
+  s_3e1b642aa1bee7::t_532054e769e273 80
+libexec/reset-session.sh
+  s_3e1b642aa1bee7::t_7e3d37c7f22713 34-36,60
+  s_3e1b642aa1bee7::t_8865dcc49d70b2 51,56-59,73
+  s_3e1b642aa1bee7::t_532054e769e273 55
+scripts/mount-projects.sh
+  s_3e1b642aa1bee7::t_606b841b48e0bc 175-178,259-260
+  s_3e1b642aa1bee7::t_532054e769e273 174
+scripts/overlay.sh
+  s_3e1b642aa1bee7::t_dd5216ca521aa0 47-48
 ---
 {
   "schema_version": "authorship/3.0.0",
