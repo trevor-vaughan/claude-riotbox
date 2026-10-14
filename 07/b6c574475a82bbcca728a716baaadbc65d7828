@@ -1,0 +1,25 @@
+tests/checkpoint-snapshot.venom.yml
+  s_380b81642d99d4::t_8f9a47241dbbc2 197,456
+tests/checkpoints-verb.venom.yml
+  s_380b81642d99d4::t_a0df4c8236e0eb 1042,1044,1046,1053,1103-1104,1141-1142
+tests/inject-system-prompt.venom.yml
+  s_380b81642d99d4::t_63af1a909495be 65,144
+tests/opencode.venom.yml
+  s_380b81642d99d4::t_24262829311899 697,881-882,897,913,999,1028,1057
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "07b6c574475a82bbcca728a716baaadbc65d7828",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
