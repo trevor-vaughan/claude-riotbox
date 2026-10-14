@@ -1,0 +1,30 @@
+scripts/lib/session-state.sh
+  s_3e1b642aa1bee7::t_239a48f166aa1a 1-98
+scripts/mount-projects.sh
+  s_3e1b642aa1bee7::t_239a48f166aa1a 15-16,35-37,152-166,225,239,308-314
+  s_3e1b642aa1bee7::t_dae00d3c8c94ea 315-316
+tests/session-state.venom.yml
+  s_3e1b642aa1bee7::t_b619fbf82311ef 1-238
+tests/session-dir-name.venom.yml
+  s_3e1b642aa1bee7::t_b619fbf82311ef 219-244
+tests/mount-modes.venom.yml
+  s_3e1b642aa1bee7::t_b619fbf82311ef 349-353,360
+tests/lib/session-state-helpers.sh
+  s_3e1b642aa1bee7::t_b619fbf82311ef 1-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "72d6dd4490c77e531c1bad061b80d69da644644c",
+  "prompts": {},
+  "sessions": {
+    "s_3e1b642aa1bee7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dea17683-ce54-431d-8b3c-b662894336ac",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
