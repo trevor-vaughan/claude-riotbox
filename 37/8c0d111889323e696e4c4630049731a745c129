@@ -1,0 +1,41 @@
+scripts/mount-projects.sh
+  s_380b81642d99d4::t_aef5e58439bc4b 316-338
+  s_380b81642d99d4::t_0f768ef774d8eb 339-340
+docs/dev/mount-projects.md
+  s_380b81642d99d4::t_60822876906d23 69-78
+scripts/lib/session-state.sh
+  s_380b81642d99d4::t_aef5e58439bc4b 35-36,389,472,488,523-524,530-558
+  s_380b81642d99d4::t_044505af017c91 164-166
+  s_380b81642d99d4::t_ec932c956a552b 243-245,286-288,290-293
+  s_380b81642d99d4::t_2c1bdd8abbc339 66,73-75,98-102,118-122,135-136,143-144,163,174-178,182,333,357-358,360-365,381,385-388,393,395,457,461,468-471,473-487,489-522,525-529,559
+tests/lib/session-state-helpers.sh
+  s_380b81642d99d4::t_daa998ad974b7d 10-12,18-19,32
+scripts/overlay.sh
+  s_380b81642d99d4::t_aef5e58439bc4b 94,121
+THREAT_MODEL.md
+  s_380b81642d99d4::t_60822876906d23 259-267
+README.md
+  s_380b81642d99d4::t_319e7fde809e6f 544-546
+libexec/migrate-session.sh
+  s_380b81642d99d4::t_ec932c956a552b 13-20
+tests/session-state.venom.yml
+  s_380b81642d99d4::t_d602e81bd1bc0a 1340,1493-1494,1612-1775
+docs/dev/decisions/session-state-dir.md
+  s_380b81642d99d4::t_60822876906d23 163-168
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "378c0d111889323e696e4c4630049731a745c129",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
