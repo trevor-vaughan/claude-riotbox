@@ -1,0 +1,35 @@
+tests/session-state.venom.yml
+  s_380b81642d99d4::t_c143fead7b0ba8 1724-1731,1733,1735
+scripts/lib/running-sessions.sh
+  s_380b81642d99d4::t_33a7d16dc7d0fc 16,18-21,32-39
+tests/overlay.venom.yml
+  s_380b81642d99d4::t_c143fead7b0ba8 1013-1042
+README.md
+  s_380b81642d99d4::t_b8923a80ab8fc0 545
+THREAT_MODEL.md
+  s_380b81642d99d4::t_b8923a80ab8fc0 260-272
+docs/dev/decisions/session-state-dir.md
+  s_380b81642d99d4::t_b8923a80ab8fc0 167-172
+docs/dev/mount-projects.md
+  s_380b81642d99d4::t_b8923a80ab8fc0 71-76
+scripts/lib/session-state.sh
+  s_380b81642d99d4::t_b8923a80ab8fc0 386-389
+tests/lib/engine-stub.sh
+  s_380b81642d99d4::t_c143fead7b0ba8 13-20,38,45-51,53-56,73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0b864faa9202ff5715f2df4e861adae63cccdc4f",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
