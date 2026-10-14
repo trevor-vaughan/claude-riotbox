@@ -1,0 +1,32 @@
+docs/dev/decisions/session-state-dir.md
+  s_380b81642d99d4::t_4af0a43a7bdd79 205-219
+README.md
+  s_380b81642d99d4::t_270cb442481a0c 597-600,612,626
+  s_380b81642d99d4::t_7a48a5ac0b488f 603,616-621
+  s_380b81642d99d4::t_4784612e730d8f 526-527,562-572,575,579-589,601,613-614,623,1594-1595
+  s_380b81642d99d4::t_1e72520661e1c4 602,615
+THREAT_MODEL.md
+  s_380b81642d99d4::t_b4fd0ee7679f2e 328
+  s_380b81642d99d4::t_270cb442481a0c 359-365
+  s_380b81642d99d4::t_055e73bfcb515b 311-327,334-358,366-367
+  s_380b81642d99d4::t_4e69f18fb01b0d 368
+docs/dev/mount-projects.md
+  s_380b81642d99d4::t_4af0a43a7bdd79 3,122-151
+  s_380b81642d99d4::t_b3491910a20927 152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e86e822aedb8d64f483bc0a8cb7edfb8a43b6730",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
