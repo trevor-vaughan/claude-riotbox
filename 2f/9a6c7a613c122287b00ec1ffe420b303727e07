@@ -1,0 +1,22 @@
+scripts/mount-projects.sh
+  s_380b81642d99d4::t_5921f97aa1ba7c 42-43,48,58,66,90-94
+  s_380b81642d99d4::t_51b3871408d929 84-85,125-126
+tests/session-dir-name.venom.yml
+  s_380b81642d99d4::t_0e63df128f3c63 173-193
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2f9a6c7a613c122287b00ec1ffe420b303727e07",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
