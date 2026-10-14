@@ -1,0 +1,29 @@
+libexec/launch.sh
+  s_380b81642d99d4::t_b617269ef21bb8 99-100
+bin/riotbox
+  s_380b81642d99d4::t_329a8c42cd61dc 75-77
+tests/overlay.venom.yml
+  s_380b81642d99d4::t_48280e84cc242b 2468-2548
+README.md
+  s_380b81642d99d4::t_6259349bb6a583 579,586
+  s_380b81642d99d4::t_329a8c42cd61dc 542
+  s_380b81642d99d4::t_8e71027537ef1f 587
+scripts/overlay.sh
+  s_380b81642d99d4::t_b617269ef21bb8 106-116,516-517,646,663,854-855,908,982,1002
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ca64968bb065a9ffce023462eb3dc70b9a77ab03",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
