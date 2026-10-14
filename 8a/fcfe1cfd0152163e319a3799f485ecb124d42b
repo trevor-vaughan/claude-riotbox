@@ -1,0 +1,39 @@
+THREAT_MODEL.md
+  s_380b81642d99d4::t_974ad97bfaa92f 536-540
+scripts/overlay.sh
+  s_380b81642d99d4::t_6f5e6eea061538 656,660-664,736-741,849-854,936-943,1194-1195,1200-1201,1210-1211,1213,1241-1256
+  s_380b81642d99d4::t_d18a1af58fca22 1202-1209,1214
+  s_380b81642d99d4::t_89acd82a1df0c8 1196-1199,1212
+  s_380b81642d99d4::t_8b3e2b0a21beff 1215-1216
+scripts/lib/overlay-ignore.sh
+  s_380b81642d99d4::t_ecfd889488d676 3-4,29-30
+  s_380b81642d99d4::t_33a572ad7333b8 22-26,45-49,78-90,106-108
+  s_380b81642d99d4::t_316d1ef1d79590 109-115
+tests/overlay.venom.yml
+  s_380b81642d99d4::t_0082a2f5c7b959 740-860
+README.md
+  s_380b81642d99d4::t_e107212ec6aba6 1702-1709
+  s_380b81642d99d4::t_44293b271b4828 959-964
+tests/headroom.venom.yml
+  s_380b81642d99d4::t_e45aa0b0b205af 552-574
+tests/lib-overlay-ignore.venom.yml
+  s_380b81642d99d4::t_0082a2f5c7b959 37-57
+scripts/lib/session-state.sh
+  s_380b81642d99d4::t_8ab3e69531c69b 314-325,327,331-333,335-342,348-351,353-354
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8afcfe1cfd0152163e319a3799f485ecb124d42b",
+  "prompts": {},
+  "sessions": {
+    "s_380b81642d99d4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e805d97e-8ae2-477a-a652-ab7dde5406c3",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
