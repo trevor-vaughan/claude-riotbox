@@ -466,6 +466,27 @@ testcases:
           - result.systemout ShouldContainSubstring "Pending overlays:"
           - result.systemout ShouldContainSubstring "1 added/modified, 0 deleted"
 
+  - name: List adopts legacy overlay data of a session that made its .projects a directory
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # The launch record in the state dir still names the session.
+          rm -rf "${STATE}/overlay"
+          rm "${SESSION}/.projects"
+          mkdir "${SESSION}/.projects"
+          mkdir -p "${SESSION}/overlay/project/upper"
+          echo "legacy" > "${SESSION}/overlay/project/upper/legacy.txt"
+          "{{.riotbox_dir}}/scripts/overlay.sh" list 2>/dev/null
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Pending overlays:"
+          - result.systemout ShouldContainSubstring "1 added/modified, 0 deleted"
+
   - name: Reject never follows an overlay entry planted as a symlink in the session dir
     steps:
       - type: exec
