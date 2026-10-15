@@ -4,7 +4,7 @@ tests/Containerfile.test
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.5",
-  "base_commit_sha": "553f6ac762d54e3c8b5ee0cb07eb8c6ed5e6137b",
+  "base_commit_sha": "943ccdd9b71756ea0c22f87dac98430002202ce3",
   "prompts": {},
   "sessions": {
     "s_79bc97b7ba8851": {
