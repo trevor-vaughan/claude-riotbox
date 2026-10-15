@@ -240,7 +240,11 @@ executed, not sourced, so they source it from their own path, as
 replaces a symlink or file with a real directory instead of following it.
 Then build the copy in a fresh `mktemp -d "<state_dir>/.sync.XXXXXX"` dir —
 the state dir's top level is never mounted, and it is on the same filesystem —
-and install it with `rm -rf` of the old copy followed by `mv -T`. The rename
+and install each top-level entry with `rm -rf` of the old one followed by
+`mv -T`. Install entries inside the mount source, never the mount source
+itself: a bind mount holds the directory's inode, not its path, so replacing
+the directory leaves every running session of the project holding a deleted,
+empty one. The rename
 never follows anything at the destination. A staged file silently replaces a
 file or link there; a staged directory silently replaces an empty directory and
 fails on anything else — a link, a file or a non-empty directory re-planted
@@ -248,8 +252,9 @@ after the `rm -rf`. Treat that failure as `changed during sync`, say so on
 stderr and exit 1. A single file at the state dir's top level, as in
 the aider example in [adding-an-agent.md](adding-an-agent.md), can be copied
 directly: the container cannot reach that level to plant a link there. An agent that keeps its own state beside its
-config, as Pi does, renames only an allowlist of entries rather than the whole
-copy; see that script's header. Claude's sync applies the same staging to the
+config, as Pi does, renames only an allowlist of entries; opencode renames
+every entry except those its sessions write at runtime. See each script's
+header. Claude's sync applies the same staging to the
 session dir, using a `.claude-sync.*` dir in `riotbox/` (see
 `agents/claude/sync-settings.sh`).
 
@@ -508,8 +513,9 @@ fallback:
   one more thing for a future reader to explain.
 - **opencode does.** `OpenCodeAdapter.getConfigDir()` reads
   `XDG_CONFIG_HOME`, which the image never sets, and falls back to
-  `~/.config/opencode`: the config mount, whose contents the host sync
-  replaces on relaunch whenever the host has a `~/.config/opencode`. The DB
+  `~/.config/opencode`: the config mount, which holds the host config copy
+  that the sync rewrites on every relaunch when the host has a
+  `~/.config/opencode`. The DB
   holds verbatim tool output that has to persist with the session, so the verb
   pins it under the data mount, `~/.local/share/opencode`.
 - **Pi does.** PiAdapter's default DB root is `~/.pi/context-mode` — outside

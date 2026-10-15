@@ -12,7 +12,7 @@
 # anything nested in it for a symlink (see scripts/lib/session-state.sh).
 #
 # Pi keeps its own state in the same directory as the config it reads, so this
-# is NOT opencode's delete-and-recopy of a whole tree. Only the allowlisted
+# does NOT mirror the whole host tree, as opencode's sync does. Only the allowlisted
 # entries below are replaced on each launch; everything else under
 # <state-dir>/pi-agent/ belongs to Pi and survives — above all sessions/,
 # which holds the conversation history `riotbox resume` continues.

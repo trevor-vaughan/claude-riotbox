@@ -179,7 +179,7 @@ Long-lived AWS access keys (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS
 
 ### Opencode config
 
-Your host `~/.config/opencode/` (agents, commands, themes, `opencode.json`, `opencode.jsonc`) is copied into the session's state dir (`~/.local/share/riotbox-state/<session>/opencode-config/`) at every launch. The container then merges `opencode.json` and `opencode.jsonc` into a single `opencode.jsonc` (jsonc wins on key conflict) and forces these keys to RiotBox values regardless of host input:
+Your host `~/.config/opencode/` (agents, commands, themes, `opencode.json`, `opencode.jsonc`) is copied into the session's state dir (`~/.local/share/riotbox-state/<session>/opencode-config/`) at every launch; sessions of the same project that are already running see the refreshed copy. The container then merges `opencode.json` and `opencode.jsonc` into a single `opencode.jsonc` (jsonc wins on key conflict) and forces these keys to RiotBox values regardless of host input:
 
 - `permission = "allow"` — the container is RiotBox; per-tool permission prompts are pointless inside it.
 - `share = "disabled"` — no session telemetry from the container.

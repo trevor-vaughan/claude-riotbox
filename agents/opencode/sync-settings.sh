@@ -12,11 +12,12 @@
 # anything nested in it for a symlink (see scripts/lib/session-state.sh).
 #
 # Behavior:
-#   * <state-dir>/opencode-config/ — host config copy, refreshed,
+#   * <state-dir>/opencode-config/ — host config copy, refreshed in place,
 #       minus opencode's plugin-install output (node_modules/, package.json,
 #       package-lock.json, bun.lock, .gitignore) which the container rebuilds
 #       from the persistent riotbox-cache-opencode volume, and minus the
-#       host's Context Mode data (context-mode/, memory/).
+#       host's Context Mode data (context-mode/, memory/). Those entries
+#       belong to the session and survive a re-sync.
 #   * <state-dir>/opencode-data/   — empty session-owned data dir
 #
 # Volume flags printed to stdout:
@@ -57,17 +58,27 @@ ensure_real_dir "${STATE_DATA}"
 # Re-copy on each launch so renamed/removed agents, commands, and themes
 # do not linger. -L dereferences symlinks (host configs may include
 # symlinked dev checkouts).
+#
+# Top-level entries the copy skips because the session writes them at
+# runtime (see the exclusion notes below). The re-sync leaves them in place.
+RUNTIME_ENTRIES=(
+	node_modules package.json package-lock.json bun.lock .gitignore
+	context-mode memory
+)
+RUNTIME_PRUNE=()
+for entry in "${RUNTIME_ENTRIES[@]}"; do
+	RUNTIME_PRUNE+=(-path "./${entry}" -prune -o)
+done
+
 if [[ -d "${HOST_CONFIG_DIR}" ]]; then
 	# Two sessions of one project share opencode-config/, so a hostile
 	# container can plant a link in it at any moment. Extract into a staging
 	# dir the container cannot reach (the state dir itself is never mounted),
-	# then rename it into place: rename(2) replaces a planted link instead of
-	# following it, and fails rather than merging into a directory that
-	# appeared meanwhile.
+	# then rename each entry into place: rename(2) replaces a planted link
+	# instead of following it, and fails rather than merging into a directory
+	# that appeared meanwhile.
 	STAGE_DIR="$(mktemp -d "${STATE_DIR}/.sync.XXXXXX")"
 	trap 'rm -rf -- "${STAGE_DIR}"' EXIT
-	# mktemp makes the dir 0700; tar's "./" entry (find prints ".") then sets
-	# the host config dir's mode on it, so the installed copy is mountable.
 	# cp -rL aborts on dangling symlinks under set -e, leaving the config
 	# copy empty and the volume flags unprinted. Pre-filter with `find -L`:
 	# under -L, valid symlinks report their target's type, so only broken
@@ -94,27 +105,42 @@ if [[ -d "${HOST_CONFIG_DIR}" ]]; then
 	# <config>/memory only when CONTEXT_MODE_DATA_DIR is unset, i.e. RiotBox's
 	# Context Mode is off and the host opencode config loads context-mode as a
 	# plugin itself. That session starts with no auto-memory, by decision,
-	# rather than with a copy of the host's, and what it writes lands in this
-	# copy, so the next launch's re-stage discards it.
+	# rather than with a copy of the host's, and what it writes there stays
+	# with the session.
 	(
 		cd "${HOST_CONFIG_DIR}" &&
-			find -L . \
-				-path './node_modules' -prune -o \
-				-path './context-mode' -prune -o \
-				-path './memory' -prune -o \
-				\( ! -type l \
-				! -path './package.json' \
-				! -path './package-lock.json' \
-				! -path './bun.lock' \
-				! -path './.gitignore' \
-				-print0 \) |
+			find -L . "${RUNTIME_PRUNE[@]}" ! -type l -print0 |
 			tar -ch --null --no-recursion --files-from=- -f -
 	) | tar -xf - -C "${STAGE_DIR}/" --no-same-owner 2>/dev/null
-	rm -rf -- "${STATE_CONFIG:?STATE_CONFIG is required}"
-	mv -T -- "${STAGE_DIR}" "${STATE_CONFIG}" || {
-		echo "Error: opencode-config in ${STATE_DIR} changed during sync (another process, possibly a running session of this project, modified it); aborting." >&2
+
+	# opencode-config/ is the bind-mount source of every running session of
+	# this project, and a bind mount holds the directory's inode, not its path.
+	# Replacing the directory would leave those sessions holding a deleted,
+	# empty one, so swap the entries inside it instead. Clear every entry the
+	# sync owns first, so one removed or renamed on the host does not linger.
+	# shellcheck disable=SC2312 # the listing's status is checked through wait below
+	mapfile -d '' -t synced < <(cd "${STATE_CONFIG}" && find . -mindepth 1 -maxdepth 1 "${RUNTIME_PRUNE[@]}" -printf '%P\0')
+	# shellcheck disable=SC2154 # $! is the process substitution's PID
+	wait "$!" || {
+		echo "Error: could not list ${STATE_CONFIG}; aborting before an entry removed on the host could linger." >&2
 		exit 1
 	}
+	for entry in "${synced[@]}"; do
+		rm -rf -- "${STATE_CONFIG:?}/${entry}"
+	done
+	# shellcheck disable=SC2312 # the listing's status is checked through wait below
+	mapfile -d '' -t staged < <(find "${STAGE_DIR}" -mindepth 1 -maxdepth 1 -printf '%P\0')
+	# shellcheck disable=SC2154 # $! is the process substitution's PID
+	wait "$!" || {
+		echo "Error: could not list the staged opencode config in ${STAGE_DIR}; aborting." >&2
+		exit 1
+	}
+	for entry in "${staged[@]}"; do
+		mv -T -- "${STAGE_DIR}/${entry}" "${STATE_CONFIG}/${entry}" || {
+			echo "Error: ${entry} in ${STATE_CONFIG} changed during sync (another process, possibly a running session of this project, modified it); aborting." >&2
+			exit 1
+		}
+	done
 else
 	echo "Notice: ${HOST_CONFIG_DIR} not found on host — opencode will use container baseline." >&2
 fi
