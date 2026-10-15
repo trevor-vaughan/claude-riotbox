@@ -228,11 +228,11 @@ Both stores hold verbatim tool output, so both must sit inside a bind mount of
 the session's host directories (for Pi, the `pi-agent/` copy in the session's
 state dir): somewhere `riotbox session-remove` deletes, and somewhere that
 cannot vanish onto the container overlay at exit. They must also outlive a
-relaunch. For opencode that rules out the config mount:
-`agents/opencode/sync-settings.sh` replaces `opencode-config/` whole on every
-launch when the host has `~/.config/opencode/`. `opencode-data/` (mounted at
-`~/.local/share/opencode`) is only ever created, never re-staged, so both
-opencode stores live there. The sync also skips a host
+relaunch. For opencode the config mount belongs to the host sync:
+`agents/opencode/sync-settings.sh` rewrites `opencode-config/` on every launch
+when the host has `~/.config/opencode/`, sparing only the entries the session
+writes at runtime. `opencode-data/` (mounted at `~/.local/share/opencode`) is
+only ever created, never re-synced, so both opencode stores live there. The sync also skips a host
 `~/.config/opencode/context-mode/`: that is host data, not config.
 
 Auto-memory follows the same root. Upstream's `BaseAdapter.getMemoryDir()`
@@ -246,9 +246,10 @@ holds memory from every host project. The one reader of that default is a
 session with RiotBox's Context Mode off whose host opencode config loads
 context-mode as a plugin itself: `CONTEXT_MODE_DATA_DIR` is unset, so upstream
 falls back to `~/.config/opencode/memory`. That session gets no host memory, by
-decision, and what it writes sits in the config copy the next re-stage
-replaces. `tests/context-mode-opencode.venom.yml` pins the resolved path and its
-survival across a relaunch sync; `tests/opencode.venom.yml` pins the prune.
+decision, and what it writes stays in the session's config copy: the sync
+leaves `memory/` alone. `tests/context-mode-opencode.venom.yml` pins the
+resolved path and its survival across a relaunch sync; `tests/opencode.venom.yml`
+pins the prune and that a re-sync keeps the session's `memory/`.
 
 Sessions from before this layout kept opencode's stores at
 `~/.config/opencode/context-mode`, and those survived when the host had no

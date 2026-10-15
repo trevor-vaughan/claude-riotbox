@@ -1029,6 +1029,61 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
 
+  # opencode-config/ is the bind-mount source for every running session of the
+  # project, and a bind mount holds the directory's inode, not its path. A
+  # process whose cwd is the dir holds it the same way, so /proc/<pid>/cwd is
+  # what a running session sees after another session of the project launches.
+  - name: sync-opencode-settings refreshes opencode-config in place for running sessions and keeps their runtime entries
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.opencode_helpers}}"
+          setup_opencode_sync_test withconfig noauth
+          host="${FAKE_HOME}/.config/opencode"
+          state_dir="${TEST_DIR}/state"
+          cfg="${state_dir}/opencode-config"
+          mkdir -p "${state_dir}"
+          printf '{}\n' > "${host}/tui.json"
+          "${RIOTBOX_DIR}/agents/opencode/sync-settings.sh" \
+              "${host}" "${FAKE_HOME}/.local/share/opencode" "${state_dir}" >/dev/null
+          # What the running session writes at runtime: opencode's plugin
+          # install and Context Mode's stores.
+          mkdir -p "${cfg}/node_modules/zod" "${cfg}/context-mode/sessions" "${cfg}/memory/0123abcd"
+          for f in node_modules/zod/index.js package.json package-lock.json bun.lock .gitignore \
+                   context-mode/sessions/s.db memory/0123abcd/note.md; do
+            printf 'runtime\n' > "${cfg}/${f}"
+          done
+          inode_before="$(stat -c %i "${cfg}")"
+          (cd "${cfg}" && exec sleep 300) &
+          session_pid=$!
+          trap 'kill "${session_pid}" 2>/dev/null; rm -rf "${TEST_DIR}"' EXIT
+          view="/proc/${session_pid}/cwd"
+          # Wait for the cd, so the view is the dir rather than the test's cwd.
+          for _ in $(seq 50); do [ "$(stat -c %i "${view}/")" = "${inode_before}" ] && break; sleep 0.1; done
+          printf '{"model": "changed"}\n' > "${host}/opencode.json"
+          printf '# new\n' > "${host}/agents/added.md"
+          rm -f "${host}/agents/myagent.md" "${host}/tui.json"
+          mkdir -p "${host}/themes"; printf '{}\n' > "${host}/themes/mine.json"
+          "${RIOTBOX_DIR}/agents/opencode/sync-settings.sh" \
+              "${host}" "${FAKE_HOME}/.local/share/opencode" "${state_dir}" >/dev/null
+          [ "$(stat -c %i "${cfg}")" = "${inode_before}" ] || { echo "FAIL: opencode-config was replaced, not refreshed in place"; exit 1; }
+          grep -qF changed "${view}/opencode.json" || { echo "FAIL: the running session sees a stale opencode.json"; exit 1; }
+          test -f "${view}/agents/added.md" || { echo "FAIL: the running session misses an added agent"; exit 1; }
+          test -f "${view}/themes/mine.json" || { echo "FAIL: the running session misses an added top-level dir"; exit 1; }
+          if test -e "${view}/agents/myagent.md"; then echo "FAIL: an agent removed on the host lingered"; exit 1; fi
+          if test -e "${view}/tui.json"; then echo "FAIL: a top-level file removed on the host lingered"; exit 1; fi
+          for f in node_modules/zod/index.js package.json package-lock.json bun.lock .gitignore \
+                   context-mode/sessions/s.db memory/0123abcd/note.md; do
+            [ "$(cat "${view}/${f}" 2>/dev/null)" = runtime ] || { echo "FAIL: runtime entry ${f} lost on re-sync"; exit 1; }
+          done
+          touch "${view}/written-at-runtime" || { echo "FAIL: the running session cannot write its config dir"; exit 1; }
+          echo "OPENCODE_INPLACE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OPENCODE_INPLACE_OK"
+
   - name: sync-opencode-settings skips dangling symlinks without aborting
     steps:
       - type: exec
@@ -1190,10 +1245,15 @@ testcases:
           mkdir -p "${victim}" "${state_dir}/opencode-config" "${bin}"
           echo precious > "${victim}/keep"
           real_mv="$(command -v mv)"
+          # A running session sees only opencode-config/'s contents, so it
+          # plants the link at the entry about to be installed.
           cat > "${bin}/mv" <<STUB
           #!/usr/bin/env bash
-          rm -rf "${state_dir}/opencode-config"
-          ln -s "${victim}" "${state_dir}/opencode-config"
+          target="\${!#}"
+          if [ "\${target}" = "${state_dir}/opencode-config/agents" ]; then
+            rm -rf "\${target}"
+            ln -s "${victim}" "\${target}"
+          fi
           exec "${real_mv}" "\$@"
           STUB
           sed -i 's/^          //' "${bin}/mv"; chmod +x "${bin}/mv"
@@ -1202,7 +1262,7 @@ testcases:
               "${FAKE_HOME}/.config/opencode" "${FAKE_HOME}/.local/share/opencode" "${state_dir}" \
               >/dev/null 2>"${TEST_DIR}/err" || rc=$?
           [ "${rc}" -eq 1 ] || { echo "FAIL: installing over a planted link must exit 1, got ${rc}"; exit 1; }
-          grep -qF 'Error: opencode-config in' "${TEST_DIR}/err" && grep -qF 'changed during sync' "${TEST_DIR}/err" || { echo "FAIL: no tamper message"; cat "${TEST_DIR}/err"; exit 1; }
+          grep -qF "Error: agents in ${state_dir}/opencode-config" "${TEST_DIR}/err" && grep -qF 'changed during sync' "${TEST_DIR}/err" || { echo "FAIL: no tamper message"; cat "${TEST_DIR}/err"; exit 1; }
           [ "$(find "${victim}" -mindepth 1 | wc -l)" -eq 1 ] && [ "$(cat "${victim}/keep")" = precious ] || { echo "FAIL: victim modified"; exit 1; }
           [ -z "$(find "${state_dir}" -maxdepth 1 -name '.sync.*')" ] || { echo "FAIL: staging dir left behind"; exit 1; }
           echo "OPENCODE_RACE_OK"
