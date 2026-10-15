@@ -394,7 +394,7 @@ testcases:
           - result.systemout ShouldContainSubstring "/home/llm/.headroom"
           - result.systemout ShouldContainSubstring "OK"
 
-  - name: headroom state dir is created under the session dir on a real (non-dry) setup
+  - name: headroom state dir is created under the state dir on a real (non-dry) setup
     steps:
       - type: exec
         script: |
@@ -403,22 +403,22 @@ testcases:
           TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
           mkdir -p "${TMP}/proj" "${TMP}/data"
           export HOME="${TMP}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
           # setup_projects runs agent host_sync hooks, which want a host
           # ~/.claude; give it an empty one so claude's sync is a no-op.
           mkdir -p "${TMP}/.claude"
           export RIOTBOX_HEADROOM=1
-          # XDG_DATA_HOME routes the session dir under ${TMP}/data so the
-          # find below can locate it. resolve_projects derives RIOTBOX_DATA_DIR
-          # from XDG_DATA_HOME; passing a bare RIOTBOX_DATA_DIR is ignored
-          # because resolve_projects always recomputes it from XDG/HOME.
+          # resolve_projects derives both the session and the state dir from
+          # XDG_DATA_HOME; a bare RIOTBOX_DATA_DIR would be ignored.
           export XDG_DATA_HOME="${TMP}/data"
           export ROOT_DIR="{{.riotbox_dir}}"
           source "{{.riotbox_dir}}/scripts/mount-projects.sh"
           setup_projects "${TMP}/proj"
-          dir="$(find "${TMP}/data" -maxdepth 3 -type d -name headroom | head -1)"
-          [ -n "${dir}" ] || { echo "BAD: no headroom dir under session dir" >&2; exit 1; }
+          dir="${RIOTBOX_STATE_DIR}/headroom"
+          [ -d "${dir}" ] || { echo "BAD: no headroom dir under the state dir" >&2; exit 1; }
+          [ ! -e "${RIOTBOX_SESSION_DIR}/headroom" ] || { echo "BAD: headroom dir created inside the session dir" >&2; exit 1; }
           echo "PROJECT_VOLUME_FLAGS=${PROJECT_VOLUME_FLAGS}"
-          echo "${PROJECT_VOLUME_FLAGS}" | grep -q "${dir}:/home/llm/.headroom:z" \
+          echo "${PROJECT_VOLUME_FLAGS}" | grep -qF -- "-v ${dir}:/home/llm/.headroom:z" \
             || { echo "BAD: mount flag does not reference the created dir" >&2; exit 1; }
           echo "OK"
         assertions:

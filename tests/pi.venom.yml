@@ -83,9 +83,9 @@ testcases:
           out="$(bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}")"
           for p in settings.json models.json mcp.json keybindings.json AGENTS.md SYSTEM.md APPEND_SYSTEM.md \
                    skills/review/SKILL.md prompts/fix.md themes/dark.json extensions/mine.js; do
-            [ -f "${S}/.pi-agent/${p}" ] || { echo "FAIL: ${p} not copied"; exit 1; }
+            [ -f "${S}/pi-agent/${p}" ] || { echo "FAIL: ${p} not copied"; exit 1; }
           done
-          printf '%s\n' "${out}" | grep -qxF -- "-v ${S}/.pi-agent:/home/llm/.pi/agent:z" \
+          printf '%s\n' "${out}" | grep -qxF -- "-v ${S}/pi-agent:/home/llm/.pi/agent:z" \
             || { echo "FAIL: agent-dir mount flag missing"; printf '%s\n' "${out}"; exit 1; }
           echo "SYNC_COPY_OK"
         assertions:
@@ -103,7 +103,7 @@ testcases:
           for f in trust.json models-store.json crashes.json mcp.log auth.json mcp-auth.json; do echo x > "${H}/${f}"; done
           bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" >/dev/null
           for p in sessions install qmd skill-library-deferred npm git bin tmp trust.json models-store.json crashes.json mcp.log auth.json mcp-auth.json; do
-            [ ! -e "${S}/.pi-agent/${p}" ] || { echo "FAIL: ${p} was copied"; exit 1; }
+            [ ! -e "${S}/pi-agent/${p}" ] || { echo "FAIL: ${p} was copied"; exit 1; }
           done
           echo "SYNC_DENY_OK"
         assertions:
@@ -120,15 +120,15 @@ testcases:
           mkdir -p "${H}/extensions" "${H}/skills/a"
           echo x > "${H}/extensions/old.js"; echo s > "${H}/skills/a/SKILL.md"
           bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" >/dev/null
-          mkdir -p "${S}/.pi-agent/sessions/proj"
-          echo '{"type":"session"}' > "${S}/.pi-agent/sessions/proj/one.jsonl"
-          echo '{}' > "${S}/.pi-agent/trust.json"
+          mkdir -p "${S}/pi-agent/sessions/proj"
+          echo '{"type":"session"}' > "${S}/pi-agent/sessions/proj/one.jsonl"
+          echo '{}' > "${S}/pi-agent/trust.json"
           rm -rf "${H}/extensions"
           bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" >/dev/null
-          [ -f "${S}/.pi-agent/sessions/proj/one.jsonl" ] || { echo "FAIL: session history lost on re-sync"; exit 1; }
-          [ -f "${S}/.pi-agent/trust.json" ] || { echo "FAIL: trust.json lost on re-sync"; exit 1; }
-          [ ! -e "${S}/.pi-agent/extensions" ] || { echo "FAIL: host-removed extensions/ lingered"; exit 1; }
-          [ -f "${S}/.pi-agent/skills/a/SKILL.md" ] || { echo "FAIL: skills/ not re-copied"; exit 1; }
+          [ -f "${S}/pi-agent/sessions/proj/one.jsonl" ] || { echo "FAIL: session history lost on re-sync"; exit 1; }
+          [ -f "${S}/pi-agent/trust.json" ] || { echo "FAIL: trust.json lost on re-sync"; exit 1; }
+          [ ! -e "${S}/pi-agent/extensions" ] || { echo "FAIL: host-removed extensions/ lingered"; exit 1; }
+          [ -f "${S}/pi-agent/skills/a/SKILL.md" ] || { echo "FAIL: skills/ not re-copied"; exit 1; }
           echo "RESYNC_OK"
         assertions:
           - result.code ShouldEqual 0
@@ -147,11 +147,11 @@ testcases:
           ln -s "${T}/nowhere" "${H}/skills/broken"
           ln -s "${T}/nowhere.md" "${H}/AGENTS.md"
           bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" >/dev/null
-          [ -f "${S}/.pi-agent/skills/linked/SKILL.md" ] && [ ! -L "${S}/.pi-agent/skills/linked" ] \
+          [ -f "${S}/pi-agent/skills/linked/SKILL.md" ] && [ ! -L "${S}/pi-agent/skills/linked" ] \
             || { echo "FAIL: symlinked skill not dereferenced"; exit 1; }
-          [ ! -e "${S}/.pi-agent/skills/broken" ] && [ ! -L "${S}/.pi-agent/skills/broken" ] \
+          [ ! -e "${S}/pi-agent/skills/broken" ] && [ ! -L "${S}/pi-agent/skills/broken" ] \
             || { echo "FAIL: dangling symlink copied"; exit 1; }
-          [[ ! -e "${S}/.pi-agent/AGENTS.md" && ! -L "${S}/.pi-agent/AGENTS.md" ]] \
+          [[ ! -e "${S}/pi-agent/AGENTS.md" && ! -L "${S}/pi-agent/AGENTS.md" ]] \
             || { echo "FAIL: dangling top-level symlink copied"; exit 1; }
           echo "SYMLINK_OK"
         assertions:
@@ -186,7 +186,7 @@ testcases:
           T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
           out="$(bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${T}/missing" "${T}/session" 2>"${T}/err")"
           grep -qF 'not found on host' "${T}/err" || { echo "FAIL: no notice"; exit 1; }
-          printf '%s\n' "${out}" | grep -qxF -- "-v ${T}/session/.pi-agent:/home/llm/.pi/agent:z" \
+          printf '%s\n' "${out}" | grep -qxF -- "-v ${T}/session/pi-agent:/home/llm/.pi/agent:z" \
             || { echo "FAIL: mount flag missing"; exit 1; }
           echo "NO_HOST_OK"
         assertions:
@@ -211,7 +211,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "ARGC_OK"
 
-  - name: sync rejects a relative session dir
+  - name: sync rejects a relative state dir
     steps:
       - type: exec
         script: |
@@ -227,31 +227,74 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "ABS_OK"
 
-  - name: sync replaces a .pi-agent symlink planted by the container instead of following it
+  - name: sync replaces a pi-agent symlink instead of following it
     steps:
       - type: exec
         script: |
           set -euo pipefail
           T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
-          H="${T}/host"; S="${T}/session"; V="${T}/victim"
-          mkdir -p "${H}" "${S}" "${V}/skills/x"
+          H="${T}/host"; V="${T}/victim"
+          mkdir -p "${H}" "${V}/skills/x"
           echo host > "${H}/AGENTS.md"
           echo victim-agents > "${V}/AGENTS.md"; echo victim-skill > "${V}/skills/x/SKILL.md"
-          ln -s ../victim "${S}/.pi-agent"
-          out="$(bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" 2>"${T}/err")"
-          [[ "$(cat "${V}/AGENTS.md")" == "victim-agents" ]] || { echo "FAIL: victim AGENTS.md modified"; exit 1; }
-          [[ "$(cat "${V}/skills/x/SKILL.md" 2>/dev/null)" == "victim-skill" ]] || { echo "FAIL: victim skills deleted"; exit 1; }
-          [[ -d "${S}/.pi-agent" && ! -L "${S}/.pi-agent" ]] || { echo "FAIL: .pi-agent is not a real dir"; exit 1; }
-          [[ "$(cat "${S}/.pi-agent/AGENTS.md")" == "host" ]] || { echo "FAIL: host AGENTS.md not synced"; exit 1; }
-          grep -qF 'Warning' "${T}/err" || { echo "FAIL: no Warning on stderr"; exit 1; }
-          printf '%s\n' "${out}" | grep -qxF -- "-v ${S}/.pi-agent:/home/llm/.pi/agent:z" \
-            || { echo "FAIL: mount flag missing"; exit 1; }
+          for kind in relative absolute dangling; do
+            S="${T}/state-${kind}"; mkdir -p "${S}"
+            case "${kind}" in
+              relative) ln -s ../victim "${S}/pi-agent" ;;
+              absolute) ln -s "${V}" "${S}/pi-agent" ;;
+              dangling) ln -s ../nowhere "${S}/pi-agent" ;;
+            esac
+            out="$(bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" 2>"${T}/err")"
+            [[ "$(cat "${V}/AGENTS.md")" == "victim-agents" ]] || { echo "FAIL: ${kind}: victim AGENTS.md modified"; exit 1; }
+            [[ "$(cat "${V}/skills/x/SKILL.md" 2>/dev/null)" == "victim-skill" ]] || { echo "FAIL: ${kind}: victim skills deleted"; exit 1; }
+            [[ -d "${S}/pi-agent" && ! -L "${S}/pi-agent" ]] || { echo "FAIL: ${kind}: pi-agent is not a real dir"; exit 1; }
+            [[ "$(cat "${S}/pi-agent/AGENTS.md")" == "host" ]] || { echo "FAIL: ${kind}: host AGENTS.md not synced"; exit 1; }
+            grep -qF 'Warning' "${T}/err" || { echo "FAIL: ${kind}: no Warning on stderr"; exit 1; }
+            printf '%s\n' "${out}" | grep -qxF -- "-v ${S}/pi-agent:/home/llm/.pi/agent:z" \
+              || { echo "FAIL: ${kind}: mount flag missing"; exit 1; }
+          done
+          [[ ! -e "${T}/nowhere" ]] || { echo "FAIL: the dangling link's target was created"; exit 1; }
           echo "PLANT_LINK_OK"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PLANT_LINK_OK"
 
-  - name: sync replaces a regular file planted at .pi-agent with a directory
+  - name: sync survives a link planted between the clear and the install without following it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          H="${T}/host"; V="${T}/victim"; S="${T}/state"; B="${T}/bin"
+          mkdir -p "${H}/skills/x" "${V}" "${S}/pi-agent" "${B}"
+          echo host > "${H}/AGENTS.md"; echo host-skill > "${H}/skills/x/SKILL.md"
+          echo precious > "${V}/keep"; echo victim-file > "${T}/victim-file"
+          real_mv="$(command -v mv)"
+          # A hostile container wins the race: just before each install it has
+          # already planted a link where the host cleared the entry.
+          cat > "${B}/mv" <<STUB
+          #!/usr/bin/env bash
+          case "\${@: -1}" in
+            */AGENTS.md) touch "${T}/planted"; ln -s "${T}/victim-file" "${S}/pi-agent/AGENTS.md" ;;
+            */skills) ln -s "${V}" "${S}/pi-agent/skills" ;;
+          esac
+          exec "${real_mv}" "\$@"
+          STUB
+          sed -i 's/^          //' "${B}/mv"; chmod +x "${B}/mv"
+          rc=0; PATH="${B}:${PATH}" bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" >/dev/null 2>"${T}/err" || rc=$?
+          [[ -e "${T}/planted" ]] || { echo "FAIL: the stub never ran"; exit 1; }
+          [[ "$(cat "${V}/keep")" == precious && "$(find "${V}" -mindepth 1 | wc -l)" -eq 1 ]] || { echo "FAIL: victim dir written"; exit 1; }
+          [[ "$(cat "${T}/victim-file")" == victim-file ]] || { echo "FAIL: victim file overwritten"; exit 1; }
+          [[ ! -L "${S}/pi-agent/AGENTS.md" && "$(cat "${S}/pi-agent/AGENTS.md")" == host ]] || { echo "FAIL: planted file link not replaced"; exit 1; }
+          [[ "${rc}" -eq 1 ]] || { echo "FAIL: installing over a planted dir link must exit 1, got ${rc}"; exit 1; }
+          grep -qF 'Error: skills in' "${T}/err" && grep -qF 'changed during sync' "${T}/err" || { echo "FAIL: no tamper message"; cat "${T}/err"; exit 1; }
+          [[ -z "$(find "${S}" -maxdepth 1 -name '.sync.*')" ]] || { echo "FAIL: staging dir left behind"; exit 1; }
+          echo "RACE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RACE_OK"
+
+  - name: sync replaces a regular file planted at pi-agent with a directory
     steps:
       - type: exec
         script: |
@@ -260,10 +303,10 @@ testcases:
           H="${T}/host"; S="${T}/session"
           mkdir -p "${H}" "${S}"
           echo host > "${H}/AGENTS.md"
-          echo junk > "${S}/.pi-agent"
+          echo junk > "${S}/pi-agent"
           bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" >/dev/null 2>&1
-          [[ -d "${S}/.pi-agent" && ! -L "${S}/.pi-agent" ]] || { echo "FAIL: .pi-agent is not a real dir"; exit 1; }
-          [[ -f "${S}/.pi-agent/AGENTS.md" ]] || { echo "FAIL: AGENTS.md not synced"; exit 1; }
+          [[ -d "${S}/pi-agent" && ! -L "${S}/pi-agent" ]] || { echo "FAIL: pi-agent is not a real dir"; exit 1; }
+          [[ -f "${S}/pi-agent/AGENTS.md" ]] || { echo "FAIL: AGENTS.md not synced"; exit 1; }
           echo "PLANT_FILE_OK"
         assertions:
           - result.code ShouldEqual 0
@@ -570,17 +613,20 @@ testcases:
           echo relocated > "${T}/relocated/AGENTS.md"
           source "{{.riotbox_dir}}/agents/registry.sh"
           unset PI_CODING_AGENT_DIR
-          agent_call pi host_sync "${T}/s1" >/dev/null
-          [[ "$(cat "${T}/s1/.pi-agent/AGENTS.md")" == default ]] || { echo "FAIL: default dir not used"; exit 1; }
-          PI_CODING_AGENT_DIR="${T}/relocated" agent_call pi host_sync "${T}/s2" >/dev/null
-          [[ "$(cat "${T}/s2/.pi-agent/AGENTS.md")" == relocated ]] || { echo "FAIL: PI_CODING_AGENT_DIR ignored"; exit 1; }
-          PI_CODING_AGENT_DIR="" agent_call pi host_sync "${T}/s3" >/dev/null
-          [[ "$(cat "${T}/s3/.pi-agent/AGENTS.md")" == default ]] || { echo "FAIL: empty PI_CODING_AGENT_DIR not defaulted"; exit 1; }
+          # host_sync <session_dir> <state_dir>: Pi writes only under the state dir.
+          mkdir -p "${T}/session"
+          agent_call pi host_sync "${T}/session" "${T}/s1" >/dev/null
+          [[ "$(cat "${T}/s1/pi-agent/AGENTS.md")" == default ]] || { echo "FAIL: default dir not used"; exit 1; }
+          PI_CODING_AGENT_DIR="${T}/relocated" agent_call pi host_sync "${T}/session" "${T}/s2" >/dev/null
+          [[ "$(cat "${T}/s2/pi-agent/AGENTS.md")" == relocated ]] || { echo "FAIL: PI_CODING_AGENT_DIR ignored"; exit 1; }
+          PI_CODING_AGENT_DIR="" agent_call pi host_sync "${T}/session" "${T}/s3" >/dev/null
+          [[ "$(cat "${T}/s3/pi-agent/AGENTS.md")" == default ]] || { echo "FAIL: empty PI_CODING_AGENT_DIR not defaulted"; exit 1; }
           mkdir -p "${HOME}/relocated"; echo tilde > "${HOME}/relocated/AGENTS.md"
-          PI_CODING_AGENT_DIR='~/relocated' agent_call pi host_sync "${T}/s4" >/dev/null
-          [[ "$(cat "${T}/s4/.pi-agent/AGENTS.md")" == tilde ]] || { echo "FAIL: leading ~/ not expanded"; exit 1; }
-          (cd "${T}" && PI_CODING_AGENT_DIR='relocated' agent_call pi host_sync "${T}/s5" >/dev/null)
-          [[ "$(cat "${T}/s5/.pi-agent/AGENTS.md")" == relocated ]] || { echo "FAIL: relative dir not resolved against PWD"; exit 1; }
+          PI_CODING_AGENT_DIR='~/relocated' agent_call pi host_sync "${T}/session" "${T}/s4" >/dev/null
+          [[ "$(cat "${T}/s4/pi-agent/AGENTS.md")" == tilde ]] || { echo "FAIL: leading ~/ not expanded"; exit 1; }
+          (cd "${T}" && PI_CODING_AGENT_DIR='relocated' agent_call pi host_sync "${T}/session" "${T}/s5" >/dev/null)
+          [[ "$(cat "${T}/s5/pi-agent/AGENTS.md")" == relocated ]] || { echo "FAIL: relative dir not resolved against PWD"; exit 1; }
+          [[ -z "$(ls -A "${T}/session")" ]] || { echo "FAIL: host_sync wrote into the session dir"; exit 1; }
           echo "HOST_SYNC_OK"
         assertions:
           - result.code ShouldEqual 0

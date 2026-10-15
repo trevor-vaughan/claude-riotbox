@@ -1039,18 +1039,18 @@ testcases:
             exit 1
           fi
           # ...and it really is anonymous there: no ref name is attached.
-          ! git -C "${REPO_DIR}" log --all --oneline --decorate | grep 'checkpoint: pre-riotbox-' | grep -q 'riotbox/checkpoints'
+          if git -C "${REPO_DIR}" log --all --oneline --decorate | grep 'checkpoint: pre-riotbox-' | grep 'riotbox/checkpoints' >/dev/null; then echo "FAIL: git log --all --decorate names the snapshot ref"; exit 1; fi
           # The claims that ARE still true.
-          ! git -C "${REPO_DIR}" log --oneline | grep -q 'checkpoint: pre-riotbox-'
+          if git -C "${REPO_DIR}" log --oneline | grep 'checkpoint: pre-riotbox-' >/dev/null; then echo "FAIL: plain git log shows a snapshot commit"; exit 1; fi
           [ -z "$(git -C "${REPO_DIR}" tag)" ]
-          ! git -C "${REPO_DIR}" describe --all | grep -q riotbox
+          if git -C "${REPO_DIR}" describe --all | grep riotbox >/dev/null; then echo "FAIL: git describe --all names a riotbox ref"; exit 1; fi
           out="$(ROOT_DIR="{{.riotbox_dir}}" \
                  bash "{{.riotbox_dir}}/libexec/checkpoints.sh" list "${REPO_DIR}" 2>&1)" && rc=0 || rc=$?
           echo "${out}"; echo "rc=${rc}"
           [ "${rc}" -eq 0 ]
           # The listing must not put `git log` on the list of things that never
           # show snapshots, and must say what git log --all actually does.
-          ! printf '%s\n' "${out}" | grep -q 'git tag, git log and git push never show'
+          if printf '%s\n' "${out}" | grep 'git tag, git log and git push never show' >/dev/null; then echo "FAIL: the listing still claims git log never shows snapshots"; exit 1; fi
           printf '%s\n' "${out}" | grep -q 'git log --all'
           echo "git_log_claim_ok=true"
         assertions:
@@ -1100,8 +1100,8 @@ testcases:
                  bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune --keep 0 2>&1)" && rc=0 || rc=$?
           echo "--- prune from a subdirectory ---"; echo "${out}"; echo "rc=${rc}"
           printf '%s\n' "${out}" | grep -q "${ref}"
-          ! printf '%s\n' "${out}" | grep -q 'NO BACKUP COPY'
-          ! printf '%s\n' "${out}" | grep -q 'irreversible'
+          if printf '%s\n' "${out}" | grep 'NO BACKUP COPY' >/dev/null; then echo "FAIL: prune from a subdirectory found no backup copy"; exit 1; fi
+          if printf '%s\n' "${out}" | grep 'irreversible' >/dev/null; then echo "FAIL: prune from a subdirectory called the prune irreversible"; exit 1; fi
 
           # Same conflation, other direction: riotbox ran against a linked
           # worktree, so the store is keyed on the worktree; refs/riotbox is a
@@ -1138,8 +1138,8 @@ testcases:
                  bash "{{.riotbox_dir}}/libexec/checkpoints.sh" prune --keep 0 2>&1)" && rc=0 || rc=$?
           echo "--- prune from the main checkout ---"; echo "${out}"; echo "rc=${rc}"
           printf '%s\n' "${out}" | grep -q "${wt_ref}"
-          ! printf '%s\n' "${out}" | grep -q 'NO BACKUP COPY'
-          ! printf '%s\n' "${out}" | grep -q 'irreversible'
+          if printf '%s\n' "${out}" | grep 'NO BACKUP COPY' >/dev/null; then echo "FAIL: prune from the main checkout found no backup copy"; exit 1; fi
+          if printf '%s\n' "${out}" | grep 'irreversible' >/dev/null; then echo "FAIL: prune from the main checkout called the prune irreversible"; exit 1; fi
           echo "backup_lookup_ok=true"
         assertions:
           - result.code ShouldEqual 0

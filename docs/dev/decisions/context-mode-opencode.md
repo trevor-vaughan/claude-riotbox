@@ -117,6 +117,14 @@ and neither can land on the container overlay and vanish at exit. The cost is
 accepted deliberately: two stores per session directory, and recall does not survive
 switching agents mid-session.
 
+> **Superseded in part.** Both stores have moved to opencode's data mount,
+> `${HOME}/.local/share/opencode/context-mode`, with `CONTEXT_MODE_DATA_DIR` at
+> `${HOME}/.local/share/opencode`. The config-dir location above was inside the
+> session's mounts but did not persist: the host sync replaces the
+> `opencode-config/` copy whole on every launch when the host has a
+> `~/.config/opencode`. See
+> [docs/dev/context-mode.md § Two storage pins](../context-mode.md#two-storage-pins-not-one).
+
 ## Registry contract: optional session verbs
 
 `agents/*/manifest.sh` gains optional verbs. Optional means absent-is-legal:
@@ -201,6 +209,14 @@ being *absent* passed in CI and failed for anyone running the suite from the
 environment this feature is developed in.
 
 ## opencode implementation: `agents/opencode/context-mode.sh`
+
+> **Superseded in part.** Both stores now live under the data mount:
+> `context_mode_store_dir` prints `${HOME}/.local/share/opencode/context-mode`
+> and `context_mode_data_dir` prints `${HOME}/.local/share/opencode`. The
+> config-dir location below did not survive a relaunch whenever the host had a
+> `~/.config/opencode`, because the sync replaces that copy whole. See
+> [docs/dev/context-mode.md § Two storage pins](../context-mode.md#two-storage-pins-not-one).
+> The shim path is unchanged.
 
 `context_mode_store_dir` prints
 `${OPENCODE_CONFIG_DIR:-${HOME}/.config/opencode}/context-mode`, and
@@ -398,6 +414,14 @@ warning when the selected agent has no verb.
    the store lands in the session config directory anyway, because that is also the
    fallback. The pin's value is against a *future* change to that fallback, which is
    exactly the thing no amount of testing today can observe.
+
+   > **Superseded.** The failure mode above is stated backwards. Upstream's
+   > fallback is the config directory, and RiotBox re-stages that directory on
+   > every launch when the host has a `~/.config/opencode`, so a store there does
+   > not survive a relaunch. That is not mild. The pins now put both stores
+   > under the data mount (`~/.local/share/opencode`), so if upstream ignored
+   > them the store would land in the re-staged config dir. See
+   > [docs/dev/context-mode.md § Two storage pins](../context-mode.md#two-storage-pins-not-one).
 
    The pin also holds only while upstream keeps both names. Unlike the matchers, the
    MCP server name and the `hook <platform> <event>` dispatcher, nothing in the image

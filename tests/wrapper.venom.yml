@@ -275,6 +275,34 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "CALL reset-session.sh all force"
 
+  # -- session-migrate command --
+
+  - name: Session-migrate routes to migrate-session.sh with the project args
+    steps:
+      - type: exec
+        script: |
+          source "{{.wrapper_helpers}}"
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          setup_wrapper_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          cd "${TEST_DIR}/projects"
+          "${TEST_DIR}/app/bin/riotbox" session-migrate
+          "${TEST_DIR}/app/bin/riotbox" session-migrate a b
+          print_capture
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CALL migrate-session.sh"
+          - result.systemout ShouldContainSubstring "CALL migrate-session.sh a b"
+
+  - name: Help lists session-migrate
+    steps:
+      - type: exec
+        script: |
+          "{{.riotbox_dir}}/bin/riotbox" help
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "session-migrate [project...]"
+
   # -- reown command --
 
   - name: Reown with no flags routes to reown-commits.sh
@@ -506,6 +534,9 @@ testcases:
           - result.systemout ShouldContainSubstring "Project + session"
           # Static agent host_sync note
           - result.systemout ShouldContainSubstring "Agent host_sync"
+          # opencode and Pi copies land in the state dir, not the session dir
+          - result.systemout ShouldContainSubstring "riotbox-state/<session>/opencode-config"
+          - result.systemout ShouldContainSubstring "riotbox-state/<session>/pi-agent"
 
   # -- install-hooks command --
 

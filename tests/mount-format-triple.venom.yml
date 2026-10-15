@@ -122,8 +122,13 @@ testcases:
           export ROOT_DIR="{{.riotbox_dir}}"
           export HOME="${TEST_DIR}/home"
           mkdir -p "${HOME}"
+          export XDG_DATA_HOME="${TEST_DIR}/data"
           out="$("{{.riotbox_dir}}/scripts/mount-projects.sh" --format=triple "${TEST_DIR}/projects/foo")"
           echo "${out}"
+          # One line: the state-dir source, the container path, rw.
+          printf '%s\n' "${out}" | grep -qE "^${XDG_DATA_HOME}/riotbox-state/[^:]+/git-ai:/home/llm/.git-ai:rw$" \
+              || { echo "BAD: git-ai mount is not one state-dir line" >&2; exit 1; }
+          echo "GIT_AI_LINE_OK"
           # Validate every line has 3 colon-separated fields with rw/ro mode.
           while IFS= read -r line; do
               [ -z "${line}" ] && continue
@@ -144,6 +149,9 @@ testcases:
           - result.systemout ShouldContainSubstring "/projects/foo:/workspace:rw"
           # The session dir bound to .claude is rw
           - result.systemout ShouldContainSubstring ":/home/llm/.claude:rw"
+          # The git-ai store (on by default) is mounted from the state dir,
+          # never from inside the session dir
+          - result.systemout ShouldContainSubstring "GIT_AI_LINE_OK"
           - result.systemout ShouldContainSubstring "ALL_LINES_VALID"
           - result.systemout ShouldNotContainSubstring "-v "
 

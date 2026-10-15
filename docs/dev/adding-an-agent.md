@@ -127,12 +127,13 @@ agent_aider_wrapper_inject() {
 agent_aider_container_setup() { :; }   # no runtime setup needed
 
 agent_aider_host_sync() {
-    local session_dir="${1:?host_sync requires a session_dir argument}"
-    # aider reads ~/.aider.conf.yml; copy it into the session dir if
-    # present, otherwise no-op.
+    local state_dir="${2:?host_sync requires a state_dir argument}"
+    # aider reads ~/.aider.conf.yml; copy it into the state dir if present,
+    # otherwise no-op. Never into the session dir ($1) — see
+    # docs/dev/agent-contract.md#agent_name_host_sync.
     if [ -f "${HOME}/.aider.conf.yml" ]; then
-        cp "${HOME}/.aider.conf.yml" "${session_dir}/.aider.conf.yml"
-        echo "-v ${session_dir}/.aider.conf.yml:/home/llm/.aider.conf.yml:z"
+        cp "${HOME}/.aider.conf.yml" "${state_dir}/aider.conf.yml"
+        echo "-v ${state_dir}/aider.conf.yml:/home/llm/.aider.conf.yml:z"
     fi
 }
 
@@ -183,6 +184,11 @@ That's the whole change. No edits to:
   about to write a `case "$RIOTBOX_AGENT" in <name>) ... ;; esac`, stop
   and put the logic in the manifest. The whole point of the refactor is
   that there is one place to look up agent behaviour.
+- **Don't mount anything from inside the session dir.** `host_sync` gets a
+  state dir for that; the session dir is the container's read-write
+  `~/.claude`, and a source nested in it can be swapped for a symlink. A copy
+  that is a mounted directory is staged and renamed into place; see
+  [`agent_<name>_host_sync`](agent-contract.md#agent_name_host_sync).
 - **Don't overload the manifest with unrelated logic.** Keep it focused
   on the contract. Long setup bodies belong in `agents/<name>/setup.sh`
   (sourced by `container_setup`); long sync logic in

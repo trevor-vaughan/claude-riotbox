@@ -156,21 +156,24 @@ agent_opencode_headroom_argv() {
 # Container-side runtime setup. setup.sh places AGENTS.md and a merged
 # opencode.jsonc (combining host opencode.json + opencode.jsonc with
 # riotbox-mandatory overrides) on every container start; both are idempotent.
+# Then move Context Mode stores an earlier release left under the config dir
+# (see context-mode.sh). entrypoint.sh runs this before context_mode_setup.
 agent_opencode_container_setup() {
 	# shellcheck source=./setup.sh
 	source "${_AGENT_OPENCODE_DIR}/setup.sh"
 	opencode_setup
+	_agent_opencode_cm_migrate_store
 }
 
 # Host-side config sync. sync-settings.sh copies the host opencode config
-# tree into the session dir and emits volume flags (including the auth.json
-# RW bind when present).
+# tree into the state dir ($2) and emits volume flags (including the
+# auth.json RW bind when present). The session dir ($1) is unused.
 agent_opencode_host_sync() {
-	local session_dir="${1:?host_sync requires a session_dir argument}"
+	local state_dir="${2:?host_sync requires a state_dir argument}"
 	"${_AGENT_OPENCODE_DIR}/sync-settings.sh" \
 		"${HOME}/.config/opencode" \
 		"${HOME}/.local/share/opencode" \
-		"${session_dir}"
+		"${state_dir}"
 }
 
 # Print the env var names this agent reads (one per line). The launcher

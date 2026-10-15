@@ -64,7 +64,7 @@ testcases:
           mkdir -p "${UPPER}/nested/deep/.codegraph" "${UPPER}/.codegraph"
           touch "${UPPER}/nested/deep/.codegraph/exfil.py"
           touch "${UPPER}/.codegraph/codegraph.db"
-          out="$(overlay_upper_changes "${UPPER}")"
+          out="$(overlay_upper_changes "${UPPER}" | tr '\0' '\n')"
           [ "${out}" = "nested/deep/.codegraph/exfil.py" ] \
             || { echo "FAIL: got '${out}'"; exit 1; }
           echo "nested_visible=pass"
@@ -102,7 +102,7 @@ testcases:
           touch "${UPPER}/sub/real.go"
           touch "${UPPER}/.wh.deleted.txt"
           # LC_ALL=C pins byte ordering; en_US collation ignores the leading dot.
-          out="$(overlay_upper_changes "${UPPER}" | LC_ALL=C sort | tr '\n' ' ')"
+          out="$(overlay_upper_changes "${UPPER}" | LC_ALL=C sort -z | tr '\0' ' ')"
           [ "${out}" = ".wh.deleted.txt sub/.codegraph/codegraph.db sub/real.go " ] \
             || { echo "FAIL: got '${out}'"; exit 1; }
           echo "walker=pass"
@@ -124,7 +124,7 @@ testcases:
           # under .codegraph is index churn like the rest of that tree.
           touch "${UPPER}/.wh..wh..opq"
           touch "${UPPER}/.codegraph/.wh..wh..opq"
-          out="$(overlay_upper_changes "${UPPER}" | tr '\n' ' ')"
+          out="$(overlay_upper_changes "${UPPER}" | tr '\0' ' ')"
           [ "${out}" = ".wh..wh..opq " ] || { echo "FAIL: got '${out}'"; exit 1; }
           echo "opaque=pass"
         assertions:
@@ -141,12 +141,31 @@ testcases:
           trap 'rm -rf "${UPPER}"' EXIT
           mkdir -p "${UPPER}/dir with spaces"
           touch "${UPPER}/dir with spaces/file name.txt"
-          out="$(overlay_upper_changes "${UPPER}")"
+          out="$(overlay_upper_changes "${UPPER}" | tr '\0' '\n')"
           [ "${out}" = "dir with spaces/file name.txt" ] || { echo "FAIL: got '${out}'"; exit 1; }
           echo "spaces=pass"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "spaces=pass"
+
+  - name: walker emits NUL-terminated paths so a newline in a name stays one entry
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          UPPER="$(mktemp -d)"
+          trap 'rm -rf "${UPPER}"' EXIT
+          mkdir -p "${UPPER}/a"$'\n'
+          touch "${UPPER}/a"$'\n'"/.wh..wh..opq"
+          mapfile -d '' -t got < <(overlay_upper_changes "${UPPER}")
+          [ "${#got[@]}" -eq 1 ] || { echo "FAIL: ${#got[@]} entries"; exit 1; }
+          [ "${got[0]}" = "a"$'\n'"/.wh..wh..opq" ] || { echo "FAIL: got $(printf %q "${got[0]}")"; exit 1; }
+          overlay_upper_has_changes "${UPPER}" || { echo "FAIL: has_changes"; exit 1; }
+          echo "nul=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "nul=pass"
 
   - name: walker emits upper-relative paths for a trailing-slash argument
     steps:
@@ -159,7 +178,7 @@ testcases:
           touch "${UPPER}/real.txt"
           # Consumers join the printed path onto a project directory; an
           # absolute path here would build garbage destinations.
-          out="$(overlay_upper_changes "${UPPER}/")"
+          out="$(overlay_upper_changes "${UPPER}/" | tr '\0' '\n')"
           [ "${out}" = "real.txt" ] || { echo "FAIL: got '${out}'"; exit 1; }
           echo "trailingslash=pass"
         assertions:
@@ -184,7 +203,7 @@ testcases:
             exit 0
           fi
           warn="$(overlay_upper_changes "${UPPER}" 2>&1 >/dev/null)"
-          out="$(overlay_upper_changes "${UPPER}" 2>/dev/null)"
+          out="$(overlay_upper_changes "${UPPER}" 2>/dev/null | tr '\0' '\n')"
           # find's own diagnostic names the path it could not read; the walker
           # adds its own line so a truncated listing is unmistakable.
           case "${warn}" in
@@ -251,7 +270,7 @@ testcases:
         script: |
           set -e
           source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
-          out="$(overlay_upper_changes "/nonexistent/upper")"
+          out="$(overlay_upper_changes "/nonexistent/upper" | tr '\0' '\n')"
           [ -z "${out}" ] || { echo "FAIL: expected no output"; exit 1; }
           if overlay_upper_has_changes "/nonexistent/upper"; then
             echo "FAIL: missing dir reported as changed"; exit 1

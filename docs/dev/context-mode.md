@@ -213,17 +213,46 @@ back to the agent's config directory.
   already exported at the session bind mount by `container/entrypoint.sh`, so the
   fallback is already pinned.
 - **opencode does.** Its fallback reads `XDG_CONFIG_HOME`, which the image never
-  sets, landing on `~/.config/opencode` — the session mount, but by coincidence
-  rather than by anything RiotBox stated.
+  sets, landing on `~/.config/opencode` — the config mount, which is the wrong
+  place for data (below). Both pins name opencode's data directory instead:
+  `CONTEXT_MODE_DIR=~/.local/share/opencode/context-mode` and
+  `CONTEXT_MODE_DATA_DIR=~/.local/share/opencode`. The plugin shim stays in
+  `~/.config/opencode/plugins/`, the only place opencode loads plugins from.
 - **Pi does, and needs it most.** PiAdapter inherits `BaseAdapter.getSessionDir()`
   and defaults its DB to `~/.pi/context-mode/sessions`, outside the `~/.pi/agent`
   session mount. `CONTEXT_MODE_DATA_DIR=~/.pi/agent` moves it to
   `~/.pi/agent/context-mode/sessions`, beside the `ctx_*` stores. The build guard
   fails if PiAdapter ever overrides `getSessionDir()`.
 
-Both stores hold verbatim tool output, so both must sit inside the bind-mounted
-session directory: somewhere `riotbox session-remove` deletes, and somewhere that
-cannot vanish onto the container overlay at exit.
+Both stores hold verbatim tool output, so both must sit inside a bind mount of
+the session's host directories (for Pi, the `pi-agent/` copy in the session's
+state dir): somewhere `riotbox session-remove` deletes, and somewhere that
+cannot vanish onto the container overlay at exit. They must also outlive a
+relaunch. For opencode that rules out the config mount:
+`agents/opencode/sync-settings.sh` replaces `opencode-config/` whole on every
+launch when the host has `~/.config/opencode/`. `opencode-data/` (mounted at
+`~/.local/share/opencode`) is only ever created, never re-staged, so both
+opencode stores live there. The sync also skips a host
+`~/.config/opencode/context-mode/`: that is host data, not config.
+
+Sessions from before this layout kept opencode's stores at
+`~/.config/opencode/context-mode`, and those survived when the host had no
+`~/.config/opencode/`. `agent_opencode_container_setup` moves that directory to
+the data mount once, before `context_mode_setup` runs
+(`_agent_opencode_cm_migrate_store`). It moves only a real directory, and only
+when the new path is absent. When both exist it warns and leaves both, and it
+never merges; an empty old directory is removed quietly instead. A link at
+either path is left in place with a warning. The two paths are separate bind
+mounts, so the move is a copy then a delete: it is skipped, with a warning,
+while any `*.db-wal` or `*.db-shm` file under the old path shows an older session
+may still have the DB open. A killed session (SIGKILL, OOM, stop timeout) leaves
+those files permanently, since upstream removes them only in an exit handler, and
+the WAL can hold committed rows not yet in the `.db`. So the warning names both
+recoveries, `sqlite3 <db> 'PRAGMA wal_checkpoint(TRUNCATE);'` (the `sqlite`
+CLI is in the image as a hard dependency of `sqlite-devel`) or a manual
+`mv -T` of the whole directory, and never says to delete the WAL. Sessions whose host has a `~/.config/opencode/` have
+nothing to carry: the first launch after upgrading re-stages the config copy
+before the container starts.
 
 ## Which tools are actually intercepted
 

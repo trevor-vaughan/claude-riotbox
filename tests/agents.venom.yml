@@ -188,6 +188,60 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
+  # host_sync <session_dir> <state_dir>. The session dir is the container's
+  # read-write ~/.claude, so a mount source nested in it could be swapped for
+  # a symlink before the next launch. No agent may mount from inside it, and
+  # only Claude — whose config root IS that mount — may write there.
+  - name: host_sync never mounts from inside the session dir, and only claude writes there
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}/home"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM PI_CODING_AGENT_DIR
+          mkdir -p "${HOME}/.claude/plugins" "${HOME}/.config/opencode" "${HOME}/.local/share/opencode" "${HOME}/.pi/agent"
+          echo '{}' > "${HOME}/.claude.json"
+          echo '# user' > "${HOME}/.claude/CLAUDE.md"
+          echo '{}' > "${HOME}/.claude/.credentials.json"
+          echo '{}' > "${HOME}/.config/opencode/opencode.json"
+          echo '{}' > "${HOME}/.local/share/opencode/auth.json"
+          echo '# pi' > "${HOME}/.pi/agent/AGENTS.md"
+          echo '{}' > "${HOME}/.pi/agent/auth.json"
+          source_agent_registry
+          agent_test_init
+          for a in "${AGENT_REGISTRY[@]}"; do
+            S="${T}/${a}/session"; ST="${T}/${a}/state"
+            mkdir -p "${S}" "${ST}"
+            flags="$(agent_call "${a}" host_sync "${S}" "${ST}" 2>/dev/null)"
+            real_s="$(realpath -m -- "${S}")"
+            while read -r flag spec; do
+              case "${flag}" in
+                -v)
+                  src="$(realpath -m -- "${spec%%:*}")"
+                  case "${src}/" in
+                    "${real_s}/"*) agent_fail "${a}: mounts ${spec%%:*} from inside the session dir" ;;
+                    *) ;;
+                  esac
+                  ;;
+                -v*|--volume*|--mount*) agent_fail "${a}: unparsed mount flag: ${flag}" ;;
+                *) ;;
+              esac
+            done <<< "${flags}"
+            if [ "${a}" = claude ]; then
+              [ -z "$(ls -A "${ST}")" ] || agent_fail "claude: wrote into the state dir"
+            else
+              [ -z "$(ls -A "${S}")" ] || agent_fail "${a}: wrote into the session dir"
+            fi
+            echo "${a}: checked"
+          done
+          agent_test_done
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
   - name: every registered agent has env_vars and returns at least one name
     steps:
       - type: exec

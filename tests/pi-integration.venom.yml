@@ -27,8 +27,9 @@ testcases:
           SESSION_KEY="$(printf '%s\n' "${REPO}" | sed 's|/|-|g; s|^-||')"
           DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
           SESSION_DIR="${DATA_DIR}/${SESSION_KEY}"
+          STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox-state/${SESSION_KEY}"
           BACKUP_DIR="${DATA_DIR}/backups/${SESSION_KEY}.git"
-          trap 'rm -rf "${REPO}" "${HOSTPI}" "${LEDGER}" "${SESSION_DIR}" "${BACKUP_DIR}"' EXIT
+          trap 'rm -rf "${REPO}" "${HOSTPI}" "${LEDGER}" "${SESSION_DIR}" "${STATE_DIR}" "${BACKUP_DIR}"' EXIT
           ( cd "${REPO}" && git init -q && echo hi > README.md && git add README.md && git commit -qm init )
           ( cd "{{.riotbox_dir}}" && task build >/dev/null 2>&1 )
           export PI_CODING_AGENT_DIR="${HOSTPI}" RIOTBOX_CONTEXT_LEDGER="${LEDGER}/ledger"
@@ -42,13 +43,13 @@ testcases:
           echo '{"defaultProvider":"riotbox-faux","defaultModel":"faux-1"}' > "${HOSTPI}/settings.json"
           out="$(cd "${REPO}" && "{{.riotbox_dir}}/bin/riotbox" --agent=pi run "create a todo" </dev/null)" || { rc=$?; echo "FAIL: riotbox run exited ${rc}"; printf '%s\n' "${out}"; exit 1; }
           printf '%s\n' "${out}" | tr -d '\r' | grep -qxE '[[:space:]]*RIOTBOX_FAUX_DONE[[:space:]]*' || { echo "FAIL: no faux reply"; echo "${out}"; exit 1; }
-          mapfile -t files < <(find "${SESSION_DIR}/.pi-agent/sessions" -name '*.jsonl')
+          mapfile -t files < <(find "${STATE_DIR}/pi-agent/sessions" -name '*.jsonl')
           [[ "${#files[@]}" -eq 1 ]] || { echo "FAIL: expected 1 session file, got ${#files[@]}"; exit 1; }
           grep -qF 'riotbox faux todo' "${files[0]}" || { echo "FAIL: todo call not persisted"; exit 1; }
           jq -e -s 'any(.[]; .message.role == "toolResult" and .message.toolName == "todo" and .message.isError == false)' "${files[0]}" >/dev/null \
             || { echo "FAIL: todo tool did not run successfully"; exit 1; }
           ( cd "${REPO}" && "{{.riotbox_dir}}/bin/riotbox" --agent=pi run "again" </dev/null >/dev/null ) || { rc=$?; echo "FAIL: second riotbox run exited ${rc}"; exit 1; }
-          [[ "$(find "${SESSION_DIR}/.pi-agent/sessions" -name '*.jsonl' | wc -l)" -eq 2 ]] || { echo "FAIL: first session lost on re-sync"; exit 1; }
+          [[ "$(find "${STATE_DIR}/pi-agent/sessions" -name '*.jsonl' | wc -l)" -eq 2 ]] || { echo "FAIL: first session lost on re-sync"; exit 1; }
           ( cd "${REPO}" && test -z "$(git status --porcelain)" ) || { echo "FAIL: project tree dirtied"; exit 1; }
           echo "INTEGRATION_OK"
         assertions:
@@ -71,8 +72,9 @@ testcases:
           SESSION_KEY="$(printf '%s\n' "${REPO}" | sed 's|/|-|g; s|^-||')"
           DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
           SESSION_DIR="${DATA_DIR}/${SESSION_KEY}"
+          STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox-state/${SESSION_KEY}"
           BACKUP_DIR="${DATA_DIR}/backups/${SESSION_KEY}.git"
-          trap 'rm -rf "${REPO}" "${HOSTPI}" "${LEDGER}" "${SESSION_DIR}" "${BACKUP_DIR}"' EXIT
+          trap 'rm -rf "${REPO}" "${HOSTPI}" "${LEDGER}" "${SESSION_DIR}" "${STATE_DIR}" "${BACKUP_DIR}"' EXIT
           ( cd "${REPO}" && git init -q && echo hi > README.md && git add README.md && git commit -qm init )
           ( cd "{{.riotbox_dir}}" && task build >/dev/null 2>&1 )
           export PI_CODING_AGENT_DIR="${HOSTPI}" RIOTBOX_CONTEXT_LEDGER="${LEDGER}/ledger"
@@ -85,8 +87,8 @@ testcases:
           cp "{{.riotbox_dir}}/tests/fixtures/pi/riotbox-faux-provider.js" "${HOSTPI}/extensions/"
           echo '{"defaultProvider":"riotbox-faux","defaultModel":"faux-1"}' > "${HOSTPI}/settings.json"
           ( cd "${REPO}" && RIOTBOX_CONTEXT_MODE=1 "{{.riotbox_dir}}/bin/riotbox" --agent=pi run "create a todo" </dev/null >/dev/null )
-          find "${SESSION_DIR}/.pi-agent/context-mode/sessions" -name '*.db' | grep -q . \
-            || { echo "FAIL: no Context Mode DB under .pi-agent/context-mode/sessions"; exit 1; }
+          find "${STATE_DIR}/pi-agent/context-mode/sessions" -name '*.db' | grep -q . \
+            || { echo "FAIL: no Context Mode DB under pi-agent/context-mode/sessions"; exit 1; }
           echo "INTEGRATION_OK"
         assertions:
           - result.code ShouldEqual 0
@@ -109,8 +111,9 @@ testcases:
           SESSION_KEY="$(printf '%s\n' "${REPO}" | sed 's|/|-|g; s|^-||')"
           DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
           SESSION_DIR="${DATA_DIR}/${SESSION_KEY}"
+          STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox-state/${SESSION_KEY}"
           BACKUP_DIR="${DATA_DIR}/backups/${SESSION_KEY}.git"
-          trap 'rm -rf "${REPO}" "${HOSTPI}" "${LEDGER}" "${SESSION_DIR}" "${BACKUP_DIR}"' EXIT
+          trap 'rm -rf "${REPO}" "${HOSTPI}" "${LEDGER}" "${SESSION_DIR}" "${STATE_DIR}" "${BACKUP_DIR}"' EXIT
           ( cd "${REPO}" && git init -q && echo hi > README.md && git add README.md && git commit -qm init )
           ( cd "{{.riotbox_dir}}" && task build >/dev/null 2>&1 )
           export PI_CODING_AGENT_DIR="${HOSTPI}" RIOTBOX_CONTEXT_LEDGER="${LEDGER}/ledger"
@@ -146,8 +149,9 @@ testcases:
           SESSION_KEY="$(printf '%s\n' "${REPO}" | sed 's|/|-|g; s|^-||')"
           DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
           SESSION_DIR="${DATA_DIR}/${SESSION_KEY}"
+          STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox-state/${SESSION_KEY}"
           BACKUP_DIR="${DATA_DIR}/backups/${SESSION_KEY}.git"
-          trap 'rm -rf "${REPO}" "${HOSTPI}" "${LEDGER}" "${SESSION_DIR}" "${BACKUP_DIR}"' EXIT
+          trap 'rm -rf "${REPO}" "${HOSTPI}" "${LEDGER}" "${SESSION_DIR}" "${STATE_DIR}" "${BACKUP_DIR}"' EXIT
           ( cd "${REPO}" && git init -q && echo hi > README.md && git add README.md && git commit -qm init )
           ( cd "{{.riotbox_dir}}" && task build >/dev/null 2>&1 )
           export PI_CODING_AGENT_DIR="${HOSTPI}" RIOTBOX_CONTEXT_LEDGER="${LEDGER}/ledger"

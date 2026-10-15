@@ -126,7 +126,9 @@ agent_claude_container_setup() {
 
 # Host-side config sync. sync-settings.sh handles credentials, config,
 # skills, statusline-command.sh, host plugins, etc. Prints volume flags
-# on stdout, notices on stderr.
+# on stdout, notices on stderr. Claude writes into the session dir ($1)
+# because that dir IS its ~/.claude mount root (copies are staged and renamed
+# in; see sync-settings.sh); the state dir ($2) is unused.
 agent_claude_host_sync() {
 	local session_dir="${1:?host_sync requires a session_dir argument}"
 	"${_AGENT_CLAUDE_DIR}/sync-settings.sh" \

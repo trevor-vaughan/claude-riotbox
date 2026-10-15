@@ -229,6 +229,7 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         zlib-devel \
         bzip2-devel \
         readline-devel \
+        sqlite \
         sqlite-devel \
         libffi-devel \
         xz-devel \

@@ -46,7 +46,7 @@ overlay_count_changes() {
 	local added=0 modified=0 deleted=0
 	local rel base
 	# shellcheck disable=SC2312  # walker failure means no entries; loop just won't run
-	while IFS= read -r rel; do
+	while IFS= read -r -d '' rel; do
 		base="${rel##*/}"
 		if [[ "${base}" == .wh.* ]]; then
 			deleted=$((deleted + 1))

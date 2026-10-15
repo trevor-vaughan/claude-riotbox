@@ -10,8 +10,8 @@ is deferred.
 **Date:** 2026-10-13 · **Issue:** [#16](https://github.com/trevor-vaughan/claude-riotbox/issues/16) · **Branch:** `16-pi` · **Verified against:** Pi 1.2.0, context-mode v1.0.169, git-ai v1.7.5
 
 > **Frozen design record.** This is what was believed and decided on the date
-> above. For how Pi behaves today, read [README § Using pi](../../README.md#using-pi),
-> [THREAT_MODEL § Pi auth surface](../../THREAT_MODEL.md#pi-auth-surface) and the
+> above. For how Pi behaves today, read [README § Using pi](../../../README.md#using-pi),
+> [THREAT_MODEL § Pi auth surface](../../../THREAT_MODEL.md#pi-auth-surface) and the
 > headers of the files under `agents/pi/` and `container/pi/`.
 
 ## Context

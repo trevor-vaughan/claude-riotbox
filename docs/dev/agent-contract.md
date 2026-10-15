@@ -198,29 +198,60 @@ manifest.
 
 ```bash
 agent_<name>_host_sync() {
-    local session_dir="${1:?host_sync requires a session_dir argument}"
+    local state_dir="${2:?host_sync requires a state_dir argument}"
     "${_AGENT_<NAME>_DIR}/sync-settings.sh" \
         "${HOME}/.config/<name>" \
-        "${session_dir}"
+        "${state_dir}"
 }
 ```
 
-Called by `scripts/mount-projects.sh` on the host. Should:
+Called by `scripts/mount-projects.sh` on the host as
+`agent_<name>_host_sync <session_dir> <state_dir>`. Should:
 
-- Copy whatever the agent needs from `${HOME}` into the session directory.
-- Print `-v` flags on stdout (one per line) for the container runtime to
-  bind-mount the session-dir copies into the container's filesystem.
+- Copy whatever the agent needs from `${HOME}` into its own subdirectory of
+  `<state_dir>` (the session's `${XDG_DATA_HOME}/riotbox-state/<key>/`), for
+  example `<state_dir>/<name>-config`.
+- Print `-v` flags on stdout (one per line) that bind-mount those state-dir
+  copies, or host files in place, into the container's filesystem.
 - Print notices on stderr if the host has no config to sync.
 - Empty stdout is allowed (means "nothing to mount").
+- Exit non-zero to abort the launch; `setup_projects` stops at the first
+  failing `host_sync`.
+- **Never write into, or mount anything from inside, `<session_dir>`.** It is
+  mounted read-write at `~/.claude`, so the container can swap anything nested
+  in it for a symlink to any host directory before the next launch, and podman
+  would mount the link's target. The container cannot reach `<state_dir>`
+  itself, only the subdirectories that are mounted. The one exception is
+  Claude, whose whole tree *is* the session dir; its `host_sync` ignores
+  `<state_dir>`. `tests/agents.venom.yml` enforces both rules for every
+  registered agent.
 
 It runs for **every registered agent on every launch**, whichever `--agent`
-was selected, so whatever it mounts reaches every agent's container. And the
-session directory is writable from inside the container, so treat anything
-already in it as untrusted before a host-side `rm`, copy or `-v` touches it:
-`agents/pi/sync-settings.sh` replaces a `.pi-agent` that is a symlink or a
-file with a real directory first. An agent that keeps its own state beside
-its config, as Pi does, replaces only an allowlist of entries rather than the
-whole copy; see that script's header.
+was selected, so whatever it mounts reaches every agent's container. Every
+agent's `host_sync` runs while `setup_projects` holds an exclusive per-project
+lock (`<state_dir>/.sync.lock`), so two launches of one project never sync at
+once; a running session of that project can still change a mounted copy at
+any moment.
+
+So never write into a mounted directory in place. Create each mount source with
+`ensure_real_dir` from `scripts/lib/session-state.sh` (sync scripts are
+executed, not sourced, so they source it from their own path, as
+`agents/opencode/sync-settings.sh` and `agents/pi/sync-settings.sh` do); it
+replaces a symlink or file with a real directory instead of following it.
+Then build the copy in a fresh `mktemp -d "<state_dir>/.sync.XXXXXX"` dir —
+the state dir's top level is never mounted, and it is on the same filesystem —
+and install it with `rm -rf` of the old copy followed by `mv -T`. The rename
+never follows anything at the destination. A staged file silently replaces a
+file or link there; a staged directory silently replaces an empty directory and
+fails on anything else — a link, a file or a non-empty directory re-planted
+after the `rm -rf`. Treat that failure as `changed during sync`, say so on
+stderr and exit 1. A single file at the state dir's top level, as in
+the aider example in [adding-an-agent.md](adding-an-agent.md), can be copied
+directly: the container cannot reach that level to plant a link there. An agent that keeps its own state beside its
+config, as Pi does, renames only an allowlist of entries rather than the whole
+copy; see that script's header. Claude's sync applies the same staging to the
+session dir, using a `.claude-sync.*` dir in `riotbox/` (see
+`agents/claude/sync-settings.sh`).
 
 If the agent has no host config story (e.g. it reads everything from env
 vars and never persists state), make this a no-op:
@@ -475,11 +506,10 @@ fallback:
   one more thing for a future reader to explain.
 - **opencode does.** `OpenCodeAdapter.getConfigDir()` reads
   `XDG_CONFIG_HOME`, which the image never sets, and falls back to
-  `~/.config/opencode`. That is the session mount today, but by coincidence
-  rather than by anything riotbox stated — and the DB holds verbatim tool
-  output, so an upstream change to that fallback would move it onto the
-  container overlay, where it vanishes at exit and escapes
-  `riotbox session-remove`.
+  `~/.config/opencode`: the config mount, whose contents the host sync
+  replaces on relaunch whenever the host has a `~/.config/opencode`. The DB
+  holds verbatim tool output that has to persist with the session, so the verb
+  pins it under the data mount, `~/.local/share/opencode`.
 - **Pi does.** PiAdapter's default DB root is `~/.pi/context-mode` — outside
   the `~/.pi/agent` session mount — so without the pin its verbatim tool
   output would land on the container overlay.
@@ -687,10 +717,10 @@ value, and write a reference the agent expands when it spawns the server —
 `${NAME}` for Claude Code, `{env:NAME}` for opencode.
 
 This is not a style preference and must not be "simplified" away. The agent
-config directories resolve into the session directory, which is a bind mount
-from the host: a token written there outlives the container, survives the
-agent exiting, and stays readable by anything on the host that can read the
-session directory. `tests/forge-mcp.venom.yml` asserts the property directly
+config directories resolve into the session directory or its state directory,
+both bind mounts from the host: a token written there outlives the container,
+survives the agent exiting, and stays readable by anything on the host that can
+read those directories. `tests/forge-mcp.venom.yml` asserts the property directly
 by wiring with sentinel token values and grepping the whole tree for them.
 
 Deciding *which* variable holds the token is the caller's job, not the

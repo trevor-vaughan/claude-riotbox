@@ -72,13 +72,18 @@ Privileged session modes (reduced isolation — see README):
 Session management:
   session-list                 List all RiotBox sessions
   session-remove [key/path]    Remove a session (or --all)
-  session-reset [all] [force]  Reset session cache
+  session-reset [all] [force]  Delete the current dir's session and state dirs
+                               (pending overlays, Pi history, git-ai store too);
+                               all: every session; force: no prompt
+  session-migrate [project...]
+                               Retry moving old session data that failed to move
 
 Overlay commands (podman-only):
   overlays                     List sessions with pending overlay data
-  overlay-diff [project]       Show overlay changes vs host project
-  overlay-accept [project]     Apply overlay changes to host project
-  overlay-reject [project]     Discard overlay changes
+  overlay-diff [project...]    Show overlay changes vs host project(s)
+  overlay-accept [project...]  Apply overlay changes to host project(s)
+  overlay-reject [project...]  Discard overlay changes
+                               (pass every project the session was launched with)
 
 Checkpoint commands:
   checkpoints [dir...]              List pre-session snapshots
@@ -343,6 +348,7 @@ socket-shell)
 session-list) exec "${LIBEXEC}/list-sessions.sh" ;;
 session-remove) exec "${LIBEXEC}/remove-session.sh" "$@" ;;
 session-reset) exec "${LIBEXEC}/reset-session.sh" "$@" ;;
+session-migrate) exec "${LIBEXEC}/migrate-session.sh" "$@" ;;
 
 overlays) exec "${SCRIPTS}/overlay.sh" list ;;
 overlay-diff) exec "${SCRIPTS}/overlay.sh" diff "$@" ;;
@@ -368,10 +374,11 @@ mounts)
 	# which left users debugging missing mounts confused about why
 	# `riotbox mounts` and the actual launch disagreed.
 	#
-	# RIOTBOX_DRY_RUN=1 keeps this command side-effect-free: no session
-	# dir gets created, no agent host_sync hook writes files. Agent-
-	# contributed mounts (credentials nest, opencode auth, Pi config/auth) are listed
-	# separately as a static note so the user knows what gets added.
+	# RIOTBOX_DRY_RUN=1 keeps this command side-effect-free: no session or
+	# state dir gets created, no agent host_sync hook writes files. Agent-
+	# contributed mounts (credentials nest, opencode config/auth, Pi
+	# config/auth) are listed separately as a static note so the user knows
+	# what gets added.
 	echo "Auto-detected (always-mounted) — from scripts/detect-mounts.sh:"
 	"${SCRIPTS}/detect-mounts.sh" | while read -r _flag path; do echo "  ${path}"; done
 	echo ""
@@ -386,10 +393,11 @@ mounts)
 	echo "  ~/.claude.json → session-dir copy"
 	echo "  ~/.claude/{skills,agents,commands,output-styles,rules,CLAUDE.md} → session-dir copy"
 	echo "  ~/.claude/plugins/ → ~/.host-plugins (RO bind, when host plugins exist)"
+	echo "  ~/.config/opencode/ → state-dir copy (riotbox-state/<session>/opencode-config)"
 	echo "  ~/.local/share/opencode/auth.json → in-place RW bind (when opencode is registered)"
 	echo "  ~/.pi/agent (or \$PI_CODING_AGENT_DIR)/{settings.json,models.json,mcp.json,"
 	echo "    keybindings.json,AGENTS.md,SYSTEM.md,APPEND_SYSTEM.md,skills,prompts,themes,"
-	echo "    extensions} → session-dir copy"
+	echo "    extensions} → state-dir copy (riotbox-state/<session>/pi-agent)"
 	echo "  ~/.pi/agent (or \$PI_CODING_AGENT_DIR)/{auth.json,mcp-auth.json}"
 	echo "    → in-place RW bind (when present)"
 	;;

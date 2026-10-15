@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# agents/pi/sync-settings.sh — Copy host Pi config into a RiotBox session dir,
-# and print the volume flags that mount it into the container.
+# agents/pi/sync-settings.sh — Copy host Pi config into a RiotBox session's
+# state dir, and print the volume flags that mount it into the container.
 #
-# Usage: sync-settings.sh <host-agent-dir> <session-dir>
+# Usage: sync-settings.sh <host-agent-dir> <state-dir>
 #
 # <host-agent-dir> is the host's Pi agent directory: $PI_CODING_AGENT_DIR when
 # the user relocated it, otherwise ~/.pi/agent (agents/pi/manifest.sh decides).
+# <state-dir> is the session's ${XDG_DATA_HOME}/riotbox-state/<key>, never the
+# session dir: the container has the session dir read-write and could swap
+# anything nested in it for a symlink (see scripts/lib/session-state.sh).
 #
 # Pi keeps its own state in the same directory as the config it reads, so this
 # is NOT opencode's delete-and-recopy of a whole tree. Only the allowlisted
 # entries below are replaced on each launch; everything else under
-# <session-dir>/.pi-agent/ belongs to Pi and survives — above all sessions/,
+# <state-dir>/pi-agent/ belongs to Pi and survives — above all sessions/,
 # which holds the conversation history `riotbox resume` continues.
 #
 # Never copied from the host, because they are Pi-managed state or host-only
@@ -19,7 +22,7 @@
 # sessions/, trust.json, models-store.json, npm/, git/, bin/, install/, ...
 #
 # Volume flags printed to stdout:
-#   -v <session>/.pi-agent:/home/llm/.pi/agent:z
+#   -v <state>/pi-agent:/home/llm/.pi/agent:z
 # plus a read-write bind for each credential file present on the host, so
 # OAuth refreshes write back and later runs stay signed in:
 #   -v <host-agent-dir>/auth.json:/home/llm/.pi/agent/auth.json:z
@@ -35,25 +38,30 @@
 #
 # Exit codes:
 #   0 — success (including the no-host-config case, which prints a notice)
-#   1 — wrong number of arguments, or a non-absolute <session-dir>
+#   1 — wrong number of arguments, a non-absolute <state-dir>, or an entry
+#       changed during sync
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-	echo "Usage: $0 <host-agent-dir> <session-dir>" >&2
+	echo "Usage: $0 <host-agent-dir> <state-dir>" >&2
 	exit 1
 fi
 
 HOST_AGENT_DIR="$1"
-SESSION_DIR="$2"
+STATE_DIR="$2"
 
-[[ "${SESSION_DIR}" = /* ]] || {
-	echo "sync-settings.sh: session dir must be an absolute path: ${SESSION_DIR}" >&2
+[[ "${STATE_DIR}" = /* ]] || {
+	echo "sync-settings.sh: state dir must be an absolute path: ${STATE_DIR}" >&2
 	exit 1
 }
 
+RIOTBOX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=scripts/lib/session-state.sh
+source "${RIOTBOX_ROOT}/scripts/lib/session-state.sh"
+
 CONTAINER_AGENT_DIR="/home/llm/.pi/agent"
-SESSION_AGENT_DIR="${SESSION_DIR}/.pi-agent"
+STATE_AGENT_DIR="${STATE_DIR}/pi-agent"
 
 # Host-authored config and resources Pi reads from its agent directory.
 SYNCED_ENTRIES=(
@@ -63,22 +71,17 @@ SYNCED_ENTRIES=(
 )
 CREDENTIAL_FILES=(auth.json mcp-auth.json)
 
-# The session dir is mounted read-write in the container, so .pi-agent is
-# untrusted: a symlink planted there would point this host-side rm/tar/mount
-# at an arbitrary host directory. Replace anything that is not a real
-# directory with one.
-if [[ -L "${SESSION_AGENT_DIR}" ]] || { [[ -e "${SESSION_AGENT_DIR}" ]] && [[ ! -d "${SESSION_AGENT_DIR}" ]]; }; then
-	echo "Warning: ${SESSION_AGENT_DIR} is not a real directory; recreating it." >&2
-	rm -f "${SESSION_AGENT_DIR}"
-fi
+# A symlink or file at pi-agent would point the mv/mount below at an
+# arbitrary host directory, so replace it with a real directory first.
+ensure_real_dir "${STATE_AGENT_DIR}"
 
-mkdir -p "${SESSION_AGENT_DIR}"
-
-# Clear every allowlisted entry first, so an entry removed or renamed on the
-# host does not linger in the session copy.
-for entry in "${SYNCED_ENTRIES[@]}"; do
-	rm -rf "${SESSION_AGENT_DIR:?}/${entry}"
-done
+# Two sessions of one project share pi-agent/, so a hostile container can
+# plant a link in it at any moment. Extract into a staging dir the container
+# cannot reach (the state dir itself is never mounted), then rename each
+# entry into place: rename(2) replaces a planted link instead of following it,
+# and fails rather than merging into a directory that appeared meanwhile.
+STAGE_DIR="$(mktemp -d "${STATE_DIR}/.sync.XXXXXX")"
+trap 'rm -rf -- "${STAGE_DIR}"' EXIT
 
 if [[ -d "${HOST_AGENT_DIR}" ]]; then
 	for entry in "${SYNCED_ENTRIES[@]}"; do
@@ -91,13 +94,25 @@ if [[ -d "${HOST_AGENT_DIR}" ]]; then
 			cd "${HOST_AGENT_DIR}" &&
 				find -L "./${entry}" ! -type l -print0 |
 				tar -ch --null --no-recursion --files-from=- -f -
-		) | tar -xf - -C "${SESSION_AGENT_DIR}/" --no-same-owner 2>/dev/null
+		) | tar -xf - -C "${STAGE_DIR}/" --no-same-owner 2>/dev/null
 	done
 else
 	echo "Notice: ${HOST_AGENT_DIR} not found on host — pi will use the container baseline." >&2
 fi
 
-echo "-v ${SESSION_AGENT_DIR}:${CONTAINER_AGENT_DIR}:z"
+# Clear every allowlisted entry, so an entry removed or renamed on the host
+# does not linger in the session copy, then install the staged ones.
+for entry in "${SYNCED_ENTRIES[@]}"; do
+	rm -rf -- "${STATE_AGENT_DIR:?}/${entry}"
+	if [[ -e "${STAGE_DIR}/${entry}" ]]; then
+		mv -T -- "${STAGE_DIR}/${entry}" "${STATE_AGENT_DIR}/${entry}" || {
+			echo "Error: ${entry} in ${STATE_AGENT_DIR} changed during sync (another process, possibly a running session of this project, modified it); aborting." >&2
+			exit 1
+		}
+	fi
+done
+
+echo "-v ${STATE_AGENT_DIR}:${CONTAINER_AGENT_DIR}:z"
 
 for file in "${CREDENTIAL_FILES[@]}"; do
 	if [[ -f "${HOST_AGENT_DIR}/${file}" ]]; then

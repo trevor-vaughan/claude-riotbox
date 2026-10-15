@@ -194,7 +194,7 @@ testcases:
           [ -n "${ref}" ]
           [ "$(git -C "${REPO_DIR}" cat-file -p "${ref}" | grep -c '^parent ')" -eq 0 ]
           git -C "${REPO_DIR}" show "${ref}:app.txt" | grep -q 'fresh work'
-          ! git -C "${REPO_DIR}" rev-parse --verify HEAD 2>/dev/null
+          if git -C "${REPO_DIR}" rev-parse --verify HEAD 2>/dev/null; then echo "FAIL: the checkpoint gave the unborn branch a HEAD"; exit 1; fi
           echo "parentless_ok=true"
         assertions:
           - result.code ShouldEqual 0
@@ -453,7 +453,7 @@ testcases:
           [ -f "${src_obj}" ]
           chmod u+w "${src_obj}"
           printf 'CORRUPT' > "${src_obj}"
-          ! git -C "${REPO_DIR}" fsck >/dev/null 2>&1
+          if git -C "${REPO_DIR}" fsck >/dev/null 2>&1; then echo "FAIL: corrupting the source object went undetected by fsck"; exit 1; fi
           git -C "${backup}" fsck >/dev/null
           echo "no_hardlink_ok=true"
         assertions:

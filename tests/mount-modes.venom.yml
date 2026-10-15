@@ -98,8 +98,8 @@ testcases:
           source "{{.riotbox_dir}}/scripts/mount-projects.sh"
           setup_projects "${BASE}/proj"
           echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
-          [ -d "${RIOTBOX_SESSION_DIR}/overlay/project/upper" ] && echo "UPPER_OK"
-          [ -d "${RIOTBOX_SESSION_DIR}/overlay/project/work" ]  && echo "WORK_OK"
+          [ -d "${RIOTBOX_STATE_DIR}/overlay/project/upper" ] && echo "UPPER_OK"
+          [ -d "${RIOTBOX_STATE_DIR}/overlay/project/work" ]  && echo "WORK_OK"
           chcon_marker_clean
         assertions:
           - result.code ShouldEqual 0
@@ -109,6 +109,39 @@ testcases:
           - result.systemout ShouldContainSubstring "WORK_OK"
           - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
           - result.systemerr ShouldNotContainSubstring "WARN:"
+
+  - name: RIOTBOX_OVERLAY=1 under RIOTBOX_DRY_RUN=1 emits the overlay mount but creates neither the session nor the state dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}" "${CHCON_STUB_DIR:-}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          mkdir -p "${BASE}/proj"
+          export XDG_DATA_HOME="${STORE}"
+          export ROOT_DIR="{{.riotbox_dir}}"
+          export RIOTBOX_OVERLAY=1
+          export RIOTBOX_DRY_RUN=1
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${BASE}/proj"
+          echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
+          # Dry run creates neither the session dir nor the state dir. (Not
+          # "STORE is empty": the container-name probe runs podman, which
+          # keeps its own storage under XDG_DATA_HOME.)
+          if [ -e "${STORE}/riotbox" ] || [ -e "${STORE}/riotbox-state" ]; then
+              echo "TREE_LEAKED"
+          else
+              echo "NO_TREE"
+          fi
+          chcon_marker_clean
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring ":/mnt/overlay:z"
+          - result.systemout ShouldContainSubstring "NO_TREE"
+          - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
 
   - name: RIOTBOX_OVERLAY=1 multi-project creates an overlay tree per project and namespaces the container paths
     steps:
@@ -128,8 +161,8 @@ testcases:
           setup_projects "${BASE}/alpha ${BASE}/bravo"
           echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
           for name in alpha bravo; do
-              [ -d "${RIOTBOX_SESSION_DIR}/overlay/${name}/upper" ] && echo "UPPER_${name}_OK"
-              [ -d "${RIOTBOX_SESSION_DIR}/overlay/${name}/work"  ] && echo "WORK_${name}_OK"
+              [ -d "${RIOTBOX_STATE_DIR}/overlay/${name}/upper" ] && echo "UPPER_${name}_OK"
+              [ -d "${RIOTBOX_STATE_DIR}/overlay/${name}/work"  ] && echo "WORK_${name}_OK"
           done
           chcon_marker_clean
         assertions:
@@ -346,12 +379,18 @@ testcases:
           else
               echo "NO_SESSION_DIR"
           fi
+          if [ -e "${STORE}/riotbox-state" ]; then
+              echo "STATE_DIR_LEAKED"
+          else
+              echo "NO_STATE_DIR"
+          fi
           chcon_marker_clean
         assertions:
           - result.systemout ShouldNotContainSubstring "RC=0"
           - result.systemout ShouldContainSubstring "ERROR_MENTIONS_PODMAN"
           - result.systemout ShouldContainSubstring "ERROR_MENTIONS_PATH"
           - result.systemout ShouldContainSubstring "NO_SESSION_DIR"
+          - result.systemout ShouldContainSubstring "NO_STATE_DIR"
           - result.systemout ShouldContainSubstring "CHCON_NOT_CALLED"
 
   - name: M15 engine guard fires before RIOTBOX_OVERLAY=1 creates any overlay dirs
@@ -376,7 +415,7 @@ testcases:
           rc=$?
           echo "RC=${rc}"
           KEY="$(printf '%s\n' "${A}" | sed 's|/|-|g; s|^-||')"
-          if [ -e "${STORE}/riotbox/${KEY}/overlay" ]; then
+          if [ -e "${STORE}/riotbox-state/${KEY}/overlay" ]; then
               echo "OVERLAY_LEAKED"
           else
               echo "NO_OVERLAY"
@@ -410,12 +449,12 @@ testcases:
           grep -q "WARN:" "${STORE}/err.log" && echo "WARN_EMITTED"
           grep -q "ephemeral overlay" "${STORE}/err.log" && echo "WARN_SAYS_EPHEMERAL"
           grep -qF "${A}" "${STORE}/err.log" && echo "WARN_NAMES_PATH"
-          if [ -e "${RIOTBOX_SESSION_DIR}/overlay/project/upper" ]; then
+          if [ -e "${RIOTBOX_STATE_DIR}/overlay/project/upper" ]; then
               echo "UPPER_LEAKED"
           else
               echo "NO_UPPER"
           fi
-          if [ -e "${RIOTBOX_SESSION_DIR}/overlay/project/work" ]; then
+          if [ -e "${RIOTBOX_STATE_DIR}/overlay/project/work" ]; then
               echo "WORK_LEAKED"
           else
               echo "NO_WORK"
@@ -461,11 +500,11 @@ testcases:
           # B is owned — it must NOT appear in the warning
           grep -qF "${B}" "${STORE}/err.log" || echo "WARN_OMITS_B"
           # Owned dir b gets the full lower+upper pair
-          [ -d "${RIOTBOX_SESSION_DIR}/overlay/b/upper" ] && echo "B_UPPER_OK"
-          [ -d "${RIOTBOX_SESSION_DIR}/overlay/b/work"  ] && echo "B_WORK_OK"
+          [ -d "${RIOTBOX_STATE_DIR}/overlay/b/upper" ] && echo "B_UPPER_OK"
+          [ -d "${RIOTBOX_STATE_DIR}/overlay/b/work"  ] && echo "B_WORK_OK"
           # Unowned dirs a and c MUST NOT have upper/work
-          [ ! -e "${RIOTBOX_SESSION_DIR}/overlay/a" ] && echo "A_NO_OVERLAY"
-          [ ! -e "${RIOTBOX_SESSION_DIR}/overlay/c" ] && echo "C_NO_OVERLAY"
+          [ ! -e "${RIOTBOX_STATE_DIR}/overlay/a" ] && echo "A_NO_OVERLAY"
+          [ ! -e "${RIOTBOX_STATE_DIR}/overlay/c" ] && echo "C_NO_OVERLAY"
           chcon_marker_clean
         assertions:
           - result.code ShouldEqual 0

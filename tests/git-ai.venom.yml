@@ -126,8 +126,8 @@ testcases:
             || { echo "FAIL: mount gate does not default to on"; exit 1; }
           grep -qF '/home/llm/.git-ai:z' scripts/mount-projects.sh \
             || { echo "FAIL: no bind mount for the git-ai store"; exit 1; }
-          grep -qF 'mkdir -p "${riotbox_session_dir}/git-ai"' scripts/mount-projects.sh \
-            || { echo "FAIL: session store dir is not created"; exit 1; }
+          grep -qF 'ensure_real_dir "${RIOTBOX_STATE_DIR}/git-ai"' scripts/mount-projects.sh \
+            || { echo "FAIL: the store dir is not created in the state dir"; exit 1; }
 
           # The dry-run guard must wrap the mkdir, as the headroom block does.
           block="$(sed -n '/git-ai store/,/^\tfi$/p' scripts/mount-projects.sh)"

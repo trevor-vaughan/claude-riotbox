@@ -216,3 +216,29 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "RC=1"
           - result.systemout ShouldContainSubstring "not writable"
+
+  - name: resolve_projects derives the state dir from the session key, beside the session dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          BASE="$(cd "${BASE}" && pwd -P)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/a" "${BASE}/b"
+          export XDG_DATA_HOME="${STORE}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          for set in "${BASE}/a" "${BASE}/a ${BASE}/b"; do
+              resolve_projects "${set}"
+              [ "${RIOTBOX_DATA_DIR}" = "${STORE}/riotbox" ] || { echo "FAIL: data dir ${RIOTBOX_DATA_DIR}"; exit 1; }
+              [ "${RIOTBOX_STATE_ROOT}" = "${STORE}/riotbox-state" ] || { echo "FAIL: state root ${RIOTBOX_STATE_ROOT}"; exit 1; }
+              key="$(basename "${RIOTBOX_SESSION_DIR}")"
+              [ "${RIOTBOX_STATE_DIR}" = "${STORE}/riotbox-state/${key}" ] || { echo "FAIL: state dir ${RIOTBOX_STATE_DIR}"; exit 1; }
+          done
+          [ ! -e "${STORE}/riotbox-state" ] || { echo "FAIL: resolve_projects created a directory"; exit 1; }
+          echo "STATE_DIR_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "STATE_DIR_OK"

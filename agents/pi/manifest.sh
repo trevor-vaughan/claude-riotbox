@@ -98,9 +98,10 @@ agent_pi_container_setup() {
 # never sets that variable inside the container: context-mode's platform
 # detection treats it as an oh-my-pi marker. The value is normalised as Pi
 # does: a leading `~` expands to $HOME and a relative path is taken against
-# the current directory. An empty value means the default.
+# the current directory. An empty value means the default. Everything Pi keeps
+# goes under the state dir ($2); the session dir ($1) is unused.
 agent_pi_host_sync() {
-	local session_dir="${1:?host_sync requires a session_dir argument}"
+	local state_dir="${2:?host_sync requires a state_dir argument}"
 	local agent_dir="${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}"
 	case "${agent_dir}" in
 	\~) agent_dir="${HOME}" ;;
@@ -108,7 +109,7 @@ agent_pi_host_sync() {
 	/*) ;;
 	*) agent_dir="${PWD}/${agent_dir}" ;;
 	esac
-	"${_AGENT_PI_DIR}/sync-settings.sh" "${agent_dir}" "${session_dir}"
+	"${_AGENT_PI_DIR}/sync-settings.sh" "${agent_dir}" "${state_dir}"
 }
 
 # Print the env var names this agent reads (one per line). The launcher

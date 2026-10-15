@@ -211,22 +211,22 @@ testcases:
           W="$(mktemp -d)"
           trap 'rm -rf "${W}"' EXIT
           export HOME="${W}/home"; mkdir -p "${HOME}"
-          export RIOTBOX_DATA_DIR="${W}/data"
+          export RIOTBOX_STATE_ROOT="${W}/data"
 
           # Two sessions on one release, one on another, plus a store with no
           # stamp at all — the shape a pre-stamp session leaves behind.
           for s in s1 s2; do
-            mkdir -p "${RIOTBOX_DATA_DIR}/${s}/git-ai"
-            echo '{}' > "${RIOTBOX_DATA_DIR}/${s}/git-ai/config.json"
-            echo "1.7.4" > "${RIOTBOX_DATA_DIR}/${s}/git-ai/.riotbox-version"
+            mkdir -p "${RIOTBOX_STATE_ROOT}/${s}/git-ai"
+            echo '{}' > "${RIOTBOX_STATE_ROOT}/${s}/git-ai/config.json"
+            echo "1.7.4" > "${RIOTBOX_STATE_ROOT}/${s}/git-ai/.riotbox-version"
           done
-          mkdir -p "${RIOTBOX_DATA_DIR}/s3/git-ai"
-          echo '{}' > "${RIOTBOX_DATA_DIR}/s3/git-ai/config.json"
-          echo "1.8.0" > "${RIOTBOX_DATA_DIR}/s3/git-ai/.riotbox-version"
-          mkdir -p "${RIOTBOX_DATA_DIR}/s4/git-ai"
-          echo '{}' > "${RIOTBOX_DATA_DIR}/s4/git-ai/config.json"
+          mkdir -p "${RIOTBOX_STATE_ROOT}/s3/git-ai"
+          echo '{}' > "${RIOTBOX_STATE_ROOT}/s3/git-ai/config.json"
+          echo "1.8.0" > "${RIOTBOX_STATE_ROOT}/s3/git-ai/.riotbox-version"
+          mkdir -p "${RIOTBOX_STATE_ROOT}/s4/git-ai"
+          echo '{}' > "${RIOTBOX_STATE_ROOT}/s4/git-ai/config.json"
           # A directory that is not a store at all must not be listed.
-          mkdir -p "${RIOTBOX_DATA_DIR}/s5/headroom"
+          mkdir -p "${RIOTBOX_STATE_ROOT}/s5/headroom"
 
           printf '#!/bin/sh\nexit 0\n' > "${W}/stub"; chmod +x "${W}/stub"
           GIT_AI_BIN="${W}/stub" bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" --list > "${W}/out"
@@ -243,6 +243,124 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "discovery_ok=true"
 
+  # Stores live in the session's state dir. One an older RiotBox left inside
+  # a session dir is not read: that project's next launch moves it.
+  - name: Discovery defaults to the state root and ignores a store left in a session dir
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          export HOME="${W}/home"; mkdir -p "${HOME}"
+          unset RIOTBOX_STATE_ROOT RIOTBOX_DATA_DIR
+          export XDG_DATA_HOME="${W}/data"
+          mkdir -p "${XDG_DATA_HOME}/riotbox-state/s1/git-ai" "${XDG_DATA_HOME}/riotbox/s2/git-ai"
+          echo '{}' > "${XDG_DATA_HOME}/riotbox-state/s1/git-ai/config.json"
+          echo "1.7.4" > "${XDG_DATA_HOME}/riotbox-state/s1/git-ai/.riotbox-version"
+          echo '{}' > "${XDG_DATA_HOME}/riotbox/s2/git-ai/config.json"
+          echo "1.7.4" > "${XDG_DATA_HOME}/riotbox/s2/git-ai/.riotbox-version"
+
+          printf '#!/bin/sh\nexit 0\n' > "${W}/stub"; chmod +x "${W}/stub"
+          GIT_AI_BIN="${W}/stub" bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" --list > "${W}/out"
+
+          grep -qF "${XDG_DATA_HOME}/riotbox-state/s1/git-ai" "${W}/out" \
+            || { echo "FAIL: the state-root store is missing"; cat "${W}/out"; exit 1; }
+          grep -qF "${XDG_DATA_HOME}/riotbox/s2/git-ai" "${W}/out" \
+            && { echo "FAIL: a store inside a session dir was read"; cat "${W}/out"; exit 1; }
+          echo "state_root_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "state_root_ok=true"
+
+  # The stamp and the store are written by the container, so they are hostile
+  # input: a stamp must not steer which host binary runs, nor may a link in
+  # the store make the host read anything outside it.
+  - name: A traversal stamp never selects or runs a host binary
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          export HOME="${W}/home"; mkdir -p "${HOME}"
+          unset GIT_AI_BIN
+          export XDG_CACHE_HOME="${W}/cache"
+          export RIOTBOX_STATE_ROOT="${W}/data"
+          export RIOTBOX_GIT_AI_NO_FETCH=1
+          mkdir -p "${RIOTBOX_STATE_ROOT}/s1/git-ai" "${XDG_CACHE_HOME}/riotbox/git-ai"
+          echo '{}' > "${RIOTBOX_STATE_ROOT}/s1/git-ai/config.json"
+          # CACHE_DIR/<stamp>/git-ai resolves to the payload below.
+          mkdir -p "${RIOTBOX_STATE_ROOT}/s1/git-ai/p"
+          printf '#!/bin/sh\ntouch "%s/PWNED"\n' "${W}" > "${RIOTBOX_STATE_ROOT}/s1/git-ai/p/git-ai"
+          chmod +x "${RIOTBOX_STATE_ROOT}/s1/git-ai/p/git-ai"
+          echo "../../../data/s1/git-ai/p" > "${RIOTBOX_STATE_ROOT}/s1/git-ai/.riotbox-version"
+          [ "$(readlink -f "${XDG_CACHE_HOME}/riotbox/git-ai/../../../data/s1/git-ai/p/git-ai")" = "${RIOTBOX_STATE_ROOT}/s1/git-ai/p/git-ai" ] \
+            || { echo "FAIL: fixture does not reach the payload"; exit 1; }
+
+          for mode in --list --json; do
+            bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" ${mode} >"${W}/out" 2>"${W}/err" || true
+            [ ! -e "${W}/PWNED" ] || { echo "FAIL: ${mode} ran the planted binary"; exit 1; }
+            grep -q 'p/git-ai' "${W}/out" && { echo "FAIL: ${mode} listed the store"; cat "${W}/out"; exit 1; }
+            grep -qi 'invalid .riotbox-version' "${W}/err" || { echo "FAIL: ${mode} gave no notice"; cat "${W}/err"; exit 1; }
+          done
+          echo "traversal_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "traversal_ok=true"
+
+  - name: A symlinked stamp is skipped and the host file behind it is never printed
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          export HOME="${W}/home"; mkdir -p "${HOME}"
+          unset GIT_AI_BIN
+          export RIOTBOX_STATE_ROOT="${W}/data"
+          mkdir -p "${RIOTBOX_STATE_ROOT}/s1/git-ai"
+          echo '{}' > "${RIOTBOX_STATE_ROOT}/s1/git-ai/config.json"
+          echo "HOST-SECRET-1.2.3" > "${W}/secret"
+          ln -s "${W}/secret" "${RIOTBOX_STATE_ROOT}/s1/git-ai/.riotbox-version"
+          printf '#!/bin/sh\nexit 0\n' > "${W}/stub"; chmod +x "${W}/stub"
+          GIT_AI_BIN="${W}/stub" bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" --list >"${W}/out" 2>"${W}/err" || true
+          cat "${W}/out" "${W}/err" | grep -q 'HOST-SECRET' && { echo "FAIL: host file content leaked"; cat "${W}/out" "${W}/err"; exit 1; }
+          grep -q 'git-ai$' "${W}/out" && { echo "FAIL: the store was listed"; cat "${W}/out"; exit 1; }
+          # The store-wide symlink scan is what fires here: the stamp is itself
+          # a link inside the store. (The regular-file check on the stamp is
+          # the second line of defence, for the host's own store.)
+          grep -q 'skipped (not read)' "${W}/err" || { echo "FAIL: no notice"; cat "${W}/err"; exit 1; }
+          echo "stamp_link_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "stamp_link_ok=true"
+
+  - name: A store containing a symlink is skipped and never copied
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          export HOME="${W}/home"; mkdir -p "${HOME}"
+          export RIOTBOX_STATE_ROOT="${W}/data"
+          mkdir -p "${RIOTBOX_STATE_ROOT}/s1/git-ai/internal" "${RIOTBOX_STATE_ROOT}/s2/git-ai"
+          for s in s1 s2; do
+            echo '{}' > "${RIOTBOX_STATE_ROOT}/${s}/git-ai/config.json"
+            echo "1.7.4" > "${RIOTBOX_STATE_ROOT}/${s}/git-ai/.riotbox-version"
+          done
+          ln -s "${W}/home" "${RIOTBOX_STATE_ROOT}/s1/git-ai/internal/db"
+          printf '#!/bin/sh\nexit 0\n' > "${W}/stub"; chmod +x "${W}/stub"
+          GIT_AI_BIN="${W}/stub" bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" --list >"${W}/out" 2>"${W}/err"
+          grep -q 's1/git-ai$' "${W}/out" && { echo "FAIL: the store with a link was listed"; cat "${W}/out"; exit 1; }
+          grep -q 's2/git-ai$' "${W}/out" || { echo "FAIL: the clean store was dropped"; cat "${W}/out"; exit 1; }
+          grep -qi 'symlink' "${W}/err" || { echo "FAIL: no notice"; cat "${W}/err"; exit 1; }
+          echo "store_link_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "store_link_ok=true"
+
   - name: Readable stores merge and an unstamped one is skipped with a notice
     steps:
       - type: exec
@@ -251,17 +369,17 @@ testcases:
           W="$(mktemp -d)"
           trap 'rm -rf "${W}"' EXIT
           export HOME="${W}/home"; mkdir -p "${HOME}"
-          export RIOTBOX_DATA_DIR="${W}/data"
+          export RIOTBOX_STATE_ROOT="${W}/data"
           bash "{{.riotbox_dir}}/tests/lib/git-ai-usage-fixtures.sh" "${W}"
 
           for s in s1 s2; do
-            mkdir -p "${RIOTBOX_DATA_DIR}/${s}/git-ai"
-            echo '{}' > "${RIOTBOX_DATA_DIR}/${s}/git-ai/config.json"
-            echo "1.7.4" > "${RIOTBOX_DATA_DIR}/${s}/git-ai/.riotbox-version"
+            mkdir -p "${RIOTBOX_STATE_ROOT}/${s}/git-ai"
+            echo '{}' > "${RIOTBOX_STATE_ROOT}/${s}/git-ai/config.json"
+            echo "1.7.4" > "${RIOTBOX_STATE_ROOT}/${s}/git-ai/.riotbox-version"
           done
           # No stamp: must be skipped, and must NOT contribute to the totals.
-          mkdir -p "${RIOTBOX_DATA_DIR}/s9/git-ai"
-          echo '{}' > "${RIOTBOX_DATA_DIR}/s9/git-ai/config.json"
+          mkdir -p "${RIOTBOX_STATE_ROOT}/s9/git-ai"
+          echo '{}' > "${RIOTBOX_STATE_ROOT}/s9/git-ai/config.json"
 
           # The stub answers `usage ... --json` with fixture A regardless of
           # which store it is pointed at, so two readable stores must produce
@@ -290,6 +408,108 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "merge_via_script_ok=true"
 
+  # The early symlink scan runs long before the copy, and a container that is
+  # still running can plant a link in between. A cp shim plants one in the
+  # private copy right after it is made, standing in for that race.
+  - name: A link that appears after the early scan is caught in the private copy
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          export HOME="${W}/home"; mkdir -p "${HOME}"
+          export RIOTBOX_STATE_ROOT="${W}/data"
+          mkdir -p "${RIOTBOX_STATE_ROOT}/s1/git-ai" "${W}/shim"
+          echo '{}' > "${RIOTBOX_STATE_ROOT}/s1/git-ai/config.json"
+          echo "1.7.4" > "${RIOTBOX_STATE_ROOT}/s1/git-ai/.riotbox-version"
+          echo "HOST-SECRET" > "${W}/secret"
+          REAL_CP="$(command -v cp)"
+          cat > "${W}/shim/cp" <<EOF
+          #!/bin/sh
+          ${REAL_CP} "\$@" || exit \$?
+          for last; do :; done
+          ln -s "${W}/secret" "\${last}/leak"
+          EOF
+          chmod +x "${W}/shim/cp"
+          cat > "${W}/stub" <<EOF
+          #!/bin/sh
+          case "\$1" in
+            --version) echo 1.7.4 ;;
+            usage) touch "${W}/READ"; cat "\${HOME}/.git-ai/leak" ;;
+          esac
+          EOF
+          chmod +x "${W}/stub"
+          PATH="${W}/shim:${PATH}" GIT_AI_BIN="${W}/stub" bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" --json >"${W}/out" 2>"${W}/err" || true
+          [ ! -e "${W}/READ" ] || { echo "FAIL: the reader ran on a copy holding a link"; exit 1; }
+          grep -q 'HOST-SECRET' "${W}/out" "${W}/err" && { echo "FAIL: host file leaked"; exit 1; }
+          grep -q 'private copy' "${W}/err" || { echo "FAIL: no notice"; cat "${W}/err"; exit 1; }
+          echo "toctou_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "toctou_ok=true"
+
+  # config.json is container-written and git-ai reads settings from it (for
+  # instance the git binary to run), so the host reader never sees it.
+  - name: The reader is given an empty config, not the container's
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          export HOME="${W}/home"; mkdir -p "${HOME}"
+          export RIOTBOX_STATE_ROOT="${W}/data"
+          bash "{{.riotbox_dir}}/tests/lib/git-ai-usage-fixtures.sh" "${W}"
+          mkdir -p "${RIOTBOX_STATE_ROOT}/s1/git-ai"
+          echo '{"git_path":"/tmp/evil"}' > "${RIOTBOX_STATE_ROOT}/s1/git-ai/config.json"
+          echo "1.7.4" > "${RIOTBOX_STATE_ROOT}/s1/git-ai/.riotbox-version"
+          cat > "${W}/stub" <<EOF
+          #!/bin/sh
+          case "\$1" in
+            --version) echo 1.7.4 ;;
+            usage) cat "\${HOME}/.git-ai/config.json" > "${W}/seen"; cat "${W}/a.json" ;;
+          esac
+          EOF
+          chmod +x "${W}/stub"
+          GIT_AI_BIN="${W}/stub" bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" --json >"${W}/out" 2>"${W}/err"
+          [ "$(tr -d '[:space:]' < "${W}/seen")" = "{}" ] || { echo "FAIL: reader saw $(cat "${W}/seen")"; exit 1; }
+          [ "$(jq -r .commits.ai_lines "${W}/out")" = 100 ] || { echo "FAIL: store not read"; exit 1; }
+          [ "$(cat "${RIOTBOX_STATE_ROOT}/s1/git-ai/config.json")" = '{"git_path":"/tmp/evil"}' ] || { echo "FAIL: the original config was modified"; exit 1; }
+          echo "config_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "config_ok=true"
+
+  - name: Terminal control characters in container-written names never reach the text report
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          export HOME="${W}/home"; mkdir -p "${HOME}"
+          export RIOTBOX_STATE_ROOT="${W}/data"
+          bash "{{.riotbox_dir}}/tests/lib/git-ai-usage-fixtures.sh" "${W}"
+          mkdir -p "${RIOTBOX_STATE_ROOT}/s1/git-ai"
+          echo '{}' > "${RIOTBOX_STATE_ROOT}/s1/git-ai/config.json"
+          echo "1.7.4" > "${RIOTBOX_STATE_ROOT}/s1/git-ai/.riotbox-version"
+          jq '.repos[0].repo_url = "r\u001b]0;pwn\u0007x"
+              | .tokens.by_model[0].model = "m\u001b[2Jy"
+              | .commits.by_tool[0][0] = "t\u009bz"
+              | .repos[0].repo_url += "\u202eevil\u200e\u200f\u061c\u200b\u200c\u200d\u2028\u2029\ufeff"' "${W}/a.json" > "${W}/evil.json"
+          printf '#!/bin/sh\ncase "$1" in --version) echo 1.7.4 ;; usage) cat "%s/evil.json" ;; esac\n' "${W}" > "${W}/stub"
+          chmod +x "${W}/stub"
+          GIT_AI_BIN="${W}/stub" bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" >"${W}/out" 2>"${W}/err"
+          grep -q 'pwn' "${W}/out" || { echo "FAIL: the repo row is missing"; cat "${W}/out"; exit 1; }
+          if LC_ALL=C grep -qP '[\x00-\x08\x0b-\x1f\x7f]|\xc2[\x80-\x9f]|\xe2\x80[\x8b-\x8f\xa8-\xae]|\xe2\x81[\xa6-\xa9]|\xd8\x9c|\xef\xbb\xbf' "${W}/out"; then echo "FAIL: raw control or bidi byte in the report"; od -c "${W}/out" | head; exit 1; fi
+          GIT_AI_BIN="${W}/stub" bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" --json | grep -qP '\\u001b' \
+            || { echo "FAIL: --json must keep the data unchanged"; exit 1; }
+          echo "sanitised_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "sanitised_ok=true"
+
   # Reading a store with the wrong release risks mis-parsing its SQLite silently,
   # which is worse than not reporting it — a number nobody can tell is wrong.
   - name: A version with no available reader is reported rather than guessed at
@@ -300,10 +520,10 @@ testcases:
           W="$(mktemp -d)"
           trap 'rm -rf "${W}"' EXIT
           export HOME="${W}/home"; mkdir -p "${HOME}"
-          export RIOTBOX_DATA_DIR="${W}/data"
-          mkdir -p "${RIOTBOX_DATA_DIR}/s1/git-ai"
-          echo '{}' > "${RIOTBOX_DATA_DIR}/s1/git-ai/config.json"
-          echo "99.99.99" > "${RIOTBOX_DATA_DIR}/s1/git-ai/.riotbox-version"
+          export RIOTBOX_STATE_ROOT="${W}/data"
+          mkdir -p "${RIOTBOX_STATE_ROOT}/s1/git-ai"
+          echo '{}' > "${RIOTBOX_STATE_ROOT}/s1/git-ai/config.json"
+          echo "99.99.99" > "${RIOTBOX_STATE_ROOT}/s1/git-ai/.riotbox-version"
 
           # No GIT_AI_BIN, no cache, and fetching disabled, so nothing can read
           # a 99.99.99 store. An empty PATH entry keeps any host git-ai out.
@@ -315,7 +535,7 @@ testcases:
           [ "${rc}" -ne 0 ] || { echo "FAIL: exited 0 with nothing readable"; cat "${W}/err"; exit 1; }
           grep -qF '99.99.99' "${W}/err" \
             || { echo "FAIL: the unreadable version was not named"; cat "${W}/err"; exit 1; }
-          grep -qF "${RIOTBOX_DATA_DIR}/s1/git-ai" "${W}/err" \
+          grep -qF "${RIOTBOX_STATE_ROOT}/s1/git-ai" "${W}/err" \
             || { echo "FAIL: the affected store was not named"; cat "${W}/err"; exit 1; }
 
           echo "unreadable_reported_ok=true"
@@ -347,10 +567,10 @@ testcases:
           W="$(mktemp -d)"
           trap 'rm -rf "${W}"' EXIT
           export HOME="${W}/home"; mkdir -p "${HOME}"
-          export RIOTBOX_DATA_DIR="${W}/data"
+          export RIOTBOX_STATE_ROOT="${W}/data"
           bash "{{.riotbox_dir}}/tests/lib/git-ai-usage-fixtures.sh" "${W}"
 
-          store="${RIOTBOX_DATA_DIR}/s1/git-ai"
+          store="${RIOTBOX_STATE_ROOT}/s1/git-ai"
           mkdir -p "${store}/internal"
           echo '{}' > "${store}/config.json"
           echo "1.7.4" > "${store}/.riotbox-version"

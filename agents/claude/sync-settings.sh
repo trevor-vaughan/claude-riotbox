@@ -20,9 +20,12 @@
 # Bind-mount flags (for credentials) are printed to stdout so the caller can
 # capture and append them to its volume flag string.
 #
+# Copies are staged outside the session dir and renamed in (see STAGE_DIR).
+#
 # Exit codes:
 #   0 — success
-#   1 — wrong number of arguments
+#   1 — wrong number of arguments, a non-absolute <session-dir>, or an entry
+#       changed during sync
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -34,8 +37,48 @@ fi
 HOST_CLAUDE_DIR="$1"
 SESSION_DIR="$2"
 
+[[ "${SESSION_DIR}" = /* ]] || {
+	echo "sync-settings.sh: session dir must be an absolute path: ${SESSION_DIR}" >&2
+	exit 1
+}
+
 # Container home — must match the image's user home (see detect-mounts.sh)
 CONTAINER_HOME="/home/llm"
+
+# The session dir is the container's read-write ~/.claude, and several
+# sessions of one project may run at once, so a running container can replace
+# any entry in it with a link while this script runs. `cp`, `chmod` and
+# `tar -x` follow a link at their destination, so a planted `.claude.json ->
+# ~/.bashrc` would have them write a host file. Every copy is therefore built
+# in STAGE_DIR and renamed into place. STAGE_DIR sits in the session dir's
+# parent (riotbox/, never mounted; dot-named, so the riotbox/*/ session
+# enumerators skip it) on the same filesystem, so the rename is atomic.
+STAGE_DIR="$(mktemp -d "$(dirname -- "${SESSION_DIR}")/.claude-sync.XXXXXX")"
+trap 'rm -rf -- "${STAGE_DIR}"' EXIT
+
+# _install_staged <name> — rename ${STAGE_DIR}/<name> onto ${SESSION_DIR}/<name>.
+# rename(2) replaces a link or other non-directory instead of following it, but
+# cannot replace a directory with a file or a non-empty directory with a
+# directory. So the old copy of a directory is removed first, and so is a
+# directory at a file's destination. A link or FIFO there would be replaced
+# anyway; it is removed first only so the warning names it (only the
+# container puts one there). If an entry is re-planted after that removal,
+# the rename fails (EISDIR, ENOTDIR or ENOTEMPTY) rather than following a
+# link or merging into a directory; abort then, as on a failed removal.
+_install_staged() {
+	local name="$1"
+	local staged="${STAGE_DIR}/${name}" dest="${SESSION_DIR}/${name}"
+	# shellcheck disable=SC2015  # abort when either the removal or the rename fails
+	if [[ -d "${staged}" ]]; then
+		rm -rf -- "${dest}"
+	elif [[ -L "${dest}" ]] || { [[ -e "${dest}" ]] && [[ ! -f "${dest}" ]]; }; then
+		echo "Warning: ${dest} is not a regular file; removing it." >&2
+		rm -rf -- "${dest}"
+	fi && mv -T -- "${staged}" "${dest}" || {
+		echo "Error: ${name} in ${SESSION_DIR} changed during sync (another process, possibly a running session of this project, modified it); aborting." >&2
+		exit 1
+	}
+}
 
 # ── Credentials (RW bind mount) ───────────────────────────────────────────────
 # Bind-mounted RW as a nested mount inside the session dir so that token
@@ -51,20 +94,21 @@ fi
 # the container shouldn't permanently modify. Copied writable so Claude Code
 # can update oauthAccount fields during token refresh without error.
 if [[ -f "${HOME}/.claude.json" ]]; then
-	dest="${SESSION_DIR}/.claude.json"
-	cp "${HOME}/.claude.json" "${dest}"
-	chmod 600 "${dest}"
+	cp "${HOME}/.claude.json" "${STAGE_DIR}/.claude.json"
+	chmod 600 "${STAGE_DIR}/.claude.json"
+	_install_staged .claude.json
 fi
 
 # ── User CLAUDE.md ───────────────────────────────────────────────────────────
 # The RiotBox system prompt lives at the managed policy path
 # (/etc/claude-code/CLAUDE.md) inside the container, so ~/.claude/CLAUDE.md is
 # free for the user's personal instructions. Copy from host if present; remove
-# stale copies if the host file was deleted.
+# stale copies (or anything planted there) if the host file was deleted.
 if [[ -f "${HOST_CLAUDE_DIR}/CLAUDE.md" ]]; then
-	cp "${HOST_CLAUDE_DIR}/CLAUDE.md" "${SESSION_DIR}/CLAUDE.md"
+	cp "${HOST_CLAUDE_DIR}/CLAUDE.md" "${STAGE_DIR}/CLAUDE.md"
+	_install_staged CLAUDE.md
 else
-	rm -f "${SESSION_DIR}/CLAUDE.md"
+	rm -rf -- "${SESSION_DIR}/CLAUDE.md"
 fi
 
 # ── User rules ───────────────────────────────────────────────────────────────
@@ -72,10 +116,10 @@ fi
 # use glob frontmatter and load on demand. Re-copy each launch so
 # added/removed rules don't linger.
 if [[ -d "${HOST_CLAUDE_DIR}/rules" ]]; then
-	rm -rf "${SESSION_DIR}/rules"
-	cp -rL "${HOST_CLAUDE_DIR}/rules" "${SESSION_DIR}/"
+	cp -rL "${HOST_CLAUDE_DIR}/rules" "${STAGE_DIR}/"
+	_install_staged rules
 else
-	rm -rf "${SESSION_DIR}/rules"
+	rm -rf -- "${SESSION_DIR}/rules"
 fi
 
 # ── User extension directories ────────────────────────────────────────────────
@@ -100,13 +144,15 @@ fi
 # destination when the source has been removed so it does not outlive the
 # host.
 for _user_dir in skills agents commands output-styles; do
-	rm -rf "${SESSION_DIR:?}/${_user_dir}"
 	if [[ -d "${HOST_CLAUDE_DIR}/${_user_dir}" ]]; then
 		(
 			cd "${HOST_CLAUDE_DIR}" &&
 				find -L "${_user_dir}" ! -type l -print0 |
 				tar -ch --null --no-recursion --files-from=- -f -
-		) | tar -xf - -C "${SESSION_DIR}/" --no-same-owner
+		) | tar -xf - -C "${STAGE_DIR}/" --no-same-owner
+		_install_staged "${_user_dir}"
+	else
+		rm -rf -- "${SESSION_DIR:?}/${_user_dir}"
 	fi
 done
 unset _user_dir
@@ -118,10 +164,11 @@ unset _user_dir
 # not be executable (e.g. created without chmod +x), so we enforce it here.
 # If the source has been removed, delete any stale copy from the session dir.
 if [[ -f "${HOST_CLAUDE_DIR}/statusline-command.sh" ]]; then
-	cp "${HOST_CLAUDE_DIR}/statusline-command.sh" "${SESSION_DIR}/statusline-command.sh"
-	chmod +x "${SESSION_DIR}/statusline-command.sh"
+	cp "${HOST_CLAUDE_DIR}/statusline-command.sh" "${STAGE_DIR}/statusline-command.sh"
+	chmod +x "${STAGE_DIR}/statusline-command.sh"
+	_install_staged statusline-command.sh
 else
-	rm -f "${SESSION_DIR}/statusline-command.sh"
+	rm -rf -- "${SESSION_DIR}/statusline-command.sh"
 fi
 
 # ── Host plugins (read-only mount) ───────────────────────────────────────────
