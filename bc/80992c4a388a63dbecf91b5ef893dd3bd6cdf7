@@ -1,29 +1,29 @@
+tests/opencode.venom.yml
+  s_511fb0f89ebc84::t_941575b8a15e74 1248-1249,1252-1256
+  s_511fb0f89ebc84::t_0d95759e0c6e8b 1032-1086
+  s_511fb0f89ebc84::t_21bb155944c654 1265
+agents/pi/sync-settings.sh
+  s_511fb0f89ebc84::t_c5496afc26fcf6 15
 README.md
   s_511fb0f89ebc84::t_db43d4c01b6263 182
-tests/opencode.venom.yml
-  s_511fb0f89ebc84::t_0d95759e0c6e8b 1032-1086
-  s_511fb0f89ebc84::t_941575b8a15e74 1248-1249,1252-1256
-  s_511fb0f89ebc84::t_21bb155944c654 1265
 agents/opencode/sync-settings.sh
-  s_511fb0f89ebc84::t_75bdf81bccee6e 61-72,77-79
-  s_511fb0f89ebc84::t_427b31d56bdb68 108-109,112,115-120,129,139-142
   s_511fb0f89ebc84::t_4b7a140850a0e5 15,19-20
-  s_511fb0f89ebc84::t_055a513c12e93d 122,128,130,132,138,143
   s_511fb0f89ebc84::t_3d5d7f4b86d055 121,123-127,131,133-135
+  s_511fb0f89ebc84::t_427b31d56bdb68 108-109,112,115-120,129,139-142
+  s_511fb0f89ebc84::t_75bdf81bccee6e 61-72,77-79
+  s_511fb0f89ebc84::t_055a513c12e93d 122,128,130,132,138,143
 docs/dev/context-mode.md
   s_511fb0f89ebc84::t_f348b218c64ba3 249-252
   s_511fb0f89ebc84::t_33c5969801ad79 231-235
-agents/pi/sync-settings.sh
-  s_511fb0f89ebc84::t_c5496afc26fcf6 15
 docs/dev/agent-contract.md
-  s_511fb0f89ebc84::t_28e1228fb57f03 255-257
   s_511fb0f89ebc84::t_0087ca02a13d94 516-518
+  s_511fb0f89ebc84::t_28e1228fb57f03 255-257
   s_511fb0f89ebc84::t_8439820545f53d 243-247
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.5",
-  "base_commit_sha": "4ff38c87d90a005972b2229912dff67652939773",
+  "base_commit_sha": "bc80992c4a388a63dbecf91b5ef893dd3bd6cdf7",
   "prompts": {},
   "sessions": {
     "s_511fb0f89ebc84": {
