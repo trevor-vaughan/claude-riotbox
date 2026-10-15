@@ -5,6 +5,19 @@ generated from [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org); do not edit it by hand — run
 `task release:bump` instead.
 
+## [0.6.1] - 2026-10-15
+
+### 🐛 Bug Fixes
+
+- *(container)* Let go fetch newer toolchains (GOTOOLCHAIN=auto)
+- *(opencode)* Refresh opencode-config in place on relaunch
+- *(security)* Reject tokscale scan roots reached through any link
+- *(session)* Find sessions by their launch record, not .projects alone
+
+### 🧪 Testing
+
+- *(overlay)* Cover the overlays gates for a hidden session
+
 ## [0.6.0] - 2026-10-15
 
 ### 🚀 Features
