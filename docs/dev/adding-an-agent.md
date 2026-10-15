@@ -1,7 +1,7 @@
 # Adding a new CLI agent to RiotBox
 
-Follow this start to finish to add a third (or fourth, or fifth) CLI agent
-alongside `claude` and `opencode` — for example [aider](https://aider.chat/),
+Follow this start to finish to add a fourth (or fifth) CLI agent
+alongside `claude`, `opencode` and `pi` — for example [aider](https://aider.chat/),
 [goose](https://block.github.io/goose/), [cursor-agent](https://docs.cursor.com/cli),
 or [codex](https://github.com/openai/codex).
 
@@ -19,7 +19,9 @@ and you're done — no edits to dispatch sites, wrappers, or test fixtures.
    eight required functions, each a handful of lines — see
    [The agent contract](agent-contract.md). Add `setup.sh` for container-side
    runtime setup and `sync-settings.sh` for host config sync if your agent needs
-   them. Use `agents/claude/` or `agents/opencode/` as a template.
+   them. Use `agents/claude/`, `agents/opencode/` or `agents/pi/` as a template —
+   `agents/pi/` is the closest template for an npm-installed agent with a
+   committed extension lock.
 3. **Run `task lint && task test`** — the contract suite at
    `tests/agents.venom.yml` automatically validates the new manifest.
 
@@ -62,13 +64,15 @@ servers](agent-contract.md#optional-verbs-forge-mcp-servers) that
 **→ [The agent contract](agent-contract.md)** documents each verb: its signature,
 what it must print, and the rules it has to honour.
 
-The two shipped manifests are the working references —
-[`agents/claude/manifest.sh`](../../agents/claude/manifest.sh) and
-[`agents/opencode/manifest.sh`](../../agents/opencode/manifest.sh).
+The three shipped manifests are the working references —
+[`agents/claude/manifest.sh`](../../agents/claude/manifest.sh),
+[`agents/opencode/manifest.sh`](../../agents/opencode/manifest.sh) and
+[`agents/pi/manifest.sh`](../../agents/pi/manifest.sh), the closest template
+for an npm-installed agent with a committed extension lock.
 
 ## Worked example: adding `aider`
 
-Suppose [aider](https://aider.chat/) is your third agent. Here's the
+Suppose [aider](https://aider.chat/) is your fourth agent. Here's the
 complete diff:
 
 ### 1. Install in Containerfile

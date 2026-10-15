@@ -1,0 +1,41 @@
+name: scripts/tokscale-riotbox.sh — session scan roots
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+testcases:
+  - name: every agent's session store becomes a tokscale scan root
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          command -v unshare >/dev/null && unshare -rn true 2>/dev/null \
+            || { echo "TOKSCALE_SKIPPED: no unprivileged user namespaces"; exit 0; }
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/data/s1/projects" "${T}/data/s2/.local-share-opencode/storage/message" "${T}/data/s3/.pi-agent/sessions"
+          printf '#!/bin/sh\necho "EXTRA=${TOKSCALE_EXTRA_DIRS}"\n' > "${T}/tok"; chmod +x "${T}/tok"
+          out="$(RIOTBOX_DATA_DIR="${T}/data" TOKSCALE_BIN="${T}/tok" bash "{{.riotbox_dir}}/scripts/tokscale-riotbox.sh")"
+          for want in "claude:${T}/data/s1/projects" "opencode:${T}/data/s2/.local-share-opencode" "pi:${T}/data/s3/.pi-agent/sessions"; do
+            printf '%s\n' "${out}" | grep -qF "${want}" || { echo "FAIL: missing ${want}"; echo "${out}"; exit 1; }
+          done
+          echo "TOKSCALE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "TOKSCALE_OK|TOKSCALE_SKIPPED"
+
+  - name: a session without a pi sessions dir adds no pi root
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          command -v unshare >/dev/null && unshare -rn true 2>/dev/null \
+            || { echo "TOKSCALE_SKIPPED: no unprivileged user namespaces"; exit 0; }
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/data/s1/.pi-agent"
+          printf '#!/bin/sh\necho "EXTRA=${TOKSCALE_EXTRA_DIRS}"\n' > "${T}/tok"; chmod +x "${T}/tok"
+          out="$(RIOTBOX_DATA_DIR="${T}/data" TOKSCALE_BIN="${T}/tok" bash "{{.riotbox_dir}}/scripts/tokscale-riotbox.sh")"
+          if printf '%s\n' "${out}" | grep -qF 'pi:'; then echo "FAIL: pi root without sessions/"; exit 1; fi
+          echo "TOKSCALE_NOPI_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "TOKSCALE_NOPI_OK|TOKSCALE_SKIPPED"

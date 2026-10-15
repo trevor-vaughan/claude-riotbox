@@ -69,6 +69,7 @@ Print the argv (one NUL-terminated token per write) for non-interactive
 |------------|-------------------------------|
 | `claude`   | `claude`, `-p`, `<prompt>`    |
 | `opencode` | `opencode`, `run`, `<prompt>` |
+| `pi`       | `pi`, `-p`, `--`, `<prompt>`  |
 
 The caller does `mapfile -d '' -t argv < <(agent_call <name> run_argv
 "$prompt")` and `exec` from there. NUL framing keeps multi-line argv
@@ -84,7 +85,7 @@ agent_<name>_resume_argv() {
 ```
 
 Print the argv to resume the most recent session in the current project.
-Examples: `claude --continue`; `opencode run --continue`.
+Examples: `claude --continue`; `opencode run --continue`; `pi -c`.
 
 ### `agent_<name>_audit_argv`
 
@@ -115,7 +116,8 @@ This is the only function with non-trivial logic. It's called by
 `container/agent-wrapper.sh` to decide:
 
 - **What flags to inject** (claude: `--dangerously-skip-permissions`;
-  opencode: `--auto`)
+  opencode: `--auto`; pi: none — it has no approval prompts, and project
+  trust comes from `settings.json`)
 - **Where to inject them** (claude: at the root; opencode: immediately
   after the `run` subcommand, or at the root only when argv carries no
   positional token at all — `--auto` is registered on `run` and on the
@@ -128,7 +130,8 @@ This is the only function with non-trivial logic. It's called by
   `opencode /workspace` runs ask-first. The position is per-CLI, which is
   exactly why this is a hook and not a constant)
 - **When to set `CI=true`** (claude: when `-p`/`--prompt` is present;
-  opencode: when `run` is present)
+  opencode: when `run` is present; pi: when `-p`/`--print` or the two-token
+  `--mode json`/`--mode rpc` appears before `--`)
 
 The contract is:
 
@@ -169,8 +172,8 @@ For opencode the injected flag is not the only thing granting autonomy —
 merged config on every container start. `THREAT_MODEL.md` records how the
 two divide the work and why neither replaces the other.
 
-See `agents/claude/manifest.sh` and `agents/opencode/manifest.sh` for two
-complete implementations.
+See `agents/claude/manifest.sh`, `agents/opencode/manifest.sh` and
+`agents/pi/manifest.sh` for three complete implementations.
 
 ### `agent_<name>_container_setup`
 
@@ -210,6 +213,15 @@ Called by `scripts/mount-projects.sh` on the host. Should:
 - Print notices on stderr if the host has no config to sync.
 - Empty stdout is allowed (means "nothing to mount").
 
+It runs for **every registered agent on every launch**, whichever `--agent`
+was selected, so whatever it mounts reaches every agent's container. And the
+session directory is writable from inside the container, so treat anything
+already in it as untrusted before a host-side `rm`, copy or `-v` touches it:
+`agents/pi/sync-settings.sh` replaces a `.pi-agent` that is a symlink or a
+file with a real directory first. An agent that keeps its own state beside
+its config, as Pi does, replaces only an allowlist of entries rather than the
+whole copy; see that script's header.
+
 If the agent has no host config story (e.g. it reads everything from env
 vars and never persists state), make this a no-op:
 
@@ -235,7 +247,11 @@ The launcher (`libexec/passthrough-vars.sh`) sources the
 registry, calls this verb on every registered agent, dedupes the union
 with `sort -u`, and emits `-e <NAME>` for each name whose value is set
 on the host. Adding a new provider key for an agent is a one-line edit
-to its manifest — no central list to maintain.
+to its manifest — no central list to maintain. The union reaches **every**
+container whatever `--agent` says, so a key added for one agent is forwarded
+into all of them; that is why `agents/pi/manifest.sh` lists only opencode's
+eight keys and leaves Pi's other providers to
+`RIOTBOX_PASSTHROUGH_EXTRA_VARS`.
 
 Constraints:
 
@@ -338,7 +354,7 @@ behavior).
 
 Six optional verbs carry [Context Mode](../../README.md#context-mode-opt-in)
 support for an agent. Five run per session; the sixth runs at image build
-time. Claude implements four of them, opencode all six:
+time. Claude implements four of them, opencode and Pi all six:
 
 | Verb | When | Contract |
 |------|------|----------|
@@ -410,10 +426,11 @@ source "${_AGENT_<NAME>_DIR}/context-mode.sh"
 That keeps the upstream constants, whatever depends on them, and the build
 guard that asserts them in one file. `agents/claude/context-mode.sh` (no
 wiring — a store path, a platform token, and a stripper for what an older
-release wrote) and `agents/opencode/context-mode.sh` (one generated plugin
-file) are the two worked examples, and they are deliberately different
-shapes — the registry contract is about the lifecycle, not about what wiring
-looks like.
+release wrote), `agents/opencode/context-mode.sh` (one generated plugin
+file) and `agents/pi/context-mode.sh` (one entry in a RiotBox-owned
+`packages` list) are the three worked examples, and they are deliberately
+different shapes — the registry contract is about the lifecycle, not about
+what wiring looks like.
 
 ### `agent_<name>_context_mode_store_dir`
 
@@ -463,6 +480,9 @@ fallback:
   output, so an upstream change to that fallback would move it onto the
   container overlay, where it vanishes at exit and escapes
   `riotbox session-remove`.
+- **Pi does.** PiAdapter's default DB root is `~/.pi/context-mode` — outside
+  the `~/.pi/agent` session mount — so without the pin its verbatim tool
+  output would land on the container overlay.
 
 **Print the parent of `context_mode_store_dir`'s path, not the same path.**
 Upstream builds the DB directory as `<root>/context-mode/sessions`, whereas
@@ -487,9 +507,9 @@ agent_<name>_context_mode_platform() {
 ```
 
 Print the token upstream keys its hook dispatch and adapter detection off —
-`claude-code` for Claude, `opencode` for opencode — and nothing else. The
-session exports it as `CONTEXT_MODE_PLATFORM`, which is the same remedy
-upstream applies to its own Copilot CLI bundle for the same reason.
+`claude-code` for Claude, `opencode` for opencode, `pi` for Pi — and nothing
+else. The session exports it as `CONTEXT_MODE_PLATFORM`, which is the same
+remedy upstream applies to its own Copilot CLI bundle for the same reason.
 
 **Pin it rather than letting upstream detect it.** `hookDispatch` resolves
 the hook script through `getPluginRoot()`, which branches on
@@ -517,7 +537,10 @@ reach Context Mode. Claude Code does not: the image stages upstream's
 marketplace plugin and `container/plugin-setup.sh` registers it against the
 session, so there is nothing left for a wire verb to write and the verb was
 removed. opencode still needs one, because its support is a plugin file in
-the session config directory that only riotbox can put there.
+the session config directory that only riotbox can put there. So does Pi: its
+support is an entry in `settings.json` `packages`, a list `agents/pi/setup.sh`
+rewrites on every container start (before `context_mode_setup` runs), so the
+wire verb appends the entry and the strip verb removes it.
 
 Write whatever form of wiring this agent needs, and return 0 **only** when
 every artifact landed. On any failure: warn on stderr, leave nothing behind
@@ -627,7 +650,9 @@ either one moves.
 Contract coverage lives in `tests/context-mode.venom.yml` (the Claude
 path, plus the strip-every-other-agent rule),
 `tests/context-mode-opencode.venom.yml` (the opencode path, including the
-foreign-file refusal and the `--pure` warning), and
+foreign-file refusal and the `--pure` warning),
+`tests/context-mode-pi.venom.yml` (the Pi path, including the strip that
+leaves user entries merely containing `context-mode`), and
 `tests/doctor-context-mode.venom.yml` (the preflight check for an agent
 with no support).
 
@@ -802,8 +827,8 @@ than a gap.
 
 **RiotBox does not write git-ai's wiring — upstream's `install-hooks` does.**
 `container/git-ai-setup.sh` calls it once per session and lets it write the Claude
-hook stanzas, the opencode plugin, and the `~/.gitconfig` Trace2 target. RiotBox
-does not hand-author any of those shapes, for the same reason
+hook stanzas, the opencode plugin, the Pi extension, and the `~/.gitconfig` Trace2
+target. RiotBox does not hand-author any of those shapes, for the same reason
 `agent_<name>_context_mode_wire` is missing on Claude Code: upstream's own docs
 have already drifted from what its binary installs once — the documented Claude
 matcher is `Write|Edit|MultiEdit`, the matcher v1.7.4 actually writes is `"*"` — so
@@ -831,7 +856,7 @@ strip verbs follow. It is idempotent, silent when there is nothing to remove, an
 always returns 0: a failure to clean is a warning on stderr, not a non-zero status,
 because nothing upstream of it has a better answer than carrying on.
 
-The two shipped agents decide ownership by different means, because the wiring
+The three shipped agents decide ownership by different means, because the wiring
 upstream writes for each one has a different shape:
 
 - **`agents/claude/git-ai.sh`** matches the binary as a **whole
@@ -854,6 +879,15 @@ upstream writes for each one has a different shape:
   block-comment line at the position upstream's generator actually writes it. The
   tighter gate leaves that file alone and only takes the file whose shape matches
   what a real `git-ai install-hooks` run produces.
+- **`agents/pi/git-ai.sh`** is content-gated too, but upstream's Pi template
+  (v1.7.5) carries no banner. It removes `~/.pi/agent/extensions/git-ai.ts`
+  only when the file's first 12 lines hold **both** of two template lines
+  exactly as upstream writes them: the comment
+  `// Optional user-owned override file. Managed installer never writes it.` as
+  a whole line, and a line starting `const GIT_AI_BIN = '`. Anything lacking
+  either is left in place with a NOTE on stderr. Because `install-hooks` runs
+  after `host_sync`, it also replaces any host copy the sync brought in, whose
+  baked binary path is a host path.
 
 ### `agent_<name>_github_mcp_wire`
 

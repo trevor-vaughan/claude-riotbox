@@ -181,13 +181,23 @@ opencode uses two host paths:
 - **`~/.local/share/opencode/auth.json`** — bind-mounted **read-write** into the container at `/home/llm/.local/share/opencode/auth.json`. Same trust posture as Claude's `.credentials.json`: the container can read and overwrite this file. Refresh tokens that opencode rotates during a session land back on the host so subsequent runs stay authenticated.
 - **`~/.config/opencode/`** — copied (not mounted) into the session dir at launch. The container's writes to its synced copy do not propagate back to the host. Re-copied at every launch so removed/renamed agents and commands do not linger.
 
-Provider env vars are exposed by name only (`-e VAR`); values come from the calling host environment via the container runtime. The set is the union of every registered agent's `agent_<name>_env_vars` manifest function (`agents/claude/manifest.sh` and `agents/opencode/manifest.sh` today), deduplicated with `sort -u`. Each manifest declares only the vars its agent reads, so adding a new provider key for one agent does not silently widen the passthrough surface for the others. The union covers direct provider keys plus Claude Code routing vars for Vertex and Bedrock (`CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_PROJECT_ID`, `AWS_PROFILE`, etc.). Long-lived AWS access keys (`AWS_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_SESSION_TOKEN`) are intentionally excluded from every manifest — shipping static long-lived credentials into an autonomous container that has full filesystem access is a regression. Bedrock users authenticate via `AWS_PROFILE` plus an `AWS_SHARED_CREDENTIALS_FILE` (RO-mounted by `RIOTBOX_CREDFILE_VARS`). Setting `RIOTBOX_PASSTHROUGH_VARS` (whitespace-separated names) overrides the registry union with a curated list — no merging. `RIOTBOX_PASSTHROUGH_EXTRA_VARS` uses the same syntax and validation but is appended to whichever set is active (default or override), letting users add forwarded vars without restating the base; identical KEY validation, identical argv-hygiene for `KEY=VALUE` values, and identical "no AWS long-lived keys" guidance apply.
+Provider env vars are exposed by name only (`-e VAR`); values come from the calling host environment via the container runtime. The set is the union of every registered agent's `agent_<name>_env_vars` manifest function (`agents/claude/manifest.sh`, `agents/opencode/manifest.sh` and `agents/pi/manifest.sh` today), deduplicated with `sort -u`. The union is forwarded into every container regardless of `--agent`, so adding a provider key to one manifest widens the passthrough surface for all agents; Pi's manifest therefore declares exactly opencode's eight keys. The union covers direct provider keys plus Claude Code routing vars for Vertex and Bedrock (`CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_PROJECT_ID`, `AWS_PROFILE`, etc.). Long-lived AWS access keys (`AWS_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_SESSION_TOKEN`) are intentionally excluded from every manifest — shipping static long-lived credentials into an autonomous container that has full filesystem access is a regression. Bedrock users authenticate via `AWS_PROFILE` plus an `AWS_SHARED_CREDENTIALS_FILE` (RO-mounted by `RIOTBOX_CREDFILE_VARS`). Setting `RIOTBOX_PASSTHROUGH_VARS` (whitespace-separated names) overrides the registry union with a curated list — no merging. `RIOTBOX_PASSTHROUGH_EXTRA_VARS` uses the same syntax and validation but is appended to whichever set is active (default or override), letting users add forwarded vars without restating the base; identical KEY validation, identical argv-hygiene for `KEY=VALUE` values, and identical "no AWS long-lived keys" guidance apply.
 
 Credential-file env vars listed in `RIOTBOX_CREDFILE_VARS` get a different treatment: when the var is set and points to an existing regular file, the file is bind-mounted **read-only** at a stable container path (e.g. `/run/secrets/gcp-creds.json`) and the env var inside the container is rewritten to that in-container path. Defaults: `GOOGLE_APPLICATION_CREDENTIALS`, `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE`, `KUBECONFIG`. Targets that don't exist or aren't regular files are skipped with a stderr notice — never auto-mounted as directories. SSH agent forwarding (`SSH_AUTH_SOCK`) is out of scope: socket forwarding gives the container live signing access for the host agent's lifetime, which doesn't fit the same threat model.
 
 opencode's session-share feature is enforced disabled inside the container regardless of host config. At session start the runtime merges `~/.config/opencode/opencode.json` and `opencode.jsonc` and forces `share = "disabled"`, `permission = "allow"`, `autoupdate = false`, and ensures `~/.config/opencode/AGENTS.md` is in `instructions`. A host `opencode.json` with `share: "enabled"` is overridden during the merge — the host file is removed and the merged `opencode.jsonc` is the single source of truth opencode loads.
 
 Auto-approval reaches opencode through two mechanisms that sit at different layers, and neither replaces the other. The forced `permission = "allow"` is config-side: opencode normalises the bare string to the rule `{"*": "allow"}` and merges it over its built-in per-agent defaults, so the permission evaluator resolves every tool call to `allow` and no approval request is raised at all. The `--auto` flag the wrapper injects (`agents/opencode/manifest.sh`) is client-side, and covers what that key cannot reach: an agent-scoped `permission` block is merged *after* the top-level value and wins over it, so an agent configured to ask still raises a request — and headless `opencode run` answers a request it was not told to approve by **rejecting** it (`permission requested: <tool>; auto-rejecting`), mid-session and without failing. Dropping the config key would route every tool call through a request; dropping the flag would leave agent-scoped `ask` rules silently auto-rejected. Both are load-bearing.
+
+## Pi auth surface
+
+- **`~/.pi/agent/auth.json` and `mcp-auth.json`** — bind-mounted **read-write** when present, same posture as opencode's `auth.json`. Like every agent's `host_sync`, Pi's runs on every launch whichever `--agent` is selected, so these files are mounted into Claude and opencode sessions too. Without a host `auth.json` there is no bind, so a `/login` inside the container leaves the credential in the session dir (`<session>/.pi-agent/auth.json`). It stays on disk — shadowed, not removed, once a host file appears and is bind-mounted over it — until `riotbox session-remove`.
+- **`~/.pi/agent/` (or `$PI_CODING_AGENT_DIR`)** — an allowlist of config files and resource directories ([README § Pi config](README.md#pi-config) is the list) is copied into the session at launch; nothing flows back. `extensions/` is host-authored code that runs inside Pi, the same trust class as Claude hooks and opencode plugins. `models.json` can run `!command` values at request time and is treated as trusted config for the same reason.
+- **Packages** — RiotBox replaces `settings.json` `packages` with the image's pinned extensions (plus the image's Context Mode package when that feature is on), so neither host paths nor npm/git specs reach the container's Pi.
+- **Approvals and trust** — Pi has no per-tool approvals in RiotBox and `defaultProjectTrust` is forced to `always`: a project's `.pi/` settings, extensions, skills, prompt templates and MCP servers load without a prompt. This matches Claude (`--dangerously-skip-permissions`) and opencode (`permission = "allow"`); the container is the boundary.
+- **Supply chain** — Pi core floats to the latest release at build time but installs from pi.dev's per-release lockfile; the extensions install from the committed `container/pi/package-lock.json`. Both installs run with `--ignore-scripts`, and an offline SDK smoke (`container/pi/smoke.mjs`) fails the build if an extension stops loading or registering its tools. Upstream's per-release lock has omitted `integrity` for some first-party `@earendil-works` entries, which `npm ci` would install unverified; before `npm ci`, `container/pi/lock-integrity.sh` refuses any entry whose `resolved` URL is not exactly the registry.npmjs.org tarball for its locked name and version, then fills each missing `integrity` from the registry's published `dist.integrity`, so every tarball is hash-verified by `npm ci`. Registry integrity is not a publisher signature: it proves the bytes match what the registry serves, not who published them.
+- **Host sync trust** — a host-side symlink under an allowlisted entry (e.g. `skills/x -> ~/.ssh`) is dereferenced and its target copied into the session, the same as opencode's sync; it is the user's own config. Conversely the session dir is writable from inside the container, so `agents/pi/sync-settings.sh` replaces a planted `.pi-agent` symlink or file with a real directory before touching it — otherwise the next host-side sync would delete, write and RW-mount an arbitrary host directory.
+- **Egress** — `PI_TELEMETRY=0` and `PI_SKIP_VERSION_CHECK=1` are set in the `pi` shim and install telemetry/analytics are forced off; Pi's model-catalog refresh from pi.dev stays on (like opencode's models.dev fetch).
 
 ## Headroom compression cache (opt-in feature)
 
@@ -374,11 +384,15 @@ path, in the ways set out below.
 **The FTS5 store holds verbatim tool output, and there is one per agent.**
 Command results, file contents, and fetched pages are written to
 `~/.claude/context-mode/` under `--agent=claude` and to
-`~/.config/opencode/context-mode/` under `--agent=opencode`. Both paths are
-inside the session directory, so both carry the same sensitivity as a session
-transcript and both are deleted by the same `riotbox session-remove`. The store
-is per agent rather than shared, which means a session directory reused across
-agents can hold two of them; the second is not a leak past any boundary the
+`~/.config/opencode/context-mode/` under `--agent=opencode` and to
+`~/.pi/agent/context-mode/` under `--agent=pi`. Pi's extension also keeps its own
+session DB, which upstream would put at `~/.pi/context-mode/sessions`, outside
+the session mount; `CONTEXT_MODE_DATA_DIR=~/.pi/agent` pins it to
+`~/.pi/agent/context-mode/sessions`. All of these paths are inside the session
+directory, so they carry the same sensitivity as a session transcript and are
+deleted by the same `riotbox session-remove`. The store is per agent rather
+than shared, which means a session directory reused across agents can hold
+more than one; each extra one is not a leak past any boundary the
 first does not already cross, but it is a second copy of the same class of
 content and worth knowing about before handing a session directory to anyone.
 
@@ -467,8 +481,11 @@ call the agent makes, in the agent's own address space and with the agent's own
 privileges. This is the same Elastic-2.0 package reviewed for the Claude path,
 at the same pinned version, asserted by the same image build. Nothing about it
 is more trusted than before; it simply has more reach if that trust is
-misplaced, and there is no process boundary to fall back on. Sessions that want
-the narrower surface should use `--agent=claude`, or leave the feature off.
+misplaced, and there is no process boundary to fall back on. Pi's Context Mode
+extension also runs inside the agent process, loaded from the `packages` entry
+riotbox writes into `~/.pi/agent/settings.json`, with an MCP child process
+behind it for the `ctx_*` tools. Sessions that want the narrower surface should
+use `--agent=claude`, or leave the feature off.
 
 **`plugins/` is a code-execution surface inside the session directory.**
 opencode loads every file under `~/.config/opencode/plugins/` at startup, and

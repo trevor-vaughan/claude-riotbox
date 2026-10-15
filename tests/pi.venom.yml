@@ -1,0 +1,772 @@
+name: pi agent — pins, host sync, container setup, manifest
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Pi core floats (installed at build time from pi.dev's per-release lock);
+# the extensions are pinned here. See docs/dev/decisions/pi-support.md.
+
+testcases:
+  - name: the extension manifest pins exact versions that the lock resolves
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.riotbox_dir}}/container/pi"
+          jq -e '.dependencies | length > 0 and all(.[]; test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' package.json >/dev/null \
+            || { echo "FAIL: a dependency is not an exact X.Y.Z pin"; exit 1; }
+          jq -e --slurpfile m package.json '.packages[""].dependencies == $m[0].dependencies' package-lock.json >/dev/null \
+            || { echo "FAIL: lock root dependencies differ from package.json — regenerate the lock"; exit 1; }
+          while IFS=$'\t' read -r name version; do
+            got="$(jq -r --arg k "node_modules/${name}" '.packages[$k].version // empty' package-lock.json)"
+            [[ "${got}" == "${version}" ]] || { echo "FAIL: ${name} locked at '${got}', pinned at '${version}'"; exit 1; }
+          done < <(jq -r '.dependencies | to_entries[] | "\(.key)\t\(.value)"' package.json)
+          echo "PINS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PINS_OK"
+
+  - name: the extension lock has no install scripts, registry-only sources, and no Pi SDK
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          lock="{{.riotbox_dir}}/container/pi/package-lock.json"
+          jq -e '[.packages[] | select(.hasInstallScript == true)] | length == 0' "${lock}" >/dev/null \
+            || { echo "FAIL: a locked package declares an install script"; exit 1; }
+          jq -e '[.packages | to_entries[] | select(.key != "") | .value
+                  | select(((.resolved // "") | test("^https://registry\\.npmjs\\.org/") | not) or ((.integrity | type) != "string"))]
+                  | length == 0' "${lock}" >/dev/null \
+            || { echo "FAIL: a locked package is not a registry tarball with an integrity hash"; exit 1; }
+          # Pi core and its SDK packages (@earendil-works/*) are supplied by
+          # Pi's loader; a copy here means the lock was not generated with
+          # --legacy-peer-deps and would load a second Pi.
+          jq -e '.packages | keys | any(test("(^|/)@earendil-works/")) | not' "${lock}" >/dev/null \
+            || { echo "FAIL: the extension lock carries an @earendil-works/* package"; exit 1; }
+          echo "LOCK_CLEAN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LOCK_CLEAN_OK"
+
+  - name: rpiv-config is overridden to the version the rpiv extensions pin
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.riotbox_dir}}/container/pi"
+          todo="$(jq -er '.dependencies["@juicesharp/rpiv-todo"]' package.json)"
+          ask="$(jq -er '.dependencies["@juicesharp/rpiv-ask-user-question"]' package.json)"
+          override="$(jq -er '.overrides["@juicesharp/rpiv-config"]' package.json)"
+          locked="$(jq -er '.packages["node_modules/@juicesharp/rpiv-config"].version' package-lock.json)"
+          [[ "${override}" == "${todo}" && "${override}" == "${ask}" ]] \
+            || { echo "FAIL: overrides.@juicesharp/rpiv-config ${override} != rpiv pins todo=${todo} ask=${ask}"; exit 1; }
+          [[ "${locked}" == "${override}" ]] \
+            || { echo "FAIL: lock resolves rpiv-config to ${locked}, override is ${override}"; exit 1; }
+          echo "OVERRIDE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OVERRIDE_OK"
+  - name: sync copies the allowlisted host entries and emits the agent-dir mount
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          H="${T}/host"; S="${T}/session"
+          mkdir -p "${H}/skills/review" "${H}/prompts" "${H}/themes" "${H}/extensions"
+          for f in settings.json models.json mcp.json keybindings.json; do echo '{}' > "${H}/${f}"; done
+          for f in AGENTS.md SYSTEM.md APPEND_SYSTEM.md; do echo "# ${f}" > "${H}/${f}"; done
+          echo skill > "${H}/skills/review/SKILL.md"
+          echo prompt > "${H}/prompts/fix.md"
+          echo '{}' > "${H}/themes/dark.json"
+          echo 'export default function () {}' > "${H}/extensions/mine.js"
+          out="$(bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}")"
+          for p in settings.json models.json mcp.json keybindings.json AGENTS.md SYSTEM.md APPEND_SYSTEM.md \
+                   skills/review/SKILL.md prompts/fix.md themes/dark.json extensions/mine.js; do
+            [ -f "${S}/.pi-agent/${p}" ] || { echo "FAIL: ${p} not copied"; exit 1; }
+          done
+          printf '%s\n' "${out}" | grep -qxF -- "-v ${S}/.pi-agent:/home/llm/.pi/agent:z" \
+            || { echo "FAIL: agent-dir mount flag missing"; printf '%s\n' "${out}"; exit 1; }
+          echo "SYNC_COPY_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SYNC_COPY_OK"
+
+  - name: sync never copies Pi state or host install trees
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          H="${T}/host"; S="${T}/session"
+          for d in sessions/p install/releases qmd/memory-stack skill-library-deferred/x npm git bin tmp; do mkdir -p "${H}/${d}"; done
+          for f in trust.json models-store.json crashes.json mcp.log auth.json mcp-auth.json; do echo x > "${H}/${f}"; done
+          bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" >/dev/null
+          for p in sessions install qmd skill-library-deferred npm git bin tmp trust.json models-store.json crashes.json mcp.log auth.json mcp-auth.json; do
+            [ ! -e "${S}/.pi-agent/${p}" ] || { echo "FAIL: ${p} was copied"; exit 1; }
+          done
+          echo "SYNC_DENY_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SYNC_DENY_OK"
+
+  - name: re-sync keeps Pi state and drops entries removed on the host
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          H="${T}/host"; S="${T}/session"
+          mkdir -p "${H}/extensions" "${H}/skills/a"
+          echo x > "${H}/extensions/old.js"; echo s > "${H}/skills/a/SKILL.md"
+          bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" >/dev/null
+          mkdir -p "${S}/.pi-agent/sessions/proj"
+          echo '{"type":"session"}' > "${S}/.pi-agent/sessions/proj/one.jsonl"
+          echo '{}' > "${S}/.pi-agent/trust.json"
+          rm -rf "${H}/extensions"
+          bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" >/dev/null
+          [ -f "${S}/.pi-agent/sessions/proj/one.jsonl" ] || { echo "FAIL: session history lost on re-sync"; exit 1; }
+          [ -f "${S}/.pi-agent/trust.json" ] || { echo "FAIL: trust.json lost on re-sync"; exit 1; }
+          [ ! -e "${S}/.pi-agent/extensions" ] || { echo "FAIL: host-removed extensions/ lingered"; exit 1; }
+          [ -f "${S}/.pi-agent/skills/a/SKILL.md" ] || { echo "FAIL: skills/ not re-copied"; exit 1; }
+          echo "RESYNC_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RESYNC_OK"
+
+  - name: sync dereferences symlinks and skips dangling ones
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          H="${T}/host"; S="${T}/session"
+          mkdir -p "${H}/skills" "${T}/checkout/linked"
+          echo real > "${T}/checkout/linked/SKILL.md"
+          ln -s "${T}/checkout/linked" "${H}/skills/linked"
+          ln -s "${T}/nowhere" "${H}/skills/broken"
+          ln -s "${T}/nowhere.md" "${H}/AGENTS.md"
+          bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" >/dev/null
+          [ -f "${S}/.pi-agent/skills/linked/SKILL.md" ] && [ ! -L "${S}/.pi-agent/skills/linked" ] \
+            || { echo "FAIL: symlinked skill not dereferenced"; exit 1; }
+          [ ! -e "${S}/.pi-agent/skills/broken" ] && [ ! -L "${S}/.pi-agent/skills/broken" ] \
+            || { echo "FAIL: dangling symlink copied"; exit 1; }
+          [[ ! -e "${S}/.pi-agent/AGENTS.md" && ! -L "${S}/.pi-agent/AGENTS.md" ]] \
+            || { echo "FAIL: dangling top-level symlink copied"; exit 1; }
+          echo "SYMLINK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SYMLINK_OK"
+
+  - name: sync binds credential files read-write only when they exist
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          H="${T}/host"; S="${T}/session"; mkdir -p "${H}"
+          none="$(bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}")"
+          printf '%s\n' "${none}" | grep -q 'auth.json' && { echo "FAIL: auth bind emitted with no auth file"; exit 1; }
+          echo tok > "${H}/auth.json"; echo tok > "${H}/mcp-auth.json"
+          out="$(bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}")"
+          printf '%s\n' "${out}" | grep -qxF -- "-v ${H}/auth.json:/home/llm/.pi/agent/auth.json:z" \
+            || { echo "FAIL: auth.json bind missing"; exit 1; }
+          printf '%s\n' "${out}" | grep -qxF -- "-v ${H}/mcp-auth.json:/home/llm/.pi/agent/mcp-auth.json:z" \
+            || { echo "FAIL: mcp-auth.json bind missing"; exit 1; }
+          echo "AUTH_BIND_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "AUTH_BIND_OK"
+
+  - name: sync with no host agent dir prints a notice and still emits the mount
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          out="$(bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${T}/missing" "${T}/session" 2>"${T}/err")"
+          grep -qF 'not found on host' "${T}/err" || { echo "FAIL: no notice"; exit 1; }
+          printf '%s\n' "${out}" | grep -qxF -- "-v ${T}/session/.pi-agent:/home/llm/.pi/agent:z" \
+            || { echo "FAIL: mount flag missing"; exit 1; }
+          echo "NO_HOST_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NO_HOST_OK"
+
+  - name: sync rejects the wrong number of arguments
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          script="{{.riotbox_dir}}/agents/pi/sync-settings.sh"
+          for n in 0 1 3; do
+            args=(); for ((k = 0; k < n; k++)); do args+=("/tmp/arg${k}"); done
+            rc=0; bash "${script}" "${args[@]}" 2>"${T}/err" >/dev/null || rc=$?
+            [[ "${rc}" -eq 1 ]] || { echo "FAIL: ${n} args exited ${rc}, want 1"; exit 1; }
+            grep -qF 'Usage' "${T}/err" || { echo "FAIL: ${n} args: no Usage on stderr"; exit 1; }
+          done
+          echo "ARGC_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ARGC_OK"
+
+  - name: sync rejects a relative session dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/host"
+          rc=0; bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${T}/host" relative/session 2>"${T}/err" >/dev/null || rc=$?
+          [[ "${rc}" -eq 1 ]] || { echo "FAIL: exit ${rc}, want 1"; exit 1; }
+          grep -qF 'must be an absolute path' "${T}/err" || { echo "FAIL: no absolute-path message"; exit 1; }
+          [[ ! -e relative ]] || { echo "FAIL: relative dir was created"; exit 1; }
+          echo "ABS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ABS_OK"
+
+  - name: sync replaces a .pi-agent symlink planted by the container instead of following it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          H="${T}/host"; S="${T}/session"; V="${T}/victim"
+          mkdir -p "${H}" "${S}" "${V}/skills/x"
+          echo host > "${H}/AGENTS.md"
+          echo victim-agents > "${V}/AGENTS.md"; echo victim-skill > "${V}/skills/x/SKILL.md"
+          ln -s ../victim "${S}/.pi-agent"
+          out="$(bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" 2>"${T}/err")"
+          [[ "$(cat "${V}/AGENTS.md")" == "victim-agents" ]] || { echo "FAIL: victim AGENTS.md modified"; exit 1; }
+          [[ "$(cat "${V}/skills/x/SKILL.md" 2>/dev/null)" == "victim-skill" ]] || { echo "FAIL: victim skills deleted"; exit 1; }
+          [[ -d "${S}/.pi-agent" && ! -L "${S}/.pi-agent" ]] || { echo "FAIL: .pi-agent is not a real dir"; exit 1; }
+          [[ "$(cat "${S}/.pi-agent/AGENTS.md")" == "host" ]] || { echo "FAIL: host AGENTS.md not synced"; exit 1; }
+          grep -qF 'Warning' "${T}/err" || { echo "FAIL: no Warning on stderr"; exit 1; }
+          printf '%s\n' "${out}" | grep -qxF -- "-v ${S}/.pi-agent:/home/llm/.pi/agent:z" \
+            || { echo "FAIL: mount flag missing"; exit 1; }
+          echo "PLANT_LINK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PLANT_LINK_OK"
+
+  - name: sync replaces a regular file planted at .pi-agent with a directory
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          H="${T}/host"; S="${T}/session"
+          mkdir -p "${H}" "${S}"
+          echo host > "${H}/AGENTS.md"
+          echo junk > "${S}/.pi-agent"
+          bash "{{.riotbox_dir}}/agents/pi/sync-settings.sh" "${H}" "${S}" >/dev/null 2>&1
+          [[ -d "${S}/.pi-agent" && ! -L "${S}/.pi-agent" ]] || { echo "FAIL: .pi-agent is not a real dir"; exit 1; }
+          [[ -f "${S}/.pi-agent/AGENTS.md" ]] || { echo "FAIL: AGENTS.md not synced"; exit 1; }
+          echo "PLANT_FILE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PLANT_FILE_OK"
+
+  - name: setup forces RiotBox settings, keeps host keys, and lists the image extensions
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_PROMPT
+          export RIOTBOX_PI_DIR="${T}/pi"
+          mkdir -p "${RIOTBOX_PI_DIR}/extensions" "${HOME}/.pi/agent"
+          echo '{"dependencies":{"pi-subagents":"0.77.0","@juicesharp/rpiv-todo":"2.13.8"}}' > "${RIOTBOX_PI_DIR}/extensions/package.json"
+          echo '{"theme":"dark","defaultProjectTrust":"never","enableAnalytics":true}' > "${HOME}/.pi/agent/settings.json"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/pi/setup.sh"
+          pi_setup 2>"${T}/err"
+          [[ ! -s "${T}/err" ]] || { echo "FAIL: spurious stderr"; cat "${T}/err"; exit 1; }
+          s="${HOME}/.pi/agent/settings.json"
+          jq -e '.theme == "dark"' "${s}" >/dev/null || { echo "FAIL: host key lost"; exit 1; }
+          jq -e '.defaultProjectTrust == "always" and .enableInstallTelemetry == false and .enableAnalytics == false' "${s}" >/dev/null \
+            || { echo "FAIL: forced keys wrong"; cat "${s}"; exit 1; }
+          jq -e --arg r "${RIOTBOX_PI_DIR}/extensions/node_modules" \
+            '.packages == [($r + "/@juicesharp/rpiv-todo"), ($r + "/pi-subagents")]' "${s}" >/dev/null \
+            || { echo "FAIL: packages not derived from the manifest"; cat "${s}"; exit 1; }
+          echo "SETUP_SETTINGS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_SETTINGS_OK"
+
+  - name: setup drops host packages and names each one on stderr
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_PROMPT
+          export RIOTBOX_PI_DIR="${T}/pi"
+          mkdir -p "${RIOTBOX_PI_DIR}/extensions" "${HOME}/.pi/agent"
+          echo '{"dependencies":{"pi-subagents":"0.77.0"}}' > "${RIOTBOX_PI_DIR}/extensions/package.json"
+          keep="${RIOTBOX_PI_DIR}/extensions/node_modules/pi-subagents"
+          jq -n --arg keep "${keep}" '{packages: ["/home/me/.pi/agent/install/x", {source: "npm:foo@1.0.0"}, $keep]}' \
+            > "${HOME}/.pi/agent/settings.json"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/pi/setup.sh"
+          RIOTBOX_AGENT=pi pi_setup 2>"${T}/err"
+          grep -qF '/home/me/.pi/agent/install/x' "${T}/err" || { echo "FAIL: string entry not named"; exit 1; }
+          grep -qF 'npm:foo@1.0.0' "${T}/err" || { echo "FAIL: object entry not named"; exit 1; }
+          if grep -qF "${keep}" "${T}/err"; then echo "FAIL: kept entry reported as dropped"; exit 1; fi
+          jq -e --arg keep "${keep}" '.packages == [$keep]' "${HOME}/.pi/agent/settings.json" >/dev/null \
+            || { echo "FAIL: packages not replaced"; exit 1; }
+          echo "DROP_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DROP_OK"
+
+  - name: setup stays silent about dropped packages for other agents but still replaces them
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_PROMPT
+          export RIOTBOX_PI_DIR="${T}/pi"
+          mkdir -p "${RIOTBOX_PI_DIR}/extensions" "${HOME}/.pi/agent"
+          echo '{"dependencies":{"pi-subagents":"0.77.0"}}' > "${RIOTBOX_PI_DIR}/extensions/package.json"
+          keep="${RIOTBOX_PI_DIR}/extensions/node_modules/pi-subagents"
+          jq -n '{packages: ["/home/me/.pi/agent/install/x"]}' > "${HOME}/.pi/agent/settings.json"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/pi/setup.sh"
+          RIOTBOX_AGENT=claude pi_setup 2>"${T}/err"
+          if grep -qF 'NOTE' "${T}/err"; then echo "FAIL: NOTE printed for a non-pi agent"; cat "${T}/err"; exit 1; fi
+          jq -e --arg keep "${keep}" '.packages == [$keep]' "${HOME}/.pi/agent/settings.json" >/dev/null \
+            || { echo "FAIL: packages not replaced"; exit 1; }
+          echo "QUIET_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "QUIET_OK"
+
+  - name: setup replaces a non-object or invalid settings.json with a warning
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_PROMPT
+          export RIOTBOX_PI_DIR="${T}/pi"
+          mkdir -p "${RIOTBOX_PI_DIR}/extensions" "${HOME}/.pi/agent"
+          echo '{"dependencies":{}}' > "${RIOTBOX_PI_DIR}/extensions/package.json"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/pi/setup.sh"
+          for bad in '[1,2]' '{not json'; do
+            printf '%s\n' "${bad}" > "${HOME}/.pi/agent/settings.json"
+            pi_setup 2>"${T}/err"
+            grep -qF 'not a valid JSON object' "${T}/err" || { echo "FAIL: no warning for ${bad}"; exit 1; }
+            jq -e '.defaultProjectTrust == "always" and .packages == []' "${HOME}/.pi/agent/settings.json" >/dev/null \
+              || { echo "FAIL: not rewritten for ${bad}"; exit 1; }
+          done
+          echo "BAD_SETTINGS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BAD_SETTINGS_OK"
+
+  - name: setup warns and lists no packages when the extensions manifest is missing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_PROMPT
+          export RIOTBOX_PI_DIR="${T}/absent"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/pi/setup.sh"
+          pi_setup 2>"${T}/err"
+          grep -qF 'package.json is missing' "${T}/err" || { echo "FAIL: no warning"; exit 1; }
+          jq -e '.packages == []' "${HOME}/.pi/agent/settings.json" >/dev/null || { echo "FAIL: packages not empty"; exit 1; }
+          echo "NO_MANIFEST_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NO_MANIFEST_OK"
+
+  - name: setup places AGENTS.md by RIOTBOX_PROMPT, then host copy, then template
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_PROMPT
+          export RIOTBOX_PI_DIR="${T}/pi"
+          mkdir -p "${RIOTBOX_PI_DIR}/extensions" "${HOME}/.riotbox" "${HOME}/.pi/agent"
+          echo '{"dependencies":{}}' > "${RIOTBOX_PI_DIR}/extensions/package.json"
+          echo TEMPLATE > "${HOME}/.riotbox/AGENTS.md.template"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/pi/setup.sh"
+          md="${HOME}/.pi/agent/AGENTS.md"
+          pi_setup 2>/dev/null
+          [[ "$(cat "${md}")" == "TEMPLATE" ]] || { echo "FAIL: template not used"; exit 1; }
+          echo HOSTCOPY > "${md}"
+          pi_setup 2>/dev/null
+          [[ "$(cat "${md}")" == "HOSTCOPY" ]] || { echo "FAIL: host copy overwritten"; exit 1; }
+          echo 'prompt on {{OS_PRETTY_NAME}}' > "${T}/prompt.md"
+          RIOTBOX_PROMPT="${T}/prompt.md" pi_setup 2>/dev/null
+          if grep -q '^prompt on ' "${md}" && ! grep -qF 'OS_PRETTY_NAME' "${md}"; then :; else
+            echo "FAIL: RIOTBOX_PROMPT not rendered"; cat "${md}"; exit 1
+          fi
+          echo "AGENTS_MD_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "AGENTS_MD_OK"
+
+  - name: setup survives an empty extensions manifest without wiping host settings
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_PROMPT
+          export RIOTBOX_PI_DIR="${T}/pi"
+          mkdir -p "${RIOTBOX_PI_DIR}/extensions" "${HOME}/.pi/agent"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/pi/setup.sh"
+          printf '  \n' > "${RIOTBOX_PI_DIR}/extensions/package.json"
+          echo '{"theme":"dark"}' > "${HOME}/.pi/agent/settings.json"
+          pi_setup 2>"${T}/err"
+          grep -qF 'package.json is not valid JSON' "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
+          s="${HOME}/.pi/agent/settings.json"
+          jq -e '.theme == "dark" and .defaultProjectTrust == "always" and .enableAnalytics == false and .packages == []' "${s}" >/dev/null \
+            || { echo "FAIL: settings wrong"; cat "${s}"; exit 1; }
+          echo "EMPTY_MANIFEST_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "EMPTY_MANIFEST_OK"
+
+  - name: setup warns on an invalid-JSON extensions manifest
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_PROMPT
+          export RIOTBOX_PI_DIR="${T}/pi"
+          mkdir -p "${RIOTBOX_PI_DIR}/extensions" "${HOME}/.pi/agent"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/pi/setup.sh"
+          printf '%s' '{not json' > "${RIOTBOX_PI_DIR}/extensions/package.json"
+          echo '{"theme":"dark"}' > "${HOME}/.pi/agent/settings.json"
+          pi_setup 2>"${T}/err"
+          grep -qF 'package.json is not valid JSON' "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
+          s="${HOME}/.pi/agent/settings.json"
+          jq -e '.theme == "dark" and .defaultProjectTrust == "always" and .enableAnalytics == false and .packages == []' "${s}" >/dev/null \
+            || { echo "FAIL: settings wrong"; cat "${s}"; exit 1; }
+          echo "BAD_MANIFEST_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BAD_MANIFEST_OK"
+
+  - name: setup warns when the manifest dependencies is not an object
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_PROMPT
+          export RIOTBOX_PI_DIR="${T}/pi"
+          mkdir -p "${RIOTBOX_PI_DIR}/extensions" "${HOME}/.pi/agent"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/pi/setup.sh"
+          printf '%s' '{"dependencies":["a"]}' > "${RIOTBOX_PI_DIR}/extensions/package.json"
+          echo '{"theme":"dark"}' > "${HOME}/.pi/agent/settings.json"
+          pi_setup 2>"${T}/err"
+          grep -qF 'has no dependencies object' "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
+          s="${HOME}/.pi/agent/settings.json"
+          jq -e '.theme == "dark" and .defaultProjectTrust == "always" and .enableAnalytics == false and .packages == []' "${s}" >/dev/null \
+            || { echo "FAIL: settings wrong"; cat "${s}"; exit 1; }
+          echo "BAD_DEPS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BAD_DEPS_OK"
+
+  - name: setup normalises a non-array host packages value
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_PROMPT
+          export RIOTBOX_PI_DIR="${T}/pi"
+          mkdir -p "${RIOTBOX_PI_DIR}/extensions" "${HOME}/.pi/agent"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/agents/pi/setup.sh"
+          echo '{"dependencies":{}}' > "${RIOTBOX_PI_DIR}/extensions/package.json"
+          echo '{"packages":"npm:x@1"}' > "${HOME}/.pi/agent/settings.json"
+          RIOTBOX_AGENT=pi pi_setup 2>"${T}/err"
+          grep -qF 'npm:x@1' "${T}/err" || { echo "FAIL: entry not named"; cat "${T}/err"; exit 1; }
+          if grep -qF 'jq: error' "${T}/err"; then echo "FAIL: raw jq error"; cat "${T}/err"; exit 1; fi
+          jq -e '.packages == []' "${HOME}/.pi/agent/settings.json" >/dev/null || { echo "FAIL: packages not replaced"; exit 1; }
+          echo "NON_ARRAY_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NON_ARRAY_OK"
+
+  - name: wrapper_inject passes argv through and flags headless runs with CI=true
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          check() { # $1 = want CI (0/1), rest = argv
+            local want="$1"; shift
+            local -a out=()
+            local i
+            printf '' > "${T}/env"; export RIOTBOX_INJECT_ENV_FILE="${T}/env"
+            mapfile -d '' -t out < <(agent_call pi wrapper_inject "$@")
+            [[ "${#out[@]}" -eq "$#" ]] || { echo "FAIL: argc ${#out[@]} != $# for $*"; exit 1; }
+            for ((i = 0; i < $#; i++)); do
+              [[ "${out[i]}" == "${@:i+1:1}" ]] || { echo "FAIL: token ${i} changed for $*"; exit 1; }
+            done
+            if [[ "${want}" == 1 ]]; then
+              grep -qxF 'CI=true' "${T}/env" || { echo "FAIL: no CI for $*"; exit 1; }
+            else
+              [[ ! -s "${T}/env" ]] || { echo "FAIL: CI set for $*"; exit 1; }
+            fi
+          }
+          check 1 -p -- "hello"
+          check 1 -p -- $'two words\nand a line'
+          check 1 --print "hello"
+          check 1 --mode json "hello"
+          check 1 --mode rpc
+          check 0 --mode=rpc
+          check 0 --mode=json
+          check 0
+          check 0 -c
+          check 0 -- "-p"
+          check 0 -c -- "-p"
+          check 0 --model json
+          echo "INJECT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "INJECT_OK"
+
+  - name: host_sync reads PI_CODING_AGENT_DIR when set, else ~/.pi/agent
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}/home"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
+          mkdir -p "${HOME}/.pi/agent" "${T}/relocated"
+          echo default > "${HOME}/.pi/agent/AGENTS.md"
+          echo relocated > "${T}/relocated/AGENTS.md"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          unset PI_CODING_AGENT_DIR
+          agent_call pi host_sync "${T}/s1" >/dev/null
+          [[ "$(cat "${T}/s1/.pi-agent/AGENTS.md")" == default ]] || { echo "FAIL: default dir not used"; exit 1; }
+          PI_CODING_AGENT_DIR="${T}/relocated" agent_call pi host_sync "${T}/s2" >/dev/null
+          [[ "$(cat "${T}/s2/.pi-agent/AGENTS.md")" == relocated ]] || { echo "FAIL: PI_CODING_AGENT_DIR ignored"; exit 1; }
+          PI_CODING_AGENT_DIR="" agent_call pi host_sync "${T}/s3" >/dev/null
+          [[ "$(cat "${T}/s3/.pi-agent/AGENTS.md")" == default ]] || { echo "FAIL: empty PI_CODING_AGENT_DIR not defaulted"; exit 1; }
+          mkdir -p "${HOME}/relocated"; echo tilde > "${HOME}/relocated/AGENTS.md"
+          PI_CODING_AGENT_DIR='~/relocated' agent_call pi host_sync "${T}/s4" >/dev/null
+          [[ "$(cat "${T}/s4/.pi-agent/AGENTS.md")" == tilde ]] || { echo "FAIL: leading ~/ not expanded"; exit 1; }
+          (cd "${T}" && PI_CODING_AGENT_DIR='relocated' agent_call pi host_sync "${T}/s5" >/dev/null)
+          [[ "$(cat "${T}/s5/.pi-agent/AGENTS.md")" == relocated ]] || { echo "FAIL: relative dir not resolved against PWD"; exit 1; }
+          echo "HOST_SYNC_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "HOST_SYNC_OK"
+
+  - name: pi declares the same provider keys as opencode, so the passthrough union does not widen
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          [[ -n "$(agent_call pi env_vars)" ]] || { echo "FAIL: pi env_vars empty"; exit 1; }
+          diff <(agent_call pi env_vars | sort) <(agent_call opencode env_vars | sort) \
+            || { echo "FAIL: pi env_vars differ from opencode's"; exit 1; }
+          echo "ENV_VARS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ENV_VARS_OK"
+
+  - name: the Containerfile installs Pi core from upstream's per-release lock and gates it on the smoke
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cf="{{.riotbox_dir}}/Containerfile"
+          for needle in \
+            'ARG PI_NODE=' \
+            'COPY --chown=llm:llm container/pi/ /tmp/riotbox-pi/' \
+            'https://pi.dev/api/installer/releases/${ver}/package.json' \
+            'https://pi.dev/api/installer/releases/${ver}/package-lock.json' \
+            'npm ci --ignore-scripts --omit=dev --no-audit --no-fund' \
+            'npm ci --ignore-scripts --omit=dev --legacy-peer-deps --no-audit --no-fund' \
+            '/tmp/riotbox-pi/smoke.mjs' \
+            'ENV RIOTBOX_PI_DIR=/home/llm/.riotbox/pi'; do
+            grep -qF -- "${needle}" "${cf}" || { echo "FAIL: Containerfile lacks: ${needle}"; exit 1; }
+          done
+          bust="$(grep -nF 'ARG LLM_TOOL_UPDATE' "${cf}" | head -1 | cut -d: -f1)" || true
+          pi="$(grep -nF 'ARG PI_NODE=' "${cf}" | head -1 | cut -d: -f1)" || true
+          [[ -n "${bust}" ]] || { echo "FAIL: Containerfile has no ARG LLM_TOOL_UPDATE"; exit 1; }
+          [[ -n "${pi}" ]] || { echo "FAIL: Containerfile has no ARG PI_NODE="; exit 1; }
+          (( pi > bust )) || { echo "FAIL: Pi layer precedes LLM_TOOL_UPDATE — riotbox update would not refresh Pi"; exit 1; }
+          echo "CONTAINERFILE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CONTAINERFILE_OK"
+
+  - name: the image installs fd so Pi never downloads it at runtime
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          grep -qE '^[[:space:]]+ripgrep fd-find bats' "{{.riotbox_dir}}/Containerfile" \
+            || { echo "FAIL: the system dnf line does not install fd-find"; exit 1; }
+          echo "FD_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FD_OK"
+
+  - name: lock-integrity.sh fills missing integrity from the registry and rejects tampered or non-registry entries
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          script="{{.riotbox_dir}}/container/pi/lock-integrity.sh"
+          T="$(mktemp -d)"
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/bin"
+          # Stub npm: answers `npm view <name>@<version> dist.integrity` for the
+          # two fixture entries that lack integrity, logs every call, and prints
+          # nothing when STUB_EMPTY=1 (the registry returned no hash).
+          cat > "${T}/bin/npm" <<'STUB'
+          #!/usr/bin/env bash
+          printf '%s\n' "$*" >> "${STUB_LOG}"
+          [[ "${STUB_EMPTY:-0}" == 1 ]] && exit 0
+          case "$*" in
+            "view -- @scope/core@1.2.0 dist.integrity") echo "sha512-c3R1Yi1jb3Jl" ;;
+            "view -- nested@3.1.0 dist.integrity") echo "sha512-c3R1Yi1uZXN0ZWQ=" ;;
+            *) echo "stub npm: unexpected call: $*" >&2; exit 1 ;;
+          esac
+          STUB
+          chmod +x "${T}/bin/npm"
+          export PATH="${T}/bin:${PATH}" STUB_LOG="${T}/npm.log"
+          fixture() {
+            jq -n '{packages: {
+              "": {name: "root", version: "1.0.0"},
+              "node_modules/@scope/core": {version: "1.2.0", resolved: "https://registry.npmjs.org/@scope/core/-/core-1.2.0.tgz"},
+              "node_modules/plain": {version: "2.0.0", resolved: "https://registry.npmjs.org/plain/-/plain-2.0.0.tgz", integrity: "sha512-RVhJU1RJTkc="},
+              "node_modules/@scope/core/node_modules/nested": {version: "3.1.0", resolved: "https://registry.npmjs.org/nested/-/nested-3.1.0.tgz"}
+            }}' > "${T}/lock.json"
+            cp "${T}/lock.json" "${T}/orig.json"
+            : > "${STUB_LOG}"
+          }
+          # Runs the script; leaves its stderr in ${err} and its status in ${rc}.
+          run() {
+            rc=0
+            err="$(bash "${script}" "${T}/lock.json" 2>&1 >/dev/null)" || rc=$?
+          }
+
+          fixture
+          run
+          [[ "${rc}" -eq 0 ]] || { echo "FAIL: fill case exited ${rc}: ${err}"; exit 1; }
+          [[ "$(jq -r '.packages["node_modules/@scope/core"].integrity' "${T}/lock.json")" == "sha512-c3R1Yi1jb3Jl" ]] \
+            || { echo "FAIL: @scope/core integrity not filled from npm view"; exit 1; }
+          [[ "$(jq -r '.packages["node_modules/@scope/core/node_modules/nested"].integrity' "${T}/lock.json")" == "sha512-c3R1Yi1uZXN0ZWQ=" ]] \
+            || { echo "FAIL: nested entry integrity not filled under its own name"; exit 1; }
+          [[ "$(jq -r '.packages["node_modules/plain"].integrity' "${T}/lock.json")" == "sha512-RVhJU1RJTkc=" ]] \
+            || { echo "FAIL: an existing integrity was changed"; exit 1; }
+          if grep -q plain "${STUB_LOG}"; then echo "FAIL: npm was queried for an entry that already had integrity"; exit 1; fi
+
+          fixture
+          jq '.packages["node_modules/plain"].resolved = "https://evil.example/plain/-/plain-2.0.0.tgz"' "${T}/orig.json" > "${T}/lock.json"
+          cp "${T}/lock.json" "${T}/orig.json"
+          run
+          [[ "${rc}" -ne 0 ]] || { echo "FAIL: a non-registry resolved was accepted"; exit 1; }
+          [[ "${err}" == *"node_modules/plain"* ]] || { echo "FAIL: non-registry error does not name the entry: ${err}"; exit 1; }
+          cmp -s "${T}/lock.json" "${T}/orig.json" || { echo "FAIL: the lock was rewritten despite a rejected entry"; exit 1; }
+
+          fixture
+          jq '.packages["node_modules/@scope/core"].resolved = "https://registry.npmjs.org/@scope/core/-/core-1.0.4.tgz"' "${T}/orig.json" > "${T}/lock.json"
+          cp "${T}/lock.json" "${T}/orig.json"
+          run
+          [[ "${rc}" -ne 0 ]] || { echo "FAIL: a tarball for another version was accepted"; exit 1; }
+          [[ "${err}" == *"node_modules/@scope/core"* ]] || { echo "FAIL: version mismatch error does not name the entry: ${err}"; exit 1; }
+          cmp -s "${T}/lock.json" "${T}/orig.json" || { echo "FAIL: the lock was rewritten despite a version mismatch"; exit 1; }
+
+          fixture
+          rc=0
+          err="$(STUB_EMPTY=1 bash "${script}" "${T}/lock.json" 2>&1 >/dev/null)" || rc=$?
+          [[ "${rc}" -ne 0 ]] || { echo "FAIL: an empty npm view answer was accepted"; exit 1; }
+          [[ "${err}" == *"@scope/core@1.2.0"* ]] || { echo "FAIL: empty-integrity error does not name the package: ${err}"; exit 1; }
+          cmp -s "${T}/lock.json" "${T}/orig.json" || { echo "FAIL: the lock was rewritten despite a missing hash"; exit 1; }
+          # Malformed keys and versions are rejected before any field splitting
+          # or npm call: a 0x1f in a key could forge the fields after it, a
+          # newline could split one record into two, a key starting with `--`
+          # would reach npm as an option, and a range is not a tarball version.
+          # Each case names the entry (JSON-escaped) and leaves the lock as is.
+          reject() {
+            local label="$1" filter="$2" want="$3"
+            fixture
+            jq "${filter}" "${T}/orig.json" > "${T}/lock.json"
+            cp "${T}/lock.json" "${T}/orig.json"
+            run
+            [[ "${rc}" -ne 0 ]] || { echo "FAIL: ${label} was accepted"; exit 1; }
+            [[ "${err}" == *"${want}"* ]] || { echo "FAIL: ${label} error does not name ${want}: ${err}"; exit 1; }
+            cmp -s "${T}/lock.json" "${T}/orig.json" || { echo "FAIL: the lock was rewritten despite ${label}"; exit 1; }
+            [[ ! -s "${STUB_LOG}" ]] || { echo "FAIL: npm was called despite ${label}: $(cat "${STUB_LOG}")"; exit 1; }
+          }
+          reject "a key containing 0x1f" \
+            '.packages["node_modules/evil\u001f1.0.0\u001fhttps://registry.npmjs.org/evil/-/evil-1.0.0.tgz\u001fsha512-Zm9yZ2Vk"] = {version: "9.9.9", resolved: "https://evil.example/x.tgz"}' \
+            '"node_modules/evil\u001f1.0.0'
+          reject "a key containing a newline" \
+            '.packages["node_modules/evil\nnode_modules/plain"] = {version: "2.0.0", resolved: "https://registry.npmjs.org/plain/-/plain-2.0.0.tgz"}' \
+            '"node_modules/evil\nnode_modules/plain"'
+          reject "a key ending in a newline" \
+            '.packages["node_modules/plain\n"] = {version: "2.0.0", resolved: "https://registry.npmjs.org/plain/-/plain-2.0.0.tgz"}' \
+            '"node_modules/plain\n"'
+          reject "an option-shaped key" \
+            '.packages["node_modules/--registry=http://x"] = {version: "1.0.0", resolved: "https://registry.npmjs.org/--registry=http://x/-/x-1.0.0.tgz"}' \
+            '"node_modules/--registry=http://x"'
+          reject "a resolved URL with a 0x1f suffix" \
+            '.packages["node_modules/@scope/core"].resolved += "\u001f "' \
+            '"node_modules/@scope/core"'
+          reject "a sha1 integrity" \
+            '.packages["node_modules/plain"].integrity = "sha1-c2hhMQ=="' \
+            '"node_modules/plain"'
+          reject "a non-string integrity" \
+            '.packages["node_modules/plain"].integrity = 123' \
+            '"node_modules/plain"'
+          reject "a version range" \
+            '.packages["node_modules/@scope/core"].version = "^1.2.0"' \
+            '"node_modules/@scope/core"'
+          echo "LOCK_INTEGRITY_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LOCK_INTEGRITY_OK"
+
+  - name: README documents each pinned Pi extension at its pinned version
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          while IFS=$'\t' read -r name version; do
+            grep -qF "\`${name}@${version}\`" "{{.riotbox_dir}}/README.md" \
+              || { echo "FAIL: README lacks \`${name}@${version}\`"; exit 1; }
+          done < <(jq -r '.dependencies | to_entries[] | "\(.key)\t\(.value)"' "{{.riotbox_dir}}/container/pi/package.json")
+          echo "README_PINS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "README_PINS_OK"

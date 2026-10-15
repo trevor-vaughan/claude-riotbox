@@ -10,7 +10,7 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-Container-based isolation for running AI coding agents autonomously against your projects. The container ships [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [opencode](https://opencode.ai/) and mirrors your host dev environment (nvm, uv, Go, Rust, Ruby) so the agent has the same toolchain you do, but runs isolated from your credentials and secrets.
+Container-based isolation for running AI coding agents autonomously against your projects. The container ships [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [opencode](https://opencode.ai/) and [Pi](https://pi.dev/) and mirrors your host dev environment (nvm, uv, Go, Rust, Ruby) so the agent has the same toolchain you do, but runs isolated from your credentials and secrets.
 
 > **Security:** This project has an AI-generated [threat model](THREAT_MODEL.md) covering the container isolation boundary, auth handling, mount surface, and nested container mode. Read it before use.
 
@@ -25,11 +25,11 @@ Finally...it was fun!
 ## How it works
 
 1. **`scripts/build.sh`** introspects your local environment (nvm, uv, Go, Rust/rustup, Ruby/RVM, UID, tool configs) and passes them as build args.
-1. The **Containerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. The agent CLIs are installed last — opencode via its [installer](https://opencode.ai/install), then Claude Code via the [official installer](https://claude.ai/install.sh) — for
+1. The **Containerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. The agent CLIs are installed last — opencode via its [installer](https://opencode.ai/install), Pi from the lockfile pi.dev publishes for each release, then Claude Code via the [official installer](https://claude.ai/install.sh) — for
    optimal layer caching.
 1. At runtime your project directory is bind-mounted into the container. Auth credentials are synced into an isolated session directory: `~/.claude/.credentials.json` is bind-mounted read-write (so token refreshes write back to the host), and `~/.claude.json` is copied so each container gets a writable snapshot without host contention.
 1. **A single generic wrapper** (`container/agent-wrapper.sh`) shadows the real agent binaries via per-agent symlinks under `~/.riotbox/bin/`. The wrapper detects which agent it's running as from its own filename, looks up that agent's manifest at `agents/<name>/manifest.sh`, and applies the manifest's flag-injection rules. The RiotBox autonomy prompt lives at `/etc/claude-code/CLAUDE.md`
-   (managed-policy path read by Claude) and at `~/.config/opencode/AGENTS.md` (placed at runtime by the agent's setup hook). Selection happens via `--agent=claude|opencode` (default `claude`); see `riotbox agents` to list the registered set.
+   (managed-policy path read by Claude) and at `~/.config/opencode/AGENTS.md` and `~/.pi/agent/AGENTS.md` (placed at runtime by each agent's setup hook). Selection happens via `--agent=claude|opencode|pi` (default `claude`); see `riotbox agents` to list the registered set.
 
 ## Prerequisites
 
@@ -156,13 +156,13 @@ riotbox --agent=opencode run "fix the build"
 # Resume the last opencode session
 riotbox --agent=opencode resume
 
-# Open a shell with both binaries on PATH (use either)
+# Open a shell with every agent binary on PATH (use any)
 riotbox shell
 ```
 
 Default is `claude` if `--agent` is omitted. You can persist a default in `~/.config/riotbox/config` by uncommenting the `RIOTBOX_AGENT` line.
 
-> Want to add a third agent (aider, goose, cursor-agent, codex, …)? See [`docs/dev/adding-an-agent.md`](docs/dev/adding-an-agent.md). The agent registry at `agents/registry.sh` is the single source of truth — adding an agent is a manifest plus a Containerfile install line, no edits to dispatch sites or wrappers.
+> Want to add another agent (aider, goose, cursor-agent, codex, …)? See [`docs/dev/adding-an-agent.md`](docs/dev/adding-an-agent.md). The agent registry at `agents/registry.sh` is the single source of truth — adding an agent is a manifest plus a Containerfile install line, no edits to dispatch sites or wrappers.
 
 ### Opencode auth
 
@@ -191,13 +191,55 @@ A banner comment in the generated `opencode.jsonc` records these forced keys. To
 Plugins listed in your `opencode.jsonc` `plugin` array (npm packages or git URLs) are installed by opencode itself via `bun install` the first time you run a session. The install output (`node_modules/`, `package.json`, `package-lock.json`, `bun.lock`, `.gitignore`) is **not** copied from your host — those files are platform-specific and opencode's own `.gitignore` marks them disposable. Instead
 the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent named volume (`riotbox-cache-opencode`). The cold install takes ~15s; later sessions resolve plugins from the warm cache in ~2s, offline. Because the plugins are built inside the container, their native dependencies always match the container platform regardless of your host OS.
 
+## Using pi
+
+RiotBox also ships the [Pi](https://pi.dev/) coding agent:
+
+```sh
+riotbox --agent=pi run "fix the build"   # headless: pi -p -- "<prompt>"
+riotbox --agent=pi resume                # continue the last session for this project
+riotbox shell                            # interactive: run `pi` at the prompt
+```
+
+Pi core tracks the latest release, like opencode and Claude Code: each image build installs whatever is current from the exact lockfile pi.dev publishes for that release, and `riotbox update` picks up a newer one. These extensions are pinned and preinstalled, giving Pi the equivalents of Claude Code's Task, AskUserQuestion and TodoWrite tools:
+
+| Extension | Provides |
+|---|---|
+| `pi-subagents@0.77.0` | `subagent` tool — delegate work to child agents |
+| `@juicesharp/rpiv-ask-user-question@2.13.8` | `ask_user_question` tool — structured questions instead of guesses |
+| `@juicesharp/rpiv-todo@2.13.8` | `todo` tool and `/todos` |
+
+Pi runs without approval prompts and trusts every project: a project's `.pi/` settings, extensions, skills, prompt templates and MCP servers load without a prompt. As with the other agents, the container is the security boundary.
+
+Pi is not wired for [headroom](#headroom-context-compression-opt-in) (headroom has no Pi wrapper) or for the [forge MCP servers](#github-and-gitlab-the-riotbox-gh-glab-flavor). It is wired for [Context Mode](#context-mode-opt-in) and [git-ai](#ai-authorship-attribution-git-ai).
+
+### Pi auth
+
+1. **Run `pi` on the host and `/login`** — `~/.pi/agent/auth.json` (and `mcp-auth.json` for MCP OAuth) is bind-mounted read-write, so token refreshes write back to the host. Without a host `auth.json` there is no bind: a `/login` inside the container is saved in the session directory (`~/.local/share/riotbox/<session>/.pi-agent/auth.json`), so it lasts for that project set only and never reaches the host. Once a host `auth.json` exists, its bind mount takes precedence over the session copy.
+1. **Provider env vars** — the same eight provider keys as opencode (see `~/.config/riotbox/config`) are forwarded automatically. Pi supports many more providers; forward their keys with `RIOTBOX_PASSTHROUGH_EXTRA_VARS`, e.g. `RIOTBOX_PASSTHROUGH_EXTRA_VARS="NVIDIA_API_KEY"`. They are not forwarded by default because the passthrough list is shared: every key it holds reaches every agent's container.
+
+### Pi config
+
+At every launch RiotBox copies these from your host agent directory (`$PI_CODING_AGENT_DIR`, else `~/.pi/agent`) into the session: `settings.json`, `models.json`, `mcp.json`, `keybindings.json`, `AGENTS.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/` (Pi's `/` commands), `themes/`, `extensions/`. Symlinks are followed. An entry you delete on the host disappears from the session at the next launch. Pi's own state in the session — sessions, `trust.json`, the model catalog cache, and a `/login` made when there is no host `auth.json` — is kept between runs and never copied from the host. Changes Pi makes inside the container to the synced files (for example a model picked with `/model`, which writes `settings.json`, or edits under `skills/`, `prompts/` or `extensions/`) are replaced at the next launch; edit the host copy instead.
+
+The sync runs on every launch whichever `--agent` you pick, so without a host Pi directory every launch prints one line, `Notice: <dir> not found on host — pi will use the container baseline.` It is harmless. A `PI_CODING_AGENT_DIR` containing whitespace breaks the session's mount flags; keep it to a path without spaces.
+
+A host `AGENTS.md` takes the place of RiotBox's autonomy prompt, as it does for opencode; without one the session gets RiotBox's template. A `RIOTBOX_PROMPT` override beats both. The container then forces these `settings.json` keys:
+
+- `packages` — the preinstalled extensions above (plus Context Mode when `RIOTBOX_CONTEXT_MODE=1`). Host entries are dropped with a notice: local paths name host directories, and npm/git entries would install unpinned code at startup. Put extensions you want in the container in `extensions/` instead.
+- `defaultProjectTrust = "always"`, `enableInstallTelemetry = false`, `enableAnalytics = false`.
+
+The `pi` command also runs with `PI_TELEMETRY=0` and `PI_SKIP_VERSION_CHECK=1`. Pi's model catalog refresh from pi.dev stays on, like opencode's models.dev fetch.
+
+`riotbox tokscale` always counts Pi usage in RiotBox sessions. For your native Pi sessions on the host it relies on tokscale, which looks for them through `PI_CONFIG_DIR`, not `PI_CODING_AGENT_DIR`. If you relocated your Pi directory, native usage is missed unless you also set `PI_CONFIG_DIR`; the value tokscale expects has not been verified.
+
 ## Commands
 
 | Command                               | Description                                                                                                                                 |
 |---------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
 | `riotbox build`                       | Introspect host environment and build the container image                                                                                   |
 | `riotbox rebuild`                     | Force a clean rebuild with no layer cache                                                                                                   |
-| `riotbox update`                      | Re-pull LLM CLI tools — opencode, Claude Code, plugins to latest; headroom, CodeGraph, Context Mode at pinned versions (large re-download)  |
+| `riotbox update`                      | Re-pull LLM CLI tools — opencode, Pi core, Claude Code, plugins to latest; Pi's extensions, headroom, CodeGraph, Context Mode at pinned versions (large re-download) |
 | `riotbox run "<task>" [dir]`          | Run the agent autonomously (defaults to current directory)                                                                                  |
 | `riotbox shell [dir]`                 | Interactive shell (defaults to current directory)                                                                                           |
 | `riotbox resume [dir]`                | Continue the last agent session                                                                                                             |
@@ -335,7 +377,7 @@ RiotBox ships a more complete default script with a Unicode progress bar and col
 The mount set comes from two scripts, applied in this order:
 
 1. **`scripts/detect-mounts.sh`** — always-on mounts that don't depend on a project: `~/bin`, `~/.config/riotbox/`, and the named cache volumes. Uses an allowlist (only paths listed in the script are mounted).
-2. **`scripts/mount-projects.sh`** — per-launch mounts: the project bind, the session directory mount, and the per-agent contributions from `agents/<name>/manifest.sh::host_sync` (credentials nest, opencode auth, host plugins, host `~/.claude/{skills,agents,…}` copies, statusline script copy).
+2. **`scripts/mount-projects.sh`** — per-launch mounts: the project bind, the session directory mount, and the per-agent contributions from `agents/<name>/manifest.sh::host_sync` (credentials nest, opencode auth, Pi config copy and auth, host plugins, host `~/.claude/{skills,agents,…}` copies, statusline script copy).
 
 Run `riotbox mounts [project ...]` to print the projected mount set — it lists the always-on group, the project + session group, and a static enumeration of what the agent host_sync hooks would add at launch.
 
@@ -358,7 +400,9 @@ Run `riotbox mounts [project ...]` to print the projected mount set — it lists
 | `~/.claude/{skills,agents,commands,output-styles}/` | copied into session dir       | file copy (symlinks dereferenced)    |
 | `~/.claude/statusline-command.sh`                   | copied into session dir       | file copy (chmod +x enforced)        |
 | `~/.claude/plugins/`                                | `~/.host-plugins`             | bind mount (read-only, `:z`)         |
-| `~/.local/share/opencode/auth.json`                 | same path in container        | bind mount (rw, when opencode runs)  |
+| `~/.local/share/opencode/auth.json`                 | same path in container        | bind mount (rw, when present)        |
+| `~/.pi/agent/` allowlist (see [Pi config](#pi-config)) | copied into session dir, mounted at `~/.pi/agent` | file copy (symlinks dereferenced) |
+| `~/.pi/agent/{auth.json,mcp-auth.json}`             | same path in container        | bind mount (rw, when present)        |
 
 RiotBox sessions are isolated from your host `~/.claude` — it is never mounted directly. `.credentials.json` is bind-mounted read-write so OAuth token refreshes write directly back to the host file (rotating refresh tokens require this). `.claude.json` is copied so each container gets a writable snapshot without host contention.
 
@@ -464,7 +508,7 @@ All RiotBox paths follow the [XDG Base Directory Specification](https://specific
 
 ## Agent wrapper
 
-Inside the container, each agent binary is shadowed by a single generic wrapper (`container/agent-wrapper.sh`) that injects the agent's autonomy flags (Claude Code: `--dangerously-skip-permissions`; opencode: `--auto`) — this is safe here because the container **is** RiotBox. The agent can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
+Inside the container, each agent binary is shadowed by a single generic wrapper (`container/agent-wrapper.sh`) that injects the agent's autonomy flags (Claude Code: `--dangerously-skip-permissions`; opencode: `--auto`; Pi has no approval prompts to switch off, so nothing is injected) — this is safe here because the container **is** RiotBox. The agent can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
 
 The system prompt is pre-rendered at build time into `/etc/claude-code/CLAUDE.md` (the managed policy path). This location is loaded automatically by Claude Code, cannot be excluded, and survives context compression. Build-time rendering avoids SELinux AVC denials that occur when `container_t` writes to `etc_t` paths in the overlay filesystem. The `RIOTBOX_PROMPT` env var can override the
 template at runtime if needed. Using the managed policy path frees `~/.claude/CLAUDE.md` for the user's own instructions — personal CLAUDE.md and rules from the host are synced into the session directory at launch.
@@ -741,7 +785,8 @@ What changes when enabled:
 - Model inference is fully offline — the compression models are baked into
   the image at build time.
 - Wired for `--agent=claude` and `--agent=opencode`, both via `headroom
-  wrap`. Other agents print a warning and run uncompressed.
+  wrap`. Other agents, including `--agent=pi` (headroom has no Pi wrapper),
+  print a warning and run uncompressed.
 - For opencode, riotbox starts the proxy itself and then hands off to
   `headroom wrap opencode --no-proxy`. It starts the proxy rather than
   letting `wrap` do it because `wrap opencode --memory` appends a memory
@@ -782,26 +827,29 @@ RIOTBOX_CONTEXT_MODE=1 riotbox run "fix the failing tests"
 echo ': "${RIOTBOX_CONTEXT_MODE:=1}"' >> ~/.config/riotbox/config
 ```
 
-**Both agents are supported, and the two paths have nothing in common.**
-Upstream reaches Claude Code through hooks and an MCP server, and opencode
-through a TypeScript plugin that runs inside the agent process; there is no
-shared shape to abstract over. On Claude the image stages upstream's own
-marketplace plugin and the session registers it — riotbox writes no Claude
-wiring at all. On opencode riotbox generates a plugin file, from
-`agents/opencode/context-mode.sh`. `container/context-mode-setup.sh` drives the
+**All three agents are supported, and the paths have little in common.**
+Upstream reaches Claude Code through hooks and an MCP server, opencode
+through a TypeScript plugin that runs inside the agent process, and Pi through
+a Pi package whose extension runs inside Pi and bridges to the MCP server;
+there is no shared shape to abstract over. On Claude the image stages
+upstream's own marketplace plugin and the session registers it — riotbox
+writes no Claude wiring at all. On opencode riotbox generates a plugin file,
+from `agents/opencode/context-mode.sh`. On Pi riotbox adds the installed
+`context-mode` package to `settings.json` `packages`, from
+`agents/pi/context-mode.sh`. `container/context-mode-setup.sh` drives the
 per-session part without naming any agent — see
 [`docs/dev/agent-contract.md`](docs/dev/agent-contract.md#optional-verbs-context-mode)
 for the contract. An agent with no support runs with the feature off after a
 warning naming it.
 
-|                        | `--agent=claude`                                                                | `--agent=opencode`                                                              |
-|------------------------|---------------------------------------------------------------------------------|---------------------------------------------------------------------------------|
-| Where the support comes from | upstream's marketplace plugin, staged in the image at a pinned ref and registered against the session in place | one generated plugin file, `~/.config/opencode/plugins/riotbox-context-mode.js`   |
-| Where the code runs    | a short-lived hook process per matched tool call, plus an MCP child process        | in-process, inside opencode's own embedded bun                                    |
-| How the `ctx_*` tools arrive | over MCP, named `mcp__plugin_context-mode_context-mode__ctx_*`              | eleven native opencode tools the plugin registers directly — no MCP server at all  |
-| Where interception happens | a `PreToolUse` matcher in the plugin's `hooks/hooks.json`                      | `tool.execute.before`, enforced in-process                                        |
-| Slash commands         | `/context-mode:*`, one per bundled skill                                          | none — opencode has no equivalent surface                                         |
-| Store                  | `~/.claude/context-mode`                                                          | `~/.config/opencode/context-mode`                                                 |
+| | `--agent=claude` | `--agent=opencode` | `--agent=pi` |
+|---|---|---|---|
+| Where the support comes from | upstream's marketplace plugin, staged in the image at a pinned ref and registered against the session in place | one generated plugin file, `~/.config/opencode/plugins/riotbox-context-mode.js` | upstream's Pi package: the installed `context-mode` package root, listed in `~/.pi/agent/settings.json` `packages` |
+| Where the code runs | a short-lived hook process per matched tool call, plus an MCP child process | in-process, inside opencode's own embedded bun | in-process, inside Pi, plus an MCP child process the extension starts on the first prompt |
+| How the `ctx_*` tools arrive | over MCP, named `mcp__plugin_context-mode_context-mode__ctx_*` | eleven native opencode tools the plugin registers directly — no MCP server at all | native Pi tools the extension registers and forwards to that MCP child |
+| Where interception happens | a `PreToolUse` matcher in the plugin's `hooks/hooks.json` | `tool.execute.before`, enforced in-process | Pi's `tool_call` event, enforced in-process; at context-mode v1.0.169 only `bash` calls are routed |
+| Slash commands | `/context-mode:*`, one per bundled skill | none — opencode has no equivalent surface | `/ctx-stats` and `/ctx-doctor` |
+| Store | `~/.claude/context-mode` | `~/.config/opencode/context-mode` | `~/.pi/agent/context-mode` |
 
 What changes when enabled:
 
@@ -843,17 +891,18 @@ What changes when enabled:
   `CONTEXT_MODE_PLUGIN_REF` ARG.
 - The FTS5 store lives in the session directory
   (`~/.local/share/riotbox/<session>/context-mode`), under the config directory of
-  the agent that wired it — in-container `~/.claude/context-mode` for Claude Code
-  and `~/.config/opencode/context-mode` for opencode. It holds verbatim tool
+  the agent that wired it — in-container `~/.claude/context-mode` for Claude Code,
+  `~/.config/opencode/context-mode` for opencode and `~/.pi/agent/context-mode`
+  for Pi. It holds verbatim tool
   output — treat it with the same sensitivity as your session transcripts.
   `riotbox session-remove` deletes it along with the rest of the session.
 
   The location is per agent rather than shared, which is a deliberate cost: a
   session directory reused with a different `--agent` starts from an empty store,
-  because recall does not cross from one agent's store to the other's. Only one
+  because recall does not cross from one agent's store to another's. Only one
   agent's *wiring* exists in a session directory at a time — starting a session
-  with a different `--agent` strips the other's on the way in — but the stores
-  themselves both stay until the session directory is removed.
+  with a different `--agent` strips the others' on the way in — but the stores
+  themselves all stay until the session directory is removed.
 - **Two stores, both in the session directory.** `content/` holds the parked tool
   output; `sessions/` holds continuity — what the session did, and the snapshot
   `PreCompact` writes so an autocompact does not lose the thread. Both persist for
@@ -1011,11 +1060,12 @@ What changes when enabled:
   deliberate actor — the container's user holds `sudo` — and `RIOTBOX_NETWORK=none`
   remains the hard control. See [Context Mode store and
   wiring](THREAT_MODEL.md#context-mode-store-and-wiring).
-- **Starting a session needs no network, on either agent.** On Claude the plugin
+- **Starting a session needs no network, on any agent.** On Claude the plugin
   is cloned at a pinned ref and has its dependencies installed at image build
   time, and the session only writes a registry entry naming that path; on
-  opencode riotbox generates the plugin file itself. Neither path runs
-  `context-mode upgrade`, which clones upstream and overwrites the installed
+  opencode riotbox generates the plugin file itself; on Pi the `packages` entry
+  is the absolute path of the copy installed in the image, so Pi never installs
+  it from npm. No path runs `context-mode upgrade`, which clones upstream and overwrites the installed
   tree with whatever is on `main`. On opencode the same reasoning is why the
   generated plugin file re-exports the copy
   **vendored in the image, by absolute path**, instead of riotbox adding
@@ -1024,11 +1074,12 @@ What changes when enabled:
   needs network (`RIOTBOX_NETWORK=none` forbids it) and floats the version off
   the pin the image build asserts against.
 
-  One outbound request remains on the Claude path, and it is not RiotBox's: the
+  One outbound request remains on the Claude and Pi paths, and it is not RiotBox's: the
   MCP server GETs `https://registry.npmjs.org/context-mode/latest` at startup to
   warn about newer versions. It carries no payload, fails soft, and — unlike
   headroom and CodeGraph — has no off switch; `RIOTBOX_NETWORK=none` is what
-  suppresses it. The opencode path has no counterpart, because it starts no
+  suppresses it. Pi's extension starts the same MCP server as a child, so it
+  makes the same request. The opencode path has no counterpart, because it starts no
   server: the plugin imports the server module with
   `CONTEXT_MODE_EMBEDDED_PLUGIN_TOOLS=1`, which is exactly the flag that skips
   the startup routine the version check lives in. See [Context Mode store and
@@ -1055,12 +1106,16 @@ What changes when enabled:
   filtered out of the `plugin` array of the generated `opencode.jsonc` and a
   warning on stderr names what was dropped and why. Your host config is not
   modified, and with the toggle off nothing is filtered — the entry is then your
-  own plugin choice.
+  own plugin choice. On Pi a `context-mode` entry in your host `packages` is
+  dropped with every other host package (see [Pi config](#pi-config)), whatever
+  the toggle says.
 - Context Mode runs on its own pinned Node 22 inside the image on the Claude
   path, independent of whichever Node versions the build mirrored from your host.
   **The opencode path does not use it**: the plugin runs under opencode's
   embedded bun, and upstream's `bun:sqlite` adapter means the native SQLite
-  addon that forced the pinned Node is never loaded there.
+  addon that forced the pinned Node is never loaded there. Pi runs on its own
+  pinned Node, the same version today, so the extension loads the addon built
+  for it.
 - **`ctx_execute` runs TypeScript because the image ships [bun](https://github.com/oven-sh/bun).**
   Without it upstream reports `TypeScript: not available (install bun, tsx, or
   ts-node)` and TS snippets do not run at all. The version is pinned and the
@@ -1295,6 +1350,10 @@ failed. The detail is on stderr — which entry was removed, and which one was
 left alone because you wrote it rather than riotbox — so keep both streams if
 you are redirecting. If no token variable is set it tells you which ones it
 looked for and writes nothing.
+
+Claude Code and opencode are wired; Pi is not. For Pi the commands print
+`[forge-mcp] pi: no github MCP support — skipped.` (or `gitlab`) on stderr and
+leave its config alone. That skip does not count as a failure.
 
 Three things worth knowing:
 
@@ -1658,6 +1717,8 @@ Non-interactive callers (`riotbox run`, CI, scripts) never block on the prompt: 
 | Session data (`~/.local/share/riotbox/`) | bind mount (`:z`)            | Isolated per project set                      |
 | `~/.claude/.credentials.json`            | nested bind mount (RW)       | OAuth token refreshes must write back to host |
 | `~/.claude.json`                         | file copy into session dir   | Each container gets a writable snapshot       |
+| opencode and Pi auth files (`~/.local/share/opencode/auth.json`, `~/.pi/agent/auth.json`, `~/.pi/agent/mcp-auth.json`) | bind mount (RW), when present | Token refreshes write back; mounted whichever `--agent` runs |
+| Pi config allowlist (`~/.pi/agent/`)     | file copy into session dir   | See [Pi config](#pi-config); nothing flows back |
 | RiotBox config (`~/.config/riotbox/`)    | bind mount (`:z`)            | `plugins.conf`, `config`, `mounts.conf`       |
 | Host plugins (`~/.claude/plugins/`)      | read-only bind mount         | Merged into session at startup                |
 | User scripts (`~/bin`)                   | read-only bind mount         | Available but not writable                    |
@@ -1892,6 +1953,7 @@ cat ~/.claude/debug/latest
 - **Did the support land?** The signal differs per agent, and on Claude it changed in this release.
   - **`--agent=claude`** — there is no `[context-mode]` startup line any more, because riotbox no longer writes Claude's wiring. The plugin registration prints instead, on stdout: `  [plugins] Context Mode 1.0.169 registered at /home/llm/.riotbox/context-mode-plugin/v1.0.169.` **Do not read that line, or its absence, as the answer.** It is printed only by a call that changed the registry, and how often that happens depends on your host: with no `context-mode` under `~/.claude/plugins` it prints on the first run and then goes quiet, while with one mounted the host merge overwrites the entry every start and the line prints on every run — twice on the first. The definitive negative signal is on stderr instead: `  [context-mode] WARN: no Context Mode plugin is installed and enabled in this session`. To check a quiet session directly, look for the plugin: `riotbox run "/context-mode:ctx-doctor"`, or `jq '.plugins["context-mode@context-mode"]' ~/.local/share/riotbox/<session>/.claude/plugins/installed_plugins.json`.
   - **`--agent=opencode`** — unchanged: `  [context-mode] opencode plugin shim wired at <path>.` on stderr.
+  - **`--agent=pi`** — `  [context-mode] pi package wired in /home/llm/.pi/agent/settings.json.` on stderr.
 
   Either way, every give-up path explains itself on **stderr** as `[context-mode] WARN:` or `[plugins] WARNING:` — streams an autonomous run usually discards. Re-run capturing them: `RIOTBOX_CONTEXT_MODE=1 riotbox run "…" 2>/tmp/rb.err; grep -E 'context-mode|Context Mode' /tmp/rb.err`. Most common causes: the selected agent has no Context Mode support in riotbox (the warning names it), the session config could not be written, the image is older than the plugin-staging layer and staged nothing (`riotbox doctor` catches that one and tells you to rebuild), or — on opencode — `--pure` was on the command line, which disables external plugins outright.
 - **Is the exit report zero rather than absent?** `this run 0 B kept out · 8.0 KB hook log on disk` means the hooks ran and withheld nothing — the feature engaged and saved nothing. The hook-log figure is disk volume, not tokens. `bytesAvoided` only moves when the model actually routes large output through the sandbox tools; a session of small tool results has nothing to redirect. **No report at all** is the different problem, and it points back to the support check above.

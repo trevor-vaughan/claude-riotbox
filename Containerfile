@@ -249,8 +249,9 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         gnupg2 \
     && dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
            epel-release \
+    # fd-find: Pi's find tool otherwise downloads an unpinned fd from GitHub into ~/.pi/agent/bin.
     && dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
-           ripgrep bats \
+           ripgrep fd-find bats \
     && if [ "${RIOTBOX_DIAGRAMS}" = "1" ]; then \
            dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
                chromium; \
@@ -908,6 +909,108 @@ RUN bash -o pipefail -c '\
             printf "%s\n" "${h}" >&2; \
             exit 1; }; \
     done'
+
+# ── Pi (https://pi.dev) ─────────────────────────────────────────────────────
+# Pi core floats to the latest release, like opencode and Claude Code, and is
+# refreshed by `riotbox update` because this layer sits below the
+# LLM_TOOL_UPDATE cache bust. It is NOT unlocked: pi.dev publishes the exact
+# package.json + package-lock.json its own installer uses for every release,
+# and this layer installs from that lock, so every version in the tree is the
+# one upstream shipped for the release it resolves. Integrity is upstream's
+# where the lock carries it; upstream omits it for Pi's own @earendil-works/*
+# packages, which `npm ci` would then install unverified, so
+# container/pi/lock-integrity.sh first pins every entry to its exact registry
+# tarball on registry.npmjs.org and fills each missing hash from the
+# configured npm registry's dist.integrity (registry.npmjs.org unless the
+# host ~/.npmrc copied into the image names a mirror). Upstream's
+# install.sh is not used: it is interactive, and its managed install lives
+# under ~/.pi/agent/install, which the session bind mount of ~/.pi/agent
+# would shadow.
+#
+# The extensions are pinned (issue #16) in container/pi/package.json and its
+# committed lock. They install with --legacy-peer-deps into their own prefix
+# so the lock carries no second Pi core: Pi's extension loader supplies the
+# SDK modules extensions import. agents/pi/setup.sh derives settings.json
+# `packages` from that same package.json, so adding an extension is: edit
+# container/pi/package.json, then regenerate the lock with
+#   (cd container/pi && npm install --package-lock-only --legacy-peer-deps \
+#        --ignore-scripts --no-audit --no-fund)
+# and update the parity list in container/pi/smoke.mjs if it adds a tool.
+#
+# --ignore-scripts on both installs, so no lifecycle script runs unreviewed
+# at build time. The extension lock declares none (tests/pi.venom.yml asserts
+# it). The core lock for 1.2.0 declares two, both safe to skip:
+# @google/genai's preinstall is `echo 'preinstall: no-op'` and protobufjs's
+# postinstall only prints a version notice. A future script that Pi actually
+# needs is not caught by the smoke, which only checks that extensions load
+# and register their tools; review a new hasInstallScript entry in the core
+# lock when one appears.
+#
+# PI_NODE matches CONTEXT_MODE_NODE today, so nvm installs it once and the
+# Context Mode layer reuses it; Context Mode's Pi extension then runs on the
+# same Node ABI it was installed with. They are separate ARGs so either can
+# move without the other. Pi needs Node >= 22.19.
+#
+# The smoke is the compatibility gate for the floating core: it loads every
+# pinned extension into a real offline Pi session and fails the build when
+# one does not load or stops registering its tool.
+#
+# The trailing npm cache strip is the one "Why every npm layer empties
+# /home/llm/.npm" explains.
+ARG PI_NODE=22.23.3
+ENV RIOTBOX_PI_DIR=/home/llm/.riotbox/pi
+COPY --chown=llm:llm container/pi/ /tmp/riotbox-pi/
+RUN bash -o pipefail -c '\
+    set -e; \
+    export NVM_DIR=/home/llm/.nvm; \
+    . "${NVM_DIR}/nvm.sh"; \
+    nvm install "${PI_NODE}" >/dev/null; \
+    node_bin="$(dirname "$(nvm which "${PI_NODE}")")"; \
+    export PATH="${node_bin}:${PATH}"; \
+    core="${RIOTBOX_PI_DIR}/core"; \
+    ext="${RIOTBOX_PI_DIR}/extensions"; \
+    mkdir -p "${core}" "${ext}"; \
+    ver="$(npm view @earendil-works/pi-coding-agent@latest version)"; \
+    printf "%s\n" "${ver}" | grep -qxE "[0-9]+\.[0-9]+\.[0-9]+" || { \
+        echo "npm reported no bare X.Y.Z for the latest Pi: ${ver}" >&2; exit 1; }; \
+    printf "1.2.0\n%s\n" "${ver}" | sort -VC || { \
+        echo "latest Pi ${ver} is below the 1.2.0 floor agents/pi was verified against" >&2; exit 1; }; \
+    curl -fsSL -o "${core}/package.json" "https://pi.dev/api/installer/releases/${ver}/package.json"; \
+    curl -fsSL -o "${core}/package-lock.json" "https://pi.dev/api/installer/releases/${ver}/package-lock.json"; \
+    [ "$(jq -r ".dependencies[\"@earendil-works/pi-coding-agent\"]" "${core}/package.json")" = "${ver}" ] || { \
+        echo "pi.dev installer manifest for ${ver} does not pin @earendil-works/pi-coding-agent@${ver}" >&2; exit 1; }; \
+    bash /tmp/riotbox-pi/lock-integrity.sh "${core}/package-lock.json"; \
+    (cd "${core}" && npm ci --ignore-scripts --omit=dev --no-audit --no-fund); \
+    cp /tmp/riotbox-pi/package.json /tmp/riotbox-pi/package-lock.json "${ext}/"; \
+    (cd "${ext}" && npm ci --ignore-scripts --omit=dev --legacy-peer-deps --no-audit --no-fund); \
+    pkg="${core}/node_modules/@earendil-works/pi-coding-agent"; \
+    entry="$(jq -r ".bin.pi" "${pkg}/package.json")"; \
+    [[ "${entry}" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "unexpected bin.pi path: ${entry}" >&2; exit 1; }; \
+    [ -f "${pkg}/${entry}" ] || { echo "Pi ${ver} has no bin.pi entry at ${pkg}/${entry}" >&2; exit 1; }; \
+    printf "%s\n" \
+        "#!/usr/bin/env bash" \
+        "# Generated by the RiotBox image build. Pins the interpreter to PI_NODE." \
+        "export PI_TELEMETRY=0" \
+        "export PI_SKIP_VERSION_CHECK=1" \
+        "exec \"${node_bin}/node\" \"${pkg}/${entry}\" \"\$@\"" \
+        > /home/llm/.local/bin/pi; \
+    chmod +x /home/llm/.local/bin/pi; \
+    probe_home="$(mktemp -d)"; \
+    [ "$(HOME="${probe_home}" /home/llm/.local/bin/pi --version)" = "${ver}" ] || { \
+        echo "the generated pi shim does not report ${ver}" >&2; exit 1; }; \
+    h="$(HOME="${probe_home}" /home/llm/.local/bin/pi --help 2>&1)" || { \
+        echo "pi --help failed" >&2; \
+        printf "%s\n" "${h}" >&2; \
+        exit 1; }; \
+    for flag in --print --continue; do \
+        printf "%s\n" "${h}" | grep -qE -- "(^|[[:space:]])${flag}([[:space:],]|$)" || { \
+            echo "Pi ${ver} no longer lists ${flag}; agents/pi/manifest.sh depends on it" >&2; \
+            printf "%s\n" "${h}" >&2; exit 1; }; \
+    done; \
+    rm -rf "${probe_home}"; \
+    node /tmp/riotbox-pi/smoke.mjs "${pkg}" "${ext}"; \
+    rm -rf /tmp/riotbox-pi; \
+    find /home/llm/.npm -mindepth 1 -delete'
 
 # ── Claude Code (LAST — changes most frequently, preserves layer cache) ─────
 RUN bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && claude --version'

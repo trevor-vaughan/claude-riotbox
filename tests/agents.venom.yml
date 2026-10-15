@@ -426,6 +426,42 @@ testcases:
           - result.systemout ShouldContainSubstring "run"
           - result.systemout ShouldContainSubstring "--continue"
 
+  # ── Pi-specific contract checks ─────────────────────────────────────────
+  # `--` must sit between -p and the prompt so a prompt that starts with `-`
+  # is not parsed as a flag.
+
+  - name: pi run_argv is `pi -p -- <prompt>`
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          mapfile -d '' -t argv < <(agent_call pi run_argv "-v is a prompt")
+          [[ "${#argv[@]}" -eq 4 && "${argv[0]}" == pi && "${argv[1]}" == -p \
+            && "${argv[2]}" == -- && "${argv[3]}" == "-v is a prompt" ]] \
+            || { printf 'FAIL: argv=%s\n' "${argv[*]}"; exit 1; }
+          mapfile -d '' -t argv < <(agent_call pi audit_argv "x")
+          [[ "${argv[*]}" == "pi -p -- x" ]] || { printf 'FAIL: audit=%s\n' "${argv[*]}"; exit 1; }
+          echo "PI_ARGV_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PI_ARGV_OK"
+
+  - name: pi resume_argv is `pi -c`
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.agent_helpers}}"
+          source_agent_registry
+          mapfile -d '' -t argv < <(agent_call pi resume_argv)
+          [[ "${argv[*]}" == "pi -c" ]] || { printf 'FAIL: argv=%s\n' "${argv[*]}"; exit 1; }
+          echo "PI_RESUME_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PI_RESUME_OK"
+
   # ── Headroom optional verb ───────────────────────────────────────────────
   # headroom_argv is the contract's first OPTIONAL verb: agents that support
   # headroom interposition define it; absence means "run unwrapped". The

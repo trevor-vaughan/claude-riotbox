@@ -7,8 +7,10 @@
 #   $XDG_DATA_HOME/riotbox/<session-key>/
 # with Claude Code transcripts at  <session>/projects/<slug>/*.jsonl
 # and opencode data at             <session>/.local-share-opencode/{storage,project}/...
+# and pi sessions at               <session>/.pi-agent/sessions/<cwd>/*.jsonl
 # tokscale, left alone, scans only the ONE native home (~/.claude,
-# ~/.local/share/opencode), so it never sees riotbox work.
+# ~/.local/share/opencode, ~/.pi/agent/sessions), so it never sees riotbox
+# work.
 #
 # This wrapper leaves the native home scan intact and adds every riotbox session
 # as an extra scan root via tokscale's TOKSCALE_EXTRA_DIRS — comma-separated
@@ -86,9 +88,10 @@ resolve_tokscale_bin() {
 # (tokscale recurses it for *.jsonl); opencode exposes its data dir — we add both
 # the data root and its storage/message subdir so tokscale finds usage whether it
 # roots the opencode scan at the home dir or at the sessions dir (redundant hits
-# are path-deduped by tokscale). Runs in the caller's command-substitution
-# subshell, so `nullglob` here does not leak. Prints the joined value, or nothing
-# when there are no sessions.
+# are path-deduped by tokscale). Pi exposes its sessions dir (tokscale client
+# id `pi`). Runs in the caller's command-substitution subshell, so `nullglob`
+# here does not leak. Prints the joined value, or nothing when there are no
+# sessions.
 build_extra_dirs() {
 	local src="${RIOTBOX_DATA_DIR}"
 	[[ -d "${src}" ]] || return 0
@@ -102,6 +105,8 @@ build_extra_dirs() {
 			entries+=("opencode:${ocdata}")
 			[[ -d "${ocdata}/storage/message" ]] && entries+=("opencode:${ocdata}/storage/message")
 		fi
+		# Pi (tokscale client id `pi`, native root .pi/agent/sessions).
+		[[ -d "${session}/.pi-agent/sessions" ]] && entries+=("pi:${session}/.pi-agent/sessions")
 	done
 	[[ ${#entries[@]} -gt 0 ]] || return 0
 	local IFS=,
@@ -127,9 +132,9 @@ if [[ -z "${tokscale_bin}" ]]; then
 fi
 
 # Native HOME is left intact so tokscale scans your real ~/.claude and
-# ~/.local/share/opencode live; TOKSCALE_EXTRA_DIRS layers every riotbox session
-# on top. Both are read-only to tokscale. unshare -rn removes the network so no
-# usage can be submitted.
+# ~/.local/share/opencode and ~/.pi/agent/sessions live; TOKSCALE_EXTRA_DIRS
+# layers every riotbox session on top. Both are read-only to tokscale.
+# unshare -rn removes the network so no usage can be submitted.
 extra_dirs="$(build_extra_dirs)"
 exec unshare -rn env \
 	TOKSCALE_EXTRA_DIRS="${extra_dirs}" \

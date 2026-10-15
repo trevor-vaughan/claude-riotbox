@@ -54,7 +54,7 @@ usage() {
 Usage: riotbox [--agent=<name>] <command> [args...]
 
 Global flags:
-  --agent=<claude|opencode>    Select the AI agent (default: claude).
+  --agent=<claude|opencode|pi> Select the AI agent (default: claude).
                                May also be set via RIOTBOX_AGENT env var.
 
 Session commands:
@@ -91,7 +91,7 @@ Setup / maintenance:
   build                        Build the RiotBox image
   rebuild                      Rebuild the image from scratch (no cache)
   update                       Upgrade only the LLM CLI tools (headroom, opencode,
-                               Claude Code, CodeGraph, Context Mode, plugins).
+                               Pi, Claude Code, CodeGraph, Context Mode, plugins).
                                Large re-download — see riotbox update --help
 
 Info:
@@ -175,12 +175,13 @@ print_command_help() {
 		echo "the container image."
 		echo "  build    Build using the layer cache where possible."
 		echo "  rebuild  Add --no-cache to invalidate every layer."
-		echo "  update   Re-pull only the LLM CLI tools (headroom, opencode, Claude Code,"
-		echo "           CodeGraph, Context Mode, plugins) — headroom, CodeGraph, and"
-		echo "           Context Mode re-install at their pinned versions; opencode,"
-		echo "           Claude Code, and plugins update to latest. Reuses every other"
-		echo "           cached layer. Re-installing at a pin is not free: headroom"
-		echo "           re-fetches ~350 MB of models and Context Mode re-runs"
+		echo "  update   Re-pull only the LLM CLI tools (headroom, opencode, Pi,"
+		echo "           Claude Code, CodeGraph, Context Mode, plugins) — headroom,"
+		echo "           CodeGraph, and Context Mode re-install at their pinned"
+		echo "           versions; opencode, Pi core, Claude Code, and plugins update"
+		echo "           to latest; Pi's extensions stay at their pins. Reuses every"
+		echo "           other cached layer. Re-installing at a pin is not free:"
+		echo "           headroom re-fetches ~350 MB of models and Context Mode re-runs"
 		echo "           'nvm install' for its pinned Node 22 toolchain, so budget a"
 		echo "           large download on a metered or slow link."
 		echo "Environment knobs:"
@@ -369,7 +370,7 @@ mounts)
 	#
 	# RIOTBOX_DRY_RUN=1 keeps this command side-effect-free: no session
 	# dir gets created, no agent host_sync hook writes files. Agent-
-	# contributed mounts (credentials nest, opencode auth) are listed
+	# contributed mounts (credentials nest, opencode auth, Pi config/auth) are listed
 	# separately as a static note so the user knows what gets added.
 	echo "Auto-detected (always-mounted) — from scripts/detect-mounts.sh:"
 	"${SCRIPTS}/detect-mounts.sh" | while read -r _flag path; do echo "  ${path}"; done
@@ -386,6 +387,11 @@ mounts)
 	echo "  ~/.claude/{skills,agents,commands,output-styles,rules,CLAUDE.md} → session-dir copy"
 	echo "  ~/.claude/plugins/ → ~/.host-plugins (RO bind, when host plugins exist)"
 	echo "  ~/.local/share/opencode/auth.json → in-place RW bind (when opencode is registered)"
+	echo "  ~/.pi/agent (or \$PI_CODING_AGENT_DIR)/{settings.json,models.json,mcp.json,"
+	echo "    keybindings.json,AGENTS.md,SYSTEM.md,APPEND_SYSTEM.md,skills,prompts,themes,"
+	echo "    extensions} → session-dir copy"
+	echo "  ~/.pi/agent (or \$PI_CODING_AGENT_DIR)/{auth.json,mcp-auth.json}"
+	echo "    → in-place RW bind (when present)"
 	;;
 
 *)

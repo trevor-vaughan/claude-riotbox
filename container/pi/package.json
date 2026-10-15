@@ -1,0 +1,14 @@
+{
+  "name": "riotbox-pi-extensions",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pi extensions RiotBox installs into the image. Pi core floats and is installed separately; see the Pi block in the Containerfile.",
+  "dependencies": {
+    "pi-subagents": "0.77.0",
+    "@juicesharp/rpiv-ask-user-question": "2.13.8",
+    "@juicesharp/rpiv-todo": "2.13.8"
+  },
+  "overrides": {
+    "@juicesharp/rpiv-config": "2.13.8"
+  }
+}

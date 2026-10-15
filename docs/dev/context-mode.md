@@ -40,8 +40,8 @@ the same session directory, and runs with the feature off.
 
 ## How each agent reaches Context Mode
 
-The two implementations are deliberately different shapes, and after this branch
-they no longer even share the question of who writes the wiring. The registry
+The three implementations are deliberately different shapes, and they do not
+even share the question of who writes the wiring. The registry
 contract is about the lifecycle, not about what wiring looks like.
 
 ### Claude Code — upstream's plugin, registered rather than authored
@@ -143,14 +143,53 @@ adapter by absolute path. Notes that cost time to establish:
   version check lives — so the one residual outbound GET has no counterpart on
   this path.
 
+### Pi — one entry in a RiotBox-owned `packages` list
+
+Pi loads Context Mode as a Pi package. The installed `context-mode` package
+root declares `pi.extensions` (`./build/adapters/pi/extension.js`) in its
+`package.json`, and Pi loads that extension when the root is listed in
+`~/.pi/agent/settings.json` `packages`. `agents/pi/setup.sh` rewrites that list
+on every container start, before `context_mode_setup` runs, so wiring is one
+entry appended and stripping is that entry removed. Notes:
+
+- **The entry is the vendored root by absolute path,** so Pi never installs
+  the package from npm and the version stays on the pin the build asserts.
+- **The strip matches the last path segment exactly.** An entry is removed only
+  when it ends in `/context-mode` (or is `context-mode`), so a user path like
+  `my-context-mode-tools` or `context-mode-fork/x` stays.
+- **The `ctx_*` tools arrive over a bridge.** The extension starts
+  `server.bundle.mjs` as a child process and registers each MCP tool as a native
+  Pi tool. It does so lazily from `before_agent_start`, so the build's SDK
+  smoke (`container/pi/smoke.mjs`) cannot see them and does not try. The
+  residual `registry.npmjs.org` version check runs in that child, as on Claude.
+- **Interception is Pi's `tool_call` event,** and at `v1.0.169` it acts on
+  `bash` alone: inline HTTP clients are blocked and `curl`/`wget` are allowed
+  only in their silent, file-output form.
+- **It runs on Pi's Node.** `PI_NODE` equals `CONTEXT_MODE_NODE` today, so the
+  extension runs on the ABI the package was installed with; the two ARGs can
+  move apart.
+- **RiotBox never sets `PI_CODING_AGENT_DIR` in the container.** Upstream's
+  detection reads it as an oh-my-pi marker; the platform token is pinned
+  anyway, but the variable would still be one more input to explain.
+
+The build guard, `agent_pi_context_mode_build_assert`, fails the image when
+`pi.extensions` is anything but `["./build/adapters/pi/extension.js"]`, when
+that file is missing, when `build/adapters/pi/index.js` is missing or PiAdapter
+overrides `getSessionDir()` (which would stop `CONTEXT_MODE_DATA_DIR` pinning
+its DB), or when `getAdapter()` in `build/adapters/detect.js` no longer maps
+`case "pi"` to PiAdapter.
+
 ## The platform token is pinned, not detected
 
 `CONTEXT_MODE_PLATFORM` is exported from `context_mode_platform` before anything
-dispatches a hook — `claude-code` for Claude, `opencode` for opencode.
+dispatches a hook — `claude-code` for Claude, `opencode` for opencode, `pi` for
+Pi.
 
 Upstream's `detectPlatform()` resolves the platform from whichever agent config
 it finds, and every RiotBox image ships every supported agent, so it has more
-than one to choose between and no way to know which is running. When it lands on
+than one to choose between and no way to know which is running. It picks `pi`
+whenever `~/.pi` exists, which in RiotBox is every session, because Pi's
+`host_sync` mounts `~/.pi/agent` whichever agent runs. When it lands on
 an in-process plugin platform, `getPluginRoot()` returns
 `~/.cache/<platform>/packages/context-mode@latest/node_modules/context-mode` — a
 path no RiotBox install populates — and the hook's import throws.
@@ -176,6 +215,11 @@ back to the agent's config directory.
 - **opencode does.** Its fallback reads `XDG_CONFIG_HOME`, which the image never
   sets, landing on `~/.config/opencode` — the session mount, but by coincidence
   rather than by anything RiotBox stated.
+- **Pi does, and needs it most.** PiAdapter inherits `BaseAdapter.getSessionDir()`
+  and defaults its DB to `~/.pi/context-mode/sessions`, outside the `~/.pi/agent`
+  session mount. `CONTEXT_MODE_DATA_DIR=~/.pi/agent` moves it to
+  `~/.pi/agent/context-mode/sessions`, beside the `ctx_*` stores. The build guard
+  fails if PiAdapter ever overrides `getSessionDir()`.
 
 Both stores hold verbatim tool output, so both must sit inside the bind-mounted
 session directory: somewhere `riotbox session-remove` deletes, and somewhere that
@@ -211,7 +255,8 @@ down to `{event: [matchers]}` and requires equality before `npm ci` runs, so a
 tool added or dropped upstream fails the image build again, and the refresh at a
 version bump is a command whose diff a reviewer reads rather than two arrays
 somebody retypes. On opencode there is no such file — routing enforcement lives
-inside `tool.execute.before`.
+inside `tool.execute.before`. On Pi it lives inside the extension's `tool_call`
+handler, and nothing in the build compares it.
 
 The check is deliberately blind to the hook *commands*, which the interpreter
 substitution below rewrites; it compares only which events are wired and which
@@ -417,6 +462,8 @@ against `git rev-parse HEAD`.
 | No opencode session run end to end | Both storage pins are asserted at the shell seam and read from upstream source, never observed | Open |
 | opencode has no `SessionStart` hook upstream | Weaker resume attribution than Claude | Documented degradation, not fixed |
 | `opencode --pure` disables external plugins | Context Mode cannot engage at all | RiotBox warns on stderr and changes nothing else — `--pure` is the user's explicit instruction |
+| No Pi session run end to end through `riotbox` with Context Mode on | A scratch Pi 1.2.0 install with the package listed put `ctx_*` in the system prompt and the DBs under `.pi/agent/context-mode/sessions`, but the `riotbox run` integration suite pins the feature off | Open |
+| Pi's routing is not asserted at build time | A version bump can change what the `tool_call` handler blocks without failing the build, as on opencode | Open |
 | Nothing greps the bundle for the two storage variables | A version bump renaming one surfaces in a user session, not at build time | Accepted |
 | The npm version check cannot be suppressed | One unauthenticated GET per server start on the Claude path | Accepted; see `THREAT_MODEL.md` |
 
@@ -460,6 +507,7 @@ says so on stderr.
 | `container/context-mode-package-lock.json` | The staged plugin's dependency resolution. Generated, not upstream's; `COPY`'d in and consumed by `npm ci` in the staging layer. Regenerate it with every ref bump |
 | `agents/claude/context-mode.sh` | Store path, platform token, MCP name, legacy-wiring stripper, Claude build guard |
 | `agents/opencode/context-mode.sh` | Plugin shim writer, strip verb, opencode build guard |
+| `agents/pi/context-mode.sh` | `packages` entry wire and strip verbs, storage pins, platform token, Pi build guard |
 | `container/context-mode-summary.sh` | Exit report and ledger append |
 | `scripts/ctx-stats.sh` | Host-side ledger reader |
 | `scripts/lib/json-write.sh` | `json_write_atomic`, shared with CodeGraph |
@@ -494,6 +542,7 @@ model and credentials CI does not have.
 | `tests/context-mode.venom.yml` | The Claude session path — the storage and platform pins, the installed-plugin probe, and the legacy-stanza strip driven from fixtures shaped like the previous release's output — plus the build-time pins it depends on: the `Containerfile` layers read as text, and the claude build assert executed against fixtures in both directions |
 | `tests/plugin-setup.venom.yml` | The registration side, end to end: `context_mode_staged_path` and the usability test, the registration and its reconcile, the refusals for a registry *or* a marketplace file it cannot read, build and write, the host-copy exclusion and its three stand-down states, and what removal will and will not claim as RiotBox's own |
 | `tests/context-mode-opencode.venom.yml` | The opencode path, the foreign-file refusal, the `--pure` warning, both storage pins |
+| `tests/context-mode-pi.venom.yml` | The Pi path: storage and platform pins, idempotent wire and strip, the refusals for a package without `pi.extensions` and for an unusable `settings.json`, the strip that leaves look-alike user entries, the build guard against fixtures in both directions, and the setup orchestration |
 | `tests/context-mode-summary.venom.yml` | Every printed number in the exit report |
 | `tests/context-mode-ledger.venom.yml` | Record shape, the `agent` field, skip-and-return-0 paths |
 | `tests/ctx-stats.venom.yml` | All four reader views, malformed records, empty ledger |

@@ -436,7 +436,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PASS"
 
-  - name: wiring installs Claude hooks, the opencode plugin and the trace2 target
+  - name: wiring installs Claude hooks, the opencode plugin, the Pi extension and the trace2 target
     steps:
       - type: exec
         script: |
@@ -453,6 +453,14 @@ testcases:
           export GIT_AI_ALLOW_SUPERUSER=1
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${FAKE}/.config/opencode"
           echo '{}' > "${CLAUDE_CONFIG_DIR}/settings.json"
+
+          # install-hooks only wires Pi when a `pi` binary is on PATH.
+          stubdir="${FAKE}/stubbin"
+          mkdir -p "${stubdir}"
+          printf '#!/bin/sh\necho 1.2.0\n' > "${stubdir}/pi"
+          chmod +x "${stubdir}/pi"
+          export PATH="${stubdir}:${PATH}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
 
           # shellcheck disable=SC1091
           . "{{.riotbox_dir}}/container/git-ai-setup.sh"
@@ -471,6 +479,9 @@ testcases:
 
           [ -f "${FAKE}/.config/opencode/plugins/git-ai.ts" ] \
             || { echo "FAIL: opencode plugin not installed"; exit 1; }
+
+          [ -f "${HOME}/.pi/agent/extensions/git-ai.ts" ] \
+            || { echo "FAIL: Pi extension not installed"; exit 1; }
 
           # The trace2 target is the actual git integration; without it git
           # emits no events and attribution silently does nothing.
@@ -935,6 +946,149 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PASS"
 
+  # git-ai v1.7.5's Pi extension (agent-support/pi/git-ai.ts) has no banner,
+  # so the strip identifies it by two template lines that must BOTH appear.
+  - name: the pi strip removes only the generated extension
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
+          mkdir -p "${HOME}/.pi/agent/extensions"
+          cat > "${HOME}/.pi/agent/extensions/git-ai.ts" <<'EOF'
+          import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+          import { spawn } from "node:child_process";
+
+          const GIT_AI_BIN = '/home/llm/.local/bin/git-ai';
+          // Optional user-owned override file. Managed installer never writes it.
+          const OVERRIDE_CONFIG_PATH = "x";
+          EOF
+          grep -qE "^const GIT_AI_BIN = '" "${HOME}/.pi/agent/extensions/git-ai.ts" \
+            || { echo "FAIL: fixture lost column-0 indentation"; exit 1; }
+          echo 'export default function () {}' > "${HOME}/.pi/agent/extensions/mine.js"
+          source "{{.riotbox_dir}}/agents/pi/git-ai.sh"
+          agent_pi_git_ai_strip
+          [[ ! -f "${HOME}/.pi/agent/extensions/git-ai.ts" ]] || { echo "FAIL: generated extension survived"; exit 1; }
+          [[ -f "${HOME}/.pi/agent/extensions/mine.js" ]] || { echo "FAIL: user extension removed"; exit 1; }
+          echo "PASS"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PASS"
+
+  - name: the pi strip spares a git-ai.ts carrying only the override comment
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
+          mkdir -p "${HOME}/.pi/agent/extensions"
+          cat > "${HOME}/.pi/agent/extensions/git-ai.ts" <<'EOF'
+          // Optional user-owned override file. Managed installer never writes it.
+          export const handWritten = true
+          EOF
+          source "{{.riotbox_dir}}/agents/pi/git-ai.sh"
+          agent_pi_git_ai_strip 2>"${TEST_DIR}/err"
+          grep -qF 'handWritten' "${HOME}/.pi/agent/extensions/git-ai.ts" || { echo "FAIL: hand-written file removed"; exit 1; }
+          grep -qF 'left in place' "${TEST_DIR}/err" || { echo "FAIL: no NOTE"; exit 1; }
+          echo "PASS"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PASS"
+
+  - name: the pi strip spares a git-ai.ts carrying only the binary-path line
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
+          mkdir -p "${HOME}/.pi/agent/extensions"
+          cat > "${HOME}/.pi/agent/extensions/git-ai.ts" <<'EOF'
+          const GIT_AI_BIN = '/usr/bin/my-wrapper';
+          export const handWritten = true
+          EOF
+          source "{{.riotbox_dir}}/agents/pi/git-ai.sh"
+          agent_pi_git_ai_strip 2>"${TEST_DIR}/err"
+          grep -qF 'handWritten' "${HOME}/.pi/agent/extensions/git-ai.ts" || { echo "FAIL: hand-written file removed"; exit 1; }
+          grep -qF 'left in place' "${TEST_DIR}/err" || { echo "FAIL: no NOTE"; exit 1; }
+          echo "PASS"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PASS"
+
+  - name: the pi strip spares a user file that merely quotes the override comment
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
+          mkdir -p "${HOME}/.pi/agent/extensions"
+          cat > "${HOME}/.pi/agent/extensions/git-ai.ts" <<'EOF'
+          // my wrapper; upstream says: // Optional user-owned override file. Managed installer never writes it.
+          const GIT_AI_BIN = '/usr/bin/mine';
+          export const handWritten = true
+          EOF
+          source "{{.riotbox_dir}}/agents/pi/git-ai.sh"
+          agent_pi_git_ai_strip 2>"${TEST_DIR}/err"
+          grep -qF 'handWritten' "${HOME}/.pi/agent/extensions/git-ai.ts" || { echo "FAIL: user file that quotes the comment was removed"; exit 1; }
+          grep -qF 'left in place' "${TEST_DIR}/err" || { echo "FAIL: no NOTE"; exit 1; }
+          echo "PASS"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PASS"
+
+  - name: the pi strip spares a user file whose override comment is indented
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
+          mkdir -p "${HOME}/.pi/agent/extensions"
+          cat > "${HOME}/.pi/agent/extensions/git-ai.ts" <<'EOF'
+            // Optional user-owned override file. Managed installer never writes it.
+          const GIT_AI_BIN = '/usr/bin/mine';
+          export const handWritten = true
+          EOF
+          grep -q '^  // Optional' "${HOME}/.pi/agent/extensions/git-ai.ts" \
+            || { echo "FAIL: fixture lost its comment indentation"; exit 1; }
+          source "{{.riotbox_dir}}/agents/pi/git-ai.sh"
+          agent_pi_git_ai_strip 2>"${TEST_DIR}/err"
+          grep -qF 'handWritten' "${HOME}/.pi/agent/extensions/git-ai.ts" || { echo "FAIL: user file with indented comment was removed"; exit 1; }
+          grep -qF 'left in place' "${TEST_DIR}/err" || { echo "FAIL: no NOTE"; exit 1; }
+          echo "PASS"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PASS"
+
+  - name: the pi strip is silent when there is no extension
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
+          source "{{.riotbox_dir}}/agents/pi/git-ai.sh"
+          agent_pi_git_ai_strip
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemerr ShouldBeEmpty
+
   - name: the entrypoint sources and calls git-ai setup in the right order
     steps:
       - type: exec
@@ -1117,6 +1271,11 @@ testcases:
           export GIT_AI_ALLOW_SUPERUSER=1
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${FAKE}/.config/opencode"
           echo '{}' > "${CLAUDE_CONFIG_DIR}/settings.json"
+          stubdir="${FAKE}/stubbin"
+          mkdir -p "${stubdir}"
+          printf '#!/bin/sh\necho 1.2.0\n' > "${stubdir}/pi"
+          chmod +x "${stubdir}/pi"
+          export PATH="${stubdir}:${PATH}"
 
           "${BIN}" install-hooks >/dev/null 2>&1
 
@@ -1157,6 +1316,24 @@ testcases:
           head -n 10 "${plugin}" 2>/dev/null |
             grep -qE "^[[:space:]]*\*[[:space:]]+${_GIT_AI_OPENCODE_MARKER}[[:space:]]*\$" \
             || { echo "DRIFT: opencode plugin banner moved past line 10 or is no longer a block-comment line — the strip verb's gate would go blind to it"; exit 1; }
+
+          # 3b. The Pi extension lands where agents/pi/git-ai.sh looks, with
+          #     the override comment as a whole line and the GIT_AI_BIN line
+          #     inside the first 12 lines — the strip verb's own gate, reused
+          #     verbatim via its variables so the two cannot diverge.
+          pi_ext="${HOME}/.pi/agent/extensions/git-ai.ts"
+          [ -f "${pi_ext}" ] \
+            || { echo "DRIFT: Pi extension path changed"; exit 1; }
+          # shellcheck disable=SC1091
+          . "{{.riotbox_dir}}/agents/pi/git-ai.sh"
+          pi_head="$(head -n 12 "${pi_ext}")"
+          grep -qxF "${_GIT_AI_PI_OVERRIDE_COMMENT}" <<<"${pi_head}" \
+            || { echo "DRIFT: Pi extension override comment moved or changed — the strip verb's gate would go blind to it"; exit 1; }
+          grep -qE "${_GIT_AI_PI_BIN_LINE_RE}" <<<"${pi_head}" \
+            || { echo "DRIFT: Pi extension GIT_AI_BIN line moved or reshaped — the strip verb's gate would go blind to it"; exit 1; }
+          agent_pi_git_ai_strip
+          [ ! -e "${pi_ext}" ] \
+            || { echo "DRIFT: agent_pi_git_ai_strip no longer removes the generated Pi extension"; exit 1; }
 
           # 4. The git integration is still trace2 in the global config.
           grep -qF 'trace2' "${FAKE}/.gitconfig" \

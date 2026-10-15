@@ -15,10 +15,11 @@
 # image.
 #
 # Why upstream's `install-hooks` rather than hand-written stanzas: one call
-# writes all three integration points — the Claude settings.json hooks, the
-# opencode plugin, and the ~/.gitconfig trace2 target — and upstream's own
-# documentation has already drifted from what its binary installs (the
-# documented Write|Edit|MultiEdit matcher is actually "*"). Letting upstream own
+# writes all four integration points — the Claude settings.json hooks, the
+# opencode plugin, the Pi extension (~/.pi/agent/extensions/git-ai.ts), and
+# the ~/.gitconfig trace2 target — and upstream's own documentation has
+# already drifted from what its binary installs (the documented
+# Write|Edit|MultiEdit matcher is actually "*"). Letting upstream own
 # the shape keeps RiotBox out of that drift. What upstream cannot do is clean up
 # a session directory that outlives the image, so that is what RiotBox owns; see
 # the per-agent git-ai.sh strip verbs.
