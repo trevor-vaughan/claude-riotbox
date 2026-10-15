@@ -4,7 +4,7 @@ agents/lib/headroom-proxy.sh
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.5",
-  "base_commit_sha": "3005466f3d7802daeb44b722aec326a8be3abd14",
+  "base_commit_sha": "ee765b6a3ab5b4cd9245fa26f425c71ae9feff2c",
   "prompts": {},
   "sessions": {
     "s_d4276e69f56fa6": {
