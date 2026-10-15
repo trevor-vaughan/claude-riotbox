@@ -4,11 +4,11 @@ set -euo pipefail
 # Required env: ROOT_DIR
 # Arguments: <session-key-or-path> [...] | --all
 #
-# A session is a directory under the data dir that carries the .projects
-# marker scripts/mount-projects.sh writes at launch, plus its state dir
-# under RIOTBOX_STATE_ROOT; removing a session removes both. Nothing without
-# the marker is ever removed: on a rootless install the app tree (bin/,
-# libexec/, scripts/, ...) and backups/ share the data dir with the sessions.
+# A session is a directory under the data dir that passes is_session
+# (scripts/lib/session-state.sh), plus its state dir under RIOTBOX_STATE_ROOT;
+# removing a session removes both. Nothing else is ever removed: on a rootless
+# install the app tree (bin/, libexec/, scripts/, ...) and backups/ share the
+# data dir with the sessions.
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
 source "${ROOT_DIR}/libexec/session-summary.sh"
@@ -39,7 +39,8 @@ to_remove=()
 
 if [[ "$1" = "--all" ]]; then
 	for d in "${session_root}"/*/; do
-		[[ -f "${d}.projects" ]] || continue
+		# shellcheck disable=SC2310 # a predicate designed for conditions
+		is_session "${d%/}" "${state_root}/$(basename "${d}")" || continue
 		to_remove+=("${d%/}")
 	done
 	if [[ ${#to_remove[@]} -eq 0 ]]; then
@@ -52,10 +53,11 @@ else
 			echo "ERROR: empty session key or path." >&2
 			exit 1
 		fi
-		# An exact session key is one path component naming a marked session.
+		# An exact session key is one path component naming a session.
 		# Keys never contain "/", and "." or ".." would leave the data dir.
-		if [[ "${arg}" != */* && "${arg}" != "." && "${arg}" != ".." &&
-			-f "${session_root}/${arg}/.projects" ]]; then
+		# shellcheck disable=SC2310 # a predicate designed for conditions
+		if [[ "${arg}" != */* && "${arg}" != "." && "${arg}" != ".." ]] &&
+			is_session "${session_root}/${arg}" "${state_root}/${arg}"; then
 			to_remove+=("${session_root}/${arg}")
 			continue
 		fi
@@ -63,7 +65,8 @@ else
 		if [[ -e "${arg}" ]]; then
 			resolve_projects "${arg}"
 			migrate_session_key
-			if [[ -f "${RIOTBOX_SESSION_DIR}/.projects" ]]; then
+			# shellcheck disable=SC2310 # a predicate designed for conditions
+			if is_session "${RIOTBOX_SESSION_DIR}" "${RIOTBOX_STATE_DIR}"; then
 				to_remove+=("${RIOTBOX_SESSION_DIR}")
 				continue
 			fi
@@ -72,7 +75,7 @@ else
 			exit 1
 		fi
 		if [[ -e "${session_root}/${arg}" ]]; then
-			echo "ERROR: '${arg}' is not a session (no .projects marker); refusing to remove it." >&2
+			echo "ERROR: '${arg}' is not a session (no .projects marker or launch record); refusing to remove it." >&2
 		else
 			echo "ERROR: '${arg}' is not a session key or an existing path." >&2
 		fi

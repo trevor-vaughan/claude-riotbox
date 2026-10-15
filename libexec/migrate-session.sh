@@ -9,7 +9,8 @@ set -euo pipefail
 source "${ROOT_DIR}/scripts/mount-projects.sh"
 resolve_projects "$*"
 migrate_session_key
-if [[ ! -f "${RIOTBOX_SESSION_DIR}/.projects" ]]; then
+# shellcheck disable=SC2310 # a predicate designed for conditions
+if ! is_session "${RIOTBOX_SESSION_DIR}" "${RIOTBOX_STATE_DIR}"; then
 	echo "No session dir found for ${PROJECT_SUMMARY}."
 	# One member of a multi-project set names no session of its own.
 	if [[ "${#PROJECT_DIRS[@]}" -eq 1 ]]; then

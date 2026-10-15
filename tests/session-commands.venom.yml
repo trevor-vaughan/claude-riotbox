@@ -487,3 +487,45 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PROJECTS_EMPTY_OK"
+
+  - name: a session that made its .projects a directory is still found by its launch record
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          # hide <name>: a launched session (host-only record in its state dir)
+          # that replaced its container-writable .projects with a directory.
+          hide() {
+            local key
+            key="$(make_session "$1")"
+            printf '%s\n' "${T}/projects/$1" >"${STATE}/${key}/projects"
+            rm "${DATA}/${key}/.projects"
+            mkdir "${DATA}/${key}/.projects"
+            printf '%s\n' "${key}"
+          }
+          a="$(hide alpha)"; b="$(hide bravo)"; c="$(hide charlie)"; d="$(hide delta)"
+          bash "{{.riotbox_dir}}/libexec/list-sessions.sh" >"${T}/list" 2>&1
+          for k in "${a}" "${b}" "${c}" "${d}"; do
+            grep -qF "${k}" "${T}/list" || { echo "FAIL: session-list hid ${k}"; cat "${T}/list"; exit 1; }
+          done
+          (cd "${T}/projects/delta" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/migrate" 2>&1
+          if grep -qF 'No session dir found' "${T}/migrate"; then echo "FAIL: session-migrate missed it"; cat "${T}/migrate"; exit 1; fi
+          printf 'y\n' | bash "{{.riotbox_dir}}/libexec/remove-session.sh" "${a}" "${T}/projects/bravo" >/dev/null
+          [ ! -e "${DATA}/${a}" ] || { echo "FAIL: remove by key refused it"; exit 1; }
+          [ ! -e "${DATA}/${b}" ] || { echo "FAIL: remove by path missed it"; exit 1; }
+          (cd "${T}/projects/charlie" && bash "{{.riotbox_dir}}/libexec/reset-session.sh" force) >/dev/null
+          [ ! -e "${DATA}/${c}" ] || { echo "FAIL: session-reset missed it"; exit 1; }
+          printf 'y\n' | bash "{{.riotbox_dir}}/libexec/remove-session.sh" --all >/dev/null
+          [ ! -e "${DATA}/${d}" ] || { echo "FAIL: --all missed it"; exit 1; }
+          e="$(hide echo)"
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force >/dev/null
+          [ ! -e "${DATA}/${e}" ] || { echo "FAIL: session-reset all missed it"; exit 1; }
+          assert_app_tree_intact
+          echo "HIDDEN_SESSION_FOUND"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "HIDDEN_SESSION_FOUND"

@@ -33,8 +33,9 @@ if [[ "${all}" = true ]]; then
 	dirs=()
 	if [[ -d "${session_root}" ]]; then
 		for d in "${session_root}"/*/; do
-			# Only marked sessions; see libexec/remove-session.sh.
-			[[ -f "${d}.projects" ]] || continue
+			# Only sessions; see libexec/remove-session.sh.
+			# shellcheck disable=SC2310 # a predicate designed for conditions
+			is_session "${d%/}" "${state_root}/$(basename "${d}")" || continue
 			dirs+=("${d%/}")
 		done
 	fi
@@ -67,7 +68,8 @@ else
 		echo "ERROR: refusing to remove the RiotBox data dir '${RIOTBOX_SESSION_DIR}'." >&2
 		exit 1
 	fi
-	if [[ ! -f "${RIOTBOX_SESSION_DIR}/.projects" ]]; then
+	# shellcheck disable=SC2310 # a predicate designed for conditions
+	if ! is_session "${RIOTBOX_SESSION_DIR}" "${RIOTBOX_STATE_DIR}"; then
 		# shellcheck disable=SC2312  # pwd never fails in a sane invocation
 		echo "No session dir found for $(pwd)."
 		exit 0
