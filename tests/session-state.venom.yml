@@ -1678,6 +1678,32 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "MIGRATE_KEEPS_NONEMPTY_OK"
 
+  - name: a mount whose path a link replaced after the container started still reaches the session dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${STATE}/git-ai" "${T}/elsewhere"
+          # The container was given ${STATE}/git-ai; then git-ai became a
+          # link out of the state dir. The container still writes the old dir.
+          echo "old1 ${STATE}/git-ai true running unlabelled" > "${STUB_RUNNING}"
+          mv -T "${STATE}/git-ai" "${T}/moved"
+          ln -s "${T}/elsewhere" "${STATE}/git-ai"
+          running_session_mounts
+          [ "${#RUNNING_MOUNT_IDS[@]}" -eq 1 ] || { echo "FAIL: no mount listed"; exit 1; }
+          running_mount_reaches 0 "$(realpath -m -- "${STATE}")" "$(realpath -ms -- "${STATE}")" \
+            || { echo "FAIL: the resolved source ${RUNNING_MOUNT_SOURCES[0]} hid the mount"; exit 1; }
+          running_mount_reaches 0 "$(realpath -m -- "${T}/unrelated")" "$(realpath -ms -- "${T}/unrelated")" \
+            && { echo "FAIL: an unrelated dir counts"; exit 1; }
+          echo "LEXICAL_MOUNT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEXICAL_MOUNT_OK"
+
   - name: session-migrate refuses while a running RiotBox container mounts the session, and fails closed
     steps:
       - type: exec
@@ -1707,9 +1733,9 @@ testcases:
               echo "abc123 ${src} true" > "${STUB_RUNNING}"
               run_migrate
               assert_untouched "mounted ${src}"
-              grep -qF 'still running (container abc123)' "${T}/err" || { echo "FAIL: ${src}: no refusal naming the container"; cat "${T}/err"; exit 1; }
+              grep -qF 'container abc123 mounts' "${T}/err" || { echo "FAIL: ${src}: no refusal naming the container"; cat "${T}/err"; exit 1; }
               grep -qF "${PROJ}" "${T}/err" || { echo "FAIL: ${src}: the refusal does not name the session's project"; cat "${T}/err"; exit 1; }
-              grep -qF 'Exit that session' "${T}/err" || { echo "FAIL: ${src}: no word to exit it"; cat "${T}/err"; exit 1; }
+              grep -qF 'Stop that container' "${T}/err" || { echo "FAIL: ${src}: no word to exit it"; cat "${T}/err"; exit 1; }
           done
           rm -f "${STUB_RUNNING}"
           STUB_ENGINE_FAIL=1 run_migrate
@@ -1727,7 +1753,7 @@ testcases:
               echo "abc123 ${STATE}/git-ai true ${state}" > "${STUB_RUNNING}"
               run_migrate
               assert_untouched "${state} container"
-              grep -qF 'still running (container abc123)' "${T}/err" || { echo "FAIL: ${state}: no refusal"; cat "${T}/err"; exit 1; }
+              grep -qF 'container abc123 mounts' "${T}/err" || { echo "FAIL: ${state}: no refusal"; cat "${T}/err"; exit 1; }
           done
           # A read-only mount of the state is not a holder.
           printf '%s\n' "abc123 ${STATE}/git-ai false" "def456 ${STATE}/git-ai true exited" > "${STUB_RUNNING}"

@@ -9,6 +9,10 @@ set -euo pipefail
 
 # shellcheck source=tests/lib/engine-stub.sh
 source "$(dirname "${BASH_SOURCE[0]}")/engine-stub.sh"
+# Session keys come from the launch's own derivation in
+# scripts/mount-projects.sh, never a re-derivation here.
+# shellcheck source=scripts/mount-projects.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../../scripts/mount-projects.sh"
 
 # setup_state_test
 #   Sets: T (canonical temp root), PROJ (a canonical project dir), KEY (its
@@ -34,7 +38,7 @@ setup_state_test() {
 	VICTIM="${T}/victim"
 	mkdir -p "${HOME}/.claude" "${PROJ}" "${VICTIM}"
 	echo precious >"${VICTIM}/keep"
-	KEY="$(printf '%s\n' "${PROJ}" | sed 's|/|-|g; s|^-||')"
+	KEY="$(session_key "${PROJ}")"
 	# shellcheck disable=SC2034  # read by the test cases after this returns
 	SESSION="${XDG_DATA_HOME}/riotbox/${KEY}"
 	# shellcheck disable=SC2034  # read by the test cases after this returns
@@ -82,4 +86,64 @@ done
 exec /usr/bin/mv "$@"
 SHIM
 	chmod +x "${T}/shim/mv"
+}
+
+# use_project <path>
+#   Make <path> (created; canonical) the case's project: re-sets PROJ, KEY,
+#   SESSION and STATE as setup_state_test does, plus the key an older
+#   release gave it (legacy_session_key) and its two dirs under that key.
+#   Sets: PROJ, KEY, SESSION, STATE, OLD_KEY, OLD_SESSION, OLD_STATE
+use_project() {
+	mkdir -p "$1"
+	PROJ="$(cd "$1" && pwd -P)"
+	KEY="$(session_key "${PROJ}")"
+	OLD_KEY="$(legacy_session_key "${PROJ}")"
+	# shellcheck disable=SC2034  # read by the test cases after this returns
+	SESSION="${XDG_DATA_HOME}/riotbox/${KEY}"
+	# shellcheck disable=SC2034  # read by the test cases after this returns
+	STATE="${XDG_DATA_HOME}/riotbox-state/${KEY}"
+	OLD_SESSION="${XDG_DATA_HOME}/riotbox/${OLD_KEY}"
+	OLD_STATE="${XDG_DATA_HOME}/riotbox-state/${OLD_KEY}"
+}
+
+# make_old_session [record]
+#   Lay out a session of PROJ under OLD_KEY as a release with a state dir
+#   left it: .projects and a Claude copy in the session dir; git-ai, Pi
+#   history, a pending overlay change and a full .migrated in the state dir.
+#   With "record", also the host-only record (record_projects) naming PROJ.
+make_old_session() {
+	local -a names
+	mkdir -p "${OLD_SESSION}/projects" "${OLD_STATE}/git-ai" "${OLD_STATE}/pi-agent/sessions" \
+		"${OLD_STATE}/overlay/project/upper" "${OLD_STATE}/overlay/project/work"
+	printf '%s\n' "${PROJ}" >"${OLD_SESSION}/.projects"
+	echo '{"copy":true}' >"${OLD_SESSION}/settings.json"
+	echo transcript >"${OLD_SESSION}/projects/t.jsonl"
+	echo '{}' >"${OLD_STATE}/git-ai/config.json"
+	echo history >"${OLD_STATE}/pi-agent/sessions/s.jsonl"
+	echo change >"${OLD_STATE}/overlay/project/upper/f.txt"
+	# shellcheck disable=SC2312 # printing a sourced array cannot fail
+	mapfile -t names < <(printf '%s\n' "${SESSION_STATE_MIGRATIONS[@]%%:*}")
+	printf '%s\n' "${names[@]}" >"${OLD_STATE}/.migrated"
+	if [[ "${1:-}" == record ]]; then
+		printf '%s\n' "${PROJ}" >"${OLD_STATE}/projects"
+	fi
+}
+
+# assert_moved_to_new_key
+#   Fail unless everything make_old_session laid out is now under KEY, with
+#   its content intact, and nothing is left under OLD_KEY.
+assert_moved_to_new_key() {
+	if [[ -e "${OLD_SESSION}" || -L "${OLD_SESSION}" || -e "${OLD_STATE}" || -L "${OLD_STATE}" ]]; then
+		echo "FAIL: something is left under the old key ${OLD_KEY}"
+		return 1
+	fi
+	local pair file got
+	for pair in "${SESSION}/settings.json|{\"copy\":true}" "${SESSION}/projects/t.jsonl|transcript" \
+		"${STATE}/git-ai/config.json|{}" "${STATE}/pi-agent/sessions/s.jsonl|history" \
+		"${STATE}/overlay/project/upper/f.txt|change"; do
+		file="${pair%%|*}"
+		got="$(cat -- "${file}" 2>/dev/null)" || got=""
+		[[ "${got}" == "${pair#*|}" ]] || { echo "FAIL: ${file} did not move intact"; return 1; }
+	done
+	grep -qx overlay "${STATE}/.migrated" || { echo "FAIL: .migrated did not move"; return 1; }
 }

@@ -3,10 +3,9 @@ vars:
   root: "."
   riotbox_dir: "{{.root}}"
   shared_helpers: "{{.root}}/tests/lib/wrapper-shared.sh"
-  test_port: "18787"
 
 # Pins agents/opencode/headroom-exec.sh. The helper owns the proxy and
-# nothing else: it must (a) reuse or spawn `headroom proxy --memory --learn`,
+# nothing else: it must (a) reuse or spawn `headroom proxy --memory --no-learn`,
 # (b) delegate routing and launch to `headroom wrap opencode --no-proxy`
 # only after the proxy answers, (c) write nothing to the merged
 # opencode.jsonc itself, and (d) degrade to unwrapped opencode on any proxy
@@ -15,7 +14,8 @@ vars:
 # Why the helper survives at all now that `wrap opencode` exists: passing
 # --memory to it appends a "## Memory" block to AGENTS.md in the CWD, which
 # in a session is the caller's bind-mounted repository. Owning the proxy
-# here keeps cross-session memory without writing to the user's checkout.
+# here keeps cross-session memory without that write, and the wrapper's
+# HEADROOM_MEMORY_DB_PATH keeps the proxy's memory DB out of the CWD too.
 # See the helper's header.
 #
 # Fakes: `headroom proxy` is faked with a python3 accept-once TCP listener;
@@ -33,36 +33,25 @@ testcases:
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           source "{{.shared_helpers}}"
           setup_wrapper_sandbox opencode
-          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          headroom_fakes_init
+          trap 'kill_fakes; rm -rf "${TEST_DIR}"' EXIT
           install_generic_wrapper_for opencode
-          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
-          #!/usr/bin/env bash
-          printf 'FAKE_HEADROOM_ARGV=%s\n' "$*" >>"${HOME}/headroom-calls.log"
-          if [ "${1:-}" = "proxy" ]; then
-            port=8787
-            prev=""
-            for a in "$@"; do [ "${prev}" = "--port" ] && port="${a}"; prev="${a}"; done
-            exec python3 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', ${port})); s.listen(1); s.accept()"
-          fi
-          if [ "${1:-}" = "wrap" ] && [ "${2:-}" = "opencode" ]; then
-            shift 2
-            while [ "$#" -gt 0 ]; do a="$1"; shift; [ "${a}" = "--" ] && break; done
-            exec opencode "$@"
-          fi
-          FAKE
-          chmod +x "${TEST_DIR}/realbin/headroom"
-          export RIOTBOX_HEADROOM=1 HEADROOM_PORT={{.test_port}}
+          install_opencode_headroom_fakes
+          export RIOTBOX_HEADROOM=1
           unset RIOTBOX_HEADROOM_ACTIVE
           out="$(opencode run "do work" 2>&1)"
           echo "${out}"
           calls="${HOME}/headroom-calls.log"
           grep -c 'FAKE_HEADROOM_ARGV=proxy' "${calls}" | grep -qx 1 \
             || { echo "FAIL: proxy not spawned exactly once" >&2; cat "${calls}" >&2; exit 1; }
-          grep -q 'FAKE_HEADROOM_ARGV=proxy --port {{.test_port}} --memory --learn' "${calls}" \
-            || { echo "FAIL: proxy argv missing --memory/--learn" >&2; cat "${calls}" >&2; exit 1; }
+          # --no-learn: the traffic learner writes learned patterns into
+          # AGENTS.md in the project (learn/plugins/opencode.py:124-130).
+          grep -qx "FAKE_HEADROOM_ARGV=proxy --port ${PORT} --memory --no-learn" "${calls}" \
+            || { echo "FAIL: proxy argv is not --memory --no-learn" >&2; cat "${calls}" >&2; exit 1; }
           # Delegation carries every flag the offline-after-build posture needs,
           # and --no-proxy so upstream does not start a second proxy.
-          grep -q 'FAKE_HEADROOM_ARGV=wrap opencode --no-proxy --no-mcp --no-serena --port {{.test_port}} -- run do work' "${calls}" \
+          grep -q "FAKE_HEADROOM_ARGV=wrap opencode --no-proxy --no-mcp --no-serena --port ${PORT} -- run do work" "${calls}" \
             || { echo "FAIL: wrap opencode argv wrong" >&2; cat "${calls}" >&2; exit 1; }
           echo "SPAWN_OK"
         assertions:
@@ -72,43 +61,26 @@ testcases:
           - result.systemout ShouldContainSubstring "arg=--auto"
           - result.systemout ShouldContainSubstring "arg=do work"
 
-  - name: reuse path — listening proxy is not respawned, delegation still happens
+  - name: reuse path — a proxy the helper started is not respawned, delegation still happens
     steps:
       - type: exec
         script: |
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           source "{{.shared_helpers}}"
           setup_wrapper_sandbox opencode
-          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          headroom_fakes_init
+          trap 'kill_fakes; rm -rf "${TEST_DIR}"' EXIT
           install_generic_wrapper_for opencode
-          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
-          #!/usr/bin/env bash
-          printf 'FAKE_HEADROOM_ARGV=%s\n' "$*" >>"${HOME}/headroom-calls.log"
-          if [ "${1:-}" = "proxy" ]; then
-            echo "FAKE_PROXY_SPAWNED"
-            exit 0
-          fi
-          if [ "${1:-}" = "wrap" ] && [ "${2:-}" = "opencode" ]; then
-            shift 2
-            while [ "$#" -gt 0 ]; do a="$1"; shift; [ "${a}" = "--" ] && break; done
-            exec opencode "$@"
-          fi
-          FAKE
-          chmod +x "${TEST_DIR}/realbin/headroom"
-          # Two accepts: the bind-wait probe below consumes the first, the
-          # helper's reuse probe consumes the second (then the listener exits).
-          python3 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', {{.test_port}})); s.listen(2); s.accept(); s.accept()" &
-          listener=$!
-          for _ in $(seq 1 50); do
-            (exec 3<>"/dev/tcp/127.0.0.1/{{.test_port}}") 2>/dev/null && { exec 3>&- 3<&-; break; } || sleep 0.1
-          done
-          export RIOTBOX_HEADROOM=1 HEADROOM_PORT={{.test_port}}
+          install_opencode_headroom_fakes
+          export RIOTBOX_HEADROOM=1
           unset RIOTBOX_HEADROOM_ACTIVE
+          opencode run "first" >/dev/null 2>&1
           out="$(opencode run "do work" 2>&1)"
           echo "${out}"
-          kill "${listener}" 2>/dev/null || true
-          wait "${listener}" 2>/dev/null || true
-          grep -q 'FAKE_HEADROOM_ARGV=wrap opencode --no-proxy' "${HOME}/headroom-calls.log" \
+          calls="${HOME}/headroom-calls.log"
+          [ "$(grep -c 'FAKE_HEADROOM_ARGV=proxy' "${calls}")" = 1 ] || { echo "FAIL: proxy respawned" >&2; cat "${calls}" >&2; exit 1; }
+          [ "$(grep -c 'FAKE_HEADROOM_ARGV=wrap opencode --no-proxy' "${calls}")" = 2 ] \
             || { echo "FAIL: wrap opencode not invoked on reuse" >&2; exit 1; }
           echo "REUSE_OK"
         assertions:
@@ -117,7 +89,6 @@ testcases:
           - result.systemout ShouldContainSubstring "FAKE_REAL_opencode_INVOKED"
           - result.systemout ShouldContainSubstring "arg=--auto"
           - result.systemout ShouldContainSubstring "arg=do work"
-          - result.systemout ShouldNotContainSubstring "FAKE_PROXY_SPAWNED"
 
   - name: proxy dies at startup — warn, no delegation, runs unwrapped
     steps:
@@ -126,7 +97,9 @@ testcases:
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           source "{{.shared_helpers}}"
           setup_wrapper_sandbox opencode
-          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          headroom_fakes_init
+          trap 'kill_fakes; rm -rf "${TEST_DIR}"' EXIT
           install_generic_wrapper_for opencode
           cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
           #!/usr/bin/env bash
@@ -134,7 +107,7 @@ testcases:
           exit 3
           FAKE
           chmod +x "${TEST_DIR}/realbin/headroom"
-          export RIOTBOX_HEADROOM=1 HEADROOM_PORT={{.test_port}}
+          export RIOTBOX_HEADROOM=1
           unset RIOTBOX_HEADROOM_ACTIVE
           opencode run "do work" 2>"${TEST_DIR}/stderr"
           echo "--- stderr ---"
@@ -160,7 +133,9 @@ testcases:
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           source "{{.shared_helpers}}"
           setup_wrapper_sandbox opencode
-          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          headroom_fakes_init
+          trap 'kill_fakes; rm -rf "${TEST_DIR}"' EXIT
           install_generic_wrapper_for opencode
           # Fake proxy that stays alive but never listens. The odd sleep
           # duration is a unique marker so the pgrep/pkill below cannot
@@ -171,7 +146,7 @@ testcases:
           exec sleep 7919
           FAKE
           chmod +x "${TEST_DIR}/realbin/headroom"
-          export RIOTBOX_HEADROOM=1 HEADROOM_PORT={{.test_port}}
+          export RIOTBOX_HEADROOM=1
           export RIOTBOX_HEADROOM_PROXY_TIMEOUT=2
           unset RIOTBOX_HEADROOM_ACTIVE
           opencode run "do work" 2>"${TEST_DIR}/stderr"
@@ -201,24 +176,11 @@ testcases:
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           source "{{.shared_helpers}}"
           setup_wrapper_sandbox opencode
-          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          headroom_fakes_init
+          trap 'kill_fakes; rm -rf "${TEST_DIR}"' EXIT
           install_generic_wrapper_for opencode
-          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
-          #!/usr/bin/env bash
-          printf 'FAKE_HEADROOM_ARGV=%s\n' "$*" >>"${HOME}/headroom-calls.log"
-          if [ "${1:-}" = "proxy" ]; then
-            port=8787
-            prev=""
-            for a in "$@"; do [ "${prev}" = "--port" ] && port="${a}"; prev="${a}"; done
-            exec python3 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', ${port})); s.listen(1); s.accept()"
-          fi
-          if [ "${1:-}" = "wrap" ] && [ "${2:-}" = "opencode" ]; then
-            shift 2
-            while [ "$#" -gt 0 ]; do a="$1"; shift; [ "${a}" = "--" ] && break; done
-            exec opencode "$@"
-          fi
-          FAKE
-          chmod +x "${TEST_DIR}/realbin/headroom"
+          install_opencode_headroom_fakes
           # Pre-seed a merged config the way setup.sh writes it: // banner +
           # plain-JSON body, anthropic already routed to a corporate gateway.
           mkdir -p "${HOME}/.config/opencode"
@@ -226,7 +188,7 @@ testcases:
           // file generated by riotbox at session start.
           {"permission":"allow","provider":{"anthropic":{"options":{"baseURL":"https://gw.corp.example/v1"}}}}
           CFG
-          export RIOTBOX_HEADROOM=1 HEADROOM_PORT={{.test_port}}
+          export RIOTBOX_HEADROOM=1
           unset RIOTBOX_HEADROOM_ACTIVE
           opencode run "do work" 2>"${TEST_DIR}/stderr"
           echo "--- stderr ---"
@@ -252,30 +214,18 @@ testcases:
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           source "{{.shared_helpers}}"
           setup_wrapper_sandbox opencode
-          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          headroom_fakes_init
+          trap 'kill_fakes; rm -rf "${TEST_DIR}"' EXIT
           install_generic_wrapper_for opencode
-          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
-          #!/usr/bin/env bash
-          if [ "${1:-}" = "proxy" ]; then
-            port=8787
-            prev=""
-            for a in "$@"; do [ "${prev}" = "--port" ] && port="${a}"; prev="${a}"; done
-            exec python3 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', ${port})); s.listen(1); s.accept()"
-          fi
-          if [ "${1:-}" = "wrap" ] && [ "${2:-}" = "opencode" ]; then
-            shift 2
-            while [ "$#" -gt 0 ]; do a="$1"; shift; [ "${a}" = "--" ] && break; done
-            exec opencode "$@"
-          fi
-          FAKE
-          chmod +x "${TEST_DIR}/realbin/headroom"
+          install_opencode_headroom_fakes
           mkdir -p "${HOME}/.config/opencode"
           cat > "${HOME}/.config/opencode/opencode.jsonc" <<'CFG'
           // file generated by riotbox at session start.
           {"permission":"allow","plugin":["/home/llm/.riotbox/context-mode-plugin.js"]}
           CFG
           cp "${HOME}/.config/opencode/opencode.jsonc" "${TEST_DIR}/before"
-          export RIOTBOX_HEADROOM=1 HEADROOM_PORT={{.test_port}}
+          export RIOTBOX_HEADROOM=1
           unset RIOTBOX_HEADROOM_ACTIVE
           opencode run "do work" >/dev/null 2>&1
           # The whole point of delegating: no jq surgery, no temp-file swap,
@@ -288,6 +238,39 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "NOWRITE_OK"
 
+  - name: simulated run keeps proxy memory in the state dir, not the project
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox opencode
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          headroom_fakes_init
+          trap 'kill_fakes; rm -rf "${TEST_DIR}"' EXIT
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM HEADROOM_MEMORY_DB_PATH
+          install_generic_wrapper_for opencode
+          # The fake proxy resolves its memory DB the way headroom 0.39.0
+          # does: HEADROOM_MEMORY_DB_PATH, else $PWD/.headroom/memory.db
+          # (proxy/server.py:1332-1336), per-project DBs in memories/ beside
+          # it (proxy/memory_handler.py:409-413). ~/.headroom stands for the
+          # state-dir mount.
+          install_opencode_headroom_fakes
+          mkdir -p "${TEST_DIR}/proj"
+          cd "${TEST_DIR}/proj"
+          export RIOTBOX_HEADROOM=1
+          unset RIOTBOX_HEADROOM_ACTIVE
+          opencode run "do work"
+          [ ! -e "${TEST_DIR}/proj/.headroom" ] || { echo "FAIL: proxy wrote into the project" >&2; find "${TEST_DIR}/proj" >&2; exit 1; }
+          [ -f "${HOME}/.headroom/memory.db" ] || { echo "FAIL: no memory DB in the state dir" >&2; exit 1; }
+          [ -f "${HOME}/.headroom/memories/projects/workspace-0123456789abcdef/memory.db" ] \
+            || { echo "FAIL: per-project DB not beside it" >&2; exit 1; }
+          echo "STATE_DIR_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_REAL_opencode_INVOKED"
+          - result.systemout ShouldContainSubstring "STATE_DIR_OK"
+
   - name: unparseable merged config does not block delegation
     steps:
       - type: exec
@@ -295,28 +278,15 @@ testcases:
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           source "{{.shared_helpers}}"
           setup_wrapper_sandbox opencode
-          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          headroom_fakes_init
+          trap 'kill_fakes; rm -rf "${TEST_DIR}"' EXIT
           install_generic_wrapper_for opencode
-          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
-          #!/usr/bin/env bash
-          printf 'FAKE_HEADROOM_ARGV=%s\n' "$*" >>"${HOME}/headroom-calls.log"
-          if [ "${1:-}" = "proxy" ]; then
-            port=8787
-            prev=""
-            for a in "$@"; do [ "${prev}" = "--port" ] && port="${a}"; prev="${a}"; done
-            exec python3 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', ${port})); s.listen(1); s.accept()"
-          fi
-          if [ "${1:-}" = "wrap" ] && [ "${2:-}" = "opencode" ]; then
-            shift 2
-            while [ "$#" -gt 0 ]; do a="$1"; shift; [ "${a}" = "--" ] && break; done
-            exec opencode "$@"
-          fi
-          FAKE
-          chmod +x "${TEST_DIR}/realbin/headroom"
+          install_opencode_headroom_fakes
           mkdir -p "${HOME}/.config/opencode"
           printf '// banner\n{not json' > "${HOME}/.config/opencode/opencode.jsonc"
           cp "${HOME}/.config/opencode/opencode.jsonc" "${TEST_DIR}/before"
-          export RIOTBOX_HEADROOM=1 HEADROOM_PORT={{.test_port}}
+          export RIOTBOX_HEADROOM=1
           unset RIOTBOX_HEADROOM_ACTIVE
           opencode run "do work" 2>"${TEST_DIR}/stderr"
           echo "--- stderr ---"
@@ -332,4 +302,31 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "CORRUPT_OK"
+          - result.systemout ShouldContainSubstring "FAKE_REAL_opencode_INVOKED"
+
+  - name: a listener that is not headroom keeps its port; opencode is routed to the next one
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox opencode
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          headroom_fakes_init
+          trap 'kill_fakes; rm -rf "${TEST_DIR}"' EXIT
+          install_generic_wrapper_for opencode
+          install_opencode_headroom_fakes
+          # A base port whose next one is verified free.
+          PORT="$(free_port_pair)"
+          export HEADROOM_PORT="${PORT}"
+          start_fake_listener "${PORT}" foreign
+          export RIOTBOX_HEADROOM=1
+          unset RIOTBOX_HEADROOM_ACTIVE
+          { opencode run "do work" 2>&1; cat "${HOME}/headroom-calls.log"; } | port_names | tee "${TEST_DIR}/out"
+          ! grep -qE -- "--port PORT([^0-9]|$)" "${TEST_DIR}/out" || { echo "FAIL: routed to the foreign listener" >&2; exit 1; }
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "is not a healthy headroom proxy (or is busy)"
+          - result.systemout ShouldContainSubstring "FAKE_HEADROOM_ARGV=proxy --port PORT1 --memory --no-learn"
+          - result.systemout ShouldContainSubstring "FAKE_HEADROOM_ARGV=wrap opencode --no-proxy --no-mcp --no-serena --port PORT1 -- run do work"
           - result.systemout ShouldContainSubstring "FAKE_REAL_opencode_INVOKED"

@@ -182,7 +182,7 @@ flowchart LR
 opencode uses two host paths:
 
 - **`~/.local/share/opencode/auth.json`** — bind-mounted **read-write** into the container at `/home/llm/.local/share/opencode/auth.json`. Same trust posture as Claude's `.credentials.json`: the container can read and overwrite this file. Refresh tokens that opencode rotates during a session land back on the host so subsequent runs stay authenticated.
-- **`~/.config/opencode/`** — copied (not mounted) into the session's state dir (`riotbox-state/<session>/opencode-config`) at launch, and that copy is mounted. The container's writes to its synced copy do not propagate back to the host. Re-copied at every launch so removed/renamed agents and commands do not linger.
+- **`~/.config/opencode/`** — copied (not mounted) into the session's state dir (`riotbox-state/<session>/opencode-config`) at launch, and that copy is mounted. The container's writes to its synced copy do not propagate back to the host. Re-copied at every launch so removed/renamed agents and commands do not linger. The host's Context Mode data, `context-mode/` and `memory/` (upstream's default opencode stores and auto-memory), is not copied: it holds tool output and memory from every host project, and would reach every session of every project.
 
 Provider env vars are exposed by name only (`-e VAR`); values come from the calling host environment via the container runtime. The set is the union of every registered agent's `agent_<name>_env_vars` manifest function (`agents/claude/manifest.sh`, `agents/opencode/manifest.sh` and `agents/pi/manifest.sh` today), deduplicated with `sort -u`. The union is forwarded into every container regardless of `--agent`, so adding a provider key to one manifest widens the passthrough surface for all agents; Pi's manifest therefore declares exactly opencode's eight keys. The union covers direct provider keys plus Claude Code routing vars for Vertex and Bedrock (`CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_PROJECT_ID`, `AWS_PROFILE`, etc.). Long-lived AWS access keys (`AWS_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_SESSION_TOKEN`) are intentionally excluded from every manifest — shipping static long-lived credentials into an autonomous container that has full filesystem access is a regression. Bedrock users authenticate via `AWS_PROFILE` plus an `AWS_SHARED_CREDENTIALS_FILE` (RO-mounted by `RIOTBOX_CREDFILE_VARS`). Setting `RIOTBOX_PASSTHROUGH_VARS` (whitespace-separated names) overrides the registry union with a curated list — no merging. `RIOTBOX_PASSTHROUGH_EXTRA_VARS` uses the same syntax and validation but is appended to whichever set is active (default or override), letting users add forwarded vars without restating the base; identical KEY validation, identical argv-hygiene for `KEY=VALUE` values, and identical "no AWS long-lived keys" guidance apply.
 
@@ -308,28 +308,69 @@ its resolved project set to `projects` at the top of the session's state dir
 `riotbox overlays`, the launch guard's hints and the hint for a lone member of a
 multi-project set take paths only from that record, and `overlay-diff`,
 `overlay-accept` and `overlay-reject` refuse a project list that is not the
-recorded set. Session keys are not unique per set (`/` is mangled to `-`, so
-`{/t/a-b/app, /t/lib}` and `{/t-a/b/app, /t/lib}` share one key), so without the
-record a session could name a colliding set in `.projects` and have
-`riotbox overlays` print a paste-ready `overlay-accept` that applied its changes
-to a directory it was never given. While changes are pending, a launch of a
-different set with the same key keeps the existing record, so those changes stay
-bound to the set that made them. A session last launched by an older RiotBox has
-no record: its overlays list as unknown with no command, and `overlay-accept`
-refuses until one overlay-mode launch records the set (that launch stops at the
-pending-changes guard). A prompt was not used instead because it could show only
-the paths the user had just typed. `overlay-diff` and `overlay-reject` work
-without a record. That first launch records whichever set is launched, so if a
-colliding set is launched first, its record then binds the pending changes to the
-wrong set. When the launched set differs from what the session's `.projects` names,
-the launch warns and shows that set (cleaned, display only, never as a command).
-Recovery is to reject the changes as the recorded set (or accept them as it), or to
-delete `<state>/projects` and launch the right set. Replacing a record that names a
-different set (with nothing pending) also warns. The record is read, checked and
+recorded set. Without the record a session could name another set in
+`.projects` and have `riotbox overlays` print a paste-ready `overlay-accept` that
+applied its changes to a directory it was never given. Session keys are unique per
+set (see **Session keys** below), so a record that names another set means the
+state dir was copied or renamed by hand; while changes are pending, a launch then
+keeps that record, so those changes stay bound to the set that made them. A
+session last launched by an older RiotBox has no record: its overlays list as
+unknown with no command, and `overlay-accept` refuses until one overlay-mode
+launch records the set (that launch stops at the pending-changes guard). A prompt
+was not used instead because it could show only the paths the user had just
+typed. `overlay-diff` and `overlay-reject` work without a record. That first
+launch records the set it was launched with, which for a session from a release
+before hashed keys is the set its `.projects` named (the key migration below
+moves it to no other). When the launched set differs from what the session's
+`.projects` names, the launch warns and shows that set (cleaned, display only,
+never as a command). Recovery is to reject the changes as the recorded set (or
+accept them as it), or to delete `<state>/projects` and launch the right set.
+Replacing a record that names a different set (with nothing pending) also warns. The record is read, checked and
 replaced under the session's `.migrate.lock`, so concurrent launches cannot
 interleave. Printed commands quote every path with `printf %q` under
 `LC_ALL=C`, so shell metacharacters are quoted and control and non-ASCII bytes
 are escaped.
+
+**Session keys.** A session's key names its session dir, its state dir and the
+`riotbox.session` label on its containers. It is a readable prefix (the path with
+`/` mapped to `-` for one project, `<first basename>-<N>more` for a set) plus the
+first 16 hex characters of the SHA-256 of the set's real paths, sorted, deduplicated and each
+NUL-terminated (`session_key` in `scripts/mount-projects.sh`). A path cannot hold
+a NUL, so two different sets never hash the same input; two sharing a key would
+need a 64-bit SHA-256 prefix collision. Releases before this keyed a session by
+its paths with `/` mapped to `-`, so `/t/a-b/app` and `/t-a/b/app`, and the
+matching sets, shared one session dir and state dir, mixing their Claude copies,
+Pi history, headroom, git-ai stores and overlays.
+
+Such a session moves to its new key once (`migrate_session_key`), at the first
+launch, overlay command, `session-remove` or `session-reset` by path, or
+`session-migrate` that resolves its set, and only when it provably belongs to that
+set: the old state dir's host-only record names it, or, when it has no record
+(released versions wrote none), the old session dir's `.projects` does. In that
+legacy case `.projects` is container-written, so a session could name any set that
+shared its old key and have that set's next launch take it over. Those are exactly
+the sets that already shared the session under the old key, so this binds nothing
+the old key did not, and the move prints a notice saying it was matched by
+`.projects`. A session that names another set stays where it is, with a warning,
+and the launched set starts fresh under its own key. Old and new keys share one
+namespace: the old key of a project whose path ends in `-<16 hex>` can be another
+set's current key, and that set's container could name the crafted project in its
+`.projects`. So the `.projects` fallback is refused for an old key of that shape,
+and a record that exists but cannot be read is a refusal, not "no record". The move refuses, failing
+closed, while any created, running or paused container can write the old dirs
+(releases up to v0.5.3 set no `riotbox.session` label, and an upgrade starts with
+their sessions; a container with the `riotbox.session` label counts when a read-write mount overlaps it either way; any other container only when a read-write mount source is that directory or inside it, so a toolbox or distrobox container mounting `/` does not count): that container would keep writing there,
+and the overlay commands' running check compares mount paths, so it would no
+longer see it. It reads nothing in the session dir but
+`.projects` (never through a link), and renames each dir whole with `mv -T`, so
+an entry planted inside moves as itself and is never followed. It writes no
+record: a record lets `overlay-accept` apply the session's overlays, and only a
+launch grants that, as before. The dir that holds the evidence moves last, so an
+interrupted move leaves the next run the same evidence to finish it by. It runs
+under the state root's `.migrate.lock` and re-checks there, so concurrent
+launches move a session once. Container
+names carry the same hash, so colliding sets no longer clash on `--name`.
+Ledger records written before the move keep the old key as their `project_set`.
 
 **Session commands** remove only directories that carry `.projects`, take an
 exact key only as one path component, and `resolve_projects` refuses a project
@@ -418,10 +459,13 @@ What remains:
 
 The overlay upper is the session container's `/mnt/overlay`, so every name, file
 type and link in it is chosen by the session. `riotbox overlay-accept` and
-`riotbox overlay-reject` (`scripts/overlay.sh`) refuse while any running
-container labelled `riotbox.session` has a read-write mount overlapping this
-overlay dir, and when the engine cannot list or inspect them; other sessions'
-read-write mounts of the project are named in a warning. `overlay-accept`
+`riotbox overlay-reject` (`scripts/overlay.sh`) refuse while any created,
+running or paused container can write this overlay dir (releases up to v0.5.3
+set no label; a container with the `riotbox.session` label counts when a read-write mount overlaps it either way; any other container only when a read-write mount source is that directory or inside it, so a toolbox or distrobox container mounting `/` does not count), and
+when the engine cannot list or inspect them; any other container with a
+read-write mount overlapping the project, labelled or not (a toolbox mounting
+`$HOME`, say), is named in a warning, because it can change the project during
+the apply. `overlay-accept`
 renames the upper to a private snapshot (`overlay/<name>.accepting.<pid>`),
 asks the engine again, validates every entry and the project path it lands on
 before the review and again after the confirmation, refuses unless both match
@@ -434,11 +478,9 @@ launch until it is put back.
 Residual risks (stated in the header of the accept code and in
 [README § Overlay mode](README.md#overlay-mode-podman-only)):
 
-- **Unlabelled sessions are not detected.** A container started by a release
-  before the `riotbox.session` label has none, so the refusal cannot see it.
 - **An open handle defeats the snapshot.** A process that already holds a
-  directory or file open inside the upper — such an unlabelled session, or a
-  container started between the check and the rename — can still change the
+  directory or file open inside the upper — a container started between the
+  check and the rename — can still change the
   bytes of a regular file between the review and its copy; the review lists
   names, not contents.
 - **The apply itself is not atomic.** Another session on the project can change
@@ -464,13 +506,40 @@ mechanism it replaced, this one does override a baseURL the user set — the
 provider is named in a notice on stderr, and the traffic still reaches that
 endpoint, forwarded by the proxy.
 
-riotbox starts the proxy itself rather than letting `wrap` do it because
-`headroom wrap opencode --memory` appends a memory block to `AGENTS.md` in
-the working directory and creates `.headroom/` beside it — inside the
-bind-mounted project, the one host path in this flow that riotbox otherwise
-leaves alone. Owning the proxy keeps cross-session memory without that write;
-`--memory` is never forwarded to `wrap`. Headroom's usage telemetry is
-disabled image-wide (`ENV HEADROOM_TELEMETRY=off`).
+riotbox starts the proxy itself, for both agents, rather than letting
+`headroom wrap` do it, because wrap writes into the working directory, which
+for a single project is the bind-mounted checkout — the one host path in
+this flow that riotbox otherwise leaves alone. `wrap claude` writes
+`.claude/settings.local.json` (with the proxy's `ANTHROPIC_BASE_URL` and a
+`SessionStart` hook that runs `headroom wrap selfheal`) and lock, marker and
+owner files beside it; `wrap opencode --memory` appends to `AGENTS.md`. The
+claude helper (`agents/claude/headroom-exec.sh`) sets the routing env for the
+launch itself and registers headroom's MCP retrieve tool at user scope, in
+the session's `~/.claude.json`; opencode's still hands off to
+`wrap opencode --no-proxy`, whose writes are all under `--memory`. The
+proxy's memory DB also defaults to the working directory, so the agent
+wrapper exports `HEADROOM_MEMORY_DB_PATH=~/.headroom/memory.db`, inside the
+state-dir mount. Failure learning (`--learn`) is off (`--no-learn`): it
+writes learned patterns into `CLAUDE.local.md` or `AGENTS.md` in the
+project, files the next agent run on the host reads, and has no setting
+that points it elsewhere. A sandboxed run with the pinned headroom and a
+stub agent leaves the project byte-identical for both agents.
+The helpers reuse a listener on the proxy port only when its `/livez`
+answers as a healthy headroom proxy, so an unrelated dev server there (such
+as `wrangler dev`, which also defaults to 8787) never gets the agent's API
+traffic or credentials. That check is not an authentication boundary:
+anything running in the container is already inside the session's trust
+domain, so a process that answers `/livez` first gains nothing it could not
+already read.
+
+Releases before this left those files in checkouts; the README lists them
+under "Headroom leftovers from older releases". In overlay mode they went to
+the overlay upper. `overlay-accept` never applies a top-level `.headroom/`,
+the memory older releases wrote there, in either direction
+(`OVERLAY_KEPT_NAMES` in `scripts/lib/overlay-ignore.sh`), so memory cannot
+leak into the checkout by being accepted along with real changes.
+Headroom's usage telemetry is disabled image-wide
+(`ENV HEADROOM_TELEMETRY=off`).
 
 ## CodeGraph index
 

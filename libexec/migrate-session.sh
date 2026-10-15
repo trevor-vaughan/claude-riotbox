@@ -8,6 +8,7 @@ set -euo pipefail
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
 resolve_projects "$*"
+migrate_session_key
 if [[ ! -f "${RIOTBOX_SESSION_DIR}/.projects" ]]; then
 	echo "No session dir found for ${PROJECT_SUMMARY}."
 	# One member of a multi-project set names no session of its own.

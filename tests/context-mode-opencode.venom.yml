@@ -998,7 +998,16 @@ testcases:
   # wholesale. The container's two mounts are stood in for by links from a
   # fake container HOME to the state-dir entries, so the store paths the verbs
   # name resolve where they would inside a session.
-  - name: Context Mode stores survive a relaunch sync that re-stages the host config
+  #
+  # Follow-up #11 pins per-session auto-memory here too. Upstream's
+  # BaseAdapter.getMemoryDir() (build/adapters/base.js, not overridden by the
+  # opencode adapter at v1.0.169) is join(CONTEXT_MODE_DATA_DIR, "context-mode",
+  # "memory", <project hash>) when the variable is set, and
+  # join(<config dir>, "memory", ...) otherwise. The value comes from
+  # context_mode_setup itself, the code that exports it into the session, so
+  # the memory dir must land in the state dir's opencode-data/ and not in the
+  # opencode-config/ copy the sync replaces.
+  - name: Context Mode stores and auto-memory survive a relaunch sync that re-stages the host config
     steps:
       - type: exec
         script: |
@@ -1022,16 +1031,38 @@ testcases:
           ln -s "${STATE}/opencode-config" "${HOME}/.config/opencode"
           ln -s "${STATE}/opencode-data" "${HOME}/.local/share/opencode"
           export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_CONTEXT_MODE=1
+          export RIOTBOX_AGENT=opencode
+          PKG="${TEST_DIR}/pkg/context-mode"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" "${CLAUDE_CONFIG_DIR}"
+          touch "${PKG}/build/adapters/opencode/plugin.js"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
 
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
-          store="$(agent_call opencode context_mode_store_dir)"
-          root="$(agent_call opencode context_mode_data_dir)"
+          # In this shell, not a subshell: the exports are what is under test.
+          context_mode_setup >/dev/null 2>&1
+          [ -n "${CONTEXT_MODE_DIR:-}" ] && [ -n "${CONTEXT_MODE_DATA_DIR:-}" ] \
+            || { echo "FAIL: setup exported no Context Mode store pins"; exit 1; }
+          store="${CONTEXT_MODE_DIR}"
+          root="${CONTEXT_MODE_DATA_DIR}"
           # Where upstream puts each: CONTEXT_MODE_DIR/content (ctx_* stores),
-          # <data root>/context-mode/sessions (plugin DB) and .../memory.
-          mkdir -p "${store}/content" "${root}/context-mode/sessions" "${root}/context-mode/memory"
+          # <data root>/context-mode/sessions (plugin DB) and
+          # <data root>/context-mode/memory/<project hash> (auto-memory).
+          memory="${root}/context-mode/memory/0123abcd"
+          want="$(realpath -m "${STATE}/opencode-data/context-mode/memory/0123abcd")"
+          got="$(realpath -m "${memory}")"
+          [ "${got}" = "${want}" ] \
+            || { echo "FAIL: auto-memory resolves to '${got}', want the session's '${want}'"; exit 1; }
+          mkdir -p "${store}/content" "${root}/context-mode/sessions" "${memory}"
           printf 'kept\n' > "${store}/content/probe.db"
           printf 'kept\n' > "${root}/context-mode/sessions/probe.db"
-          printf 'kept\n' > "${root}/context-mode/memory/probe.md"
+          printf 'kept\n' > "${memory}/probe.md"
 
           run_sync
 
@@ -1039,7 +1070,7 @@ testcases:
             || { echo "FAIL: the relaunch sync did not re-stage the host config"; exit 1; }
           for f in "${store}/content/probe.db" \
                    "${root}/context-mode/sessions/probe.db" \
-                   "${root}/context-mode/memory/probe.md"; do
+                   "${memory}/probe.md"; do
             [ -f "${f}" ] || { echo "FAIL: ${f} did not survive the relaunch sync"; exit 1; }
           done
           echo "STORES_SURVIVE_RELAUNCH_OK"

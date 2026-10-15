@@ -34,6 +34,27 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "match=pass"
 
+  - name: .headroom is ignored and kept, .codegraph only ignored
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          # Headroom memory an older RiotBox let land in the overlay: hidden
+          # from review AND never applied or discarded (overlay_path_kept), so
+          # it cannot reach the project the way a copied-through index does.
+          for p in .headroom .headroom/memory.db .headroom/memories/projects/x/memory.db .wh..headroom; do
+            overlay_path_ignored "${p}" || { echo "FAIL: ${p} not ignored"; exit 1; }
+            overlay_path_kept "${p}" || { echo "FAIL: ${p} not kept"; exit 1; }
+          done
+          for p in sub/.headroom/memory.db .headroomx .codegraph .codegraph/codegraph.db real.txt; do
+            if overlay_path_kept "${p}"; then echo "FAIL: ${p} kept"; exit 1; fi
+          done
+          if overlay_path_ignored "sub/.headroom/memory.db"; then echo "FAIL: nested .headroom hidden"; exit 1; fi
+          echo "kept=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "kept=pass"
+
   - name: predicate matches the whiteout form at the first component only
     steps:
       - type: exec

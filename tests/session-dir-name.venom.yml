@@ -1,17 +1,18 @@
-name: session directory naming (hashed for multi-project to fit NAME_MAX)
+name: session directory naming (hashed per project set, within NAME_MAX)
 vars:
   root: "."
   riotbox_dir: "{{.root}}"
 
-# Pins the shape of resolve_projects() in mount-projects.sh. The
-# multi-project session dir basename must fit within Linux's 255-byte
-# NAME_MAX so mkdir -p succeeds on every supported filesystem, must be
-# deterministic across argument ordering, and must share its hash suffix
-# with the container name so a project set carries a single identity
-# across the on-disk store and the runtime container. The single-project
-# case keeps the human-readable path-mangled key so list-sessions output
-# and the test helpers in tests/lib/ remain decodable by reversing the
-# `s|/|-|g` mangling.
+# Pins the shape of resolve_projects() in mount-projects.sh. Every session
+# key is a readable prefix plus "-" and the first 16 hex characters of the
+# SHA-256 of the canonical project set (the real paths, sorted bytewise, each
+# followed by a NUL byte), so two different sets never share a session dir.
+# The readable prefix is the path with "/" mapped to "-" for one project, and
+# "<first basename>-<N>more" for a set; it is trimmed so the key fits Linux's
+# 255-byte NAME_MAX and mkdir -p succeeds on every supported filesystem. The
+# key is deterministic across argument ordering, and a set's container name
+# carries the same hash, so a project set has a single identity across the
+# on-disk store and the runtime container.
 
 testcases:
   - name: multi-project session dir fits within NAME_MAX and mkdir succeeds
@@ -90,10 +91,6 @@ testcases:
               mkdir -p "${BASE}/${d}"
           done
           export XDG_DATA_HOME="${STORE}"
-          # Force the running-container probe to return empty so single-
-          # project disambiguation does not run here (irrelevant — these are
-          # multi-project — but keeps the test hermetic).
-          export CONTAINER_CMD=true
           # shellcheck disable=SC1091
           source "{{.riotbox_dir}}/scripts/mount-projects.sh"
           set -- "${BASE}/alpha" "${BASE}/bravo" "${BASE}/charlie" \
@@ -105,8 +102,10 @@ testcases:
           s_name="$(basename "${RIOTBOX_SESSION_DIR}")"
           echo "CONTAINER=${c_name}"
           echo "SESSION=${s_name}"
-          c_hash="$(printf '%s' "${c_name}" | grep -oE '[0-9a-f]{8}$' || true)"
-          s_hash="$(printf '%s' "${s_name}" | grep -oE '[0-9a-f]{8}$' || true)"
+          # The container name ends in a random suffix after the set hash.
+          c_hash="$(printf '%s' "${c_name}" | grep -oE -- '-[0-9a-f]{16}-[0-9a-f]{8}$' || true)"
+          c_hash="${c_hash%-*}"
+          s_hash="$(printf '%s' "${s_name}" | grep -oE -- '-[0-9a-f]{16}$' || true)"
           echo "C_HASH=${c_hash}"
           echo "S_HASH=${s_hash}"
           if [ -n "${c_hash}" ] && [ "${c_hash}" = "${s_hash}" ]; then
@@ -118,12 +117,13 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "HASH_SHARED"
 
-  - name: single-project session dir retains the path-mangled key
+  - name: single-project session key is the path-mangled prefix plus the set hash
     steps:
       - type: exec
         script: |
           set -euo pipefail
           BASE="$(mktemp -d)"
+          BASE="$(cd "${BASE}" && pwd -P)"
           STORE="$(mktemp -d)"
           trap 'rm -rf "${BASE}" "${STORE}"' EXIT
           mkdir -p "${BASE}/myproject"
@@ -132,13 +132,221 @@ testcases:
           source "{{.riotbox_dir}}/scripts/mount-projects.sh"
           resolve_projects "${BASE}/myproject"
           name="$(basename "${RIOTBOX_SESSION_DIR}")"
-          expected="$(printf '%s\n' "${BASE}/myproject" | sed 's|/|-|g; s|^-||')"
+          prefix="$(printf '%s\n' "${BASE}/myproject" | sed 's|/|-|g; s|^-||')"
+          hash="$(printf '%s\0' "${BASE}/myproject" | sha256sum | cut -c1-16)"
+          expected="${prefix}-${hash}"
           echo "NAME=${name}"
           echo "EXPECTED=${expected}"
           if [ "${name}" = "${expected}" ]; then echo "MATCH"; else echo "MISMATCH"; fi
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "MATCH"
+          - result.systemout ShouldNotContainSubstring "MISMATCH"
+
+  - name: multi-project session key is first basename, count and the set hash
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          BASE="$(cd "${BASE}" && pwd -P)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/b/lib" "${BASE}/a/app" "${BASE}/c/web"
+          export XDG_DATA_HOME="${STORE}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          resolve_projects "${BASE}/b/lib ${BASE}/c/web ${BASE}/a/app"
+          name="$(basename "${RIOTBOX_SESSION_DIR}")"
+          hash="$(printf '%s\0' "${BASE}/a/app" "${BASE}/b/lib" "${BASE}/c/web" | sha256sum | cut -c1-16)"
+          expected="app-2more-${hash}"
+          echo "NAME=${name}"
+          echo "EXPECTED=${expected}"
+          if [ "${name}" = "${expected}" ]; then echo "MATCH"; else echo "MISMATCH"; fi
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MATCH"
+          - result.systemout ShouldNotContainSubstring "MISMATCH"
+
+  - name: a project named twice keys as the project once
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          BASE="$(cd "${BASE}" && pwd -P)"
+          trap 'rm -rf "${BASE}"' EXIT
+          mkdir -p "${BASE}/a" "${BASE}/b"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          [ "$(session_key "${BASE}/a" "${BASE}/a")" = "$(session_key "${BASE}/a")" ] \
+            || { echo "FAIL: /a /a keys differently from /a"; exit 1; }
+          k="$(session_key "${BASE}/b" "${BASE}/a" "${BASE}/b")"
+          [ "${k}" = "$(session_key "${BASE}/a" "${BASE}/b")" ] || { echo "FAIL: a repeated member changes the key: ${k}"; exit 1; }
+          case "${k}" in a-1more-*) ;; *) echo "FAIL: a repeated member is counted: ${k}"; exit 1 ;; esac
+          echo "DEDUPE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DEDUPE_OK"
+
+  - name: resolve_projects merges a project named twice, also through a link, and keeps the list as given for the old key
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          BASE="$(cd "${BASE}" && pwd -P)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/a" "${BASE}/b"
+          ln -s "${BASE}/a" "${BASE}/link"
+          export XDG_DATA_HOME="${STORE}" ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD=true
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_OVERLAY RIOTBOX_HEADROOM
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          resolve_projects "${BASE}/a"
+          single_key="$(basename "${RIOTBOX_SESSION_DIR}")"
+          resolve_projects "${BASE}/a ${BASE}/link"
+          [ "${#PROJECT_DIRS[@]}" -eq 1 ] && [ "${PROJECT_DIRS[0]}" = "${BASE}/a" ] || { echo "FAIL: PROJECT_DIRS=${PROJECT_DIRS[*]}"; exit 1; }
+          [ "${PROJECT_SUMMARY}" = "${BASE}/a" ] || { echo "FAIL: summary ${PROJECT_SUMMARY}"; exit 1; }
+          [ "$(basename "${RIOTBOX_SESSION_DIR}")" = "${single_key}" ] || { echo "FAIL: key"; exit 1; }
+          [ "${PROJECT_DIRS_GIVEN[*]}" = "${BASE}/a ${BASE}/a" ] || { echo "FAIL: the given list is lost: ${PROJECT_DIRS_GIVEN[*]}"; exit 1; }
+          setup_projects "${BASE}/a ${BASE}/a" 2>/dev/null
+          [ "$(printf '%s\n' ${PROJECT_VOLUME_FLAGS} | grep -c ':/workspace')" -eq 1 ] || { echo "FAIL: mounted twice: ${PROJECT_VOLUME_FLAGS}"; exit 1; }
+          case "${CONTAINER_NAME}" in *more*) echo "FAIL: set-form name ${CONTAINER_NAME}"; exit 1 ;; esac
+          # Order is kept, the second mention dropped.
+          resolve_projects "${BASE}/b ${BASE}/a ${BASE}/b"
+          [ "${PROJECT_DIRS[*]}" = "${BASE}/b ${BASE}/a" ] && [ "${PROJECT_SUMMARY}" = "2 projects: b, a" ] \
+            || { echo "FAIL: set: ${PROJECT_DIRS[*]} / ${PROJECT_SUMMARY}"; exit 1; }
+          echo "RESOLVE_DEDUPE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RESOLVE_DEDUPE_OK"
+
+  - name: single projects whose paths differ only by a dash for a slash get different session dirs
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          BASE="$(cd "${BASE}" && pwd -P)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/t/a-b/app" "${BASE}/t-a/b/app"
+          export XDG_DATA_HOME="${STORE}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          resolve_projects "${BASE}/t/a-b/app"
+          s1="${RIOTBOX_SESSION_DIR}" t1="${RIOTBOX_STATE_DIR}"
+          resolve_projects "${BASE}/t-a/b/app"
+          s2="${RIOTBOX_SESSION_DIR}" t2="${RIOTBOX_STATE_DIR}"
+          echo "S1=${s1}"
+          echo "S2=${s2}"
+          [ "${s1}" != "${s2}" ] || { echo "SHARED_SESSION_DIR"; exit 1; }
+          [ "${t1}" != "${t2}" ] || { echo "SHARED_STATE_DIR"; exit 1; }
+          echo "DISTINCT"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DISTINCT"
+
+  - name: project sets whose paths differ only by a dash for a slash get different session dirs and container names
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          BASE="$(cd "${BASE}" && pwd -P)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          mkdir -p "${BASE}/t/a-b/app" "${BASE}/t/a-b/lib" "${BASE}/t-a/b/app" "${BASE}/t-a/b/lib"
+          export XDG_DATA_HOME="${STORE}"
+          export CONTAINER_CMD=true
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          resolve_projects "${BASE}/t/a-b/app ${BASE}/t/a-b/lib"
+          s1="${RIOTBOX_SESSION_DIR}" t1="${RIOTBOX_STATE_DIR}"
+          generate_container_name "${PROJECT_DIRS[@]}"
+          c1="${CONTAINER_NAME}"
+          resolve_projects "${BASE}/t-a/b/app ${BASE}/t-a/b/lib"
+          s2="${RIOTBOX_SESSION_DIR}" t2="${RIOTBOX_STATE_DIR}"
+          generate_container_name "${PROJECT_DIRS[@]}"
+          c2="${CONTAINER_NAME}"
+          echo "S1=${s1} C1=${c1}"
+          echo "S2=${s2} C2=${c2}"
+          [ "${s1}" != "${s2}" ] || { echo "SHARED_SESSION_DIR"; exit 1; }
+          [ "${t1}" != "${t2}" ] || { echo "SHARED_STATE_DIR"; exit 1; }
+          # Without the random suffix, which would make any two names differ.
+          [ "${c1%-*}" != "${c2%-*}" ] || { echo "SHARED_CONTAINER_NAME"; exit 1; }
+          echo "DISTINCT"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DISTINCT"
+
+  - name: a single-project key whose path is near NAME_MAX is trimmed from the front and keeps its hash
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          BASE="$(cd "${BASE}" && pwd -P)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          # Four 60-byte components: the mangled path alone is over 240
+          # bytes, so with the 17-byte hash suffix it would pass NAME_MAX.
+          seg="$(printf 'x%.0s' $(seq 60))"
+          deep="${BASE}/${seg}1/${seg}2/${seg}3/${seg}4-leaf"
+          mkdir -p "${deep}"
+          export XDG_DATA_HOME="${STORE}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          resolve_projects "${deep}"
+          name="$(basename "${RIOTBOX_SESSION_DIR}")"
+          hash="$(printf '%s\0' "${deep}" | sha256sum | cut -c1-16)"
+          echo "LEN=$(LC_ALL=C; echo "${#name}")"
+          [ "$(LC_ALL=C; echo "${#name}")" -le 255 ] || { echo "LEN_OVER"; exit 1; }
+          case "${name}" in
+          *"4-leaf-${hash}") echo "TAIL_KEPT" ;;
+          *) echo "TAIL_LOST ${name}"; exit 1 ;;
+          esac
+          case "${name}" in
+          [a-zA-Z0-9]*) echo "STARTS_ALNUM" ;;
+          *) echo "BAD_START ${name}"; exit 1 ;;
+          esac
+          mkdir -p "${RIOTBOX_SESSION_DIR}" && echo "MKDIR_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "TAIL_KEPT"
+          - result.systemout ShouldContainSubstring "STARTS_ALNUM"
+          - result.systemout ShouldContainSubstring "MKDIR_OK"
+
+  - name: a set whose first basename is near NAME_MAX keeps its count and hash within NAME_MAX
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          BASE="$(mktemp -d)"
+          BASE="$(cd "${BASE}" && pwd -P)"
+          STORE="$(mktemp -d)"
+          trap 'rm -rf "${BASE}" "${STORE}"' EXIT
+          long="a$(printf 'y%.0s' $(seq 249))"
+          mkdir -p "${BASE}/${long}" "${BASE}/zzz"
+          export XDG_DATA_HOME="${STORE}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          resolve_projects "${BASE}/${long} ${BASE}/zzz"
+          name="$(basename "${RIOTBOX_SESSION_DIR}")"
+          hash="$(printf '%s\0' "${BASE}/${long}" "${BASE}/zzz" | sha256sum | cut -c1-16)"
+          echo "NAME=${name}"
+          [ "${#name}" -le 255 ] || { echo "LEN_OVER"; exit 1; }
+          case "${name}" in
+          ay*"-1more-${hash}") echo "SHAPE_OK" ;;
+          *) echo "SHAPE_BAD"; exit 1 ;;
+          esac
+          mkdir -p "${RIOTBOX_SESSION_DIR}" && echo "MKDIR_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SHAPE_OK"
+          - result.systemout ShouldContainSubstring "MKDIR_OK"
 
   - name: resolve_projects exits non-zero with clear error for nonexistent path
     steps:

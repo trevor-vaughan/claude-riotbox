@@ -1,6 +1,6 @@
 # Invariants of `scripts/mount-projects.sh`
 
-Seven things this script must keep doing. Each was a bug once, and each is cheap to
+Eight things this script must keep doing. Each was a bug once, and each is cheap to
 reintroduce by a refactor that looks like a simplification. Read this before
 changing the file.
 
@@ -82,6 +82,15 @@ the Context Mode ledger are not session-created and stay where they are.
   concurrent launches and overlay commands would otherwise overwrite each
   other's records. `setup_projects` runs the migration before any `-v` flag is
   built and skips it under `RIOTBOX_DRY_RUN=1`.
+- `.migrated` also holds one record that is not a migration:
+  `project-headroom-notice`. A single-project launch with `RIOTBOX_HEADROOM=1`
+  writes it, under the same lock, once `notice_project_headroom` has looked
+  for headroom memory an older release left in `<project>/.headroom`. The
+  record is written whether or not a notice printed, so the check runs once
+  per session. A launch with headroom off writes nothing, so the first
+  headroom launch still checks. The migration passes skip the record, since
+  they read only the names in `SESSION_STATE_MIGRATIONS`. The notice is
+  advisory: if the check or the record fails, the launch warns and goes on.
 - `resolve_projects` refuses a project that resolves to `/` (compared with
   `-ef`): its key would be empty and its session dir the data dir itself. A
   project that is an ancestor of the data dir (`$HOME`) is not refused; it
@@ -98,6 +107,25 @@ the Context Mode ledger are not session-created and stay where they are.
 `tests/session-state.venom.yml` ("with every feature on, no mount source except
 the session dir itself lies inside the session dir") and the `host_sync` case in
 `tests/agents.venom.yml` fail if a source moves back inside.
+
+## Locks, in the order they may be taken
+
+1. `${RIOTBOX_STATE_ROOT}/.migrate.lock`, the state root's: the key move and
+   `riotbox overlays`' session migration.
+2. `<state dir>/.migrate.lock`, the session's: the state migration, the
+   project record, the headroom notice.
+3. `<state dir>/.sync.lock`: a launch's `host_sync`, taken only after 2 is
+   released, so the two never nest.
+4. `<state dir>/.overlay-<name>.lock`: one `overlay-accept` or
+   `overlay-reject` at a time per overlay (`_overlay_locked` in
+   `scripts/overlay.sh`). Taken after `resolve_overlay` has released 1 and 2,
+   and never held while taking any other; a second command refuses at once
+   rather than waiting. Without it, one command could restore or delete the
+   other's live `<name>.rejecting.*` dir or accept snapshot.
+
+Inside a container, the headroom helpers take their own start lock in
+`/tmp/riotbox-headroom-<uid>/proxy.lock`, which is container-local and
+meets none of these.
 
 ## `host_sync` runs under the per-project sync lock (introduced 2026-10-13)
 
@@ -118,6 +146,48 @@ it into a mounted subdir. `flock` is a host prerequisite for this reason, and
 (`scripts/preflight.sh`). `tests/session-state.venom.yml` ("concurrent
 setup_projects runs of one project all succeed") is the regression test: 20
 rounds of two parallel runs, which failed 16 of 40 runs without the lock.
+
+## One injective session key per project set (introduced 2026-10-14)
+
+`session_key` is the only derivation of a session's key; `resolve_projects`
+builds `RIOTBOX_SESSION_DIR` and `RIOTBOX_STATE_DIR` from it, and
+`libexec/launch.sh` labels containers `riotbox.session=<basename of the session
+dir>`. The key is a readable prefix plus `-` and `session_set_hash`: the first
+16 hex of the SHA-256 of the real paths, sorted bytewise with duplicates dropped (`LC_ALL=C sort -zu`),
+each NUL-terminated. The prefix is the path with `/` mapped to `-` for one
+project and `<first_seg>-<n_more>more` for a set
+(`compute_multi_project_identity`, which a set's container name also uses), and
+is trimmed so the key fits NAME_MAX (255 bytes). The prefix is for people only:
+never decode a key back into paths, and never re-derive one in a test (call
+`session_key`). The keys before this mapped `/` to `-` and nothing more, so
+`/t/a-b/app` and `/t-a/b/app` shared a session; a set's 8-hex hash was taken
+over those mangled paths and collided the same way.
+
+Container names are not keys. `generate_container_name` gives each launch
+`riotbox-<basename>-<rand8>` (one project) or
+`riotbox-<first_seg>-<n_more>more-<hash>-<rand8>` (a set). The readable part
+is trimmed so the name fits 64 characters, and `<rand8>` is 8 random hex
+digits on every launch. It never asks the engine which names are taken. Two
+concurrent launches could both find a name free and then clash on `--name`,
+since the gap between naming and `run` includes the TTY prompts. So never
+look a session's container up by name: use the `riotbox.session` label, or
+the mounts, as `running_session_mounts` in `scripts/lib/running-sessions.sh`
+does. That also catches v0.5.3's unlabelled `riotbox-<dir>` containers.
+
+`legacy_session_key` reproduces those old keys byte for byte, in the user's
+locale, and exists only for `migrate_session_key`. That move runs before
+anything touches the session dirs in `setup_projects` (not under
+`RIOTBOX_DRY_RUN`), in `libexec/launch.sh` before the overlay snapshot check, in
+both overlay resolvers, and in `session-migrate`, and in `session-remove` and
+`session-reset` by path. A new command that resolves a set to its session must
+call it too. It moves the old pair only when the old record, or for a
+record-less session the old `.projects`, names the launched set; it writes no
+record (only a launch may let `overlay-accept` act); it moves the dir holding
+the evidence last so an interrupted move can finish; and it refuses while a
+running container mounts the old dirs. Backup stores
+(`libexec/checkpoint.sh`) keep the unhashed mangling deliberately: each store
+records its project in `remote.origin.url`, and a push into a store whose origin
+differs is refused.
 
 ## Symlink canonicalization invariant
 

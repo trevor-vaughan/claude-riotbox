@@ -1095,10 +1095,11 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
 
-  # Upstream's own default puts opencode's Context Mode stores at
-  # ~/.config/opencode/context-mode, so a host that runs Context Mode has one.
-  # It is host data (verbatim tool output from host sessions), not config, and
-  # the session keeps its own stores under the data mount.
+  # Upstream's own defaults put opencode's Context Mode stores at
+  # ~/.config/opencode/context-mode and its auto-memory at
+  # ~/.config/opencode/memory, so a host that runs Context Mode has both. They
+  # are host data (verbatim tool output and memory from every host project),
+  # not config, and the session keeps its own under the data mount.
   - name: sync-opencode-settings does not copy the host's Context Mode stores
     steps:
       - type: exec
@@ -1109,6 +1110,8 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           mkdir -p "${FAKE_HOME}/.config/opencode/context-mode/sessions"
           printf 'host\n' > "${FAKE_HOME}/.config/opencode/context-mode/sessions/host.db"
+          mkdir -p "${FAKE_HOME}/.config/opencode/memory/0123abcd"
+          printf 'host memory\n' > "${FAKE_HOME}/.config/opencode/memory/0123abcd/note.md"
           session_dir="${TEST_DIR}/session"
           mkdir -p "${session_dir}"
           "${RIOTBOX_DIR}/agents/opencode/sync-settings.sh" \
@@ -1121,6 +1124,12 @@ testcases:
           fi
           if test -e "${session_dir}/opencode-data/context-mode"; then
             echo "FAIL: host Context Mode stores copied into opencode-data"; exit 1
+          fi
+          if test -e "${session_dir}/opencode-config/memory"; then
+            echo "FAIL: host Context Mode auto-memory copied into opencode-config"; exit 1
+          fi
+          if test -e "${session_dir}/opencode-data/memory"; then
+            echo "FAIL: host Context Mode auto-memory copied into opencode-data"; exit 1
           fi
         assertions:
           - result.code ShouldEqual 0
@@ -1547,7 +1556,7 @@ testcases:
               run "respond with 'ok' and exit" )
 
           # Locate the state dir (matches mangle in mount-projects.sh)
-          SESSION_KEY="$(printf '%s\n' "${REPO}" | sed 's|/|-|g; s|^-||')"
+          SESSION_KEY="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${REPO}")"
           STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox-state/${SESSION_KEY}"
           test -d "${STATE_DIR}/opencode-config"
           test -d "${STATE_DIR}/opencode-data"

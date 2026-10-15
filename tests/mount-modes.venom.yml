@@ -129,8 +129,8 @@ testcases:
           setup_projects "${BASE}/proj"
           echo "FLAGS=${PROJECT_VOLUME_FLAGS}"
           # Dry run creates neither the session dir nor the state dir. (Not
-          # "STORE is empty": the container-name probe runs podman, which
-          # keeps its own storage under XDG_DATA_HOME.)
+          # "STORE is empty": anything else the setup runs may keep its own
+          # state under XDG_DATA_HOME.)
           if [ -e "${STORE}/riotbox" ] || [ -e "${STORE}/riotbox-state" ]; then
               echo "TREE_LEAKED"
           else
@@ -373,7 +373,7 @@ testcases:
           # Session dir must NOT have been created on a failed launch
           # The session key for a single canonical path is the path with
           # / replaced by - and leading - stripped.
-          KEY="$(printf '%s\n' "${A}" | sed 's|/|-|g; s|^-||')"
+          KEY="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${A}")"
           if [ -d "${STORE}/riotbox/${KEY}" ]; then
               echo "SESSION_DIR_LEAKED"
           else
@@ -414,7 +414,7 @@ testcases:
           ( setup_projects "${A}" ) 2>"${STORE}/err.log"
           rc=$?
           echo "RC=${rc}"
-          KEY="$(printf '%s\n' "${A}" | sed 's|/|-|g; s|^-||')"
+          KEY="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${A}")"
           if [ -e "${STORE}/riotbox-state/${KEY}/overlay" ]; then
               echo "OVERLAY_LEAKED"
           else

@@ -412,7 +412,7 @@ testcases:
           PROJECT="${TEST_DIR}/myproject"
           mkdir -p "${PROJECT}"
 
-          session_key="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+          session_key="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${PROJECT}")"
           export XDG_DATA_HOME="${TEST_DIR}/data"
           SESSION="${XDG_DATA_HOME}/riotbox/${session_key}"
           mkdir -p "${SESSION}"
@@ -737,6 +737,518 @@ testcases:
           - result.systemout ShouldContainSubstring "No overlay changes to discard"
           - result.systemout ShouldContainSubstring "reject_index_only_noop=pass"
 
+  - name: Accept never copies .headroom into the project and leaves it in the overlay
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          # What an older RiotBox's headroom wrote into an overlay session.
+          mkdir -p "${OVERLAY}/upper/.headroom/memories/projects/workspace-0123456789abcdef"
+          echo old-memory > "${OVERLAY}/upper/.headroom/memory.db"
+          echo db > "${OVERLAY}/upper/.headroom/memories/projects/workspace-0123456789abcdef/memory.db"
+          echo "real" > "${OVERLAY}/upper/real.txt"
+          out="$(echo y | "{{.riotbox_dir}}/scripts/overlay.sh" accept "${PROJECT}")"
+          printf '%s\n' "${out}"
+          [ -f "${PROJECT}/real.txt" ] || { echo "FAIL: real change not applied"; exit 1; }
+          [ ! -e "${PROJECT}/.headroom" ] || { echo "FAIL: .headroom reached the project"; exit 1; }
+          printf '%s\n' "${out}" | grep -q 'headroom' && { echo "FAIL: .headroom in the review"; exit 1; }
+          [ "$(cat "${OVERLAY}/upper/.headroom/memory.db")" = old-memory ] \
+            && [ -f "${OVERLAY}/upper/.headroom/memories/projects/workspace-0123456789abcdef/memory.db" ] \
+            || { echo "FAIL: .headroom not kept in the overlay"; exit 1; }
+          [ ! -e "${OVERLAY}/upper/real.txt" ] || { echo "FAIL: applied change left in the overlay"; exit 1; }
+          ls -d "${OVERLAY}".accepting.* 2>/dev/null && { echo "FAIL: snapshot left behind"; exit 1; }
+          echo "accept_headroom=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "accept_headroom=pass"
+
+  - name: Accept does not delete the project's own .headroom through a whiteout
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${PROJECT}/.headroom"
+          echo theirs > "${PROJECT}/.headroom/memory.db"
+          : > "${OVERLAY}/upper/.wh..headroom"
+          echo "real" > "${OVERLAY}/upper/real.txt"
+          echo y | "{{.riotbox_dir}}/scripts/overlay.sh" accept "${PROJECT}"
+          [ -f "${PROJECT}/real.txt" ] || { echo "FAIL: real change not applied"; exit 1; }
+          [ "$(cat "${PROJECT}/.headroom/memory.db")" = theirs ] || { echo "FAIL: project .headroom deleted"; exit 1; }
+          echo "accept_headroom_whiteout=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "accept_headroom_whiteout=pass"
+
+  - name: Reject discards real changes but leaves .headroom in the overlay
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${OVERLAY}/upper/.headroom"
+          echo old-memory > "${OVERLAY}/upper/.headroom/memory.db"
+          echo "real" > "${OVERLAY}/upper/real.txt"
+          : > "${OVERLAY}/upper/.wh..wh..opq"
+          echo "workdata" > "${OVERLAY}/work/something"
+          "{{.riotbox_dir}}/scripts/overlay.sh" reject --force "${PROJECT}"
+          [ "$(cat "${OVERLAY}/upper/.headroom/memory.db")" = old-memory ] || { echo "FAIL: .headroom discarded"; exit 1; }
+          [ "$(ls -A "${OVERLAY}/upper")" = .headroom ] || { echo "FAIL: upper holds more than .headroom"; ls -A "${OVERLAY}/upper"; exit 1; }
+          [ -z "$(ls -A "${OVERLAY}/work")" ] || { echo "FAIL: work not emptied"; exit 1; }
+          [ "$(ls -A "${OVERLAY}")" = "$(printf 'upper\nwork')" ] || { echo "FAIL: stray entries"; ls -A "${OVERLAY}"; exit 1; }
+          echo "reject_headroom=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Overlay data discarded"
+          - result.systemout ShouldContainSubstring "reject_headroom=pass"
+
+  - name: Diff hides .headroom and says accept and reject leave it in the overlay
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${OVERLAY}/upper/.headroom" "${OVERLAY}/upper/.codegraph"
+          echo m > "${OVERLAY}/upper/.headroom/memory.db"
+          echo m > "${OVERLAY}/upper/.headroom/memory_graph.db"
+          echo i > "${OVERLAY}/upper/.codegraph/codegraph.db"
+          echo "real" > "${OVERLAY}/upper/real.txt"
+          out="$("{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJECT}")"
+          printf '%s\n' "${out}"
+          printf '%s\n' "${out}" | grep -qE '^[AMD]  .*headroom' && { echo "FAIL: .headroom in diff"; exit 1; }
+          grep -qF "Note: 2 file(s) under .headroom/ not shown (headroom memory)." <<<"${out}" || { echo "FAIL: no .headroom note"; exit 1; }
+          grep -qF "never copied to the project" <<<"${out}" || { echo "FAIL: note does not say it never reaches the project"; exit 1; }
+          grep -qF "Note: 1 file(s) under .codegraph/ not shown (derived cache)." <<<"${out}" || { echo "FAIL: .codegraph note wrong"; exit 1; }
+          echo "diff_headroom=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "diff_headroom=pass"
+
+  - name: A .headroom-only overlay is not pending and accept leaves it alone
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${OVERLAY}/upper/.headroom"
+          echo m > "${OVERLAY}/upper/.headroom/memory.db"
+          rc=0; out="$("{{.riotbox_dir}}/scripts/overlay.sh" list)" || rc=$?
+          [ "${rc}" -eq 1 ] && grep -q "No pending overlays." <<<"${out}" || { echo "FAIL: listed as pending"; printf '%s\n' "${out}"; exit 1; }
+          "{{.riotbox_dir}}/scripts/overlay.sh" accept --force "${PROJECT}"
+          [ ! -e "${PROJECT}/.headroom" ] && [ -f "${OVERLAY}/upper/.headroom/memory.db" ] || { echo "FAIL: accept touched it"; exit 1; }
+          echo "headroom_only=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "No overlay changes to apply"
+          - result.systemout ShouldContainSubstring "headroom_only=pass"
+
+  - name: Reject never moves kept entries through links a session planted in the overlay dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          VICTIM="${TEST_DIR}/victim" VICTIM2="${TEST_DIR}/victim2"
+          mkdir -p "${VICTIM}" "${VICTIM2}"
+          echo precious > "${VICTIM}/keep"
+          echo precious > "${VICTIM2}/keep"
+          mkdir -p "${OVERLAY}/upper/.headroom"
+          echo m > "${OVERLAY}/upper/.headroom/memory.db"
+          echo real > "${OVERLAY}/upper/real.txt"
+          # The overlay dir is mounted read-write at /mnt/overlay, so a session
+          # can plant names beside upper/. Sourcing overlay.sh keeps this
+          # shell's $$, so the planted temp name is the one reject would pick.
+          ln -s "${VICTIM}" "${OVERLAY}/upper.new.$$"
+          rm -rf "${OVERLAY}/work"
+          ln -s "${VICTIM2}" "${OVERLAY}/work"
+          source "{{.riotbox_dir}}/scripts/overlay.sh"
+          overlay_reject --force "${PROJECT}"
+          [ "$(ls -A "${VICTIM}")" = keep ] && [ "$(cat "${VICTIM}/keep")" = precious ] \
+            || { echo "FAIL: victim changed"; ls -lA "${VICTIM}"; exit 1; }
+          [ "$(ls -A "${VICTIM2}")" = keep ] || { echo "FAIL: work victim changed"; exit 1; }
+          [ -d "${OVERLAY}/upper" ] && [ ! -L "${OVERLAY}/upper" ] || { echo "FAIL: upper is not a real dir"; ls -la "${OVERLAY}"; exit 1; }
+          [ -d "${OVERLAY}/work" ] && [ ! -L "${OVERLAY}/work" ] || { echo "FAIL: work is not a real dir"; exit 1; }
+          [ -f "${OVERLAY}/upper/.headroom/memory.db" ] && [ ! -e "${OVERLAY}/upper/real.txt" ] \
+            || { echo "FAIL: reject result wrong"; ls -lA "${OVERLAY}/upper"; exit 1; }
+          echo "REJECT_PLANTED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REJECT_PLANTED_OK"
+
+  - name: A failed move of .headroom after an accept leaves nothing pending and says where it is
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${OVERLAY}/upper/.headroom"
+          echo old-memory > "${OVERLAY}/upper/.headroom/memory.db"
+          echo real > "${OVERLAY}/upper/real.txt"
+          source "{{.riotbox_dir}}/scripts/overlay.sh"
+          # The move back into the new upper fails (a full disk, say); any
+          # other move still works.
+          eval "_orig_move_kept() $(declare -f _overlay_move_kept | tail -n +2)"
+          _overlay_move_kept() { [[ "$2" != */upper ]] || return 1; _orig_move_kept "$@"; }
+          overlay_accept --force "${PROJECT}" 2>"${TEST_DIR}/err"
+          cat "${TEST_DIR}/err"
+          [ -f "${PROJECT}/real.txt" ] && [ ! -e "${PROJECT}/.headroom" ] || { echo "FAIL: apply result wrong"; exit 1; }
+          ls -d "${OVERLAY}".accepting.* 2>/dev/null && { echo "FAIL: stranded snapshot left"; exit 1; }
+          if overlay_state_pending "${STATE}"; then echo "FAIL: session reads as pending"; exit 1; fi
+          aside="$(sed -n 's/^Warning: .headroom from the overlay is in \(.*\);.*/\1/p' "${TEST_DIR}/err")"
+          [ -n "${aside}" ] && [ "$(cat "${aside}/.headroom/memory.db")" = old-memory ] \
+            || { echo "FAIL: .headroom not set aside where the warning says"; exit 1; }
+          [ "$(ls -A "${aside}")" = .headroom ] || { echo "FAIL: aside holds more than .headroom"; exit 1; }
+          echo "ACCEPT_KEEP_FAIL_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ACCEPT_KEEP_FAIL_OK"
+
+  - name: The last-resort fallback after an accept nests the snapshot so it never reads as pending
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${OVERLAY}/upper/.headroom" "${OVERLAY}/upper/upper"
+          echo old-memory > "${OVERLAY}/upper/.headroom/memory.db"
+          # The project has a top-level upper/ of its own, so a snapshot left
+          # at the top of an overlay/ sibling would look like an overlay dir.
+          echo change > "${OVERLAY}/upper/upper/file.txt"
+          source "{{.riotbox_dir}}/scripts/overlay.sh"
+          # Both ways of keeping .headroom fail; only the rename is left.
+          _overlay_move_kept() { return 1; }
+          overlay_accept --force "${PROJECT}" 2>"${TEST_DIR}/err"
+          cat "${TEST_DIR}/err"
+          [ "$(cat "${PROJECT}/upper/file.txt")" = change ] || { echo "FAIL: change not applied"; exit 1; }
+          ls -d "${OVERLAY}".accepting.* 2>/dev/null && { echo "FAIL: stranded snapshot left"; exit 1; }
+          applied=("${OVERLAY}".applied.*)
+          [ "${#applied[@]}" -eq 1 ] && [ -d "${applied[0]}/data/.headroom" ] \
+            || { echo "FAIL: snapshot not nested under data/"; ls -la "${STATE}/overlay"; exit 1; }
+          [ "$(ls -A "${applied[0]}")" = data ] || { echo "FAIL: fallback dir holds more than data/"; exit 1; }
+          grep -qF "${applied[0]}/data" "${TEST_DIR}/err" || { echo "FAIL: warning does not name it"; exit 1; }
+          if overlay_state_pending "${STATE}"; then echo "FAIL: session reads as pending"; exit 1; fi
+          rc=0; out="$("{{.riotbox_dir}}/scripts/overlay.sh" list)" || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "FAIL: list shows a pending overlay"; printf '%s\n' "${out}"; exit 1; }
+          echo "APPLIED_FALLBACK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "APPLIED_FALLBACK_OK"
+
+  - name: Reject refuses when a session starts while it waits for confirmation
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "new" > "${OVERLAY}/upper/file.txt"
+          echo "c0ffee123456 ${OVERLAY} true" > "${STUB_RUNNING}"
+          rc=0
+          echo y | STUB_RUNNING_FROM_CALL=2 "{{.riotbox_dir}}/scripts/overlay.sh" reject "${PROJECT}" >/dev/null 2>"${TEST_DIR}/err" || rc=$?
+          [ "${rc}" -ne 0 ] || { echo "FAIL: exited 0"; exit 1; }
+          [ "$(cat "${STUB_PS_CALLS}")" -ge 2 ] || { echo "FAIL: no second check"; exit 1; }
+          grep -qF 'still running' "${TEST_DIR}/err" || { echo "FAIL: no message"; cat "${TEST_DIR}/err"; exit 1; }
+          [ "$(cat "${OVERLAY}/upper/file.txt")" = "new" ] || { echo "FAIL: overlay discarded"; exit 1; }
+          echo "REJECT_RECHECK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REJECT_RECHECK_OK"
+
+  - name: Reject removes everything a session planted in the overlay dir without following it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          VICTIM="${TEST_DIR}/victim"
+          mkdir -p "${VICTIM}"; echo precious > "${VICTIM}/keep"
+          echo real > "${OVERLAY}/upper/real.txt"
+          ln -s "${VICTIM}" "${OVERLAY}/upper.new.12345"
+          ln -s /nonexistent "${OVERLAY}/dangling"
+          mkdir -p "${OVERLAY}/stray/sub"; echo x > "${OVERLAY}/stray/sub/f"
+          echo x > "${OVERLAY}/note.txt"
+          "{{.riotbox_dir}}/scripts/overlay.sh" reject --force "${PROJECT}"
+          [ "$(ls -A "${OVERLAY}" | sort | tr '\n' ' ')" = "upper work " ] || { echo "FAIL: planted entries left"; ls -lA "${OVERLAY}"; exit 1; }
+          [ "$(ls -A "${VICTIM}")" = keep ] && [ "$(cat "${VICTIM}/keep")" = precious ] || { echo "FAIL: victim changed"; exit 1; }
+          echo "REJECT_CLEAN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REJECT_CLEAN_OK"
+
+  - name: A launch refuses an overlay upper or work that a session replaced with a link
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          VICTIM="${TEST_DIR}/victim"
+          for entry in upper work; do
+            rm -rf "${OVERLAY}/upper" "${OVERLAY}/work" "${VICTIM}"
+            mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work" "${VICTIM}"
+            rm -rf "${OVERLAY:?}/${entry}"
+            ln -s "${VICTIM}" "${OVERLAY}/${entry}"
+            rc=0; launch_overlay "${PROJECT}" || rc=$?
+            [ "${rc}" -ne 0 ] || { echo "FAIL: ${entry}: launch went ahead on a linked ${entry}"; exit 1; }
+            grep -qF "${OVERLAY}/${entry} is a symlink or not a directory" "${TEST_DIR}/launch.err" \
+              || { echo "FAIL: ${entry}: no refusal"; cat "${TEST_DIR}/launch.err"; exit 1; }
+            [ -z "$(ls -A "${VICTIM}")" ] && [ -L "${OVERLAY}/${entry}" ] || { echo "FAIL: ${entry}: link or victim changed"; exit 1; }
+            grep -qF "(the entry itself is removed, never followed)" "${TEST_DIR}/launch.err" \
+              || { echo "FAIL: ${entry}: hint wording"; cat "${TEST_DIR}/launch.err"; exit 1; }
+            grep -qxF "    riotbox overlay-reject $(quote_words "${PROJECT}")" "${TEST_DIR}/launch.err" \
+              || { echo "FAIL: ${entry}: the refusal does not say how to clear it"; cat "${TEST_DIR}/launch.err"; exit 1; }
+          done
+          echo "LAUNCH_REFUSES_LINK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LAUNCH_REFUSES_LINK_OK"
+
+  - name: Reject clears an upper or work a session left as a link or a file, even with nothing to discard, and unlocks the launch
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          VICTIM="${TEST_DIR}/victim"
+          for kind in dir-link dangling-link file; do
+            for entry in upper work; do
+              rm -rf "${OVERLAY}/upper" "${OVERLAY}/work" "${VICTIM}"
+              mkdir -p "${OVERLAY}/upper" "${OVERLAY}/work" "${VICTIM}"
+              echo keep > "${VICTIM}/keep"
+              rm -rf "${OVERLAY:?}/${entry}"
+              case "${kind}" in
+              dir-link) ln -s "${VICTIM}" "${OVERLAY}/${entry}" ;;
+              dangling-link) ln -s "${TEST_DIR}/nowhere" "${OVERLAY}/${entry}" ;;
+              file) echo x > "${OVERLAY}/${entry}" ;;
+              esac
+              "{{.riotbox_dir}}/scripts/overlay.sh" reject --force "${PROJECT}" >"${TEST_DIR}/out" 2>&1 \
+                || { echo "FAIL: ${kind}/${entry}: reject failed"; cat "${TEST_DIR}/out"; exit 1; }
+              grep -qF "${OVERLAY}/${entry} is a symlink or not a directory; removed it without following it" "${TEST_DIR}/out" \
+                || { echo "FAIL: ${kind}/${entry}: no notice"; cat "${TEST_DIR}/out"; exit 1; }
+              [ -d "${OVERLAY}/${entry}" ] && [ ! -L "${OVERLAY}/${entry}" ] || { echo "FAIL: ${kind}/${entry}: not a real dir again"; exit 1; }
+              [ "$(cat "${VICTIM}/keep")" = keep ] && [ "$(ls -A "${VICTIM}")" = keep ] || { echo "FAIL: ${kind}/${entry}: the target was touched"; exit 1; }
+              launch_overlay "${PROJECT}" || { echo "FAIL: ${kind}/${entry}: the launch is still locked"; cat "${TEST_DIR}/launch.err"; exit 1; }
+            done
+          done
+          echo "REJECT_CLEARS_LINK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REJECT_CLEARS_LINK_OK"
+
+  - name: Reject clears a linked upper in one project of a set
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_multi_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/victim"
+          rm -rf "${OV2}/upper"
+          ln -s "${TEST_DIR}/victim" "${OV2}/upper"
+          "{{.riotbox_dir}}/scripts/overlay.sh" reject --force "${P1}" "${P2}" >"${TEST_DIR}/out" 2>&1 \
+            || { echo "FAIL: reject failed"; cat "${TEST_DIR}/out"; exit 1; }
+          [ -d "${OV2}/upper" ] && [ ! -L "${OV2}/upper" ] || { echo "FAIL: the linked upper is still there"; cat "${TEST_DIR}/out"; exit 1; }
+          echo "REJECT_SET_LINK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REJECT_SET_LINK_OK"
+
+  - name: Reject and accept put back .headroom a killed overlay-reject left beside the overlay
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          for verb in reject accept; do
+            setup_overlay_test
+            # Where a reject killed after setting .headroom aside leaves it.
+            mkdir -p "${OVERLAY}.rejecting.Ab12Cd/.headroom"
+            echo old-memory > "${OVERLAY}.rejecting.Ab12Cd/.headroom/memory.db"
+            echo real > "${OVERLAY}/upper/real.txt"
+            out="$("{{.riotbox_dir}}/scripts/overlay.sh" "${verb}" --force "${PROJECT}" 2>&1)"
+            printf '%s\n' "${out}"
+            [ "$(cat "${OVERLAY}/upper/.headroom/memory.db")" = old-memory ] || { echo "FAIL: ${verb}: .headroom not restored"; exit 1; }
+            [ ! -e "${OVERLAY}.rejecting.Ab12Cd" ] || { echo "FAIL: ${verb}: leftover dir not removed"; exit 1; }
+            [ ! -e "${PROJECT}/.headroom" ] || { echo "FAIL: ${verb}: .headroom reached the project"; exit 1; }
+            grep -qF "put .headroom back into ${OVERLAY}/upper" <<<"${out}" || { echo "FAIL: ${verb}: not reported"; exit 1; }
+            rm -rf "${TEST_DIR}"
+          done
+          echo "REJECTING_RESTORED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REJECTING_RESTORED_OK"
+
+  - name: A leftover .rejecting dir whose .headroom would clash, or that is a link, is reported or ignored
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${OVERLAY}/upper/.headroom" "${OVERLAY}.rejecting.Ab12Cd/.headroom"
+          echo current > "${OVERLAY}/upper/.headroom/memory.db"
+          echo leftover > "${OVERLAY}.rejecting.Ab12Cd/.headroom/memory.db"
+          VICTIM="${TEST_DIR}/victim"
+          mkdir -p "${VICTIM}/.headroom"; echo precious > "${VICTIM}/.headroom/memory.db"
+          ln -s "${VICTIM}" "${OVERLAY}.rejecting.Zz99Yy"
+          echo real > "${OVERLAY}/upper/real.txt"
+          "{{.riotbox_dir}}/scripts/overlay.sh" reject --force "${PROJECT}" 2>"${TEST_DIR}/err"
+          cat "${TEST_DIR}/err"
+          [ "$(cat "${OVERLAY}/upper/.headroom/memory.db")" = current ] || { echo "FAIL: upper .headroom overwritten"; exit 1; }
+          [ "$(cat "${OVERLAY}.rejecting.Ab12Cd/.headroom/memory.db")" = leftover ] || { echo "FAIL: leftover lost"; exit 1; }
+          grep -qF "${OVERLAY}.rejecting.Ab12Cd/.headroom was set aside by an overlay-reject that did not finish" "${TEST_DIR}/err" || { echo "FAIL: clash not reported"; exit 1; }
+          grep -qF "mv -T ${OVERLAY}.rejecting.Ab12Cd/.headroom ${OVERLAY}/upper/.headroom" "${TEST_DIR}/err" || { echo "FAIL: no mv command"; exit 1; }
+          # overlay/ is host-only, so a link there was planted by hand; the
+          # session-state migration removes it without following it, before
+          # recovery looks.
+          [ "$(cat "${VICTIM}/.headroom/memory.db")" = precious ] && [ -d "${VICTIM}/.headroom" ] \
+            || { echo "FAIL: followed a linked leftover"; exit 1; }
+          ! grep -qF "Zz99Yy/.headroom" "${TEST_DIR}/err" || { echo "FAIL: recovered through the link"; exit 1; }
+          echo "REJECTING_REPORTED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REJECTING_REPORTED_OK"
+
+  - name: A second accept or reject on an overlay another one is working on refuses and changes nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          # The holder is killed below; a kill of a process already gone
+          # must not fail the case under set -e.
+          trap 'if ! kill "${holder:-}" 2>/dev/null; then :; fi; rm -rf "${TEST_DIR}"' EXIT
+          echo old > "${PROJECT}/file.txt"
+          echo new > "${OVERLAY}/upper/file.txt"
+          # Stands in for the first command, holding the per-overlay lock.
+          # The subshell execs sleep, so killing ${holder} closes the fd and
+          # releases the lock (`flock file sleep` would leave a child
+          # holding it).
+          ( exec 8>"${STATE}/.overlay-project.lock"; flock 8; exec sleep 30 ) &
+          holder=$!
+          for _ in $(seq 1 50); do flock -n "${STATE}/.overlay-project.lock" true 2>/dev/null || break; sleep 0.1; done
+          for verb in accept reject; do
+            rc=0
+            "{{.riotbox_dir}}/scripts/overlay.sh" "${verb}" --force "${PROJECT}" >"${TEST_DIR}/out" 2>"${TEST_DIR}/err" || rc=$?
+            [ "${rc}" -ne 0 ] || { echo "FAIL: ${verb} went ahead"; cat "${TEST_DIR}/out"; exit 1; }
+            grep -qF "another overlay-accept or overlay-reject is working on the overlay of ${PROJECT}" "${TEST_DIR}/err" \
+              || { echo "FAIL: ${verb}: no refusal"; cat "${TEST_DIR}/err"; exit 1; }
+            [ "$(cat "${PROJECT}/file.txt")" = old ] && [ "$(cat "${OVERLAY}/upper/file.txt")" = new ] \
+              || { echo "FAIL: ${verb} changed something"; exit 1; }
+          done
+          kill "${holder}"; wait "${holder}" 2>/dev/null || :
+          "{{.riotbox_dir}}/scripts/overlay.sh" reject --force "${PROJECT}" >/dev/null
+          [ ! -e "${OVERLAY}/upper/file.txt" ] || { echo "FAIL: reject after release did nothing"; exit 1; }
+          echo "OVERLAY_LOCK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OVERLAY_LOCK_OK"
+
+  - name: Accept and reject keep a .headroom that is a symlink, a FIFO or a whiteout without following it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          for verb in accept reject; do
+            for kind in link fifo whiteout; do
+              setup_overlay_test
+              VICTIM="${TEST_DIR}/victim"
+              mkdir -p "${VICTIM}"; echo precious > "${VICTIM}/keep"
+              mkdir -p "${PROJECT}/.headroom"; echo theirs > "${PROJECT}/.headroom/memory.db"
+              case "${kind}" in
+                link) ln -s "${VICTIM}" "${OVERLAY}/upper/.headroom"; name=.headroom ;;
+                fifo) mkfifo "${OVERLAY}/upper/.headroom"; name=.headroom ;;
+                whiteout) : > "${OVERLAY}/upper/.wh..headroom"; name=.wh..headroom ;;
+              esac
+              echo real > "${OVERLAY}/upper/real.txt"
+              "{{.riotbox_dir}}/scripts/overlay.sh" "${verb}" --force "${PROJECT}" >"${TEST_DIR}/out" 2>&1 \
+                || { echo "FAIL: ${verb} ${kind} failed"; cat "${TEST_DIR}/out"; exit 1; }
+              [ "$(ls -A "${VICTIM}")" = keep ] || { echo "FAIL: ${verb} ${kind}: followed the link"; exit 1; }
+              [ "$(cat "${PROJECT}/.headroom/memory.db")" = theirs ] || { echo "FAIL: ${verb} ${kind}: project .headroom changed"; exit 1; }
+              [ -e "${OVERLAY}/upper/${name}" ] || [ -L "${OVERLAY}/upper/${name}" ] || { echo "FAIL: ${verb} ${kind}: not kept"; exit 1; }
+              case "${kind}" in
+                link) [ -L "${OVERLAY}/upper/.headroom" ] ;;
+                fifo) [ -p "${OVERLAY}/upper/.headroom" ] ;;
+                whiteout) [ -f "${OVERLAY}/upper/.wh..headroom" ] ;;
+              esac || { echo "FAIL: ${verb} ${kind}: kept entry changed type"; exit 1; }
+              if [ "${verb}" = accept ]; then
+                [ -f "${PROJECT}/real.txt" ] || { echo "FAIL: accept ${kind}: real change not applied"; exit 1; }
+              else
+                [ ! -e "${PROJECT}/real.txt" ] && [ ! -e "${OVERLAY}/upper/real.txt" ] || { echo "FAIL: reject ${kind}: real change survived"; exit 1; }
+              fi
+              rm -rf "${TEST_DIR}"
+            done
+          done
+          echo "KEPT_KINDS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "KEPT_KINDS_OK"
+
+  - name: Accept applies a nested sub/.headroom like any other change
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${OVERLAY}/upper/sub/.headroom"
+          echo nested > "${OVERLAY}/upper/sub/.headroom/memory.db"
+          diff_out="$("{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJECT}")"
+          grep -qF "A  sub/.headroom/memory.db" <<<"${diff_out}" || { echo "FAIL: nested .headroom not reviewed"; printf '%s\n' "${diff_out}"; exit 1; }
+          "{{.riotbox_dir}}/scripts/overlay.sh" accept --force "${PROJECT}"
+          [ "$(cat "${PROJECT}/sub/.headroom/memory.db")" = nested ] || { echo "FAIL: nested .headroom not applied"; exit 1; }
+          [ ! -e "${OVERLAY}/upper/sub" ] || { echo "FAIL: nested .headroom kept in the overlay"; exit 1; }
+          echo "NESTED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NESTED_OK"
+
   - name: Launch guard ignores an index-only pending overlay
     steps:
       - type: exec
@@ -832,7 +1344,7 @@ testcases:
           # honours TMPDIR, so a temp path crossing a symlink would otherwise
           # yield a key launch.sh never looks at and pass this case vacuously.
           proj="$(cd "${TMP}/proj" && pwd -P)"
-          key="$(printf '%s\n' "${proj}" | sed 's|/|-|g; s|^-||')"
+          key="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${proj}")"
           upper="${TMP}/data/riotbox-state/${key}/overlay/project/upper"
           mkdir -p "${upper}/.codegraph"
           echo "index bytes" > "${upper}/.codegraph/codegraph.db"
@@ -853,9 +1365,9 @@ testcases:
           # regression this case exists to catch, launch.sh exits 1 and the
           # EXIT trap would delete err before anything could report it.
           [ "${rc}" -eq 0 ] || { echo "FAIL: launch exited ${rc}"; cat "${TMP}/err" >&2; exit 1; }
-          # Match the `run` verb, not mere non-emptiness: setup_projects probes
-          # `${CONTAINER_CMD} ps -a` when picking a collision-free container
-          # name, ahead of the guard, so the stub always captures something.
+          # Match the `run` verb, not mere non-emptiness: it is the call that
+          # proves the launch got past the guard. This case also proves the
+          # stub is wired, which the blocking case below relies on.
           grep -q '^run ' "${TMP}/argv" \
             || { echo "FAIL: launch never reached the container run"; cat "${TMP}/err" >&2; exit 1; }
           grep -q 'Pending overlay data exists' "${TMP}/err" \
@@ -880,7 +1392,7 @@ testcases:
 
           # Canonicalized for the same reason as the case above.
           proj="$(cd "${TMP}/proj" && pwd -P)"
-          key="$(printf '%s\n' "${proj}" | sed 's|/|-|g; s|^-||')"
+          key="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${proj}")"
           upper="${TMP}/data/riotbox-state/${key}/overlay/project/upper"
           mkdir -p "${upper}/.codegraph"
           echo "index bytes" > "${upper}/.codegraph/codegraph.db"
@@ -898,13 +1410,13 @@ testcases:
           [ "${rc}" -eq 1 ] || { echo "FAIL: expected exit 1, got ${rc}"; cat "${TMP}/err" >&2; exit 1; }
           grep -q 'Pending overlay data exists' "${TMP}/err" \
             || { echo "FAIL: no block message"; cat "${TMP}/err" >&2; exit 1; }
-          # Same reason as the case above: the stub also catches the pre-guard
-          # `ps -a` name probe, so the container `run` verb is the real signal.
-          # A missing capture file means the stub never ran at all — a broken
-          # harness, not a blocked launch, so fail loudly instead of passing.
-          [ -f "${TMP}/argv" ] || { echo "FAIL: capture stub never ran"; exit 1; }
-          grep -q '^run ' "${TMP}/argv" \
-            && { echo "FAIL: launch ran the container despite pending data"; exit 1; }
+          # The guard stops the launch before any engine call (naming no
+          # longer probes the engine), so a missing capture file is the
+          # expected outcome. The index-only case above, on the same harness,
+          # proves the stub is wired; the block message proves the guard ran.
+          if [ -f "${TMP}/argv" ] && grep -q '^run ' "${TMP}/argv"; then
+            echo "FAIL: launch ran the container despite pending data"; exit 1
+          fi
           echo "launch_blocks=pass"
         assertions:
           - result.code ShouldEqual 0
@@ -1009,6 +1521,31 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "REFUSE_RUNNING_OK"
+
+  - name: Accept and reject refuse while an unlabelled container from v0.5.3 runs on the overlay
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "old" > "${PROJECT}/file.txt"
+          echo "new" > "${OVERLAY}/upper/file.txt"
+          # v0.5.3 named containers riotbox-<dir> and set no riotbox.session label.
+          echo "riotbox-myproject ${OVERLAY}/upper true running unlabelled" > "${STUB_RUNNING}"
+          for verb in accept reject; do
+            rc=0
+            "{{.riotbox_dir}}/scripts/overlay.sh" "${verb}" --force "${PROJECT}" >"${TEST_DIR}/out" 2>"${TEST_DIR}/err" || rc=$?
+            [ "${rc}" -ne 0 ] || { echo "FAIL: ${verb} exited 0 while an unlabelled session runs"; exit 1; }
+            grep -qF 'riotbox-myproject' "${TEST_DIR}/err" || { echo "FAIL: ${verb}: container not named"; cat "${TEST_DIR}/err"; exit 1; }
+            [ "$(cat "${PROJECT}/file.txt")" = "old" ] && [ "$(cat "${OVERLAY}/upper/file.txt")" = "new" ] || { echo "FAIL: ${verb}: something changed"; exit 1; }
+          done
+          echo "REFUSE_UNLABELLED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REFUSE_UNLABELLED_OK"
 
   - name: Accept and reject refuse while a session's container is created but not yet started
     steps:
@@ -1412,7 +1949,7 @@ testcases:
           TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
           mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
           proj="$(cd "${TMP}/proj" && pwd -P)"
-          key="$(printf '%s\n' "${proj}" | sed 's|/|-|g; s|^-||')"
+          key="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${proj}")"
           for engine in podman docker; do
             printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$@" > "${CAPTURE}"' > "${TMP}/${engine}"
             chmod +x "${TMP}/${engine}"
@@ -1613,7 +2150,7 @@ testcases:
           printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" > "${CAPTURE}"' > "${TMP}/podman"
           chmod +x "${TMP}/podman"
           proj="$(cd "${TMP}/proj" && pwd -P)"
-          key="$(printf '%s\n' "${proj}" | sed 's|/|-|g; s|^-||')"
+          key="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${proj}")"
           mkdir -p "${TMP}/data/riotbox/${key}"
           echo "${proj}" > "${TMP}/data/riotbox/${key}/.projects"
           base="${TMP}/data/riotbox-state/${key}/overlay"
@@ -1651,7 +2188,7 @@ testcases:
           printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" > "${CAPTURE}"' > "${TMP}/podman"
           chmod +x "${TMP}/podman"
           proj="$(cd "${TMP}/proj" && pwd -P)"
-          key="$(printf '%s\n' "${proj}" | sed 's|/|-|g; s|^-||')"
+          key="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${proj}")"
           mkdir -p "${TMP}/data/riotbox/${key}"
           echo "${proj}" > "${TMP}/data/riotbox/${key}/.projects"
           base="${TMP}/data/riotbox-state/${key}/overlay"
@@ -1761,6 +2298,69 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "GONE_CONTAINER_OK"
 
+  - name: One inspect covers every container, and a container gone mid-run falls back to one inspect each without losing a holder
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "new" > "${OVERLAY}/upper/file.txt"
+          printf '%s\n' "aaa /elsewhere true" "bbb /other true" "ccc /third true" > "${STUB_RUNNING}"
+          rm -f "${STUB_INSPECT_CALLS}" "${STUB_PS_CALLS}"
+          rc=0; "{{.riotbox_dir}}/scripts/overlay.sh" reject --force "${PROJECT}" >/dev/null 2>"${TEST_DIR}/err" || rc=$?
+          [ "${rc}" -eq 0 ] || { echo "FAIL: reject refused"; cat "${TEST_DIR}/err"; exit 1; }
+          # Each scan lists twice (all, then labelled) and inspects once.
+          scans=$(($(cat "${STUB_PS_CALLS}") / 2))
+          [ "${scans}" -ge 1 ] && [ "$(cat "${STUB_INSPECT_CALLS}")" -eq "${scans}" ] \
+            || { echo "FAIL: $(cat "${STUB_INSPECT_CALLS}") inspects for ${scans} scans of 3 containers"; exit 1; }
+          echo "new" > "${OVERLAY}/upper/file.txt"
+          printf '%s\n' "aaa /elsewhere true" "gone1 /x true" "holder ${OVERLAY} true" > "${STUB_RUNNING}"
+          rc=0; STUB_GONE_IDS=gone1 "{{.riotbox_dir}}/scripts/overlay.sh" reject --force "${PROJECT}" >/dev/null 2>"${TEST_DIR}/err" || rc=$?
+          [ "${rc}" -ne 0 ] && grep -qF 'container holder mounts the overlay' "${TEST_DIR}/err" \
+            || { echo "FAIL: the fallback lost the holder (exit ${rc})"; cat "${TEST_DIR}/err"; exit 1; }
+          [ -f "${OVERLAY}/upper/file.txt" ] || { echo "FAIL: discarded"; exit 1; }
+          echo "BATCH_INSPECT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BATCH_INSPECT_OK"
+
+  - name: An unlabelled container that mounts / read-write, as toolbox does, blocks nothing but accept warns about it; a labelled one blocks
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo "tbx / true running unlabelled" > "${STUB_RUNNING}"
+          for verb in reject accept; do
+            echo "new-${verb}" > "${OVERLAY}/upper/file.txt"
+            "{{.riotbox_dir}}/scripts/overlay.sh" "${verb}" --force "${PROJECT}" >/dev/null 2>"${TEST_DIR}/err" \
+              || { echo "FAIL: ${verb}: a toolbox container blocked it"; cat "${TEST_DIR}/err"; exit 1; }
+            if [ "${verb}" = accept ]; then
+              # It can still change the project while the apply runs.
+              grep -qF 'Warning: container tbx has / mounted read-write' "${TEST_DIR}/err" \
+                || { echo "FAIL: accept did not warn about the toolbox container"; cat "${TEST_DIR}/err"; exit 1; }
+            elif grep -qF 'tbx' "${TEST_DIR}/err"; then
+              echo "FAIL: reject named the toolbox container"; cat "${TEST_DIR}/err"; exit 1
+            fi
+          done
+          [ "$(cat "${PROJECT}/file.txt")" = new-accept ] || { echo "FAIL: not applied"; exit 1; }
+          # A RiotBox session whose project contains the data dir mounts an
+          # ancestor too, and does write there.
+          echo "rbx / true" > "${STUB_RUNNING}"
+          echo "again" > "${OVERLAY}/upper/file.txt"
+          rc=0; "{{.riotbox_dir}}/scripts/overlay.sh" reject --force "${PROJECT}" >/dev/null 2>"${TEST_DIR}/err" || rc=$?
+          [ "${rc}" -ne 0 ] && grep -qF 'container rbx mounts' "${TEST_DIR}/err" || { echo "FAIL: a labelled ancestor mount did not block"; cat "${TEST_DIR}/err"; exit 1; }
+          echo "TOOLBOX_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "TOOLBOX_OK"
+
   - name: Overlay folders of projects whose names contain .accepting. are not stranded snapshots
     steps:
       - type: exec
@@ -1771,7 +2371,7 @@ testcases:
           printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" > "${CAPTURE}"' > "${TMP}/podman"
           chmod +x "${TMP}/podman"
           proj="$(cd "${TMP}/proj" && pwd -P)"
-          key="$(printf '%s\n' "${proj}" | sed 's|/|-|g; s|^-||')"
+          key="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${proj}")"
           mkdir -p "${TMP}/data/riotbox/${key}"
           echo "${proj}" > "${TMP}/data/riotbox/${key}/.projects"
           base="${TMP}/data/riotbox-state/${key}/overlay"
@@ -1884,7 +2484,7 @@ testcases:
           mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
           printf '#!/usr/bin/env bash\nexit 0\n' > "${TMP}/podman"
           chmod +x "${TMP}/podman"
-          key="$(printf '%s\n' "${TMP}/proj" | sed 's|/|-|g; s|^-||')"
+          key="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${TMP}/proj")"
           mkdir -p "${TMP}/data/riotbox-state/${key}/overlay/project/upper"
           # A dry run records nothing: plant what the earlier launch recorded.
           echo "${TMP}/proj" > "${TMP}/data/riotbox-state/${key}/projects"
@@ -2194,9 +2794,10 @@ testcases:
           - result.systemout ShouldContainSubstring "MULTI_ERREXIT_OK"
 
   # ── the launch's project record ─────────────────────────────────────────
-  # Session keys are not unique per set ("/" becomes "-"), and .projects is
-  # container-written, so the overlay commands trust only the set the launch
-  # recorded in the host-only state dir.
+  # .projects is container-written, so the overlay commands trust only the
+  # set the launch recorded in the host-only state dir. Session keys are
+  # unique per set, so a record naming another set is planted by hand below,
+  # as a state dir copied or renamed by hand would hold one.
 
   - name: A launch records its project set in the state dir by staging and renaming, never through a link
     steps:
@@ -2231,7 +2832,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "RECORD_OK"
 
-  - name: A container that names a colliding project set in .projects cannot steer list or accept onto it
+  - name: A container that names another project set in .projects cannot steer list or accept onto it
     steps:
       - type: exec
         script: |
@@ -2241,12 +2842,13 @@ testcases:
           TEST_DIR="$(cd "${TEST_DIR}" && pwd -P)"
           trap 'rm -rf "${TEST_DIR}" "${TEST_DIR}-a"' EXIT
           O="{{.riotbox_dir}}/scripts/overlay.sh"
-          # {T/a-b/app, T/lib} and {T-a/b/app, T/lib} share one session key.
+          # {T/a-b/app, T/lib} and {T-a/b/app, T/lib} shared one session key
+          # before keys carried a hash of the set.
           mkdir -p "${TEST_DIR}/a-b/app" "${TEST_DIR}/lib" "${TEST_DIR}-a/b/app"
           A="${TEST_DIR}/a-b/app" L="${TEST_DIR}/lib" X="${TEST_DIR}-a/b/app"
           k1="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh"; resolve_projects "${A} ${L}"; basename "${RIOTBOX_STATE_DIR}")"
           k2="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh"; resolve_projects "${X} ${L}"; basename "${RIOTBOX_STATE_DIR}")"
-          [ "${k1}" = "${k2}" ] || { echo "FAIL: the sets no longer collide (${k1} vs ${k2}); rework this case"; exit 1; }
+          [ "${k1}" != "${k2}" ] || { echo "FAIL: the sets share a session key (${k1})"; exit 1; }
 
           launch_overlay "${A}" "${L}" || { echo "FAIL: launch failed"; cat "${TEST_DIR}/launch.err"; exit 1; }
           state="${XDG_DATA_HOME}/riotbox-state/${k1}"
@@ -2260,25 +2862,22 @@ testcases:
             && grep -qxF "  Apply    riotbox overlay-accept ${A} ${L}" "${TEST_DIR}/out" \
             || { echo "FAIL: list does not show the recorded set"; cat "${TEST_DIR}/out"; exit 1; }
 
-          # Pasting the container's set is refused for every verb.
+          # Pasting the container's set reaches no session, for every verb.
           for verb in diff "accept --force" "reject --force"; do
             rc=0
             # shellcheck disable=SC2086 # the verb carries its flag
             "${O}" ${verb} "${X}" "${L}" >"${TEST_DIR}/out" 2>&1 || rc=$?
-            [ "${rc}" -eq 1 ] || { echo "FAIL: ${verb} of the colliding set exit ${rc}"; cat "${TEST_DIR}/out"; exit 1; }
-            grep -qF 'not the set this session was launched with' "${TEST_DIR}/out" \
-              && grep -qxF "         ${A} ${L}" "${TEST_DIR}/out" \
-              || { echo "FAIL: ${verb} does not explain or print the record"; cat "${TEST_DIR}/out"; exit 1; }
+            [ "${rc}" -eq 1 ] || { echo "FAIL: ${verb} of the other set exit ${rc}"; cat "${TEST_DIR}/out"; exit 1; }
+            grep -qF 'No session found for the project set' "${TEST_DIR}/out" \
+              || { echo "FAIL: ${verb} of the other set found a session"; cat "${TEST_DIR}/out"; exit 1; }
           done
-          [ -z "$(ls -A "${X}")" ] && [ -f "${state}/overlay/app/upper/evil.txt" ] || { echo "FAIL: the colliding set was touched"; exit 1; }
+          [ -z "$(ls -A "${X}")" ] && [ -f "${state}/overlay/app/upper/evil.txt" ] || { echo "FAIL: the other set was touched"; exit 1; }
 
-          # The user launching the colliding set keeps the record while
-          # changes are pending, and the guard names the recorded set.
-          rc=0; launch_overlay "${X}" "${L}" || rc=$?
-          [ "${rc}" -eq 1 ] || { echo "FAIL: colliding launch exit ${rc}"; cat "${TEST_DIR}/launch.err"; exit 1; }
+          # Launching the other set starts its own session and leaves this
+          # one's record and pending changes alone.
+          launch_overlay "${X}" "${L}" || { echo "FAIL: launch of the other set failed"; cat "${TEST_DIR}/launch.err"; exit 1; }
+          [ -d "${XDG_DATA_HOME}/riotbox-state/${k2}" ] || { echo "FAIL: the other set has no session of its own"; exit 1; }
           [ "$(cat "${state}/projects")" = "$(printf '%s\n%s' "${A}" "${L}")" ] || { echo "FAIL: record overwritten"; exit 1; }
-          grep -qxF "    riotbox overlay-accept ${A} ${L}" "${TEST_DIR}/launch.err" \
-            || { echo "FAIL: guard does not name the recorded set"; cat "${TEST_DIR}/launch.err"; exit 1; }
 
           "${O}" accept --force "${L}" "${A}" >/dev/null || { echo "FAIL: accept of the recorded set failed"; exit 1; }
           [ -f "${A}/evil.txt" ] && [ -z "$(ls -A "${X}")" ] || { echo "FAIL: applied to the wrong project"; exit 1; }
@@ -2286,6 +2885,37 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "COLLIDING_SET_OK"
+
+  - name: Overlay commands refuse a set that is not the one the session recorded
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          TEST_DIR="$(cd "${TEST_DIR}" && pwd -P)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          O="{{.riotbox_dir}}/scripts/overlay.sh"
+          mkdir -p "${TEST_DIR}/a/app" "${TEST_DIR}/lib" "${TEST_DIR}/x/app"
+          A="${TEST_DIR}/a/app" L="${TEST_DIR}/lib" X="${TEST_DIR}/x/app"
+          launch_overlay "${A}" "${L}" || { echo "FAIL: launch failed"; cat "${TEST_DIR}/launch.err"; exit 1; }
+          state="$(dirname "$(grep -lxF "${A}" "${XDG_DATA_HOME}"/riotbox-state/*/projects)")"
+          echo "planted" > "${state}/overlay/app/upper/evil.txt"
+          printf '%s\n' "${X}" "${L}" > "${state}/projects"
+          for verb in diff "accept --force" "reject --force"; do
+            rc=0
+            # shellcheck disable=SC2086 # the verb carries its flag
+            "${O}" ${verb} "${A}" "${L}" >"${TEST_DIR}/out" 2>&1 || rc=$?
+            [ "${rc}" -eq 1 ] || { echo "FAIL: ${verb} exit ${rc}"; cat "${TEST_DIR}/out"; exit 1; }
+            grep -qF 'not the set this session was launched with' "${TEST_DIR}/out" \
+              && grep -qxF "         ${X} ${L}" "${TEST_DIR}/out" \
+              || { echo "FAIL: ${verb} does not explain or print the record"; cat "${TEST_DIR}/out"; exit 1; }
+          done
+          [ -z "$(ls -A "${A}")" ] && [ -f "${state}/overlay/app/upper/evil.txt" ] || { echo "FAIL: something was touched"; exit 1; }
+          echo "RECORD_REFUSE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RECORD_REFUSE_OK"
 
   - name: A session an older RiotBox launched has no record, so accept asks for one launch while diff and reject still work
     steps:
@@ -2397,23 +3027,24 @@ testcases:
           source "{{.overlay_helpers}}"
           setup_overlay_test
           TEST_DIR="$(cd "${TEST_DIR}" && pwd -P)"
-          trap 'rm -rf "${TEST_DIR}" "${TEST_DIR}-a"' EXIT
-          # {T/a-b/app, T/lib} and {T-a/b/app, T/lib} share one session key.
-          mkdir -p "${TEST_DIR}/a-b/app" "${TEST_DIR}/lib" "${TEST_DIR}-a/b/app"
-          A="${TEST_DIR}/a-b/app" L="${TEST_DIR}/lib" X="${TEST_DIR}-a/b/app"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/a/app" "${TEST_DIR}/lib" "${TEST_DIR}/x/app"
+          A="${TEST_DIR}/a/app" L="${TEST_DIR}/lib" X="${TEST_DIR}/x/app"
           launch_overlay "${A}" "${L}" || { echo "FAIL: launch failed"; cat "${TEST_DIR}/launch.err"; exit 1; }
           state="$(dirname "$(grep -lxF "${A}" "${XDG_DATA_HOME}"/riotbox-state/*/projects)")"
 
-          # N2: nothing pending, a different set replaces the record, with a warning.
-          launch_overlay "${X}" "${L}" || { echo "FAIL: colliding launch failed"; cat "${TEST_DIR}/launch.err"; exit 1; }
-          [ "$(cat "${state}/projects")" = "$(printf '%s\n%s' "${X}" "${L}")" ] || { echo "FAIL: record not replaced"; exit 1; }
+          # N2: nothing pending, a record naming another set is replaced, with a warning.
+          printf '%s\n' "${X}" "${L}" > "${state}/projects"
+          launch_overlay "${A}" "${L}" || { echo "FAIL: relaunch failed"; cat "${TEST_DIR}/launch.err"; exit 1; }
+          [ "$(cat "${state}/projects")" = "$(printf '%s\n%s' "${A}" "${L}")" ] || { echo "FAIL: record not replaced"; exit 1; }
           grep -qF 'replacing' "${TEST_DIR}/launch.err" \
-            && grep -qxF "           ${A}" "${TEST_DIR}/launch.err" && grep -qxF "           ${L}" "${TEST_DIR}/launch.err" \
+            && grep -qxF "           ${X}" "${TEST_DIR}/launch.err" && grep -qxF "           ${L}" "${TEST_DIR}/launch.err" \
             || { echo "FAIL: no replacement warning listing the old set"; cat "${TEST_DIR}/launch.err"; exit 1; }
-          launch_overlay "${X}" "${L}" || { echo "FAIL: relaunch failed"; exit 1; }
+          launch_overlay "${A}" "${L}" || { echo "FAIL: relaunch failed"; exit 1; }
           grep -qF 'replacing' "${TEST_DIR}/launch.err" && { echo "FAIL: warned on an unchanged record"; cat "${TEST_DIR}/launch.err"; exit 1; }
 
           # N4: changes pending, the record is kept; one indented path per line.
+          printf '%s\n' "${X}" "${L}" > "${state}/projects"
           echo "edit" > "${state}/overlay/app/upper/f.txt"
           rc=0; launch_overlay "${A}" "${L}" || rc=$?
           [ "${rc}" -eq 1 ] || { echo "FAIL: launch with pending changes exit ${rc}"; exit 1; }
@@ -2434,27 +3065,27 @@ testcases:
           source "{{.overlay_helpers}}"
           setup_overlay_test
           TEST_DIR="$(cd "${TEST_DIR}" && pwd -P)"
-          trap 'rm -rf "${TEST_DIR}" "${TEST_DIR}-a"' EXIT
-          mkdir -p "${TEST_DIR}/a-b/app" "${TEST_DIR}/lib" "${TEST_DIR}-a/b/app"
-          A="${TEST_DIR}/a-b/app" L="${TEST_DIR}/lib" X="${TEST_DIR}-a/b/app"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${TEST_DIR}/a/app" "${TEST_DIR}/lib" "${TEST_DIR}/x/app"
+          A="${TEST_DIR}/a/app" L="${TEST_DIR}/lib" X="${TEST_DIR}/x/app"
           launch_overlay "${A}" "${L}" || { echo "FAIL: launch failed"; cat "${TEST_DIR}/launch.err"; exit 1; }
           state="$(dirname "$(grep -lxF "${A}" "${XDG_DATA_HOME}"/riotbox-state/*/projects)")"
           session="${XDG_DATA_HOME}/riotbox/$(basename "${state}")"
-          # As an older RiotBox left it: changes pending, no record, and a
-          # .projects (session-written, so it may hold anything) naming A.
+          # Changes pending, no record, and a .projects (session-written, so
+          # it may hold anything) naming another set.
           rm -f "${state}/projects"
           echo "edit" > "${state}/overlay/app/upper/f.txt"
-          printf '%s\n' "${A}" "${L}"$'\e[31m' > "${session}/.projects"
+          printf '%s\n' "${X}" "${L}"$'\e[31m' > "${session}/.projects"
 
-          rc=0; launch_overlay "${X}" "${L}" || rc=$?
+          rc=0; launch_overlay "${A}" "${L}" || rc=$?
           [ "${rc}" -eq 1 ] || { echo "FAIL: launch exit ${rc}"; cat "${TEST_DIR}/launch.err"; exit 1; }
           grep -qF 'no recorded project set' "${TEST_DIR}/launch.err" \
-            && grep -qxF "           ${A}" "${TEST_DIR}/launch.err" && grep -qxF "           ${L}?[31m" "${TEST_DIR}/launch.err" \
+            && grep -qxF "           ${X}" "${TEST_DIR}/launch.err" && grep -qxF "           ${L}?[31m" "${TEST_DIR}/launch.err" \
             || { echo "FAIL: no warning naming the .projects set"; cat -A "${TEST_DIR}/launch.err"; exit 1; }
           grep -q $'\e' "${TEST_DIR}/launch.err" && { echo "FAIL: raw escape printed"; exit 1; }
-          grep -F "riotbox overlay-" "${TEST_DIR}/launch.err" | grep -qF "${A}" \
+          grep -F "riotbox overlay-" "${TEST_DIR}/launch.err" | grep -qF "${X}" \
             && { echo "FAIL: .projects set offered as a command"; cat "${TEST_DIR}/launch.err"; exit 1; }
-          [ "$(cat "${state}/projects")" = "$(printf '%s\n%s' "${X}" "${L}")" ] || { echo "FAIL: the launched set was not recorded"; exit 1; }
+          [ "$(cat "${state}/projects")" = "$(printf '%s\n%s' "${A}" "${L}")" ] || { echo "FAIL: the launched set was not recorded"; exit 1; }
 
           # Same set as .projects: no warning.
           rm -f "${state}/projects"

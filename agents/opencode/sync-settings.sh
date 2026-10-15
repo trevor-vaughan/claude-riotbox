@@ -15,7 +15,8 @@
 #   * <state-dir>/opencode-config/ — host config copy, refreshed,
 #       minus opencode's plugin-install output (node_modules/, package.json,
 #       package-lock.json, bun.lock, .gitignore) which the container rebuilds
-#       from the persistent riotbox-cache-opencode volume.
+#       from the persistent riotbox-cache-opencode volume, and minus the
+#       host's Context Mode data (context-mode/, memory/).
 #   * <state-dir>/opencode-data/   — empty session-owned data dir
 #
 # Volume flags printed to stdout:
@@ -83,19 +84,24 @@ if [[ -d "${HOST_CONFIG_DIR}" ]]; then
 	# across would only risk host/container ABI mismatch. Prune the
 	# node_modules tree and skip the four generated top-level files.
 	#
-	# Also prune context-mode/, upstream's default home for a host's opencode
-	# Context Mode session DB and ctx_* stores: host data (verbatim tool
-	# output), not config. The session keeps its own under opencode-data
-	# (agents/opencode/context-mode.sh), and a copy here would trip that file's
-	# one-time migration: moved into an empty store, or a both-exist warning on
-	# every later launch. This is not all of the host's Context Mode data:
-	# upstream's default opencode auto-memory dir is memory/ beside it, which
-	# is still copied.
+	# Also prune context-mode/ and memory/, upstream's default homes for a
+	# host's opencode Context Mode session DB and ctx_* stores, and for its
+	# auto-memory: host data (verbatim tool output, and memory gathered across
+	# every host project), not config. The session keeps its own under
+	# opencode-data (agents/opencode/context-mode.sh), and a context-mode/ copy
+	# here would trip that file's one-time migration: moved into an empty
+	# store, or a both-exist warning on every later launch. Upstream reads
+	# <config>/memory only when CONTEXT_MODE_DATA_DIR is unset, i.e. RiotBox's
+	# Context Mode is off and the host opencode config loads context-mode as a
+	# plugin itself. That session starts with no auto-memory, by decision,
+	# rather than with a copy of the host's, and what it writes lands in this
+	# copy, so the next launch's re-stage discards it.
 	(
 		cd "${HOST_CONFIG_DIR}" &&
 			find -L . \
 				-path './node_modules' -prune -o \
 				-path './context-mode' -prune -o \
+				-path './memory' -prune -o \
 				\( ! -type l \
 				! -path './package.json' \
 				! -path './package-lock.json' \

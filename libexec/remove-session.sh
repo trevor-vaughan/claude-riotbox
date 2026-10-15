@@ -62,6 +62,7 @@ else
 		# Try as a project path — resolve to session key
 		if [[ -e "${arg}" ]]; then
 			resolve_projects "${arg}"
+			migrate_session_key
 			if [[ -f "${RIOTBOX_SESSION_DIR}/.projects" ]]; then
 				to_remove+=("${RIOTBOX_SESSION_DIR}")
 				continue

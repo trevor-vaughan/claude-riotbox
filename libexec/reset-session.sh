@@ -61,6 +61,7 @@ if [[ "${all}" = true ]]; then
 	echo "Removed ${#dirs[@]} session(s). Next run will create fresh copies."
 else
 	resolve_projects ""
+	migrate_session_key
 	# Defence in depth: resolve_projects already refuses /, but this guards rm -rf.
 	if [[ "${RIOTBOX_SESSION_DIR%/}" = "${session_root%/}" ]]; then
 		echo "ERROR: refusing to remove the RiotBox data dir '${RIOTBOX_SESSION_DIR}'." >&2

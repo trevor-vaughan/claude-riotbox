@@ -28,9 +28,9 @@
 #
 # The upper directory is container-controlled: it is the session container's
 # /mnt/overlay, so every name, file type and link in it is chosen by the
-# session. accept and reject therefore refuse while a running RiotBox
-# container (libexec/launch.sh labels each with riotbox.session=<key>) has
-# this overlay mounted read-write; other sessions on the same project do not
+# session. accept and reject therefore refuse while any live container,
+# labelled riotbox.session or not (running_session_mounts, running_mount_reaches), has this overlay
+# mounted read-write; other sessions on the same project do not
 # block, and accept names them. accept applies a private snapshot of the
 # upper, never follows a link in it or in the project, and validates every
 # entry before the review and again after the confirmation (for safety;
@@ -85,6 +85,8 @@ resolve_overlay() {
 	# Resolve to session dir
 	# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
 	resolve_projects "${project_path}" || return 1
+	# shellcheck disable=SC2310 # it has already said why it failed
+	migrate_session_key || return 1
 	# shellcheck disable=SC2154 # RIOTBOX_SESSION_DIR is set by resolve_projects (sourced from mount-projects.sh)
 	OVERLAY_SESSION_DIR="${RIOTBOX_SESSION_DIR}"
 
@@ -109,7 +111,10 @@ resolve_overlay() {
 	# this key belongs to another set and is never looked for.
 	# shellcheck disable=SC2034  # used by caller after sourcing
 	OVERLAY_DIR="${RIOTBOX_STATE_DIR}/overlay/project"
-	if [[ ! -d "${OVERLAY_DIR}/upper" ]]; then
+	# reject also takes an upper a session left as a link or a file, which
+	# it removes (_overlay_reject_one); nothing else would clear it.
+	if [[ ! -d "${OVERLAY_DIR}/upper" ]] &&
+		! { [[ "${verb}" == reject ]] && [[ -e "${OVERLAY_DIR}/upper" || -L "${OVERLAY_DIR}/upper" ]]; }; then
 		echo "ERROR: No overlay data found for '${project_path}'." >&2
 		echo "Run 'riotbox overlays' to see pending overlays." >&2
 		member_set_hint "overlay-${verb}" "${PROJECT_DIRS[0]}"
@@ -130,6 +135,8 @@ _overlay_resolve_set() {
 	shift
 	# shellcheck disable=SC2310 # it has already said why it failed
 	resolve_projects "$*" || return 1
+	# shellcheck disable=SC2310 # it has already said why it failed
+	migrate_session_key || return 1
 	listed="$(printf ' %s' "${PROJECT_DIRS[@]}")"
 	OVERLAY_SESSION_DIR="${RIOTBOX_SESSION_DIR}"
 	if [[ ! -d "${OVERLAY_SESSION_DIR}" ]]; then
@@ -158,8 +165,11 @@ _overlay_resolve_set() {
 	OVERLAY_PROJECTS=("${PROJECT_DIRS[@]}")
 	OVERLAY_DIRS=()
 	local found=""
+	local upper
 	for i in "${!OVERLAY_NAMES[@]}"; do
-		if [[ -d "${RIOTBOX_STATE_DIR}/overlay/${OVERLAY_NAMES[i]}/upper" ]]; then
+		upper="${RIOTBOX_STATE_DIR}/overlay/${OVERLAY_NAMES[i]}/upper"
+		# As for one project: reject also takes a linked or file upper.
+		if [[ -d "${upper}" ]] || { [[ "${verb}" == reject ]] && [[ -e "${upper}" || -L "${upper}" ]]; }; then
 			OVERLAY_DIRS+=("${RIOTBOX_STATE_DIR}/overlay/${OVERLAY_NAMES[i]}")
 			found=1
 		else
@@ -180,9 +190,9 @@ _overlay_resolve_set() {
 # _overlay_check_record <verb>
 #   Refuse, saying why, unless PROJECT_DIRS is the project set the launch
 #   recorded for the resolved session (record_projects). Session keys are
-#   not unique per set (resolve_projects maps "/" to "-"), so another set
-#   can resolve to this session, and its overlays must not be applied to
-#   directories they were never made for. The container-written .projects
+#   unique per set (session_key), so this refuses only a state dir copied or
+#   renamed by hand: its overlays must not be applied to directories they
+#   were never made for. The container-written .projects
 #   is never consulted. Without a record (the session was last launched by
 #   an older RiotBox) only accept refuses: diff only reads, and reject only
 #   discards the session's own data. Accept is not offered behind a prompt
@@ -212,8 +222,7 @@ _overlay_check_record() {
 	# shellcheck disable=SC2312 # quoting cannot fail
 	{
 		echo "ERROR: these projects are not the set this session was launched with."
-		echo "       Different project sets can share a session key; this session's overlays"
-		echo "       belong to the set its launch recorded:"
+		echo "       This session's overlays belong to the set its launch recorded:"
 		printf '         %s\n' "$(quote_words "${paths[@]}")"
 		echo "       given:"
 		printf '         %s\n' "$(quote_words "${PROJECT_DIRS[@]}")"
@@ -304,42 +313,49 @@ _overlay_entry_kind() {
 }
 
 # _overlay_scan_sessions
-#   Classify the read-write mounts of every running RiotBox container
+#   Classify the read-write mounts of every live container
 #   (running_session_mounts). Sets
-#     _OVERLAY_HOLDERS  IDs of containers with a read-write mount overlapping
-#                       OVERLAY_DIR: they run on this overlay
-#     _OVERLAY_SHARERS  "<id> <source>" per read-write mount overlapping
-#                       OVERLAY_PROJECT_DIR: other sessions on the project,
-#                       which RiotBox supports running side by side
+#     _OVERLAY_HOLDERS  names of containers with a read-write mount reaching
+#                       OVERLAY_DIR (running_mount_reaches): they run on
+#                       this overlay, and block accept and reject
+#     _OVERLAY_SHARERS  "<name> <source>" per other read-write mount
+#                       overlapping OVERLAY_PROJECT_DIR either way, labelled
+#                       or not (running_mount_overlaps): other sessions on
+#                       the project, which RiotBox supports running side by
+#                       side, or a toolbox with $HOME mounted, any of which
+#                       can change the project during the apply; they only
+#                       warn
 #   Returns non-zero when the engine cannot list or inspect them.
 #   Needs OVERLAY_DIR and OVERLAY_PROJECT_DIR (resolve_overlay).
 _overlay_scan_sessions() {
-	local overlay project id src i
+	local overlay project overlay_lexical project_lexical id src i
 	local -A held=()
 	_OVERLAY_HOLDERS=()
 	_OVERLAY_SHARERS=()
 	overlay="$(realpath -m -- "${OVERLAY_DIR}")" || return 1
 	project="$(realpath -m -- "${OVERLAY_PROJECT_DIR}")" || return 1
+	overlay_lexical="$(realpath -ms -- "${OVERLAY_DIR}")" || return 1
+	project_lexical="$(realpath -ms -- "${OVERLAY_PROJECT_DIR}")" || return 1
 	# shellcheck disable=SC2310 # the engine's status is the point of the call
 	running_session_mounts || return 1
 	for i in "${!RUNNING_MOUNT_IDS[@]}"; do
 		id="${RUNNING_MOUNT_IDS[i]}"
 		src="${RUNNING_MOUNT_SOURCES[i]}"
 		# shellcheck disable=SC2310 # designed to be tested in conditions
-		if paths_overlap "${src}" "${overlay}"; then
+		if running_mount_reaches "${i}" "${overlay}" "${overlay_lexical}"; then
 			if [[ -z "${held["${id}"]:-}" ]]; then
 				held["${id}"]=1
-				_OVERLAY_HOLDERS+=("${id}")
+				_OVERLAY_HOLDERS+=("$(running_mount_label "${i}")")
 			fi
-		elif paths_overlap "${src}" "${project}"; then
-			_OVERLAY_SHARERS+=("${id} ${src}")
+		elif running_mount_overlaps "${i}" "${project}" "${project_lexical}"; then
+			_OVERLAY_SHARERS+=("$(running_mount_label "${i}") ${src}")
 		fi
 	done
 }
 
 # _overlay_refuse_if_running <verb> [warn]
-#   Return non-zero, saying why, unless the engine confirms that no running
-#   RiotBox container has this overlay mounted read-write. Fails closed: an
+#   Return non-zero, saying why, unless the engine confirms that no live
+#   container can write this overlay (running_mount_reaches). Fails closed: an
 #   engine that cannot answer is a refusal, because such a container can
 #   still change the overlay. Other sessions on the project do not block;
 #   with "warn" they are named, since they can change the project.
@@ -347,19 +363,19 @@ _overlay_refuse_if_running() {
 	local verb="$1" warn="${2:-}" sharer
 	# shellcheck disable=SC2310 # the engine's status is the point of the test
 	if ! _overlay_scan_sessions; then
-		echo "ERROR: could not ask '${CONTAINER_CMD:-podman}' which RiotBox containers use the overlay of ${OVERLAY_PROJECT_DIR}." >&2
+		echo "ERROR: could not ask '${CONTAINER_CMD:-podman}' which containers use the overlay of ${OVERLAY_PROJECT_DIR}." >&2
 		echo "       overlay-${verb} refuses while it cannot tell: a session running on the overlay can still change it." >&2
 		echo "       Make sure the container engine works (and that session has exited), then retry." >&2
 		return 1
 	fi
 	if [[ "${#_OVERLAY_HOLDERS[@]}" -gt 0 ]]; then
-		echo "ERROR: a RiotBox session on the overlay of ${OVERLAY_PROJECT_DIR} is still running (container ${_OVERLAY_HOLDERS[*]})." >&2
-		echo "       It can still change the overlay. Exit that session, then run overlay-${verb} again." >&2
+		echo "ERROR: container ${_OVERLAY_HOLDERS[*]} mounts the overlay of ${OVERLAY_PROJECT_DIR} read-write and is still running." >&2
+		echo "       It can still change the overlay. Stop that container (exit its session), then run overlay-${verb} again." >&2
 		return 1
 	fi
 	if [[ -n "${warn}" ]] && [[ "${#_OVERLAY_SHARERS[@]}" -gt 0 ]]; then
 		for sharer in "${_OVERLAY_SHARERS[@]}"; do
-			echo "Warning: RiotBox container ${sharer%% *} has ${sharer#* } mounted read-write, overlapping ${OVERLAY_PROJECT_DIR}." >&2
+			echo "Warning: container ${sharer%% *} has ${sharer#* } mounted read-write, overlapping ${OVERLAY_PROJECT_DIR}." >&2
 		done
 		echo "         overlay-${verb} checks the project again after you confirm, but changes made while" >&2
 		echo "         the apply itself runs are not detected." >&2
@@ -393,6 +409,19 @@ _overlay_check_dest() {
 	return 1
 }
 
+# _overlay_migrate_sessions
+#   overlay_list's migrate_session_state pass over every marked session dir;
+#   the caller holds the state root's lock. Returns 1 when one failed.
+_overlay_migrate_sessions() {
+	local session_dir
+	for session_dir in "${RIOTBOX_DATA_DIR}"/*/; do
+		[[ -f "${session_dir}.projects" ]] || continue
+		session_dir="${session_dir%/}"
+		# shellcheck disable=SC2310 # a failed migration has already said why
+		migrate_session_state "${session_dir}" "${RIOTBOX_STATE_ROOT}/${session_dir##*/}" || return 1
+	done
+}
+
 # ─── overlay list ──────────────────────────────────────────────────────────
 # List sessions with pending overlay data.
 # Exit 0 if overlays exist, 1 if none, 2 if adopting legacy overlay data failed.
@@ -402,14 +431,21 @@ overlay_list() {
 	# Run each session's one-time migration (migrate_session_state), which
 	# adopts the overlay data and other state an older RiotBox left inside a
 	# session dir, so an upgrade does not hide pending changes until that
-	# project's next launch.
-	local session_dir
+	# project's next launch. Under the state root's lock, which the key move
+	# (migrate_session_key) holds while it renames a session: an old-key
+	# session is then either not moved yet or gone, never half moved. Root
+	# lock first, then each session's, the order every caller takes them in.
+	local session_dir found=""
 	for session_dir in "${RIOTBOX_DATA_DIR}"/*/; do
 		[[ -f "${session_dir}.projects" ]] || continue
-		session_dir="${session_dir%/}"
-		# shellcheck disable=SC2310 # a failed migration has already said why
-		migrate_session_state "${session_dir}" "${RIOTBOX_STATE_ROOT}/${session_dir##*/}" || return 2
+		found=1
+		break
 	done
+	if [[ -n "${found}" ]]; then
+		mkdir -p "${RIOTBOX_STATE_ROOT}" && chmod 700 "${RIOTBOX_STATE_ROOT}" || return 2
+		# shellcheck disable=SC2310 # a failed migration has already said why
+		_with_migrate_lock "${RIOTBOX_STATE_ROOT}" _overlay_migrate_sessions || return 2
+	fi
 
 	if [[ ! -d "${RIOTBOX_STATE_ROOT}" ]]; then
 		echo "No pending overlays."
@@ -432,7 +468,7 @@ overlay_list() {
 		# Project paths come only from the set the launch recorded in the
 		# host-only state dir (record_projects), never from the session's
 		# container-written .projects: a session could name any directory
-		# there, and keys are not unique per set. Paths are cleaned for
+		# there, and a key cannot be decoded back to its set. Paths are cleaned for
 		# printing; the commands quote them as recorded (overlay_command).
 		# Each overlay is shown with the project it was mounted for
 		# (overlay_project_names).
@@ -623,17 +659,22 @@ _overlay_diff_one() {
 		echo "Note: could not ask '${CONTAINER_CMD:-podman}' whether a session on this overlay is running;" >&2
 		echo "      if one is, the overlay can change while you read this." >&2
 	elif [[ "${#_OVERLAY_HOLDERS[@]}" -gt 0 ]]; then
-		echo "Note: a RiotBox session on the overlay of ${project} is still running; the overlay can change while you read this." >&2
+		echo "Note: container ${_OVERLAY_HOLDERS[*]} mounts the overlay of ${project} read-write and is still running; the overlay can change while you read this." >&2
 	fi
 
 	echo "Overlay diff for: ${project}"
 	echo ""
 
 	local found=0
-	local hidden=0
+	local hidden=0 kept=0
 	local rel shown base dir kind target
 	# shellcheck disable=SC2312 # find failure means no files; loop just won't execute
 	while IFS= read -r -d '' rel; do
+		# shellcheck disable=SC2310 # designed to be tested in conditions
+		if overlay_path_kept "${rel}"; then
+			kept=$((kept + 1))
+			continue
+		fi
 		# shellcheck disable=SC2310 # designed to be tested in conditions
 		if overlay_path_ignored "${rel}"; then
 			hidden=$((hidden + 1))
@@ -705,6 +746,12 @@ _overlay_diff_one() {
 		echo "      overlay-accept does not filter them: they are copied to the"
 		echo "      project whenever it applies changes."
 	fi
+	if [[ "${kept}" -gt 0 ]]; then
+		echo ""
+		echo "Note: ${kept} file(s) under .headroom/ not shown (headroom memory)."
+		echo "      overlay-accept and overlay-reject leave them in the overlay;"
+		echo "      they are never copied to the project."
+	fi
 }
 
 # ─── overlay accept ────────────────────────────────────────────────────────
@@ -718,8 +765,8 @@ _overlay_diff_one() {
 #
 # What accept guarantees, and what it does not:
 #
-# - It refuses while a running RiotBox container has this overlay mounted
-#   read-write, and when the engine cannot say. Other sessions on the same
+# - It refuses while a live container, labelled riotbox.session or not, has
+#   this overlay mounted read-write, and when the engine cannot say. Other sessions on the same
 #   project (which RiotBox supports) do not block; their read-write mounts
 #   of the project are named in a warning.
 # - The upper is renamed to a snapshot outside the session's mount
@@ -735,8 +782,8 @@ _overlay_diff_one() {
 #   validated; only validated entries are applied.
 #
 # Not covered: a process that already holds a directory or file open inside
-# the upper (an unlabelled session from an older RiotBox, a container started
-# between the check and the rename) can still change the bytes of a regular
+# the upper (a container started between the check and the rename) can
+# still change the bytes of a regular
 # file between the review and its copy; the review lists names, not contents.
 # And another session on the project can change the project while the apply
 # itself runs, after the second validation.
@@ -758,7 +805,37 @@ overlay_accept() {
 
 	# shellcheck disable=SC2310 # resolve_overlay is designed to be tested with ||
 	resolve_overlay accept "${projects[@]}" || return $?
-	_overlay_each applied _overlay_accept_one "${FORCE}"
+	_overlay_each applied _overlay_locked _overlay_accept_one "${FORCE}"
+}
+
+# _overlay_locked <function> [args...]
+#   Run <function> holding an exclusive flock on
+#   <state-dir>/.overlay-<name>.lock, so an accept and a reject (or two of
+#   either) never work on one overlay at once: each moves the upper aside,
+#   and one could restore or delete the other's live <name>.rejecting.* dir
+#   or accept snapshot. Refuses at once when another command holds it. The
+#   lock file is at the state dir's top level, which no container mounts;
+#   not in overlay/, whose non-directories the session-state migration
+#   removes. Lock order: resolve_overlay takes and releases the state root's
+#   and the session's .migrate.lock before this, and nothing takes either
+#   while holding this one; a launch's .sync.lock never meets it.
+_overlay_locked() {
+	local lock="${OVERLAY_DIR%/overlay/*}/.overlay-${OVERLAY_DIR##*/}.lock" fd rc=0
+	exec {fd}>"${lock}" || return 1
+	if ! flock -n "${fd}"; then
+		exec {fd}>&-
+		echo "ERROR: another overlay-accept or overlay-reject is working on the overlay of ${OVERLAY_PROJECT_DIR}." >&2
+		echo "       Let it finish, then run this again." >&2
+		return 1
+	fi
+	# Not `"$@" || rc=$?`: that would switch errexit off inside <function>,
+	# and _overlay_each relies on it to end a project's run at an unexpected
+	# failure. Under errexit a failure exits this (sub)shell, which releases
+	# the lock with it.
+	"$@"
+	rc=$?
+	exec {fd}>&-
+	return "${rc}"
 }
 
 # _overlay_accept_one <force>
@@ -767,6 +844,8 @@ _overlay_accept_one() {
 	local FORCE="$1"
 	# shellcheck disable=SC2310 # designed to be tested with ||
 	_overlay_refuse_if_running accept warn || return 1
+	# shellcheck disable=SC2310 # designed to be tested with ||
+	_overlay_recover_rejecting || return 1
 
 	local upper="${OVERLAY_DIR}/upper"
 	local work="${OVERLAY_DIR}/work"
@@ -812,15 +891,46 @@ _overlay_accept_one() {
 	0)
 		_OVERLAY_SNAPSHOT=""
 		trap - EXIT INT TERM HUP
-		rm -rf -- "${snapshot}"
+		# The snapshot holds only applied changes now, plus any kept entries.
+		# It must not outlive this as <name>.accepting.<pid>, which reads as
+		# an interrupted accept: pending, re-applied by the next accept. So
+		# when the kept entries cannot go back into the upper they are set
+		# aside in a sibling the bookkeeping ignores, and failing that the
+		# snapshot itself is renamed to one.
+		local aside
+		# shellcheck disable=SC2310 # its status picks the recovery
+		if _overlay_move_kept "${snapshot}" "${upper}"; then
+			rm -rf -- "${snapshot}"
+		elif aside="$(mktemp -d -- "${OVERLAY_DIR}.headroom.XXXXXX")" &&
+			_overlay_move_kept "${snapshot}" "${aside}"; then
+			rm -rf -- "${snapshot}"
+			echo "Warning: .headroom from the overlay is in ${aside}; it could not be moved back into ${upper}." >&2
+			echo "         It is headroom memory an older RiotBox left there, never applied to the project." >&2
+			# shellcheck disable=SC2312 # quoting cannot fail
+			echo "         Exit every session of this project, then move it back with: mv -T $(quote_words "${aside}/.headroom" "${upper}/.headroom"); or delete $(quote_words "${aside}")." >&2
+		elif aside="$(mktemp -d -- "${OVERLAY_DIR}.applied.XXXXXX")" &&
+			mv -T -- "${snapshot}" "${aside}/data"; then
+			# Nested one level down: at the top, a project's own upper/
+			# would make the sibling look like an overlay dir with changes.
+			echo "Warning: could not set .headroom aside; ${aside}/data holds it together with the changes just applied." >&2
+			# shellcheck disable=SC2312 # quoting cannot fail
+			echo "         Take .headroom from it if you want to keep it, then delete $(quote_words "${aside}")." >&2
+		else
+			echo "Warning: ${snapshot} holds .headroom and the changes just applied, and reads as an interrupted accept." >&2
+			echo "         Take .headroom from it if you want to keep it, then delete it; do not move it back as the upper." >&2
+		fi
 		# shellcheck disable=SC2310 # the engine's status is the point of the test
 		if ! _overlay_scan_sessions 2>/dev/null || [[ "${#_OVERLAY_HOLDERS[@]}" -gt 0 ]]; then
 			echo "Notice: a session on this overlay is running now (or the engine could not say);" >&2
 			echo "        left ${work} in place." >&2
-			mkdir -p -- "${upper}"
+			# shellcheck disable=SC2310 # designed to be tested with ||
+			require_real_dir "${upper}" || return 1
 		else
 			rm -rf -- "${work}"
-			mkdir -p -- "${upper}" "${work}"
+			# shellcheck disable=SC2310 # designed to be tested with ||
+			require_real_dir "${upper}" || return 1
+			# shellcheck disable=SC2310 # designed to be tested with ||
+			require_real_dir "${work}" || return 1
 		fi
 		echo "Applied. Overlay data cleaned."
 		;;
@@ -894,7 +1004,14 @@ _overlay_plan() {
 	fi
 
 	local rel
-	local -a bad=()
+	local -a bad=() applied=()
+	# Kept names are never applied (scripts/lib/overlay-ignore.sh): neither
+	# copied into the project nor, through a whiteout, deleted from it.
+	for rel in "${rels[@]}"; do
+		# shellcheck disable=SC2310 # designed to be tested in conditions
+		overlay_path_kept "${rel}" || applied+=("${rel}")
+	done
+	rels=("${applied[@]}")
 	for rel in "${rels[@]}"; do
 		# shellcheck disable=SC2310 # designed to be tested in conditions
 		if _overlay_name_unsafe "${rel}"; then
@@ -1142,7 +1259,74 @@ overlay_reject() {
 
 	# shellcheck disable=SC2310 # resolve_overlay is designed to be tested with ||
 	resolve_overlay reject "${projects[@]}" || return $?
-	_overlay_each discarded _overlay_reject_one "${FORCE}"
+	_overlay_each discarded _overlay_locked _overlay_reject_one "${FORCE}"
+}
+
+# _overlay_move_kept <from-dir> <to-dir>
+#   Move each top-level entry of <from-dir> that overlay_path_kept names into
+#   <to-dir>, creating <to-dir> (require_real_dir: never through a link)
+#   before the first move only, so it is left absent when there is nothing to
+#   keep. mv moves a link as a link, so a planted symlink stays a symlink in
+#   the overlay and is never followed. Returns non-zero when a move fails or
+#   <to-dir> is not a real directory; what moved before stays moved.
+_overlay_move_kept() {
+	local from="$1" to="$2" entry
+	local -a entries=()
+	# A listing that failed could miss a kept entry, which the caller would
+	# then delete with the rest, so its status is checked.
+	# shellcheck disable=SC2312 # the listing's status is checked through wait below
+	mapfile -d '' -t entries < <(find "${from}" -mindepth 1 -maxdepth 1 -printf '%P\0')
+	# shellcheck disable=SC2154 # $! is the process substitution's PID
+	wait "$!" || return 1
+	for entry in "${entries[@]}"; do
+		# shellcheck disable=SC2310 # designed to be tested in conditions
+		overlay_path_kept "${entry}" || continue
+		# shellcheck disable=SC2310 # designed to be tested with ||
+		require_real_dir "${to}" || return 1
+		mv -T -- "${from}/${entry}" "${to}/${entry}" || return 1
+	done
+}
+
+# _overlay_recover_rejecting
+#   An overlay-reject killed between setting the kept entries aside and
+#   putting the fresh upper in place leaves them in
+#   <name>.rejecting.XXXXXX, beside OVERLAY_DIR in overlay/, which no
+#   container mounts. For each such real directory (a link is never
+#   followed): move each kept entry back into the upper when the upper is a
+#   real directory that has none, and remove the directory once empty;
+#   otherwise say where the entry is and how to move it. Callers have just
+#   checked that no session runs on the overlay. Returns non-zero when a
+#   directory cannot be listed.
+_overlay_recover_rejecting() {
+	local dir entry left upper="${OVERLAY_DIR}/upper"
+	local -a entries=()
+	for dir in "${OVERLAY_DIR}".rejecting.*; do
+		[[ -d "${dir}" && ! -L "${dir}" ]] || continue
+		# shellcheck disable=SC2312 # the listing's status is checked through wait below
+		mapfile -d '' -t entries < <(find "${dir}" -mindepth 1 -maxdepth 1 -printf '%P\0')
+		# shellcheck disable=SC2154 # $! is the process substitution's PID
+		wait "$!" || {
+			echo "ERROR: could not list ${dir}, left by an overlay-reject that did not finish." >&2
+			return 1
+		}
+		for entry in "${entries[@]}"; do
+			# shellcheck disable=SC2310 # designed to be tested in conditions
+			if overlay_path_kept "${entry}" && [[ -d "${upper}" && ! -L "${upper}" ]] &&
+				[[ ! -e "${upper}/${entry}" && ! -L "${upper}/${entry}" ]] &&
+				mv -T -- "${dir}/${entry}" "${upper}/${entry}"; then
+				echo "Notice: put ${entry} back into ${upper} from ${dir}, left by an overlay-reject that did not finish."
+			else
+				echo "Notice: ${dir}/${entry} was set aside by an overlay-reject that did not finish." >&2
+				# shellcheck disable=SC2312 # quoting cannot fail
+				echo "        Move it back with: mv -T $(quote_words "${dir}/${entry}" "${upper}/${entry}") (after removing what is there), or delete it." >&2
+			fi
+		done
+		# Removed only when empty: what could not be put back stays.
+		left="$(find "${dir}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" || left=unlistable
+		if [[ -z "${left}" ]]; then
+			rmdir -- "${dir}" || return 1
+		fi
+	done
 }
 
 # _overlay_reject_one <force>
@@ -1151,6 +1335,22 @@ _overlay_reject_one() {
 	local FORCE="$1"
 	# shellcheck disable=SC2310 # designed to be tested with ||
 	_overlay_refuse_if_running reject || return 1
+	# shellcheck disable=SC2310 # designed to be tested with ||
+	_overlay_recover_rejecting || return 1
+
+	# A session can leave upper or work as a link or a file. The launch then
+	# refuses the overlay (require_real_dir) and names this command, and
+	# there are no changes to find through it, so clear it first, changes
+	# or not: rm -rf removes the entry itself, never what a link names.
+	local stray
+	for stray in "${OVERLAY_DIR}/upper" "${OVERLAY_DIR}/work"; do
+		if [[ -L "${stray}" ]] || { [[ -e "${stray}" ]] && [[ ! -d "${stray}" ]]; }; then
+			echo "Warning: ${stray} is a symlink or not a directory; removed it without following it." >&2
+			rm -rf -- "${stray}" || return 1
+			# shellcheck disable=SC2310 # it has already said why it refused
+			require_real_dir "${stray}" || return 1
+		fi
+	done
 
 	# shellcheck disable=SC2310 # overlay_has_changes is designed to be tested in if-conditions
 	if ! overlay_has_changes "${OVERLAY_DIR}"; then
@@ -1168,9 +1368,51 @@ _overlay_reject_one() {
 			return 0
 		fi
 	fi
+	# Again, as accept does: a session can start while the prompt waits.
+	# shellcheck disable=SC2310 # designed to be tested with ||
+	_overlay_refuse_if_running reject || return 1
 
-	rm -rf "${OVERLAY_DIR}/upper" "${OVERLAY_DIR}/work"
-	mkdir -p "${OVERLAY_DIR}/upper" "${OVERLAY_DIR}/work"
+	# Kept names survive the discard (scripts/lib/overlay-ignore.sh). They
+	# go into a fresh upper, so nothing else about the old one (an opaque
+	# marker, its own attributes) carries over. That fresh dir is made by
+	# mktemp as a sibling of the overlay dir, in overlay/, which no container
+	# mounts: a fixed name inside the overlay dir could be a link a session
+	# planted, and the kept entries would be moved through it. Its mode is
+	# what mkdir would have given the upper.
+	local upper="${OVERLAY_DIR}/upper" work="${OVERLAY_DIR}/work" fresh
+	local mask
+	mask="$(umask)"
+	fresh="$(mktemp -d -- "${OVERLAY_DIR}.rejecting.XXXXXX")" || return 1
+	chmod -- "$(printf '%o' $((0777 & ~0${mask})))" "${fresh}" || return 1
+	if [[ -d "${upper}" ]] && [[ ! -L "${upper}" ]]; then
+		# shellcheck disable=SC2310 # designed to be tested with ||
+		_overlay_move_kept "${upper}" "${fresh}" || {
+			echo "ERROR: could not set .headroom aside in ${fresh}; nothing more was discarded." >&2
+			return 1
+		}
+	fi
+	# Everything else in the overlay dir goes too: only upper/ and work/
+	# belong there (container/overlay-setup.sh), so anything more is what a
+	# session planted, such as links named like a temp dir. rm -rf removes a
+	# link itself, never what it points at.
+	local entry
+	local -a entries=()
+	# shellcheck disable=SC2312 # the listing's status is checked through wait below
+	mapfile -d '' -t entries < <(find "${OVERLAY_DIR}" -mindepth 1 -maxdepth 1 -print0)
+	# shellcheck disable=SC2154 # $! is the process substitution's PID
+	wait "$!" || {
+		echo "ERROR: could not list ${OVERLAY_DIR}; what overlay-reject keeps is in ${fresh}." >&2
+		return 1
+	}
+	for entry in "${entries[@]}"; do
+		rm -rf -- "${entry}"
+	done
+	mv -T -- "${fresh}" "${upper}" || {
+		echo "ERROR: could not put the fresh upper in place; what overlay-reject keeps is in ${fresh}." >&2
+		return 1
+	}
+	# shellcheck disable=SC2310 # designed to be tested with ||
+	require_real_dir "${work}" || return 1
 	echo "Overlay data discarded."
 }
 

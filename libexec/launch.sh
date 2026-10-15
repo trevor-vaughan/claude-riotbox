@@ -64,25 +64,6 @@ fi
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
 
-# Print, on stderr, the overlay-<verb> command for each verb given, naming
-# the project set recorded for this session (record_projects): every path
-# of it, since the overlay commands accept only that set, and never the
-# container-written .projects.
-print_overlay_commands() {
-	local recorded verb
-	local -a paths
-	# shellcheck disable=SC2310 # no record is an answer, not an error
-	if ! recorded="$(recorded_projects "${RIOTBOX_STATE_DIR}")"; then
-		echo "    (unknown) — launch this project set once with this release" >&2
-		return 0
-	fi
-	mapfile -t paths <<<"${recorded}"
-	for verb in "$@"; do
-		# shellcheck disable=SC2312 # quoting cannot fail
-		echo "    $(overlay_command "${verb}" "${paths[@]}")" >&2
-	done
-}
-
 # Overlay guard, part 1: an overlay-accept's snapshot holds reviewed changes
 # that were never applied or put back. Checked before setup_projects, which
 # creates overlay/<name>/upper: an accept still at its prompt has renamed its
@@ -106,6 +87,10 @@ if [[ "${RIOTBOX_OVERLAY:-}" = "1" ]]; then
 	# shellcheck source=../scripts/lib/overlay-ignore.sh disable=SC1091
 	source "${ROOT_DIR}/scripts/lib/overlay-ignore.sh"
 	resolve_projects "${RIOTBOX_PROJECTS:-}"
+	# The snapshot check reads the state dir, so an old-key session must be
+	# under this set's key first (setup_projects' call is then a no-op).
+	# shellcheck disable=SC2310 # it has already said why it failed
+	migrate_session_key || exit 1
 	refuse_stranded_overlay_snapshot
 fi
 
@@ -152,7 +137,7 @@ SESSION_ID="${_session_ts}-${_session_rand}"
 # The session key labels every container of the session, so overlay-accept and
 # overlay-reject (scripts/overlay.sh) can refuse while one still runs and can
 # change the overlay. Container names cannot serve: generate_container_name
-# varies them between concurrent launches of the same session.
+# gives every launch a random suffix.
 SESSION_KEY="$(basename "${RIOTBOX_SESSION_DIR}")"
 
 # Podman rootless --userns=keep-id preserves the host user's UID/GID inside

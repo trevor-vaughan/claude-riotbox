@@ -9,9 +9,8 @@
 #      `claude`, it dispatches to the `claude` manifest.
 #   2. Sources the agent registry to load every manifest.
 #   3. Interposes headroom (when RIOTBOX_HEADROOM=1 and guard unset): execs
-#      the argv emitted by agent_<name>_headroom_argv — either
-#      `headroom wrap <agent> … -- <argv>` or an agent-dir helper that fronts
-#      `headroom proxy` — which re-launches the shim; the guard
+#      the argv emitted by agent_<name>_headroom_argv — an agent-dir helper
+#      that fronts `headroom proxy` — which re-launches the shim; the guard
 #      (RIOTBOX_HEADROOM_ACTIVE=1) makes that second pass fall through.
 #   4. Resolves the real binary via container/find-real-bin.sh.
 #   5. Calls agent_<name>_wrapper_inject "$@" to rewrite argv (and decide
@@ -41,14 +40,23 @@ fi
 
 # ── Headroom interposition (opt-in context compression) ─────────────────────
 # First pass (RIOTBOX_HEADROOM=1, guard unset): exec the argv emitted by the
-# agent's headroom_argv verb — `headroom wrap …` for natively supported
-# tools, or an agent-dir helper that fronts `headroom proxy` — instead of
-# the real binary. That command re-launches the agent by name, which
+# agent's headroom_argv verb — an agent-dir helper that fronts `headroom
+# proxy` (agents/lib/headroom-proxy.sh) — instead of the real binary. That command re-launches the agent by name, which
 # resolves back to this shim; the exported RIOTBOX_HEADROOM_ACTIVE guard
 # makes that second pass fall through to the normal inject-and-exec path
 # below. Both degraded modes (agent has no headroom_argv verb / headroom
 # missing from the image) warn and run unwrapped — headroom is an
 # optimization layer, never a reason to lose a session.
+#
+# HEADROOM_MEMORY_DB_PATH puts headroom's memory into ~/.headroom, the
+# session's state-dir mount. Unset, headroom 0.39.0 keeps it in
+# $PWD/.headroom (proxy/server.py) — in a session, the caller's checkout for
+# one project and the image's own /workspace, lost at exit, for a set. The
+# proxy keeps its per-project DBs in memories/ beside this file. Exported
+# rather than passed as --memory-db-path because the helper starts the proxy
+# and `headroom proxy` reads it as that option's env var. `headroom memory`
+# does not read it: it uses ./.headroom/memory.db when that exists, else
+# ~/.headroom/memory.db (cli/memory.py:36-50), which is this same file.
 if [[ "${RIOTBOX_HEADROOM:-0}" = "1" ]] && [[ -z "${RIOTBOX_HEADROOM_ACTIVE:-}" ]]; then
 	if ! declare -F "agent_${agent}_headroom_argv" >/dev/null; then
 		echo "WARNING: RIOTBOX_HEADROOM=1 but agent '${agent}' has no headroom support — running unwrapped." >&2
@@ -56,7 +64,7 @@ if [[ "${RIOTBOX_HEADROOM:-0}" = "1" ]] && [[ -z "${RIOTBOX_HEADROOM_ACTIVE:-}" 
 		echo "WARNING: RIOTBOX_HEADROOM=1 but headroom is not installed in this image — running unwrapped." >&2
 		echo "         Update the image with: riotbox update" >&2
 	else
-		export RIOTBOX_HEADROOM_ACTIVE=1
+		export RIOTBOX_HEADROOM_ACTIVE=1 HEADROOM_MEMORY_DB_PATH="${HOME}/.headroom/memory.db"
 		# shellcheck disable=SC2312  # agent_call exit code is not masked; mapfile reads its stdout via process substitution
 		mapfile -d '' -t headroom_args < <(agent_call "${agent}" headroom_argv "$@")
 		exec "${headroom_args[@]}"

@@ -110,7 +110,7 @@ testcases:
           setup_session_install
           trap 'rm -rf "${T}"' EXIT
           mkdir -p "${T}/projects/beta"
-          key="$(printf '%s\n' "${T}/projects/beta" | sed 's|/|-|g; s|^-||')"
+          key="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${T}/projects/beta")"
           mkdir -p "${DATA}/${key}"
           echo keep > "${DATA}/${key}/payload"
           rc=0

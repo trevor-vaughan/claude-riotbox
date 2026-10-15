@@ -7,6 +7,11 @@
 # deletes something these helpers can see is gone.
 set -euo pipefail
 
+# Session keys come from the launch's own derivation in
+# scripts/mount-projects.sh, never a re-derivation here.
+# shellcheck source=scripts/mount-projects.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../../scripts/mount-projects.sh"
+
 # setup_session_install
 #   Install RiotBox rootless into a fresh fake HOME and seed a backup store.
 #   Sets: T (canonical temp root), DATA (the rootless RIOTBOX_DATA_DIR),
@@ -35,7 +40,7 @@ setup_session_install() {
 make_session() {
 	local project="${T}/projects/$1" key
 	mkdir -p "${project}"
-	key="$(printf '%s\n' "${project}" | sed 's|/|-|g; s|^-||')"
+	key="$(session_key "${project}")"
 	mkdir -p "${DATA}/${key}" "${STATE}/${key}/git-ai"
 	printf '%s\n' "${project}" >"${DATA}/${key}/.projects"
 	echo payload >"${DATA}/${key}/payload"

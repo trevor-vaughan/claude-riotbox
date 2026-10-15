@@ -1480,8 +1480,8 @@ testcases:
           # (it only mislabels a ledger record), so a substring check on the
           # key name alone would pass even if the value were garbage.
           # resolve_projects (scripts/mount-projects.sh) derives the
-          # single-project session key by this same path-mangling.
-          expected_key="$(printf '%s\n' "${stub_dir}" | sed 's|/|-|g; s|^-||')"
+          # session key with session_key, which this calls too.
+          expected_key="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${stub_dir}")"
           grep -qxF "RIOTBOX_SESSION_KEY=${expected_key}" "${STUB_ARGV_FILE}" \
             || { echo "BAD: expected RIOTBOX_SESSION_KEY=${expected_key} in argv" >&2; exit 1; }
           echo "OK"

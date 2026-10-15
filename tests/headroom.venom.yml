@@ -106,7 +106,7 @@ testcases:
           - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
           - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_INVOKED"
 
-  - name: gate on — wrapper execs headroom wrap with the guard exported
+  - name: gate on for claude — wrapper execs the proxy helper with the guard and memory path exported
     steps:
       - type: exec
         script: |
@@ -115,36 +115,38 @@ testcases:
           setup_wrapper_sandbox claude
           trap 'rm -rf "${TEST_DIR}"' EXIT
           install_generic_wrapper_for claude
-          # Fake headroom records its argv and the guard, then exits — the
-          # re-launch chain is exercised by the dedicated case below.
           cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
           #!/usr/bin/env bash
           echo "FAKE_HEADROOM_INVOKED"
-          echo "HR_GUARD=${RIOTBOX_HEADROOM_ACTIVE:-unset}"
-          printf 'hrarg=%s\n' "$@"
           FAKE
           chmod +x "${TEST_DIR}/realbin/headroom"
+          # Recorder in place of the copied helper: the wrapper must exec it,
+          # never `headroom wrap claude`, which writes .claude/settings.local.json
+          # and a SessionStart hook into the CWD (the caller's checkout).
+          cat > "${TEST_DIR}/home/.riotbox/agents/claude/headroom-exec.sh" <<'REC'
+          #!/usr/bin/env bash
+          echo "FAKE_HELPER_INVOKED"
+          echo "HR_GUARD=${RIOTBOX_HEADROOM_ACTIVE:-unset}"
+          echo "HR_MEMDB=${HEADROOM_MEMORY_DB_PATH:-unset}"
+          printf 'helperarg=%s\n' "$@"
+          REC
+          chmod +x "${TEST_DIR}/home/.riotbox/agents/claude/headroom-exec.sh"
           export RIOTBOX_HEADROOM=1
-          unset RIOTBOX_HEADROOM_ACTIVE
+          unset RIOTBOX_HEADROOM_ACTIVE HEADROOM_MEMORY_DB_PATH
           out="$(claude -p "do work")"
           echo "${out}"
-          printf '%s\n' "${out}" | grep -qx 'hrarg=--' || { echo "FAIL: bare -- separator token missing" >&2; exit 1; }
-          echo "SEP_OK"
+          printf '%s\n' "${out}" | grep -qxF "HR_MEMDB=${HOME}/.headroom/memory.db" \
+            || { echo "FAIL: HEADROOM_MEMORY_DB_PATH is not ~/.headroom/memory.db" >&2; exit 1; }
+          echo "MEMDB_OK"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "FAKE_HEADROOM_INVOKED"
+          - result.systemout ShouldContainSubstring "FAKE_HELPER_INVOKED"
           - result.systemout ShouldContainSubstring "HR_GUARD=1"
-          - result.systemout ShouldContainSubstring "hrarg=wrap"
-          - result.systemout ShouldContainSubstring "hrarg=claude"
-          - result.systemout ShouldContainSubstring "hrarg=--memory"
-          - result.systemout ShouldContainSubstring "hrarg=--learn"
-          - result.systemout ShouldContainSubstring "hrarg=--code-memory"
-          - result.systemout ShouldContainSubstring "hrarg=none"
-          - result.systemout ShouldNotContainSubstring "hrarg=--no-context-tool"
-          - result.systemout ShouldContainSubstring "SEP_OK"
-          - result.systemout ShouldContainSubstring "hrarg=do work"
-          # First pass must NOT reach the real binary — headroom owns the launch.
+          - result.systemout ShouldContainSubstring "MEMDB_OK"
+          - result.systemout ShouldContainSubstring "helperarg=-p"
+          - result.systemout ShouldContainSubstring "helperarg=do work"
           - result.systemout ShouldNotContainSubstring "FAKE_REAL_claude_INVOKED"
+          - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_INVOKED"
 
   - name: guard set — second pass skips headroom and execs the real binary
     steps:
@@ -169,41 +171,100 @@ testcases:
           - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
           - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_INVOKED"
 
-  - name: full chain — headroom re-launches the shim and the loop breaks
+  - name: full chain for claude — the helper re-launches the shim, which runs the real binary once
     steps:
       - type: exec
         script: |
           export RIOTBOX_DIR="{{.riotbox_dir}}"
           source "{{.shared_helpers}}"
           setup_wrapper_sandbox claude
-          trap 'rm -rf "${TEST_DIR}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          headroom_fakes_init
+          trap 'kill_fakes; rm -rf "${TEST_DIR}"' EXIT
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM HEADROOM_MEMORY_DB_PATH
           install_generic_wrapper_for claude
-          # Faithful fake: like the real headroom, re-invoke `claude` by NAME
-          # (PATH lookup -> hits the shim again) with the post-`--` args.
+          # `headroom proxy` is an accept-once TCP listener; anything else
+          # headroom is asked to do is logged, and `wrap` fails loudly.
           cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
           #!/usr/bin/env bash
-          echo "FAKE_HEADROOM_INVOKED"
-          while [ $# -gt 0 ] && [ "$1" != "--" ]; do shift; done
-          [ "${1:-}" = "--" ] && shift
-          exec claude "$@"
+          printf 'HR=%s\n' "$*" >>"${HOME}/headroom-calls.log"
+          case "${1:-}" in
+            proxy)
+              port=8787 prev=""
+              for a in "$@"; do [ "${prev}" = "--port" ] && port="${a}"; prev="${a}"; done
+              exec python3 "${RIOTBOX_DIR}/tests/lib/fake-headroom-listener.py" "${port}" ;;
+            mcp) exit 0 ;;
+            *) echo "FAKE_HEADROOM_UNEXPECTED $*"; exit 3 ;;
+          esac
           FAKE
           chmod +x "${TEST_DIR}/realbin/headroom"
           export RIOTBOX_HEADROOM=1
           unset RIOTBOX_HEADROOM_ACTIVE
-          out="$(claude -p "do work")"
+          out="$(claude -p "do work" 2>&1)"
           echo "${out}"
-          # headroom exactly once (no loop), real binary exactly once, and
-          # the second shim pass still injected the permissions flag.
-          hr_count="$(printf '%s\n' "${out}" | grep -c 'FAKE_HEADROOM_INVOKED' || true)"
           real_count="$(printf '%s\n' "${out}" | grep -c 'FAKE_REAL_claude_INVOKED' || true)"
-          [ "${hr_count}" = "1" ] || { echo "FAIL: headroom ran ${hr_count} times" >&2; exit 1; }
           [ "${real_count}" = "1" ] || { echo "FAIL: real binary ran ${real_count} times" >&2; exit 1; }
+          ! grep -q '^HR=wrap' "${HOME}/headroom-calls.log" || { echo "FAIL: headroom wrap was used" >&2; exit 1; }
+          [ "$(grep -c '^HR=proxy' "${HOME}/headroom-calls.log")" = 1 ] || { echo "FAIL: proxy not started once" >&2; exit 1; }
           echo "CHAIN_OK"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "CHAIN_OK"
           - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
           - result.systemout ShouldContainSubstring "arg=do work"
+          - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_UNEXPECTED"
+
+  - name: simulated claude run leaves the project tree exactly as it was
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          setup_wrapper_sandbox claude
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          headroom_fakes_init
+          trap 'kill_fakes; rm -rf "${TEST_DIR}"' EXIT
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM HEADROOM_MEMORY_DB_PATH
+          install_generic_wrapper_for claude
+          # Models where headroom 0.39.0 writes. The proxy keeps memory at
+          # HEADROOM_MEMORY_DB_PATH, else $PWD/.headroom/memory.db
+          # (proxy/server.py:1332-1336); `wrap claude` writes
+          # .claude/settings.local.json and its lock in $PWD (cli/wrap.py:
+          # 5253, 1672). ~/.headroom stands for the state-dir mount.
+          cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
+          #!/usr/bin/env bash
+          case "${1:-}" in
+            proxy)
+              db="${HEADROOM_MEMORY_DB_PATH:-${PWD}/.headroom/memory.db}"
+              mkdir -p "${db%/*}"; touch "${db}"
+              port=8787 prev=""
+              for a in "$@"; do [ "${prev}" = "--port" ] && port="${a}"; prev="${a}"; done
+              exec python3 "${RIOTBOX_DIR}/tests/lib/fake-headroom-listener.py" "${port}" ;;
+            wrap)
+              mkdir -p .claude; echo '{}' > .claude/settings.local.json; : > .claude/.headroom_wrap_settings.lock
+              while [ "$#" -gt 0 ]; do a="$1"; shift; [ "${a}" = "--" ] && break; done
+              exec claude "$@" ;;
+            mcp) exit 0 ;;
+          esac
+          FAKE
+          chmod +x "${TEST_DIR}/realbin/headroom"
+          mkdir -p "${TEST_DIR}/proj/src"
+          echo code > "${TEST_DIR}/proj/src/main.c"
+          echo '# team' > "${TEST_DIR}/proj/CLAUDE.md"
+          cd "${TEST_DIR}/proj"
+          snap() { find . -printf '%p %y %m %s\n' | LC_ALL=C sort; find . -type f -exec sha256sum {} + | LC_ALL=C sort; }
+          before="$(snap)"
+          export RIOTBOX_HEADROOM=1
+          unset RIOTBOX_HEADROOM_ACTIVE
+          claude -p "do work"
+          after="$(snap)"
+          [ "${before}" = "${after}" ] || { echo "FAIL: the project changed" >&2; diff <(printf '%s\n' "${before}") <(printf '%s\n' "${after}") >&2; exit 1; }
+          [ -f "${HOME}/.headroom/memory.db" ] || { echo "FAIL: no memory DB in the state dir" >&2; exit 1; }
+          echo "PROJECT_UNTOUCHED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_REAL_claude_INVOKED"
+          - result.systemout ShouldContainSubstring "PROJECT_UNTOUCHED"
 
   - name: agent without headroom_argv warns and runs unwrapped
     steps:
@@ -420,6 +481,180 @@ testcases:
           echo "PROJECT_VOLUME_FLAGS=${PROJECT_VOLUME_FLAGS}"
           echo "${PROJECT_VOLUME_FLAGS}" | grep -qF -- "-v ${dir}:/home/llm/.headroom:z" \
             || { echo "BAD: mount flag does not reference the created dir" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: existing project .headroom gets a one-time notice and is left alone
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/proj/.headroom" "${TMP}/data" "${TMP}/.claude"
+          echo old-memory > "${TMP}/proj/.headroom/memory.db"
+          export HOME="${TMP}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
+          export RIOTBOX_HEADROOM=1 XDG_DATA_HOME="${TMP}/data" ROOT_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${TMP}/proj" 2>"${TMP}/first"
+          setup_projects "${TMP}/proj" 2>"${TMP}/second"
+          echo "--- first ---"; cat "${TMP}/first"
+          echo "--- second ---"; cat "${TMP}/second"
+          grep -qF "rm -rf -- ${TMP}/proj/.headroom" "${TMP}/first" \
+            || { echo "BAD: no delete command" >&2; exit 1; }
+          keep="$(grep -F "cp -a -- ${TMP}/proj/.headroom/. ${RIOTBOX_STATE_DIR}/headroom/" "${TMP}/first")" \
+            || { echo "BAD: no keep command" >&2; exit 1; }
+          grep -qF "git -C ${TMP}/proj rm -r --cached -- .headroom" "${TMP}/first" \
+            || { echo "BAD: no untrack command" >&2; exit 1; }
+          grep -qF ".gitignore" "${TMP}/first" || { echo "BAD: no .gitignore advice" >&2; exit 1; }
+          ! grep -q headroom "${TMP}/second" || { echo "BAD: notice repeated" >&2; exit 1; }
+          [ "$(cat "${TMP}/proj/.headroom/memory.db")" = old-memory ] \
+            || { echo "BAD: project .headroom was touched" >&2; exit 1; }
+          # The keep command must not pair the old DB with the new location's
+          # SQLite journal files or its per-project DBs.
+          st="${RIOTBOX_STATE_DIR}/headroom"
+          mkdir -p "${st}/memories/projects/x" "${st}/logs"
+          echo new > "${st}/memory.db"; echo stale > "${st}/memory.db-wal"; echo stale > "${st}/memory_vectors.db-shm"
+          touch "${st}/logs/proxy.log"
+          bash -c "${keep}"
+          [ "$(cat "${st}/memory.db")" = old-memory ] || { echo "BAD: old memory not in place" >&2; exit 1; }
+          [ ! -e "${st}/memory.db-wal" ] && [ ! -e "${st}/memory_vectors.db-shm" ] && [ ! -e "${st}/memories" ] \
+            || { echo "BAD: stale journal or per-project DB survived" >&2; ls -A "${st}" >&2; exit 1; }
+          [ -e "${st}/logs/proxy.log" ] || { echo "BAD: keep removed unrelated state" >&2; exit 1; }
+          [ ! -e "${TMP}/proj/.headroom" ] || { echo "BAD: old copy not removed" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: no project .headroom notice without one, or with the gate off, until headroom runs
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/clean" "${TMP}/off/.headroom" "${TMP}/data" "${TMP}/.claude"
+          export HOME="${TMP}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
+          export XDG_DATA_HOME="${TMP}/data" ROOT_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          RIOTBOX_HEADROOM=1 setup_projects "${TMP}/clean" 2>"${TMP}/clean.err"
+          unset RIOTBOX_HEADROOM
+          setup_projects "${TMP}/off" 2>"${TMP}/off.err"
+          cat "${TMP}/clean.err" "${TMP}/off.err"
+          ! grep -q '\.headroom' "${TMP}/clean.err" "${TMP}/off.err" \
+            || { echo "BAD: unexpected notice" >&2; exit 1; }
+          # Headroom off records nothing, so the first headroom launch of
+          # that session still checks and notices.
+          ! grep -qx project-headroom-notice "${RIOTBOX_STATE_DIR}/.migrated" \
+            || { echo "BAD: headroom-off launch recorded the notice" >&2; exit 1; }
+          RIOTBOX_HEADROOM=1 setup_projects "${TMP}/off" 2>"${TMP}/on.err"
+          grep -qF "Notice: ${TMP}/off/.headroom" "${TMP}/on.err" \
+            || { echo "BAD: later headroom launch did not notice" >&2; cat "${TMP}/on.err" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: headroom memory in an older overlay upper gets the notice too
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/proj" "${TMP}/state/overlay/project/upper/.headroom" "${TMP}/state/overlay/other/upper"
+          ln -s "${TMP}/proj" "${TMP}/state/overlay/other/upper/.headroom"
+          # A session can replace its upper with a link: never follow it.
+          mkdir -p "${TMP}/victim/.headroom" "${TMP}/state/overlay/linked"
+          ln -s "${TMP}/victim" "${TMP}/state/overlay/linked/upper"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          notice_project_headroom "${TMP}/proj" "${TMP}/state" 2>"${TMP}/err"
+          cat "${TMP}/err"
+          up="${TMP}/state/overlay/project/upper/.headroom"
+          grep -qF "Notice: ${up} may hold headroom memory" "${TMP}/err" || { echo "BAD: no overlay notice" >&2; exit 1; }
+          grep -qF "overlay-accept never copies it" "${TMP}/err" || { echo "BAD: accept not explained" >&2; exit 1; }
+          grep -qxF "          rm -rf -- ${up}" "${TMP}/err" || { echo "BAD: no delete command" >&2; exit 1; }
+          ! grep -qF "${TMP}/state/overlay/other" "${TMP}/err" || { echo "BAD: followed a symlinked .headroom" >&2; exit 1; }
+          ! grep -qF "${TMP}/state/overlay/linked" "${TMP}/err" || { echo "BAD: followed a symlinked upper" >&2; exit 1; }
+          [ -d "${TMP}/victim/.headroom" ] || { echo "BAD: victim changed" >&2; exit 1; }
+          ! grep -q 'git -C' "${TMP}/err" || { echo "BAD: git advice for a state-dir copy" >&2; exit 1; }
+          [ "$(grep -c 'shown once per session' "${TMP}/err")" = 1 ] || { echo "BAD: footer count" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: a symlinked project .headroom is not followed and gets no notice
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/proj" "${TMP}/elsewhere" "${TMP}/data" "${TMP}/.claude"
+          echo theirs > "${TMP}/elsewhere/memory.db"
+          ln -s "${TMP}/elsewhere" "${TMP}/proj/.headroom"
+          export HOME="${TMP}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
+          export RIOTBOX_HEADROOM=1 XDG_DATA_HOME="${TMP}/data" ROOT_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${TMP}/proj" 2>"${TMP}/err"
+          cat "${TMP}/err"
+          ! grep -q 'headroom memory' "${TMP}/err" || { echo "BAD: notice for a symlink" >&2; exit 1; }
+          [ -L "${TMP}/proj/.headroom" ] && [ "$(cat "${TMP}/elsewhere/memory.db")" = theirs ] \
+            && [ "$(ls -A "${TMP}/elsewhere")" = memory.db ] \
+            || { echo "BAD: link or its target changed" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: the notice quotes a project path with spaces and shell metacharacters
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          proj="${TMP}/my proj \$(x);y"
+          mkdir -p "${proj}/.headroom" "${TMP}/data" "${TMP}/.claude"
+          export HOME="${TMP}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
+          export RIOTBOX_HEADROOM=1 XDG_DATA_HOME="${TMP}/data" ROOT_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          # resolve_projects splits on spaces, so set PROJECT_DIRS the way it
+          # would and call the notice directly.
+          mkdir -p "${TMP}/state"
+          notice_project_headroom "${proj}" "${TMP}/state" 2>"${TMP}/err"
+          cat "${TMP}/err"
+          q="$(printf '%q' "${proj}/.headroom")"
+          grep -qxF "          rm -rf -- ${q}" "${TMP}/err" || { echo "BAD: delete command not quoted" >&2; exit 1; }
+          # Running the printed delete command removes exactly that directory.
+          bash -c "$(grep -F "rm -rf -- ${q}" "${TMP}/err" | head -1)"
+          [ ! -e "${proj}/.headroom" ] && [ -d "${proj}" ] || { echo "BAD: quoted command misbehaved" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: a failed headroom notice warns and does not stop the launch
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/proj/.headroom" "${TMP}/data" "${TMP}/.claude"
+          export HOME="${TMP}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
+          export RIOTBOX_HEADROOM=1 XDG_DATA_HOME="${TMP}/data" ROOT_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          # Stands in for a marker that cannot be written (disk full).
+          notice_project_headroom() { return 1; }
+          setup_projects "${TMP}/proj" 2>"${TMP}/err"
+          cat "${TMP}/err"
+          grep -q 'Warning: could not record that the headroom memory notice was checked' "${TMP}/err" \
+            || { echo "BAD: no warning" >&2; exit 1; }
+          echo "${PROJECT_VOLUME_FLAGS}" | grep -qF -- "/home/llm/.headroom:z" || { echo "BAD: launch setup stopped" >&2; exit 1; }
           echo "OK"
         assertions:
           - result.code ShouldEqual 0

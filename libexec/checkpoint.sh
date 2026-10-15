@@ -285,7 +285,8 @@ _backup_project() {
 	# ~/work/b/web would otherwise share one backup, where the second project
 	# force-overwrites the first's branches and collides with its snapshot ref
 	# on every launch — so one of the two is never actually backed up. Same
-	# path mangling as the session key in scripts/mount-projects.sh.
+	# path mangling as a single-project session key's readable prefix
+	# (session_key in scripts/mount-projects.sh), without its hash.
 	# shellcheck disable=SC2312  # printf into sed cannot fail for a non-empty path
 	backup_key="$(printf '%s\n' "${dir}" | sed 's|/|-|g; s|^-||')"
 	backup_dir="${backup_root}/${backup_key}.git"
@@ -394,8 +395,8 @@ Remove or rename that path, then relaunch to rebuild the backup from scratch."
 	fi
 
 	# The store is readable — now make sure it is OURS before writing to it.
-	# The key mangling matches mount-projects.sh character for character, but it
-	# is not injective: any '-' in a path component aliases with '/', so
+	# The key mangling is the one session_key's readable prefix uses, and with no
+	# hash after it, it is not injective: any '-' in a path component aliases with '/', so
 	# ~/a-b/c and ~/a/b-c key alike, and hyphenated directories are common.
 	# Pushing into the wrong store would force-overwrite another project's
 	# branches silently. The origin URL is the store's own record of who it

@@ -5,6 +5,10 @@ set -euo pipefail
 
 # shellcheck source=tests/lib/engine-stub.sh
 source "$(dirname "${BASH_SOURCE[0]}")/engine-stub.sh"
+# Session keys come from the launch's own derivation in
+# scripts/mount-projects.sh, never a re-derivation here.
+# shellcheck source=scripts/mount-projects.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../../scripts/mount-projects.sh"
 
 # Create an overlay test environment with a project, its session directory,
 # and its state directory, which is where overlay data lives. Like a launch,
@@ -26,7 +30,7 @@ setup_overlay_test() {
 	PROJECT="${TEST_DIR}/myproject"
 	mkdir -p "${PROJECT}"
 
-	SESSION_KEY="$(echo "${PROJECT}" | sed 's|/|-|g; s|^-||')"
+	SESSION_KEY="$(session_key "${PROJECT}")"
 	export XDG_DATA_HOME="${TEST_DIR}/data"
 	SESSION="${XDG_DATA_HOME}/riotbox/${SESSION_KEY}"
 	STATE="${XDG_DATA_HOME}/riotbox-state/${SESSION_KEY}"

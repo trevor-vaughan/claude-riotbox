@@ -1294,13 +1294,16 @@ testcases:
           # 2. tests/lib/git-test-helpers.sh
           echo "helper=$(backup_path "${REPO_DIR}")"
           [ "$(backup_path "${REPO_DIR}")" = "${created}" ]
-          # 3. scripts/mount-projects.sh — the session key uses the same
-          #    mangling, so its basename plus .git must be the store's.
+          # 3. scripts/mount-projects.sh — the session key's readable prefix
+          #    uses the same mangling, so the key without its "-<16 hex>"
+          #    hash, plus .git, must be the store's.
           (
             source "{{.riotbox_dir}}/scripts/mount-projects.sh"
             resolve_projects "${REPO_DIR}"
-            echo "session_key=$(basename "${RIOTBOX_SESSION_DIR}")"
-            [ "$(basename "${RIOTBOX_SESSION_DIR}").git" = "$(basename "${created}")" ]
+            key="$(basename "${RIOTBOX_SESSION_DIR}")"
+            echo "session_key=${key}"
+            printf '%s\n' "${key}" | grep -qE -- '-[0-9a-f]{16}$'
+            [ "${key%-*}.git" = "$(basename "${created}")" ]
           )
           # 4. libexec/checkpoints.sh — sourcing is safe, main() is guarded.
           (

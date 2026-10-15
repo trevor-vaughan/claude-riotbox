@@ -314,33 +314,15 @@ Emits (NUL-terminated, like the other argv verbs) the command line the
 wrapper execs instead of the real binary when `RIOTBOX_HEADROOM=1`. The
 wrapper exports `RIOTBOX_HEADROOM_ACTIVE=1` first, so when the emitted
 command eventually re-invokes the agent by name, the shim's second pass
-takes the normal inject-and-exec path. Two shapes exist:
+takes the normal inject-and-exec path.
 
-**Wrap-shaped** — for tools headroom supports natively
-(`headroom wrap claude|codex|goose|…`):
-
-```bash
-agent_<name>_headroom_argv() {
-	printf '%s\0' headroom wrap <real-binary> <flags...> --
-	local arg
-	for arg in "$@"; do
-		printf '%s\0' "${arg}"
-	done
-}
-```
-
-A wrap-shaped verb MUST:
-
-- start with `headroom wrap <real-binary>`,
-- disable anything that downloads at session start (the claude manifest
-  passes `--code-memory none` — the image is offline-after-build),
-- place all caller args after a literal `--` (headroom's wrap subcommands
-  define their own flags, e.g. `-p/--port`, that would otherwise swallow
-  agent flags).
-
-**Proxy-routed** — for tools headroom has no wrap subcommand for. Emit an
-executable helper co-located in your agent's directory, followed by the
-caller args verbatim:
+The one rule above all others: **headroom must write nothing into the CWD**,
+which in a session is the caller's bind-mounted project. That rules out
+emitting `headroom wrap <tool>` directly for every tool checked so far:
+`wrap claude` writes `.claude/settings.local.json`, lock, marker and owner
+files and a `SessionStart` hook there, and `wrap opencode --memory` appends
+to `AGENTS.md` (headroom 0.39.0). So the verb emits an executable helper
+co-located in your agent's directory, followed by the caller args verbatim:
 
 ```bash
 agent_<name>_headroom_argv() {
@@ -354,32 +336,52 @@ agent_<name>_headroom_argv() {
 
 The helper owns whatever routing the tool needs and MUST:
 
-- ensure `headroom proxy` is listening (reuse a live one, else spawn with
-  `--memory --learn`, log to `~/.headroom/logs/proxy.log`, and wait for
-  TCP readiness with a timeout),
+- ensure the proxy with `headroom_proxy_ensure <agent-type> <plan-fn>`
+  from `agents/lib/headroom-proxy.sh`. `<plan-fn> <port>` sets
+  `HEADROOM_PROXY_ARGS` and exports the routing env the agent needs with a
+  proxy on that port. Under a start lock (`proxy.lock` in the container-local
+  `/tmp/riotbox-headroom-<uid>/`; `RIOTBOX_HEADROOM_RUN_DIR` overrides it,
+  for tests only)
+  the library scans up to 100 ports from `HEADROOM_PORT`. It reuses a port
+  only when `/livez` answers as a healthy headroom proxy AND
+  `proxy.<port>` there records the same launch config (the
+  arguments and the env that decides the upstream) for a process still
+  alive with the same start time. The proxy fixes its upstream when it
+  starts, so a proxy started for another provider must not be shared. The
+  records are container-local because `~/.headroom` is the state-dir mount,
+  shared by every concurrent container of the project, each with its own
+  network and PID namespace.
+  Otherwise it starts `headroom proxy --memory --no-learn` on the first free
+  port, logs to `~/.headroom/logs/proxy.log`, waits for `/livez` until a
+  deadline (`RIOTBOX_HEADROOM_PROXY_TIMEOUT` seconds), writes the record and
+  releases the lock. The port actually used is in `HEADROOM_PROXY_PORT`.
+  The wrapper has already exported `HEADROOM_MEMORY_DB_PATH=~/.headroom/memory.db`,
+  which keeps the proxy's memory out of the CWD; do not override it.
+  `--no-learn` is not optional: the traffic learner writes into the project
+  and cannot be pointed elsewhere (the library's header has the evidence),
 - apply agent-specific routing only AFTER the proxy answers,
 - degrade to unwrapped on any failure — warn on stderr, leave config
   untouched, `exec <real-binary-name> "$@"`,
 - end by exec'ing something that reaches `<real-binary-name>`, so the shim's
   guarded second pass applies the agent's normal injection rules. That may
-  be the binary directly, or `headroom wrap <tool>`, which launches it.
+  be the binary directly (claude), or `headroom wrap <tool> --no-proxy` when
+  that subcommand provably writes nothing into the CWD with the flags passed
+  (opencode, without `--memory`),
+- be verified by a sandboxed run with the pinned headroom and a stub agent
+  that leaves the project byte-identical.
 
-A helper is the right shape whenever `headroom wrap <tool>` does most of the
-job but one of its side effects is unacceptable in a container. The opencode
-helper exists for exactly one such effect: `wrap opencode --memory` writes a
-memory block into `AGENTS.md` in the CWD, which in a session is the caller's
-bind-mounted repository. Owning the proxy locally buys memory without that
-write; everything else is delegated to `wrap opencode --no-proxy`.
-
-`agents/opencode/headroom-exec.sh` is the reference implementation.
+`agents/claude/headroom-exec.sh` sets the routing env itself and documents
+what it keeps from and drops relative to `wrap claude`;
+`agents/opencode/headroom-exec.sh` delegates routing to
+`wrap opencode --no-proxy`.
 
 Agents without the verb run unwrapped under `RIOTBOX_HEADROOM=1`, with a
 warning on stderr.
 
 Contract coverage lives in `tests/agents.venom.yml` ("Headroom optional
-verb" cases), `tests/headroom.venom.yml` (wrapper gate, guard, and
-fallbacks), and `tests/headroom-opencode.venom.yml` (proxy-routed helper
-behavior).
+verb" cases), `tests/headroom.venom.yml` (wrapper gate, guard, fallbacks,
+and the untouched-project run), `tests/headroom-claude.venom.yml` and
+`tests/headroom-opencode.venom.yml` (helper behavior).
 
 ## Optional verbs: Context Mode
 

@@ -24,7 +24,7 @@ testcases:
           export GIT_AUTHOR_NAME=riotbox-test GIT_AUTHOR_EMAIL=riotbox-test@invalid
           export GIT_COMMITTER_NAME=riotbox-test GIT_COMMITTER_EMAIL=riotbox-test@invalid
           REPO="$(cd "$(mktemp -d)" && pwd -P)"; HOSTPI="$(mktemp -d)"; LEDGER="$(mktemp -d)"
-          SESSION_KEY="$(printf '%s\n' "${REPO}" | sed 's|/|-|g; s|^-||')"
+          SESSION_KEY="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${REPO}")"
           DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
           SESSION_DIR="${DATA_DIR}/${SESSION_KEY}"
           STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox-state/${SESSION_KEY}"
@@ -69,7 +69,7 @@ testcases:
           export GIT_AUTHOR_NAME=riotbox-test GIT_AUTHOR_EMAIL=riotbox-test@invalid
           export GIT_COMMITTER_NAME=riotbox-test GIT_COMMITTER_EMAIL=riotbox-test@invalid
           REPO="$(cd "$(mktemp -d)" && pwd -P)"; HOSTPI="$(mktemp -d)"; LEDGER="$(mktemp -d)"
-          SESSION_KEY="$(printf '%s\n' "${REPO}" | sed 's|/|-|g; s|^-||')"
+          SESSION_KEY="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${REPO}")"
           DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
           SESSION_DIR="${DATA_DIR}/${SESSION_KEY}"
           STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox-state/${SESSION_KEY}"
@@ -108,7 +108,7 @@ testcases:
           export GIT_AUTHOR_NAME=riotbox-test GIT_AUTHOR_EMAIL=riotbox-test@invalid
           export GIT_COMMITTER_NAME=riotbox-test GIT_COMMITTER_EMAIL=riotbox-test@invalid
           REPO="$(cd "$(mktemp -d)" && pwd -P)"; HOSTPI="$(mktemp -d)"; LEDGER="$(mktemp -d)"
-          SESSION_KEY="$(printf '%s\n' "${REPO}" | sed 's|/|-|g; s|^-||')"
+          SESSION_KEY="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${REPO}")"
           DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
           SESSION_DIR="${DATA_DIR}/${SESSION_KEY}"
           STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox-state/${SESSION_KEY}"
@@ -146,7 +146,7 @@ testcases:
           export GIT_AUTHOR_NAME=riotbox-test GIT_AUTHOR_EMAIL=riotbox-test@invalid
           export GIT_COMMITTER_NAME=riotbox-test GIT_COMMITTER_EMAIL=riotbox-test@invalid
           REPO="$(cd "$(mktemp -d)" && pwd -P)"; HOSTPI="$(mktemp -d)"; LEDGER="$(mktemp -d)"
-          SESSION_KEY="$(printf '%s\n' "${REPO}" | sed 's|/|-|g; s|^-||')"
+          SESSION_KEY="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh" && session_key "${REPO}")"
           DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
           SESSION_DIR="${DATA_DIR}/${SESSION_KEY}"
           STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox-state/${SESSION_KEY}"

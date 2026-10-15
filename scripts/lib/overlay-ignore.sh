@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# scripts/lib/overlay-ignore.sh — derived-cache filter for overlay bookkeeping.
+# scripts/lib/overlay-ignore.sh — derived-cache and agent-state filter for
+# overlay bookkeeping.
 #
 # Sourced by the host overlay tooling (scripts/overlay.sh, libexec/launch.sh,
 # scripts/mount-projects.sh)
@@ -18,10 +19,15 @@
 # simply stays in the overlay for the next session — nothing is wiped, so
 # there is nothing for it to survive.
 #
+# The one exception is OVERLAY_KEPT_NAMES: names that must never reach the
+# project, whatever the user accepts. Accept neither copies nor deletes them
+# in the project, and both verbs move them into the fresh upper instead of
+# wiping them, so they stay in the overlay until the user removes them.
+#
 # Public:
 #   overlay_path_ignored <relative-path>
-#     Exit 0 when the FIRST component of the path is a derived-cache directory
-#     (or its overlayfs whiteout form). Matching is by name alone and ignores
+#     Exit 0 when the FIRST component of the path is in OVERLAY_IGNORED_NAMES
+#     (or is its overlayfs whiteout form). Matching is by name alone and ignores
 #     file type, so a regular file literally named `.codegraph` is filtered
 #     too.
 #
@@ -35,6 +41,11 @@
 #     copied it to the host: a write channel to the host that review never
 #     showed. A deliberately-indexed subdirectory now shows up as a change,
 #     which is the safe direction to be wrong in.
+#
+#   overlay_path_kept <relative-path>
+#     Exit 0 when the FIRST component of the path is in OVERLAY_KEPT_NAMES (or
+#     is its whiteout form): overlay-accept and overlay-reject leave the entry
+#     in the overlay and never apply it. Anchored like overlay_path_ignored.
 #
 #   overlay_upper_changes <upper-dir>
 #     Print one upper-relative path per non-ignored, non-directory entry,
@@ -64,7 +75,19 @@
 #   .codegraph — CodeGraph's per-project index. Rebuilt by `codegraph init`,
 #                self-gitignored by CodeGraph itself. See README "CodeGraph
 #                code intelligence".
-OVERLAY_IGNORED_NAMES=(".codegraph")
+#   .headroom  headroom memory. Since the agent wrapper sets
+#              HEADROOM_MEMORY_DB_PATH it lives in the state dir, but older
+#              releases let headroom write it into the working directory,
+#              which in overlay mode is the overlay upper. Also kept (below).
+OVERLAY_IGNORED_NAMES=(".codegraph" ".headroom")
+
+# Names overlay-accept never copies into the project and overlay-reject never
+# discards — a subset of OVERLAY_IGNORED_NAMES, so they are hidden from review
+# too. .headroom is the agent's memory store, not project content: copying it
+# would put the old memory into the user's checkout, the very write the
+# state-dir location exists to prevent. The one-time notice
+# (notice_project_headroom) says how to delete or keep it.
+OVERLAY_KEPT_NAMES=(".headroom")
 
 overlay_path_ignored() {
 	local rel="${1:-}"
@@ -73,6 +96,16 @@ overlay_path_ignored() {
 	local first="${rel%%/*}"
 	local name
 	for name in "${OVERLAY_IGNORED_NAMES[@]}"; do
+		if [[ "${first}" = "${name}" ]] || [[ "${first}" = ".wh.${name}" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+overlay_path_kept() {
+	local first="${1%%/*}" name
+	for name in "${OVERLAY_KEPT_NAMES[@]}"; do
 		if [[ "${first}" = "${name}" ]] || [[ "${first}" = ".wh.${name}" ]]; then
 			return 0
 		fi

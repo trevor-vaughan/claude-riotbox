@@ -27,6 +27,7 @@
 #
 # Public:
 #   ensure_real_dir <dir>
+#   require_real_dir <dir>
 #   migrate_legacy_state <session-dir> <state-dir> <legacy>:<new> ...
 #   migrate_overlay_state <session-dir> <state-dir>
 #   migrate_session_state <session-dir> <state-dir>  (list: SESSION_STATE_MIGRATIONS)
@@ -61,6 +62,20 @@ ensure_real_dir() {
 		rm -f "${dir}" || return 1
 	fi
 	mkdir -p "${dir}"
+}
+
+# require_real_dir <dir>
+#   Create <dir> as a directory, or confirm that it already is one. Unlike
+#   ensure_real_dir, refuse, saying so, when it is a symlink or not a
+#   directory: for dirs inside overlay/<name>, which is mounted read-write
+#   into the session at /mnt/overlay, so a session can plant either there,
+#   and a link where upper/ should be is tampering to stop at, not to tidy
+#   up. `mkdir -p` would take a link to a directory for the directory.
+require_real_dir() {
+	mkdir -- "$1" 2>/dev/null && return 0
+	[[ -d "$1" ]] && [[ ! -L "$1" ]] && return 0
+	echo "ERROR: $1 is a symlink or not a directory (or could not be created); refusing to use it." >&2
+	return 1
 }
 
 # migrate_legacy_state [--replace-empty] <session-dir> <state-dir> <legacy>:<new> ...
@@ -230,6 +245,11 @@ SESSION_STATE_MIGRATIONS=(
 #     <name>          the entry ran; never run automatically again
 #     failed:<name>   it left legacy data stranded (a failed move, or both
 #                     copies exist); written after a <name> line
+#   One record names no entry of SESSION_STATE_MIGRATIONS and moves nothing:
+#     project-headroom-notice  notice_project_headroom has checked for
+#                     headroom memory an older release left in the project
+#                     (and printed the notice if it found some); written by
+#                     a headroom launch only. The passes here skip it.
 #   An entry is failed while its last line is failed:<name>; a later <name>
 #   line (migrate_failed_state succeeded, or nothing is left to move) makes
 #   it done. Every stranded entry also gets a plain line, so a reader that
@@ -284,7 +304,7 @@ migrate_session_state() {
 #   cannot keep an import window open by forcing failures. An entry whose
 #   legacy path holds nothing (see migrate_session_state) is recorded as
 #   done without a retry. Before the first retry it refuses, failing closed,
-#   while a running RiotBox container mounts the session
+#   while a live container can write the session (running_mount_reaches)
 #   (_refuse_if_session_running). Otherwise the retry is the
 #   migrate_legacy_state / migrate_overlay_state call the launch made, links
 #   included, with --replace-empty: the launch that left the pair stranded
@@ -305,15 +325,72 @@ migrate_failed_state() {
 	_with_migrate_lock "${state_dir}" _migrate_failed_state_locked "${session_dir}" "${state_dir}"
 }
 
+# notice_project_headroom <project-dir> <state-dir>
+#   Once per session: for each of <project-dir>/.headroom and
+#   <state-dir>/overlay/*/upper/.headroom that is a real directory, say on
+#   stderr that it may hold headroom memory an older RiotBox left there, and
+#   how to delete it or copy it to <state-dir>/headroom, where memory is kept
+#   now. Older releases let headroom default its memory DB to the
+#   container's working directory: for one project the user's checkout, or
+#   in overlay mode the overlay upper. Nothing is moved or deleted: a
+#   .headroom the user made with their own headroom looks the same, and
+#   overlay-accept/-reject never apply or discard one in an upper
+#   (OVERLAY_KEPT_NAMES). Recorded in .migrated as project-headroom-notice
+#   whether or not it printed, so it is checked once. The caller holds the
+#   migrate lock (_with_migrate_lock), so concurrent launches print it once.
+notice_project_headroom() {
+	local project="$1" state_dir="$2" name=project-headroom-notice old printed=""
+	local -A recorded=() failed=()
+	_read_migration_marker "${state_dir}/.migrated" recorded failed
+	[[ -z "${recorded["${name}"]:-}" ]] || return 0
+	for old in "${project}/.headroom" "${state_dir}"/overlay/*/upper/.headroom; do
+		[[ -d "${old}" && ! -L "${old}" ]] || continue
+		# A session can replace its upper with a link; the glob would follow
+		# it, and the printed rm -rf would delete through it.
+		if [[ "${old}" != "${project}/.headroom" ]] &&
+			{ [[ -L "${old%/.headroom}" ]] || [[ -L "${old%/upper/.headroom}" ]]; }; then
+			continue
+		fi
+		printed=1
+		{
+			echo "Notice: ${old} may hold headroom memory from an older RiotBox."
+			if [[ "${old}" == "${project}/.headroom" ]]; then
+				echo "        It was written into the project; RiotBox leaves it alone."
+			else
+				echo "        It was written into this session's overlay; overlay-accept never copies it into"
+				echo "        the project, and overlay-reject keeps it."
+			fi
+			echo "        RiotBox now keeps headroom memory in ${state_dir}/headroom. To delete the old copy:"
+			printf '          rm -rf -- %q\n' "${old}"
+			echo "        To keep it instead, exit every RiotBox session of this project, then replace the"
+			echo "        memory the new location holds (its SQLite -wal/-shm files included) with it:"
+			printf '          rm -rf -- %q/memory*.db* %q && cp -a -- %q %q && rm -rf -- %q\n' \
+				"${state_dir}/headroom" "${state_dir}/headroom/memories" "${old}/." "${state_dir}/headroom/" "${old}"
+			if [[ "${old}" == "${project}/.headroom" ]]; then
+				echo "        If .headroom/ was committed, untrack it and add it to .gitignore:"
+				printf '          git -C %q rm -r --cached -- .headroom && echo .headroom/ >>%q\n' "${project}" "${project}/.gitignore"
+			fi
+		} >&2
+	done
+	[[ -z "${printed}" ]] || echo "        This notice is shown once per session." >&2
+	_record_migration "${state_dir}" "${name}"
+}
+
 # _with_migrate_lock <state-dir> <command> [args...]
 #   Run <command> holding an exclusive flock on <state-dir>/.migrate.lock,
-#   saying so on stderr when it has to wait, and return its status.
+#   saying so on stderr when it has to wait, and return its status. With
+#   RIOTBOX_STATE_ROOT as <state-dir> that is the lock the key move
+#   (migrate_session_key) and riotbox overlays take, and the message says so.
 _with_migrate_lock() {
 	local state_dir="$1" lock_fd rc=0
 	shift
 	exec {lock_fd}>"${state_dir}/.migrate.lock" || return 1
 	if ! flock --nonblock "${lock_fd}"; then
-		echo "Waiting for another RiotBox command on this session to finish migrating its state…" >&2
+		if [[ "${state_dir}" == "${RIOTBOX_STATE_ROOT:-}" ]]; then
+			echo "Waiting for another RiotBox command to finish moving sessions to their new keys…" >&2
+		else
+			echo "Waiting for another RiotBox command on this session to finish migrating its state…" >&2
+		fi
 		flock --exclusive "${lock_fd}" || {
 			exec {lock_fd}>&-
 			return 1
@@ -489,16 +566,20 @@ _session_migrate_hint() {
 	fi
 }
 
-# _refuse_if_session_running <session-dir> <state-dir>
-#   Return non-zero, saying why, unless the engine confirms that no running
-#   RiotBox container has a read-write mount overlapping the session dir or
-#   the state dir (running_session_mounts). A retry moves the legacy dir and
+# _refuse_if_session_running <session-dir> <state-dir> [<mover> <retry>]
+#   Return non-zero, saying why, unless the engine confirms that no live
+#   container has a read-write mount that reaches the session dir or the
+#   state dir (running_session_mounts, running_mount_reaches: either way
+#   for a RiotBox-labelled container, only at or below them for any other). A retry moves the legacy dir and
 #   may replace the new one, so a running session would keep writing into a
 #   dir that is no longer where RiotBox looks, and those writes would be
-#   lost. Fails closed: an engine that cannot answer is a refusal.
+#   lost. Fails closed: an engine that cannot answer is a refusal. <mover>
+#   names what refuses (default session-migrate) and <retry> what to do once
+#   the session has exited (default: run riotbox session-migrate again).
 _refuse_if_session_running() {
-	local session_dir="$1" state_dir="$2" session state label projects i id
-	local -a paths=() holders=()
+	local session_dir="$1" state_dir="$2" session state session_lexical state_lexical label projects i id
+	local mover="${3:-session-migrate}" retry="${4:-run riotbox session-migrate again}"
+	local -a paths=() holders=() mounts=()
 	local -A held=()
 	if projects="$(recorded_projects "${state_dir}")"; then
 		mapfile -t paths <<<"${projects}"
@@ -508,25 +589,31 @@ _refuse_if_session_running() {
 	fi
 	session="$(realpath -m -- "${session_dir}")" || return 1
 	state="$(realpath -m -- "${state_dir}")" || return 1
+	session_lexical="$(realpath -ms -- "${session_dir}")" || return 1
+	state_lexical="$(realpath -ms -- "${state_dir}")" || return 1
 	if ! running_session_mounts; then
-		echo "ERROR: could not ask '${CONTAINER_CMD:-podman}' whether a RiotBox session of ${label} is running." >&2
-		echo "       session-migrate refuses while it cannot tell: a running session can still write to what it would move." >&2
+		echo "ERROR: could not ask '${CONTAINER_CMD:-podman}' whether a running container mounts the session of ${label}." >&2
+		echo "       ${mover} refuses while it cannot tell: a running session can still write to what it would move." >&2
 		echo "       Make sure the container engine works (and that the session has exited), then retry." >&2
 		return 1
 	fi
 	for i in "${!RUNNING_MOUNT_IDS[@]}"; do
 		id="${RUNNING_MOUNT_IDS[i]}"
-		if paths_overlap "${RUNNING_MOUNT_SOURCES[i]}" "${session}" ||
-			paths_overlap "${RUNNING_MOUNT_SOURCES[i]}" "${state}"; then
+		# shellcheck disable=SC2310 # a predicate designed for conditions
+		if running_mount_reaches "${i}" "${session}" "${session_lexical}" ||
+			running_mount_reaches "${i}" "${state}" "${state_lexical}"; then
 			if [[ -z "${held["${id}"]:-}" ]]; then
 				held["${id}"]=1
-				holders+=("${id}")
+				holders+=("$(running_mount_label "${i}")")
+				mounts+=("${RUNNING_MOUNT_SOURCES[i]}")
 			fi
 		fi
 	done
 	if [[ "${#holders[@]}" -gt 0 ]]; then
-		echo "ERROR: a RiotBox session of ${label} is still running (container ${holders[*]})." >&2
-		echo "       It can still write to what session-migrate would move. Exit that session, then run riotbox session-migrate again." >&2
+		for i in "${!holders[@]}"; do
+			echo "ERROR: container ${holders[i]} mounts ${mounts[i]} read-write, which reaches the session of ${label}, and is still running." >&2
+		done
+		echo "       It can still write to what ${mover} would move. Stop that container (exit its session), then ${retry}." >&2
 		return 1
 	fi
 }

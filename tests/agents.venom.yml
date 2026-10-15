@@ -559,7 +559,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
-  - name: claude headroom_argv carries the mandated flags and -- before user args
+  - name: claude headroom_argv execs the proxy helper, never headroom wrap
     steps:
       - type: exec
         script: |
@@ -572,36 +572,13 @@ testcases:
           fi
           mapfile -d '' -t argv < <(agent_call claude headroom_argv -p "do work")
           echo "argv=${argv[*]}"
-          # Required flags (offline-after-build: Serena downloads at start).
-          for want in --memory --learn --code-memory; do
-            found=0
-            for t in "${argv[@]}"; do [ "${t}" = "${want}" ] && found=1; done
-            [ "${found}" = "1" ] || { echo "FAIL: missing ${want}" >&2; exit 1; }
-          done
-          # --code-memory takes a value; only 'none' suppresses the download.
-          # Checking the flag alone would pass on --code-memory serena.
-          cm=""
-          for i in "${!argv[@]}"; do
-            [ "${argv[$i]}" = "--code-memory" ] && cm="${argv[$((i + 1))]:-}"
-          done
-          [ "${cm}" = "none" ] \
-            || { echo "FAIL: --code-memory is '${cm}', want 'none'" >&2; exit 1; }
-          # Retired upstream: headroom raises a ClickException on this flag,
-          # so passing it would abort every headroom-enabled session.
-          for t in "${argv[@]}"; do
-            [ "${t}" = "--no-context-tool" ] \
-              && { echo "FAIL: --no-context-tool was removed from headroom" >&2; exit 1; }
-          done
-          # `--` must exist and every user arg must come after it: headroom
-          # wrap claude has its own -p/--port, so a user -p BEFORE the
-          # separator would be eaten as a proxy port.
-          sep=-1; p=-1
-          for i in "${!argv[@]}"; do
-            [ "${argv[$i]}" = "--" ] && [ "${sep}" -lt 0 ] && sep=$i
-            [ "${argv[$i]}" = "-p" ] && [ "${p}" -lt 0 ] && p=$i
-          done
-          [ "${sep}" -ge 0 ] || { echo "FAIL: no -- separator" >&2; exit 1; }
-          [ "${p}" -gt "${sep}" ] || { echo "FAIL: -p not after -- (p=${p} sep=${sep})" >&2; exit 1; }
+          # `headroom wrap claude` writes .claude/settings.local.json and a
+          # SessionStart hook into the CWD, the caller's checkout.
+          [ "${argv[0]}" = "${RIOTBOX_DIR}/agents/claude/headroom-exec.sh" ] \
+            || { echo "FAIL: argv[0] is not the claude headroom helper" >&2; exit 1; }
+          [ -x "${argv[0]}" ] || { echo "FAIL: helper not executable" >&2; exit 1; }
+          [ "${#argv[@]}" -eq 3 ] && [ "${argv[1]}" = "-p" ] && [ "${argv[2]}" = "do work" ] \
+            || { echo "FAIL: user args not passed verbatim" >&2; exit 1; }
           echo "OK"
         assertions:
           - result.code ShouldEqual 0
@@ -646,10 +623,10 @@ testcases:
             - thing one
             - thing two"
           mapfile -d '' -t argv < <(agent_call claude headroom_argv -p "${prompt}")
-          # Tail must be exactly: -- -p <prompt> (3 tokens after the flags).
+          # Exactly: <helper> -p <prompt>.
           n=${#argv[@]}
-          if [ "${argv[$((n-3))]}" != "--" ] || [ "${argv[$((n-2))]}" != "-p" ]; then
-            echo "FAIL: tail is not '-- -p <prompt>' (${argv[$((n-3))]} ${argv[$((n-2))]})" >&2
+          if [ "${n}" -ne 3 ] || [ "${argv[1]}" != "-p" ]; then
+            echo "FAIL: argv is not '<helper> -p <prompt>' (${argv[*]})" >&2
             exit 1
           fi
           if [ "${argv[$((n-1))]}" != "${prompt}" ]; then

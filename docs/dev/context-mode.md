@@ -235,6 +235,21 @@ launch when the host has `~/.config/opencode/`. `opencode-data/` (mounted at
 opencode stores live there. The sync also skips a host
 `~/.config/opencode/context-mode/`: that is host data, not config.
 
+Auto-memory follows the same root. Upstream's `BaseAdapter.getMemoryDir()`
+(`build/adapters/base.js`, not overridden by the opencode adapter at `v1.0.169`)
+returns `<CONTEXT_MODE_DATA_DIR>/context-mode/memory/<project hash>` when the
+variable is set and `<config dir>/memory/<project hash>` otherwise, so with
+RiotBox's Context Mode on it lands in the session's
+`riotbox-state/<key>/opencode-data/context-mode/memory`. The sync skips a host
+`~/.config/opencode/memory/` too: it is upstream's default auto-memory home and
+holds memory from every host project. The one reader of that default is a
+session with RiotBox's Context Mode off whose host opencode config loads
+context-mode as a plugin itself: `CONTEXT_MODE_DATA_DIR` is unset, so upstream
+falls back to `~/.config/opencode/memory`. That session gets no host memory, by
+decision, and what it writes sits in the config copy the next re-stage
+replaces. `tests/context-mode-opencode.venom.yml` pins the resolved path and its
+survival across a relaunch sync; `tests/opencode.venom.yml` pins the prune.
+
 Sessions from before this layout kept opencode's stores at
 `~/.config/opencode/context-mode`, and those survived when the host had no
 `~/.config/opencode/`. `agent_opencode_container_setup` moves that directory to

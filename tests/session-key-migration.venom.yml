@@ -1,0 +1,740 @@
+name: session key migration — sessions an older release keyed by mangled path move once to their hashed key
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Releases before session_key keyed a session by its project paths with "/"
+# mapped to "-" (legacy_session_key in scripts/mount-projects.sh), so two
+# project sets could share one key. migrate_session_key moves such a session
+# to the set's own key, once, and only when the old session provably belongs
+# to the launched set: by the host-only record in its state dir or, for a
+# session an older release left without one, by its .projects. These cases
+# pin that rule, the partial and concurrent cases, the running-session guard,
+# links, and every command that resolves a set to its session.
+
+testcases:
+  - name: legacy_session_key reproduces v0.5.3's keys byte for byte
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          # Golden keys from v0.5.3's own resolve_projects (git show
+          # v0.5.3:scripts/mount-projects.sh, run in a scratch dir on these
+          # paths under LC_ALL=C.UTF-8), not from the function under test.
+          # The set has a hyphen, a non-ASCII basename that sorts first,
+          # and three paths; the last repeats a path, which v0.5.3 did not
+          # deduplicate.
+          G=/tmp/rbx-golden
+          check() {
+            local want="$1" got
+            shift
+            got="$(legacy_session_key "$@")"
+            [ "${got}" = "${want}" ] || { echo "FAIL: legacy_session_key $*: got ${got}, want ${want}"; exit 1; }
+          }
+          check tmp-rbx-golden-home-you-src-app "${G}/home/you/src/app"
+          check n-c-d-x-2more-fc0163cd "${G}/w/lib" "${G}/w/b-c/app" "${G}/w/a/Ünïcödé-x"
+          check n-c-d-x-2more-fc0163cd "${G}/w/a/Ünïcödé-x" "${G}/w/lib" "${G}/w/b-c/app"
+          check lib-1more-956a9e55 "${G}/w/lib" "${G}/w/lib"
+          echo "LEGACY_GOLDEN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEGACY_GOLDEN_OK"
+
+  - name: an old-key session whose record names the launched project moves to the new key with its data intact
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          make_old_session record
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" \
+            || { echo "FAIL: launch failed"; cat "${T}/err"; exit 1; }
+          assert_moved_to_new_key
+          grep -qxF "Notice: moved ${OLD_SESSION} to ${SESSION}" "${T}/err" \
+            && grep -qxF "Notice: moved ${OLD_STATE} to ${STATE}" "${T}/err" \
+            || { echo "FAIL: no move notices"; cat "${T}/err"; exit 1; }
+          [ "$(cat "${STATE}/projects")" = "${PROJ}" ] || { echo "FAIL: record"; exit 1; }
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err"
+          if grep -qF "${OLD_KEY}" "${T}/err"; then echo "FAIL: a second launch mentions the old key"; cat "${T}/err"; exit 1; fi
+          echo "RECORD_MIGRATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "RECORD_MIGRATE_OK"
+
+  - name: a session an older release left without a state dir moves by its .projects, with a notice saying so
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          # A released RiotBox kept its state inside the session dir.
+          mkdir -p "${OLD_SESSION}/git-ai" "${OLD_SESSION}/.pi-agent/sessions"
+          printf '%s\n' "${PROJ}" > "${OLD_SESSION}/.projects"
+          echo '{"copy":true}' > "${OLD_SESSION}/settings.json"
+          echo '{}' > "${OLD_SESSION}/git-ai/config.json"
+          echo history > "${OLD_SESSION}/.pi-agent/sessions/s.jsonl"
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" \
+            || { echo "FAIL: launch failed"; cat "${T}/err"; exit 1; }
+          [ ! -e "${OLD_SESSION}" ] && [ ! -e "${OLD_STATE}" ] || { echo "FAIL: left under the old key"; exit 1; }
+          [ "$(cat "${SESSION}/settings.json")" = '{"copy":true}' ] || { echo "FAIL: Claude copy"; exit 1; }
+          [ "$(cat "${STATE}/git-ai/config.json")" = '{}' ] || { echo "FAIL: git-ai not in the state dir"; exit 1; }
+          [ "$(cat "${STATE}/pi-agent/sessions/s.jsonl")" = history ] || { echo "FAIL: Pi history"; exit 1; }
+          [ "$(grep -c "^Notice: moved ${OLD_SESSION} to ${SESSION}" "${T}/err")" -eq 1 ] \
+            && grep -F "Notice: moved ${OLD_SESSION} to ${SESSION}" "${T}/err" | grep -qF '.projects' \
+            || { echo "FAIL: no one-line notice naming .projects"; cat "${T}/err"; exit 1; }
+          [ "$(cat "${STATE}/projects")" = "${PROJ}" ] || { echo "FAIL: the launch did not record its set"; exit 1; }
+          echo "LEGACY_MIGRATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEGACY_MIGRATE_OK"
+
+  - name: a session with a state dir but no record moves by its .projects, and only a launch records it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          make_old_session
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" \
+            || { echo "FAIL: launch failed"; cat "${T}/err"; exit 1; }
+          assert_moved_to_new_key
+          grep -F "Notice: moved ${OLD_SESSION} to ${SESSION}" "${T}/err" | grep -qF '.projects' \
+            || { echo "FAIL: no notice naming .projects"; cat "${T}/err"; exit 1; }
+          # An overlay command moves it too, but grants overlay-accept nothing.
+          rm -rf "${XDG_DATA_HOME}"
+          make_old_session
+          rc=0; "{{.riotbox_dir}}/scripts/overlay.sh" accept --force "${PROJ}" >"${T}/out" 2>&1 || rc=$?
+          [ "${rc}" -eq 1 ] && grep -qF 'no project set is recorded' "${T}/out" \
+            || { echo "FAIL: accept was granted by .projects (exit ${rc})"; cat "${T}/out"; exit 1; }
+          [ ! -e "${STATE}/projects" ] && [ ! -e "${PROJ}/f.txt" ] || { echo "FAIL: the move recorded a set or applied"; exit 1; }
+          assert_moved_to_new_key
+          echo "NO_RECORD_MIGRATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NO_RECORD_MIGRATE_OK"
+
+  - name: a project set whose old key collides never takes another set's old session, and its launches stop warning once it has its own
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          for mode in record legacy; do
+            rm -rf "${XDG_DATA_HOME}"
+            # T/a-b/app and T/a/b-app had one key: both map to ...-a-b-app.
+            use_project "${T}/a-b/app"
+            A="${PROJ}" A_OLD_KEY="${OLD_KEY}"
+            if [ "${mode}" = record ]; then make_old_session record; else make_old_session; rm -f "${OLD_STATE}/projects"; fi
+            use_project "${T}/a/b-app"
+            [ "${OLD_KEY}" = "${A_OLD_KEY}" ] || { echo "FAIL: the projects' old keys do not collide; rework this case"; exit 1; }
+            ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" \
+              || { echo "FAIL: ${mode}: launch failed"; cat "${T}/err"; exit 1; }
+            [ "$(cat "${OLD_SESSION}/settings.json")" = '{"copy":true}' ] \
+              && [ "$(cat "${OLD_STATE}/overlay/project/upper/f.txt")" = change ] \
+              || { echo "FAIL: ${mode}: the other set's old session was touched"; exit 1; }
+            [ ! -e "${SESSION}/settings.json" ] && [ ! -e "${STATE}/overlay/project/upper/f.txt" ] \
+              || { echo "FAIL: ${mode}: the colliding set got the other set's data"; exit 1; }
+            grep -qF 'belongs to another project set' "${T}/err" && grep -qF "           ${A}" "${T}/err" \
+              || { echo "FAIL: ${mode}: no warning naming the owner"; cat "${T}/err"; exit 1; }
+            ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err"
+            if grep -qF 'belongs to another project set' "${T}/err"; then echo "FAIL: ${mode}: warned twice"; exit 1; fi
+            # The owner still gets its session.
+            use_project "${T}/a-b/app"
+            ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" \
+              || { echo "FAIL: ${mode}: owner launch failed"; cat "${T}/err"; exit 1; }
+            assert_moved_to_new_key
+          done
+          echo "COLLISION_KEPT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "COLLISION_KEPT_OK"
+
+  - name: an unreadable record, a .projects naming nothing, or an old key shaped like a new one moves nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          launch() {
+            ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" \
+              || { echo "FAIL: $1: launch failed"; cat "${T}/err"; exit 1; }
+          }
+          kept() {
+            [ "$(cat "${OLD_SESSION}/settings.json")" = '{"copy":true}' ] && [ ! -e "${SESSION}/settings.json" ] \
+              || { echo "FAIL: $1: the old session moved"; exit 1; }
+          }
+          use_project "${T}/proj"
+          # A record that exists but cannot be read is a refusal, even when
+          # .projects names this set.
+          for bad in link empty; do
+            rm -rf "${XDG_DATA_HOME}"
+            make_old_session
+            if [ "${bad}" = link ]; then
+              printf '%s\n' "${PROJ}" > "${VICTIM}/rec"; ln -s "${VICTIM}/rec" "${OLD_STATE}/projects"
+            else
+              : > "${T}/empty"; cp "${T}/empty" "${OLD_STATE}/projects"
+            fi
+            launch "record ${bad}"; kept "record ${bad}"
+            [ -d "${OLD_STATE}" ] || { echo "FAIL: record ${bad}: the old state dir moved"; exit 1; }
+            grep -qF "${OLD_STATE}/projects is not a readable project record" "${T}/err" \
+              || { echo "FAIL: record ${bad}: no warning"; cat "${T}/err"; exit 1; }
+            rm -f "${VICTIM}/rec"
+          done
+          assert_victim_intact
+
+          # A .projects of blank lines names no set: a one-line notice.
+          rm -rf "${XDG_DATA_HOME}"
+          make_old_session record
+          rm -f "${OLD_STATE}/projects"
+          printf '\n\n' > "${OLD_SESSION}/.projects"
+          launch "blank .projects"; kept "blank .projects"
+          [ "$(grep -c "names no readable set" "${T}/err")" -eq 1 ] || { echo "FAIL: no notice for a blank .projects"; cat "${T}/err"; exit 1; }
+
+          # Old and new keys share a namespace: the old key of Y-<hash of Y>
+          # is Y's current key. Y's session, without a record, whose
+          # container named the crafted project in .projects, is not taken.
+          rm -rf "${XDG_DATA_HOME}"
+          use_project "${T}/y"
+          Y="${PROJ}" Y_SESSION="${SESSION}"
+          mkdir -p "${Y_SESSION}" && echo '{"copy":true}' > "${Y_SESSION}/settings.json"
+          use_project "${T}/$(basename "${Y}")-${Y_SESSION##*-}"
+          [ "${OLD_SESSION}" = "${Y_SESSION}" ] || { echo "FAIL: the crafted project's old key is not Y's key (${OLD_KEY})"; exit 1; }
+          printf '%s\n' "${PROJ}" > "${Y_SESSION}/.projects"
+          launch "crafted name"; kept "crafted name"
+          grep -qF "a name a current session key can have" "${T}/err" || { echo "FAIL: crafted name: no warning"; cat "${T}/err"; exit 1; }
+          grep -qF "check what ${OLD_SESSION}/.projects names first" "${T}/err" \
+            && grep -qxF "           mv -T -- $(quote_words "${OLD_SESSION}" "${SESSION}")" "${T}/err" \
+            || { echo "FAIL: crafted name: no way forward"; cat "${T}/err"; exit 1; }
+          if grep -qF "mv -T -- $(quote_words "${OLD_STATE}")" "${T}/err"; then echo "FAIL: offered to move a state dir that does not exist"; exit 1; fi
+          rm -rf "${SESSION}" "${STATE}"
+          mkdir -p "${OLD_STATE}"
+          launch "crafted name, state dir"
+          grep -qxF "           mv -T -- $(quote_words "${OLD_STATE}" "${STATE}")" "${T}/err" \
+            || { echo "FAIL: no move for the old state dir"; cat "${T}/err"; exit 1; }
+          echo "UNTRUSTED_EVIDENCE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "UNTRUSTED_EVIDENCE_OK"
+
+  - name: an old-key multi-project session moves only for its own set, in any order
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/a-b/app" "${T}/a/b/app" "${T}/lib"
+          A="${T}/a-b/app" X="${T}/a/b/app" L="${T}/lib"
+          keys() {
+            # shellcheck disable=SC1091
+            source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+            resolve_projects "$1"
+            printf '%s %s\n' "$(legacy_session_key "${PROJECT_DIRS[@]}")" "$(basename "${RIOTBOX_SESSION_DIR}")"
+          }
+          read -r old new_a < <(keys "${A} ${L}")
+          read -r old_x new_x < <(keys "${X} ${L}")
+          [ "${old}" = "${old_x}" ] || { echo "FAIL: the sets' old keys do not collide; rework this case"; exit 1; }
+          mkdir -p "${XDG_DATA_HOME}/riotbox/${old}" "${XDG_DATA_HOME}/riotbox-state/${old}/git-ai"
+          printf '%s\n' "${A}" "${L}" > "${XDG_DATA_HOME}/riotbox/${old}/.projects"
+          printf '%s\n' "${L}" "${A}" > "${XDG_DATA_HOME}/riotbox-state/${old}/projects"
+          echo '{}' > "${XDG_DATA_HOME}/riotbox-state/${old}/git-ai/config.json"
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${L} ${X}" ) >/dev/null 2>"${T}/err" || { cat "${T}/err"; exit 1; }
+          [ -d "${XDG_DATA_HOME}/riotbox/${old}" ] && [ ! -e "${XDG_DATA_HOME}/riotbox-state/${new_x}/git-ai/config.json" ] \
+            || { echo "FAIL: the colliding set took the session"; exit 1; }
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${L} ${A}" ) >/dev/null 2>"${T}/err" || { cat "${T}/err"; exit 1; }
+          [ ! -e "${XDG_DATA_HOME}/riotbox/${old}" ] && [ "$(cat "${XDG_DATA_HOME}/riotbox-state/${new_a}/git-ai/config.json")" = '{}' ] \
+            || { echo "FAIL: the owning set did not get its session"; cat "${T}/err"; exit 1; }
+          echo "SET_MIGRATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SET_MIGRATE_OK"
+
+  - name: an old session of a project named twice moves to the project's key when it is named twice again
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          # v0.5.3 keyed "proj proj" as a set of two.
+          OLD_KEY="$(legacy_session_key "${PROJ}" "${PROJ}")"
+          OLD_SESSION="${XDG_DATA_HOME}/riotbox/${OLD_KEY}" OLD_STATE="${XDG_DATA_HOME}/riotbox-state/${OLD_KEY}"
+          case "${OLD_KEY}" in proj-1more-*) ;; *) echo "FAIL: unexpected old key ${OLD_KEY}"; exit 1 ;; esac
+          make_old_session record
+          printf '%s\n' "${PROJ}" "${PROJ}" > "${OLD_SESSION}/.projects"
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ} ${PROJ}" ) >/dev/null 2>"${T}/err" \
+            || { echo "FAIL: launch failed"; cat "${T}/err"; exit 1; }
+          assert_moved_to_new_key
+          echo "TWICE_MIGRATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "TWICE_MIGRATE_OK"
+
+  - name: a v0.5.3 session of one project is found when it is first launched with the project named twice
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          # As v0.5.3 left `riotbox /proj`: no state dir, no record.
+          mkdir -p "${OLD_SESSION}/git-ai"
+          printf '%s\n' "${PROJ}" > "${OLD_SESSION}/.projects"
+          echo '{"copy":true}' > "${OLD_SESSION}/settings.json"
+          echo '{}' > "${OLD_SESSION}/git-ai/config.json"
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ} ${PROJ}" ) >/dev/null 2>"${T}/err" \
+            || { echo "FAIL: launch failed"; cat "${T}/err"; exit 1; }
+          [ ! -e "${OLD_SESSION}" ] && [ "$(cat "${SESSION}/settings.json")" = '{"copy":true}' ] \
+            && [ "$(cat "${STATE}/git-ai/config.json")" = '{}' ] || { echo "FAIL: the /proj session was not moved"; cat "${T}/err"; exit 1; }
+          grep -F "Notice: moved ${OLD_SESSION} to ${SESSION}" "${T}/err" | grep -qF '.projects' \
+            || { echo "FAIL: no notice"; cat "${T}/err"; exit 1; }
+
+          # The given list's old key comes first: with both a "proj proj"
+          # and a "proj" session, the first moves, and the other stays.
+          rm -rf "${XDG_DATA_HOME}"
+          twice="${XDG_DATA_HOME}/riotbox/$(legacy_session_key "${PROJ}" "${PROJ}")"
+          mkdir -p "${twice}" "${OLD_SESSION}"
+          printf '%s\n' "${PROJ}" "${PROJ}" > "${twice}/.projects"
+          printf '%s\n' "${PROJ}" > "${OLD_SESSION}/.projects"
+          echo twice > "${twice}/marker"
+          echo once > "${OLD_SESSION}/marker"
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ} ${PROJ}" ) >/dev/null 2>"${T}/err" \
+            || { echo "FAIL: second launch failed"; cat "${T}/err"; exit 1; }
+          [ "$(cat "${SESSION}/marker")" = twice ] && [ "$(cat "${OLD_SESSION}/marker")" = once ] \
+            || { echo "FAIL: wrong order or a merge"; cat "${T}/err"; exit 1; }
+          [ "$(grep -c "^Warning: both ${OLD_SESSION} and ${SESSION} hold a session of this project set" "${T}/err")" -eq 1 ] \
+            || { echo "FAIL: the session left behind was not named once"; cat "${T}/err"; exit 1; }
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ} ${PROJ}" ) >/dev/null 2>"${T}/err" || { cat "${T}/err"; exit 1; }
+          if grep -qF "Warning: both ${OLD_SESSION}" "${T}/err"; then echo "FAIL: warned again on a run that moved nothing"; exit 1; fi
+
+          # Left behind but naming another set: no "both" warning.
+          rm -rf "${XDG_DATA_HOME}"
+          mkdir -p "${twice}" "${OLD_SESSION}" "${T}/other"
+          printf '%s\n' "${PROJ}" "${PROJ}" > "${twice}/.projects"
+          printf '%s\n' "${T}/other" > "${OLD_SESSION}/.projects"
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ} ${PROJ}" ) >/dev/null 2>"${T}/err" || { cat "${T}/err"; exit 1; }
+          if grep -qF "Warning: both ${OLD_SESSION}" "${T}/err"; then echo "FAIL: warned about another set's session"; cat "${T}/err"; exit 1; fi
+
+          # An old "proj" session that is not this set's stays, with the warning.
+          rm -rf "${XDG_DATA_HOME}"
+          mkdir -p "${OLD_SESSION}" "${T}/other"
+          printf '%s\n' "${T}/other" > "${OLD_SESSION}/.projects"
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ} ${PROJ}" ) >/dev/null 2>"${T}/err" || { cat "${T}/err"; exit 1; }
+          [ -d "${OLD_SESSION}" ] && grep -qF 'belongs to another project set' "${T}/err" \
+            || { echo "FAIL: evidence rule not applied to the second key"; cat "${T}/err"; exit 1; }
+          echo "TWICE_FINDS_ONCE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "TWICE_FINDS_ONCE_OK"
+
+  - name: a migration that moved only one of the two dirs is completed by the next launch
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          for moved in session state; do
+            rm -rf "${XDG_DATA_HOME}"
+            make_old_session record
+            mkdir -p "${XDG_DATA_HOME}/riotbox-state"
+            if [ "${moved}" = session ]; then mv -T "${OLD_SESSION}" "${SESSION}"; else mv -T "${OLD_STATE}" "${STATE}"; fi
+            ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" \
+              || { echo "FAIL: ${moved} moved: launch failed"; cat "${T}/err"; exit 1; }
+            assert_moved_to_new_key
+          done
+          # Only the session dir moved, and it was a legacy session without a
+          # state dir: nothing is left to do or to warn about.
+          rm -rf "${XDG_DATA_HOME}"
+          mkdir -p "${SESSION}" && printf '%s\n' "${PROJ}" > "${SESSION}/.projects"
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" || { cat "${T}/err"; exit 1; }
+          if grep -qF "${OLD_KEY}" "${T}/err"; then echo "FAIL: spoke about the old key"; cat "${T}/err"; exit 1; fi
+          echo "PARTIAL_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PARTIAL_OK"
+
+  - name: a failed move stops the launch, and the next launch finishes it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          # mv fails on the second of the two dirs to move, whichever that
+          # is, so the order is under test: the dir holding the evidence
+          # (the record's state dir, or the session dir with .projects) must
+          # be the one still in place for the retry.
+          mkdir -p "${T}/shim"
+          cat > "${T}/shim/mv" <<'SHIM'
+          #!/bin/sh
+          for a; do
+            for d in ${KEY_DIRS}; do
+              if [ "$a" = "$d" ]; then
+                n=$(($(cat "${MV_COUNT}") + 1)); echo "$n" > "${MV_COUNT}"
+                if [ "$n" -eq 2 ]; then echo "mv: simulated failure" >&2; exit 1; fi
+              fi
+            done
+          done
+          exec /usr/bin/mv "$@"
+          SHIM
+          chmod +x "${T}/shim/mv"
+          for mode in record legacy; do
+            rm -rf "${XDG_DATA_HOME}"
+            if [ "${mode}" = record ]; then make_old_session record; evidence="${OLD_STATE}"; else make_old_session; evidence="${OLD_SESSION}"; fi
+            echo 0 > "${T}/count"
+            rc=0
+            ( export KEY_DIRS="${OLD_SESSION} ${OLD_STATE}" MV_COUNT="${T}/count"; PATH="${T}/shim:${PATH}"
+              source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" || rc=$?
+            [ "${rc}" -ne 0 ] || { echo "FAIL: ${mode}: the launch went ahead"; cat "${T}/err"; exit 1; }
+            [ "$(cat "${T}/count")" -eq 2 ] || { echo "FAIL: ${mode}: $(cat "${T}/count") moves attempted, want 2"; exit 1; }
+            grep -qF "could not move ${evidence} to " "${T}/err" \
+              || { echo "FAIL: ${mode}: the evidence was not the last to move"; cat "${T}/err"; exit 1; }
+            [ ! -e "${STATE}/projects" ] || [ "${mode}" = record ] || { echo "FAIL: legacy: a record was written"; exit 1; }
+            ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" \
+              || { echo "FAIL: ${mode}: the retry failed"; cat "${T}/err"; exit 1; }
+            assert_moved_to_new_key
+          done
+          echo "FAILED_MOVE_RESUMED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAILED_MOVE_RESUMED_OK"
+
+  - name: when both an old and a new dir of the set exist, neither is merged or overwritten
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          make_old_session record
+          mkdir -p "${SESSION}" && echo newer > "${SESSION}/settings.json"
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" \
+            || { echo "FAIL: launch failed"; cat "${T}/err"; exit 1; }
+          [ "$(cat "${OLD_SESSION}/settings.json")" = '{"copy":true}' ] || { echo "FAIL: old session dir changed"; exit 1; }
+          grep -qF "both ${OLD_SESSION} and ${SESSION} exist" "${T}/err" || { echo "FAIL: no warning naming both"; cat "${T}/err"; exit 1; }
+          [ "$(cat "${STATE}/overlay/project/upper/f.txt")" = change ] || { echo "FAIL: the state dir did not move"; exit 1; }
+          echo "BOTH_KEPT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BOTH_KEPT_OK"
+
+  - name: concurrent first launches of an old-key session all succeed and move it once
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          failed=0
+          for i in $(seq 1 15); do
+              rm -rf "${XDG_DATA_HOME}"
+              if [ $((i % 2)) -eq 0 ]; then make_old_session record; else make_old_session; fi
+              for run in a b c; do
+                  (
+                      source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+                      setup_projects "${PROJ}"
+                  ) >/dev/null 2>"${T}/err.${i}.${run}" &
+              done
+              for job in $(jobs -p); do
+                  wait "${job}" || { failed=$((failed + 1)); cat "${T}/err.${i}".*; }
+              done
+              assert_moved_to_new_key || { cat "${T}/err.${i}".*; exit 1; }
+              [ "$(cat "${T}/err.${i}".* | grep -c "^Notice: moved ${OLD_SESSION} to ")" -eq 1 ] \
+                || { echo "FAIL: round ${i}: not moved exactly once"; cat "${T}/err.${i}".*; exit 1; }
+          done
+          [ "${failed}" -eq 0 ] || { echo "FAIL: ${failed} of 45 runs failed"; exit 1; }
+          echo "CONCURRENT_KEY_MIGRATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CONCURRENT_KEY_MIGRATE_OK"
+
+  - name: the key move and riotbox overlays share the state root's lock, and say so while they wait
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          make_old_session record
+          root="${XDG_DATA_HOME}/riotbox-state"
+          # riotbox overlays must not migrate an old-key dir while a key move
+          # holds the root lock.
+          flock "${root}/.migrate.lock" sleep 2 &
+          holder=$!
+          sleep 0.5
+          "{{.riotbox_dir}}/scripts/overlay.sh" list >"${T}/out" 2>"${T}/err" || true
+          wait "${holder}"
+          grep -qF 'Waiting for another RiotBox command to finish moving sessions to their new keys' "${T}/err" \
+            || { echo "FAIL: overlays did not wait on the root lock"; cat "${T}/err"; exit 1; }
+          grep -qF 'on this session' "${T}/err" && { echo "FAIL: the root lock speaks of one session"; exit 1; }
+          flock "${root}/.migrate.lock" sleep 2 &
+          holder=$!
+          sleep 0.5
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" \
+            || { echo "FAIL: launch failed"; cat "${T}/err"; exit 1; }
+          wait "${holder}"
+          grep -qF 'Waiting for another RiotBox command to finish moving sessions to their new keys' "${T}/err" \
+            || { echo "FAIL: the key move did not say what it waits for"; cat "${T}/err"; exit 1; }
+          assert_moved_to_new_key
+          echo "ROOT_LOCK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ROOT_LOCK_OK"
+
+  - name: the move refuses while a running RiotBox container mounts the old dirs, and fails closed
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          make_old_session record
+          launch() {
+            rc=0
+            ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" || rc=$?
+          }
+          untouched() {
+            [ "${rc}" -ne 0 ] || { echo "FAIL: $1: the launch went ahead"; cat "${T}/err"; exit 1; }
+            [ -f "${OLD_SESSION}/settings.json" ] && [ -f "${OLD_STATE}/overlay/project/upper/f.txt" ] \
+              && [ ! -e "${SESSION}" ] && [ ! -e "${STATE}" ] || { echo "FAIL: $1: something moved"; exit 1; }
+          }
+          # The last is a v0.5.3 container: named riotbox-<dir>, no riotbox.session
+          # label. That release is the one every real upgrade starts from.
+          for c in "abc123 ${OLD_SESSION} true" "abc123 ${OLD_STATE}/overlay/project true" \
+                   "abc123 ${OLD_SESSION} true running unlabelled"; do
+            echo "${c}" > "${STUB_RUNNING}"
+            launch; untouched "${c}"
+            grep -qF 'container abc123 mounts' "${T}/err" || { echo "FAIL: ${c}: no refusal naming the container"; cat "${T}/err"; exit 1; }
+            grep -qF "${SESSION}" "${T}/err" || { echo "FAIL: the refusal does not name the new key"; cat "${T}/err"; exit 1; }
+          done
+          # A toolbox-style container mounts / read-write and keeps running;
+          # unlabelled, it does not count as reaching the session.
+          echo "tbx / true running unlabelled" > "${STUB_RUNNING}"
+          launch
+          [ "${rc}" -eq 0 ] || { echo "FAIL: a toolbox container blocked the move"; cat "${T}/err"; exit 1; }
+          assert_moved_to_new_key
+          rm -rf "${XDG_DATA_HOME}"
+          make_old_session record
+          rm -f "${STUB_RUNNING}"
+          STUB_ENGINE_FAIL=1 launch; untouched "engine down"
+          grep -qF 'could not ask' "${T}/err" || { echo "FAIL: engine down: no message"; cat "${T}/err"; exit 1; }
+          launch
+          [ "${rc}" -eq 0 ] || { echo "FAIL: launch after the session exited"; cat "${T}/err"; exit 1; }
+          assert_moved_to_new_key
+          echo "KEY_RUNNING_GUARD_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "KEY_RUNNING_GUARD_OK"
+
+  - name: the move never follows a link planted in the old session dir, and keeps a state dir the user linked elsewhere
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          # A .projects that is a link is no evidence at all.
+          mkdir -p "${OLD_SESSION}"
+          printf '%s\n' "${PROJ}" > "${VICTIM}/projects-list"
+          ln -s "${VICTIM}/projects-list" "${OLD_SESSION}/.projects"
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" || { cat "${T}/err"; exit 1; }
+          [ -L "${OLD_SESSION}/.projects" ] || { echo "FAIL: a session proved by a linked .projects was moved"; exit 1; }
+          [ "$(grep -c "^Notice: ${OLD_SESSION} is under this project set's old key, but its .projects names no readable set" "${T}/err")" -eq 1 ] \
+            || { echo "FAIL: no one-line notice about the unreadable .projects"; cat "${T}/err"; exit 1; }
+          rm -f "${VICTIM}/projects-list"
+          assert_victim_intact
+
+          rm -rf "${XDG_DATA_HOME}"
+          make_old_session record
+          ln -s "${VICTIM}" "${OLD_SESSION}/planted"
+          ln -s ../../../victim/keep "${OLD_SESSION}/projects/rel"
+          mkdir -p "${T}/disk"
+          mv -T "${OLD_STATE}" "${T}/disk/state"
+          ln -s "${T}/disk/state" "${OLD_STATE}"
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" \
+            || { echo "FAIL: launch failed"; cat "${T}/err"; exit 1; }
+          [ -L "${SESSION}/planted" ] && [ -L "${SESSION}/projects/rel" ] || { echo "FAIL: planted links were not moved as links"; exit 1; }
+          [ -L "${STATE}" ] && [ "$(readlink "${STATE}")" = "${T}/disk/state" ] || { echo "FAIL: the user's state link was not kept"; exit 1; }
+          assert_moved_to_new_key
+          assert_victim_intact
+          echo "KEY_LINKS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "KEY_LINKS_OK"
+
+  - name: the overlay commands move an old-key session before looking for its overlay
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          O="{{.riotbox_dir}}/scripts/overlay.sh"
+          make_old_session record
+          "${O}" list > "${T}/out" 2>&1 || { echo "FAIL: list"; cat "${T}/out"; exit 1; }
+          grep -qxF "  Project  ${PROJ}" "${T}/out" || { echo "FAIL: list misses the old-key session"; cat "${T}/out"; exit 1; }
+          "${O}" diff "${PROJ}" > "${T}/out" 2>&1 || { echo "FAIL: diff"; cat "${T}/out"; exit 1; }
+          grep -qF 'A  f.txt' "${T}/out" || { echo "FAIL: diff does not show the change"; cat "${T}/out"; exit 1; }
+          assert_moved_to_new_key
+          "${O}" accept --force "${PROJ}" > "${T}/out" 2>&1 || { echo "FAIL: accept"; cat "${T}/out"; exit 1; }
+          [ "$(cat "${PROJ}/f.txt")" = change ] || { echo "FAIL: not applied"; exit 1; }
+
+          # A set, too.
+          rm -rf "${XDG_DATA_HOME}"
+          mkdir -p "${T}/a/app" "${T}/b/lib"
+          P1="${T}/a/app" P2="${T}/b/lib"
+          old="$(source "{{.riotbox_dir}}/scripts/mount-projects.sh"; legacy_session_key "${P1}" "${P2}")"
+          mkdir -p "${XDG_DATA_HOME}/riotbox/${old}" "${XDG_DATA_HOME}/riotbox-state/${old}/overlay/app/upper"
+          printf '%s\n' "${P1}" "${P2}" > "${XDG_DATA_HOME}/riotbox/${old}/.projects"
+          printf '%s\n' "${P1}" "${P2}" > "${XDG_DATA_HOME}/riotbox-state/${old}/projects"
+          echo one > "${XDG_DATA_HOME}/riotbox-state/${old}/overlay/app/upper/one.txt"
+          "${O}" diff "${P2}" "${P1}" > "${T}/out" 2>&1 || { echo "FAIL: set diff"; cat "${T}/out"; exit 1; }
+          grep -qF 'A  one.txt' "${T}/out" || { echo "FAIL: set diff does not show the change"; cat "${T}/out"; exit 1; }
+          [ ! -e "${XDG_DATA_HOME}/riotbox/${old}" ] || { echo "FAIL: the set session did not move"; exit 1; }
+          echo "OVERLAY_KEY_MIGRATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OVERLAY_KEY_MIGRATE_OK"
+
+  - name: session commands list and remove old-key sessions, and accept the new key format
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          L="{{.riotbox_dir}}/libexec"
+          use_project "${T}/proj"
+
+          make_old_session record
+          bash "${L}/list-sessions.sh" > "${T}/out"
+          grep -qxF "  Key:        ${OLD_KEY}" "${T}/out" || { echo "FAIL: list misses the old key"; cat "${T}/out"; exit 1; }
+          printf 'y\n' | bash "${L}/remove-session.sh" "${OLD_KEY}" > /dev/null
+          [ ! -e "${OLD_SESSION}" ] && [ ! -e "${OLD_STATE}" ] || { echo "FAIL: remove by old key"; exit 1; }
+
+          make_old_session record
+          printf 'y\n' | bash "${L}/remove-session.sh" "${PROJ}" > /dev/null 2>"${T}/err" || { cat "${T}/err"; exit 1; }
+          [ ! -e "${OLD_SESSION}" ] && [ ! -e "${OLD_STATE}" ] && [ ! -e "${SESSION}" ] && [ ! -e "${STATE}" ] \
+            || { echo "FAIL: remove by path left the session"; exit 1; }
+
+          make_old_session record
+          (cd "${PROJ}" && bash "${L}/reset-session.sh" force) > /dev/null 2>"${T}/err" || { cat "${T}/err"; exit 1; }
+          [ ! -e "${OLD_SESSION}" ] && [ ! -e "${SESSION}" ] && [ ! -e "${STATE}" ] || { echo "FAIL: reset left the session"; exit 1; }
+
+          make_old_session record
+          (cd "${PROJ}" && bash "${L}/migrate-session.sh") > "${T}/out" 2>"${T}/err" || { cat "${T}/out" "${T}/err"; exit 1; }
+          grep -qxF 'Nothing to migrate.' "${T}/out" || { echo "FAIL: session-migrate did not find the session"; cat "${T}/out" "${T}/err"; exit 1; }
+          assert_moved_to_new_key
+
+          bash "${L}/list-sessions.sh" > "${T}/out"
+          grep -qxF "  Key:        ${KEY}" "${T}/out" || { echo "FAIL: list misses the new key"; cat "${T}/out"; exit 1; }
+          printf 'y\n' | bash "${L}/remove-session.sh" "${KEY}" > /dev/null
+          [ ! -e "${SESSION}" ] && [ ! -e "${STATE}" ] || { echo "FAIL: remove by new key"; exit 1; }
+          echo "SESSION_COMMANDS_KEY_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SESSION_COMMANDS_KEY_OK"
+
+  - name: riotbox mounts under dry run moves nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          use_project "${T}/proj"
+          make_old_session record
+          RIOTBOX_DRY_RUN=1 bash "{{.riotbox_dir}}/scripts/mount-projects.sh" "${PROJ}" > /dev/null 2>&1
+          [ -d "${OLD_SESSION}" ] && [ -d "${OLD_STATE}" ] && [ ! -e "${SESSION}" ] || { echo "FAIL: dry run moved something"; exit 1; }
+          echo "DRY_RUN_KEPT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DRY_RUN_KEPT_OK"
+
+  - name: tokscale and git-ai find a moved session's stores under the new key only
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          unset RIOTBOX_DATA_DIR RIOTBOX_STATE_ROOT
+          use_project "${T}/proj"
+          make_old_session record
+          ( source "{{.riotbox_dir}}/scripts/mount-projects.sh"; setup_projects "${PROJ}" ) >/dev/null 2>"${T}/err" || { cat "${T}/err"; exit 1; }
+          echo "1.7.4" > "${STATE}/git-ai/.riotbox-version"
+          printf '#!/bin/sh\nexit 0\n' > "${T}/stub"; chmod +x "${T}/stub"
+          GIT_AI_BIN="${T}/stub" bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" --list > "${T}/out"
+          grep -qF "${STATE}/git-ai" "${T}/out" || { echo "FAIL: git-ai misses the new key"; cat "${T}/out"; exit 1; }
+          if grep -qF "${OLD_KEY}/" "${T}/out"; then echo "FAIL: git-ai names the old key"; exit 1; fi
+          if command -v unshare >/dev/null && unshare -rn true 2>/dev/null; then
+            printf '#!/bin/sh\necho "EXTRA=${TOKSCALE_EXTRA_DIRS}"\n' > "${T}/tok"; chmod +x "${T}/tok"
+            out="$(TOKSCALE_BIN="${T}/tok" bash "{{.riotbox_dir}}/scripts/tokscale-riotbox.sh")"
+            printf '%s\n' "${out}" | grep -qF "pi:${STATE}/pi-agent/sessions" \
+              && printf '%s\n' "${out}" | grep -qF "claude:${SESSION}/projects" \
+              || { echo "FAIL: tokscale misses the new key"; echo "${out}"; exit 1; }
+            if printf '%s\n' "${out}" | grep -qF "${OLD_KEY}/"; then echo "FAIL: tokscale names the old key"; exit 1; fi
+          fi
+          echo "USAGE_TOOLS_KEY_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "USAGE_TOOLS_KEY_OK"

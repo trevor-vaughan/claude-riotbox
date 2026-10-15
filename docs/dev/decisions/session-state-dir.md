@@ -197,10 +197,31 @@ trusted container-written content. Each was fixed on the same branch:
 - **`riotbox tokscale`** scans the state root and passes a scan root only when
   its last component is a real directory, not a symlink.
 - **`riotbox overlay-accept`/`overlay-reject`** refuse while a running
-  container labelled `riotbox.session` has a read-write mount overlapping this
-  overlay, or when the engine cannot say. `overlay-accept` applies a private
+  container can write this overlay (with the `riotbox.session` label, any overlapping read-write mount; without it, since v0.5.3 set no label, only one at or inside the overlay, so toolbox's `/` mount does not count),
+  or when the engine cannot say. `overlay-accept` applies a private
   snapshot, never follows a link in the overlay or the project, and validates
   every entry before the review and again after the confirmation.
+
+## Session keys hashed by project set (2026-10-14)
+
+The `<key>` in both paths was the project path with `/` mapped to `-` (a set:
+first basename, count, and an 8-hex hash of those mangled paths), so sets whose
+paths differ only by `-` for `/` shared one session dir and one state dir. The
+host-only record (`<state>/projects`) limited what that let a session steer, but
+the data still mixed. Keys now end in a 16-hex SHA-256 of the sorted,
+NUL-terminated real paths (`session_key` in `scripts/mount-projects.sh`), with
+the old readable part kept in front so `riotbox session-list` stays readable.
+Each old session moves to its new key once, and only to the set its record, or
+for a session without one its `.projects`, names; see
+[THREAT_MODEL § Session state directory](../../../THREAT_MODEL.md#session-state-directory)
+for why trusting `.projects` there binds nothing new. The record checks stay as
+defence in depth against a state dir copied or renamed by hand.
+
+The first hashed keys on this branch (033daee to before 2f9a6c7) hashed the
+argument list, so a project named twice (`riotbox /a /a`) got a set-form key of
+its own. Those keys were never released and nothing moves sessions made under
+them: such a session is orphaned under its key, and `riotbox session-remove
+<key>` deletes it.
 
 ## What was verified, and what was not
 

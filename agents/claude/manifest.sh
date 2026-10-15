@@ -82,32 +82,14 @@ agent_claude_wrapper_inject() {
 }
 
 # Optional verb: argv for headroom interposition (RIOTBOX_HEADROOM=1).
-# The wrapper execs this instead of the real binary; headroom starts its
-# compression proxy and re-launches `claude`, which resolves back to the
-# shim — the wrapper's RIOTBOX_HEADROOM_ACTIVE guard makes that second
-# pass exec the real binary. See docs/dev/agent-contract.md.
-#
-# Flag rationale (verified against headroom 0.36.5):
-#   --memory / --learn      cross-session memory + failure learning,
-#                           persisted under ~/.headroom (session-mounted)
-#   --code-memory none      Serena MCP registration downloads at session
-#                           start — violates offline-after-build. This is
-#                           the spelling that replaced --no-serena; the old
-#                           flag still works but is hidden and deprecated.
-#   --                      REQUIRED: headroom wrap claude has its own
-#                           -p/--port; user args (claude -p "<prompt>")
-#                           must follow the separator or click eats them
-#
-# --no-context-tool was passed here through headroom 0.25.0, for the same
-# offline-after-build reason as Serena. It is gone: headroom removed the CLI
-# context tools (rtk, lean-ctx) outright, and keeps the flag registered only
-# to raise a ClickException naming the removal, so still passing it would
-# abort every RIOTBOX_HEADROOM=1 session. Nothing replaces it — with the
-# feature deleted upstream there is no session-start download left to
-# suppress.
+# Helper-shaped, like opencode's: headroom-exec.sh starts the proxy, then
+# runs claude with the routing env pointing at it. `headroom wrap claude`
+# is not used because it writes .claude/settings.local.json, lock and
+# marker files and a SessionStart hook into the CWD, the caller's checkout;
+# the helper's header lists what it keeps from wrap and what it drops.
+# See docs/dev/agent-contract.md.
 agent_claude_headroom_argv() {
-	printf '%s\0' headroom wrap claude --memory --learn \
-		--code-memory none --
+	printf '%s\0' "${_AGENT_CLAUDE_DIR}/headroom-exec.sh"
 	local arg
 	for arg in "$@"; do
 		printf '%s\0' "${arg}"
