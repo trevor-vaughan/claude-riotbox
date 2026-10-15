@@ -162,16 +162,20 @@ _headroom_proxy_config() {
 }
 
 # _headroom_proxy_start_time <pid>: the process's start time in clock ticks
-# (/proc/<pid>/stat field 22), which a recycled PID does not share.
+# (/proc/<pid>/stat field 22), which a recycled PID does not share. Fails for
+# a zombie or dead process: containers run without an init (launch.sh
+# --init=false), so a proxy orphaned by its launcher is never reaped and its
+# stat, start time included, outlives it.
 _headroom_proxy_start_time() {
 	local stat
 	stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
 	stat="${stat##*) }"
-	# Field 22 overall is field 20 after "<pid> (<comm>) ". The fields are
-	# numbers and single-letter states: split on purpose, nothing to glob.
+	# Field 22 overall is field 20 after "<pid> (<comm>) ", and field 3, the
+	# state, is field 1. The fields are numbers and single-letter states:
+	# split on purpose, nothing to glob.
 	# shellcheck disable=SC2086
 	set -- ${stat}
-	[[ -n "${20:-}" ]] || return 1
+	[[ "${1:-}" != [ZX] && -n "${20:-}" ]] || return 1
 	printf '%s\n' "${20}"
 }
 
