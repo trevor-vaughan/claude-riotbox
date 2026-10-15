@@ -27,12 +27,13 @@ for session_dir in "${session_root}"/*/; do
 	#   - backups/ is the safety backup tree, not a session.
 	#   - The XDG data dir also holds the app tree on rootless installs
 	#     (bin/, libexec/, scripts/, agents/, container/). Filter sessions
-	#     by the .projects marker that mount-projects.sh writes at launch.
+	#     with is_session (scripts/lib/session-state.sh).
 	#     Without this, `riotbox session-list` listed app subdirs as
 	#     sessions and `riotbox session-remove libexec` would delete part
 	#     of the installation.
 	[[ "${name}" = "backups" ]] && continue
-	[[ -f "${session_dir}/.projects" ]] || continue
+	# shellcheck disable=SC2310 # a predicate designed for conditions
+	is_session "${session_dir%/}" "${RIOTBOX_STATE_ROOT}/${name}" || continue
 
 	found=$((found + 1))
 

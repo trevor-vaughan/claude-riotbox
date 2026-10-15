@@ -410,12 +410,13 @@ _overlay_check_dest() {
 }
 
 # _overlay_migrate_sessions
-#   overlay_list's migrate_session_state pass over every marked session dir;
+#   overlay_list's migrate_session_state pass over every session dir;
 #   the caller holds the state root's lock. Returns 1 when one failed.
 _overlay_migrate_sessions() {
 	local session_dir
 	for session_dir in "${RIOTBOX_DATA_DIR}"/*/; do
-		[[ -f "${session_dir}.projects" ]] || continue
+		# shellcheck disable=SC2310 # a predicate designed for conditions
+		is_session "${session_dir%/}" "${RIOTBOX_STATE_ROOT}/$(basename "${session_dir}")" || continue
 		session_dir="${session_dir%/}"
 		# shellcheck disable=SC2310 # a failed migration has already said why
 		migrate_session_state "${session_dir}" "${RIOTBOX_STATE_ROOT}/${session_dir##*/}" || return 1
@@ -437,7 +438,8 @@ overlay_list() {
 	# lock first, then each session's, the order every caller takes them in.
 	local session_dir found=""
 	for session_dir in "${RIOTBOX_DATA_DIR}"/*/; do
-		[[ -f "${session_dir}.projects" ]] || continue
+		# shellcheck disable=SC2310 # a predicate designed for conditions
+		is_session "${session_dir%/}" "${RIOTBOX_STATE_ROOT}/$(basename "${session_dir}")" || continue
 		found=1
 		break
 	done

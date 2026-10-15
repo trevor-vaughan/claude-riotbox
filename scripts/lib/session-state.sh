@@ -634,6 +634,20 @@ recorded_projects() {
 	return "${rc}"
 }
 
+# is_session <session-dir> <state-dir>
+#   True when <session-dir> is a RiotBox session: it is a directory that
+#   carries the .projects marker setup_projects writes, or whose <state-dir>
+#   carries the launch's project record (record_projects). Session commands act only on what passes, so
+#   the rootless app tree and backups/ beside the sessions are never touched.
+#   The record matters because a running session can replace its own
+#   .projects (with a directory, say) to hide from those commands until its
+#   next launch; the record sits in the state dir itself, which the container
+#   cannot reach. .projects still counts alone: a session an older RiotBox
+#   last launched has no record.
+is_session() {
+	[[ -d "$1" ]] && { [[ -f "$1/.projects" ]] || [[ -f "$2/projects" && ! -L "$2/projects" ]]; }
+}
+
 # quote_words <word>...
 #   Print the words shell-quoted and space-separated, by printf %q under
 #   LC_ALL=C, so control and non-ASCII bytes come out escaped: a path pasted
