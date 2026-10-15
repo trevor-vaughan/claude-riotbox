@@ -1,0 +1,19 @@
+Containerfile
+  s_511fb0f89ebc84::t_abf1872a1f9cee 390-393
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7d9a0d836947bde36874073fe2aac48d7ddb0c21",
+  "prompts": {},
+  "sessions": {
+    "s_511fb0f89ebc84": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cd67b2b6-b493-4259-850a-f39c2b73a205",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
