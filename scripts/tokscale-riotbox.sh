@@ -86,6 +86,25 @@ resolve_tokscale_bin() {
 	return 0
 }
 
+# Print the canonical path of scan root <dir>/<rel> when it is a directory
+# reached without following any link below <dir>; print nothing otherwise.
+# <dir> is a host-created session or state dir, but the container writes what is
+# inside it and could plant a link at ANY component of <rel> (e.g.
+# opencode-data/storage -> /etc), not just the last. `[[ -L ]]` sees only the
+# last, so instead the fully resolved root must equal the resolved <dir> plus
+# <rel> verbatim. That also rejects a link into another session's store. The
+# canonical path is what gets passed on, which narrows (but cannot close) the
+# window for a swap between this check and tokscale's scan. `|| true`: an absent
+# or looping path is expected, and see resolve_tokscale_bin for why a bare
+# failure inside $(...) is avoided.
+scan_root() {
+	local dir real
+	dir="$(realpath -e -- "$1" 2>/dev/null || true)"
+	real="$(realpath -e -- "$1/$2" 2>/dev/null || true)"
+	[[ -n "${dir}" && "${real}" == "${dir}/$2" && -d "${real}" ]] && printf '%s\n' "${real}"
+	return 0
+}
+
 # Build tokscale's TOKSCALE_EXTRA_DIRS value: one `client:path` entry per live
 # riotbox session store, comma-joined. Claude sessions expose a projects/ dir
 # in the session dir (tokscale recurses it for *.jsonl). opencode and Pi keep
@@ -96,25 +115,27 @@ resolve_tokscale_bin() {
 # `pi`). A store an older RiotBox left inside a session dir is not scanned: that
 # project's next launch moves it into the state dir. Runs in the caller's
 # command-substitution subshell, so `nullglob` here does not leak. Prints the
-# joined value, or nothing when there are no sessions. A scan root that is a
-# symlink is skipped: the container writes these dirs and could plant a link to
-# a host path (e.g. pi-agent/sessions -> /etc).
+# joined value, or nothing when there are no sessions. Every root goes through
+# scan_root, so a link the container plants anywhere below its dir keeps that
+# root out.
 build_extra_dirs() {
 	shopt -s nullglob
-	local session state ocdata entries=()
+	local session state root entries=()
 	for session in "${RIOTBOX_DATA_DIR}"/*/; do
-		session="${session%/}"
-		[[ -d "${session}/projects" && ! -L "${session}/projects" ]] && entries+=("claude:${session}/projects")
+		root="$(scan_root "${session%/}" projects)"
+		[[ -n "${root}" ]] && entries+=("claude:${root}")
 	done
 	for state in "${RIOTBOX_STATE_ROOT}"/*/; do
 		state="${state%/}"
-		ocdata="${state}/opencode-data"
-		if [[ -d "${ocdata}" ]]; then
-			entries+=("opencode:${ocdata}")
-			[[ -d "${ocdata}/storage/message" && ! -L "${ocdata}/storage/message" ]] && entries+=("opencode:${ocdata}/storage/message")
+		root="$(scan_root "${state}" opencode-data)"
+		if [[ -n "${root}" ]]; then
+			entries+=("opencode:${root}")
+			root="$(scan_root "${state}" opencode-data/storage/message)"
+			[[ -n "${root}" ]] && entries+=("opencode:${root}")
 		fi
 		# Pi (tokscale client id `pi`, native root .pi/agent/sessions).
-		[[ -d "${state}/pi-agent/sessions" && ! -L "${state}/pi-agent/sessions" ]] && entries+=("pi:${state}/pi-agent/sessions")
+		root="$(scan_root "${state}" pi-agent/sessions)"
+		[[ -n "${root}" ]] && entries+=("pi:${root}")
 	done
 	[[ ${#entries[@]} -gt 0 ]] || return 0
 	local IFS=,

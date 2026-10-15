@@ -90,3 +90,36 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldMatchRegex "TOKSCALE_SYMLINK_OK|TOKSCALE_SKIPPED"
+
+  - name: a link at any component below the session dir keeps that root from tokscale
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          command -v unshare >/dev/null && unshare -rn true 2>/dev/null \
+            || { echo "TOKSCALE_SKIPPED: no unprivileged user namespaces"; exit 0; }
+          # Canonical: the script emits resolved paths, and TMPDIR may be a link.
+          T="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${T}"' EXIT
+          # Each "bad" session plants a link above the scan root itself; "xs" links
+          # into a different session's (real, otherwise valid) store.
+          mkdir -p "${T}/target/storage/message" "${T}/target/sessions" \
+                   "${T}/state/ocroot" "${T}/state/oc/opencode-data" "${T}/state/pi" "${T}/state/xs" \
+                   "${T}/state/good/opencode-data/storage/message" "${T}/state/good/pi-agent/sessions"
+          ln -s "${T}/target" "${T}/state/ocroot/opencode-data"
+          ln -s "${T}/target/storage" "${T}/state/oc/opencode-data/storage"
+          ln -s "${T}/target" "${T}/state/pi/pi-agent"
+          ln -s "${T}/state/good/pi-agent" "${T}/state/xs/pi-agent"
+          printf '#!/bin/sh\necho "EXTRA=${TOKSCALE_EXTRA_DIRS}"\n' > "${T}/tok"; chmod +x "${T}/tok"
+          out="$(RIOTBOX_DATA_DIR="${T}/data" RIOTBOX_STATE_ROOT="${T}/state" TOKSCALE_BIN="${T}/tok" bash "{{.riotbox_dir}}/scripts/tokscale-riotbox.sh")"
+          # Exact set: a leaked root may surface under its link target (target/,
+          # good/), so absence-by-pattern alone would miss it.
+          got="$(printf '%s\n' "${out#EXTRA=}" | tr ',' '\n' | sort)"
+          want="$(printf '%s\n' "opencode:${T}/state/good/opencode-data" \
+                                "opencode:${T}/state/good/opencode-data/storage/message" \
+                                "pi:${T}/state/good/pi-agent/sessions" \
+                                "opencode:${T}/state/oc/opencode-data" | sort)"
+          [[ "${got}" == "${want}" ]] || { echo "FAIL: scan roots differ"; diff <(echo "${want}") <(echo "${got}") || true; exit 1; }
+          echo "TOKSCALE_INTERMEDIATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "TOKSCALE_INTERMEDIATE_OK|TOKSCALE_SKIPPED"
