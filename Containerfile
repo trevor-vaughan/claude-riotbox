@@ -387,6 +387,10 @@ COPY --from=tools --chown=llm:llm /tools/bin/ /home/llm/.local/bin/
 ENV HOME=/home/llm
 ENV NVM_DIR=/home/llm/.nvm
 ENV GOPATH=/home/llm/go
+# The distro's /usr/lib/golang/go.env pins GOTOOLCHAIN=local, so a module whose
+# go.mod requires a newer Go than the packaged one fails to build or install.
+# auto fetches that toolchain from the module proxy, verified against GOSUMDB.
+ENV GOTOOLCHAIN=auto
 ENV PATH=/home/llm/.riotbox/bin:/home/llm/.local/bin:/home/llm/.cargo/bin:/home/llm/go/bin:/usr/lib/golang/bin:/home/llm/bin:${PATH}
 
 # ── Workaround uv and SELinux issuees ──────────────────────────────────────────
