@@ -395,9 +395,12 @@ What remains:
   Host code that reads them reads what the container left, including a link
   placed inside a mounted dir (for example `overlay/<name>/upper`). Each reader
   treats them as untrusted: `riotbox overlay-accept` is covered in
-  [Overlay accept](#overlay-accept); `riotbox tokscale` passes only scan roots
-  that are real directories (it checks the last component of each:
-  `projects/`, `storage/message`, `pi-agent/sessions`); `riotbox git-ai` is
+  [Overlay accept](#overlay-accept); `riotbox tokscale` passes a scan root
+  (`projects/`, `opencode-data/`, `opencode-data/storage/message`,
+  `pi-agent/sessions`) only when it resolves to exactly that path under the
+  session's own dir, so a link at any component of it keeps the root out. A
+  link swapped in after that check, or one inside a root, is still followed,
+  but tokscale only reads and shows the numbers to you; `riotbox git-ai` is
   described in [git-ai daemon and attribution
   store](#git-ai-daemon-and-attribution-store).
 - **A running session can make another launch abort.** If it writes into a
