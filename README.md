@@ -10,7 +10,7 @@ ______________________________________________________________________
 
 ______________________________________________________________________
 
-Container-based isolation for running AI coding agents autonomously against your projects. The container ships [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [opencode](https://opencode.ai/) and mirrors your host dev environment (nvm, uv, Go, Rust, Ruby) so the agent has the same toolchain you do, but runs isolated from your credentials and secrets.
+Container-based isolation for running AI coding agents autonomously against your projects. The container ships [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [opencode](https://opencode.ai/) and [Pi](https://pi.dev/) and mirrors your host dev environment (nvm, uv, Go, Rust, Ruby) so the agent has the same toolchain you do, but runs isolated from your credentials and secrets.
 
 > **Security:** This project has an AI-generated [threat model](THREAT_MODEL.md) covering the container isolation boundary, auth handling, mount surface, and nested container mode. Read it before use.
 
@@ -25,11 +25,11 @@ Finally...it was fun!
 ## How it works
 
 1. **`scripts/build.sh`** introspects your local environment (nvm, uv, Go, Rust/rustup, Ruby/RVM, UID, tool configs) and passes them as build args.
-1. The **Containerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. The agent CLIs are installed last — opencode via its [installer](https://opencode.ai/install), then Claude Code via the [official installer](https://claude.ai/install.sh) — for
+1. The **Containerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. The agent CLIs are installed last — opencode via its [installer](https://opencode.ai/install), Pi from the lockfile pi.dev publishes for each release, then Claude Code via the [official installer](https://claude.ai/install.sh) — for
    optimal layer caching.
 1. At runtime your project directory is bind-mounted into the container. Auth credentials are synced into an isolated session directory: `~/.claude/.credentials.json` is bind-mounted read-write (so token refreshes write back to the host), and `~/.claude.json` is copied so each container gets a writable snapshot without host contention.
 1. **A single generic wrapper** (`container/agent-wrapper.sh`) shadows the real agent binaries via per-agent symlinks under `~/.riotbox/bin/`. The wrapper detects which agent it's running as from its own filename, looks up that agent's manifest at `agents/<name>/manifest.sh`, and applies the manifest's flag-injection rules. The RiotBox autonomy prompt lives at `/etc/claude-code/CLAUDE.md`
-   (managed-policy path read by Claude) and at `~/.config/opencode/AGENTS.md` (placed at runtime by the agent's setup hook). Selection happens via `--agent=claude|opencode` (default `claude`); see `riotbox agents` to list the registered set.
+   (managed-policy path read by Claude) and at `~/.config/opencode/AGENTS.md` and `~/.pi/agent/AGENTS.md` (placed at runtime by each agent's setup hook). Selection happens via `--agent=claude|opencode|pi` (default `claude`); see `riotbox agents` to list the registered set.
 
 ## Prerequisites
 
@@ -41,6 +41,8 @@ Finally...it was fun!
 
   - `ANTHROPIC_API_KEY` environment variable, **or**
   - `~/.claude.json` with OAuth tokens (created by running `claude` on the host and completing the OAuth flow)
+
+- `flock` (from util-linux; installed on most Linux systems, and a dependency of the rpm and deb packages) — serializes the host-side config sync of concurrent launches of one project
 
 - [git-filter-repo](https://github.com/newren/git-filter-repo) (required for `reown` — `pip install git-filter-repo`)
 
@@ -156,13 +158,13 @@ riotbox --agent=opencode run "fix the build"
 # Resume the last opencode session
 riotbox --agent=opencode resume
 
-# Open a shell with both binaries on PATH (use either)
+# Open a shell with every agent binary on PATH (use any)
 riotbox shell
 ```
 
 Default is `claude` if `--agent` is omitted. You can persist a default in `~/.config/riotbox/config` by uncommenting the `RIOTBOX_AGENT` line.
 
-> Want to add a third agent (aider, goose, cursor-agent, codex, …)? See [`docs/dev/adding-an-agent.md`](docs/dev/adding-an-agent.md). The agent registry at `agents/registry.sh` is the single source of truth — adding an agent is a manifest plus a Containerfile install line, no edits to dispatch sites or wrappers.
+> Want to add another agent (aider, goose, cursor-agent, codex, …)? See [`docs/dev/adding-an-agent.md`](docs/dev/adding-an-agent.md). The agent registry at `agents/registry.sh` is the single source of truth — adding an agent is a manifest plus a Containerfile install line, no edits to dispatch sites or wrappers.
 
 ### Opencode auth
 
@@ -177,7 +179,7 @@ Long-lived AWS access keys (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS
 
 ### Opencode config
 
-Your host `~/.config/opencode/` (agents, commands, themes, `opencode.json`, `opencode.jsonc`) is copied into the session dir at every launch. The container then merges `opencode.json` and `opencode.jsonc` into a single `opencode.jsonc` (jsonc wins on key conflict) and forces these keys to RiotBox values regardless of host input:
+Your host `~/.config/opencode/` (agents, commands, themes, `opencode.json`, `opencode.jsonc`) is copied into the session's state dir (`~/.local/share/riotbox-state/<session>/opencode-config/`) at every launch. The container then merges `opencode.json` and `opencode.jsonc` into a single `opencode.jsonc` (jsonc wins on key conflict) and forces these keys to RiotBox values regardless of host input:
 
 - `permission = "allow"` — the container is RiotBox; per-tool permission prompts are pointless inside it.
 - `share = "disabled"` — no session telemetry from the container.
@@ -191,13 +193,55 @@ A banner comment in the generated `opencode.jsonc` records these forced keys. To
 Plugins listed in your `opencode.jsonc` `plugin` array (npm packages or git URLs) are installed by opencode itself via `bun install` the first time you run a session. The install output (`node_modules/`, `package.json`, `package-lock.json`, `bun.lock`, `.gitignore`) is **not** copied from your host — those files are platform-specific and opencode's own `.gitignore` marks them disposable. Instead
 the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent named volume (`riotbox-cache-opencode`). The cold install takes ~15s; later sessions resolve plugins from the warm cache in ~2s, offline. Because the plugins are built inside the container, their native dependencies always match the container platform regardless of your host OS.
 
+## Using pi
+
+RiotBox also ships the [Pi](https://pi.dev/) coding agent:
+
+```sh
+riotbox --agent=pi run "fix the build"   # headless: pi -p -- "<prompt>"
+riotbox --agent=pi resume                # continue the last session for this project
+riotbox shell                            # interactive: run `pi` at the prompt
+```
+
+Pi core tracks the latest release, like opencode and Claude Code: each image build installs whatever is current from the exact lockfile pi.dev publishes for that release, and `riotbox update` picks up a newer one. These extensions are pinned and preinstalled, giving Pi the equivalents of Claude Code's Task, AskUserQuestion and TodoWrite tools:
+
+| Extension | Provides |
+|---|---|
+| `pi-subagents@0.77.0` | `subagent` tool — delegate work to child agents |
+| `@juicesharp/rpiv-ask-user-question@2.13.8` | `ask_user_question` tool — structured questions instead of guesses |
+| `@juicesharp/rpiv-todo@2.13.8` | `todo` tool and `/todos` |
+
+Pi runs without approval prompts and trusts every project: a project's `.pi/` settings, extensions, skills, prompt templates and MCP servers load without a prompt. As with the other agents, the container is the security boundary.
+
+Pi is not wired for [headroom](#headroom-context-compression-opt-in) (headroom has no Pi wrapper) or for the [forge MCP servers](#github-and-gitlab-the-riotbox-gh-glab-flavor). It is wired for [Context Mode](#context-mode-opt-in) and [git-ai](#ai-authorship-attribution-git-ai).
+
+### Pi auth
+
+1. **Run `pi` on the host and `/login`** — `~/.pi/agent/auth.json` (and `mcp-auth.json` for MCP OAuth) is bind-mounted read-write, so token refreshes write back to the host. Without a host `auth.json` there is no bind: a `/login` inside the container is saved in the session's state directory (`~/.local/share/riotbox-state/<session>/pi-agent/auth.json`), so it lasts for that project set only and never reaches the host. Once a host `auth.json` exists, its bind mount takes precedence over the session copy.
+1. **Provider env vars** — the same eight provider keys as opencode (see `~/.config/riotbox/config`) are forwarded automatically. Pi supports many more providers; forward their keys with `RIOTBOX_PASSTHROUGH_EXTRA_VARS`, e.g. `RIOTBOX_PASSTHROUGH_EXTRA_VARS="NVIDIA_API_KEY"`. They are not forwarded by default because the passthrough list is shared: every key it holds reaches every agent's container.
+
+### Pi config
+
+At every launch RiotBox copies these from your host agent directory (`$PI_CODING_AGENT_DIR`, else `~/.pi/agent`) into the session: `settings.json`, `models.json`, `mcp.json`, `keybindings.json`, `AGENTS.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `skills/`, `prompts/` (Pi's `/` commands), `themes/`, `extensions/`. Symlinks are followed. An entry you delete on the host disappears from the session at the next launch. Pi's own state in the session — sessions, `trust.json`, the model catalog cache, and a `/login` made when there is no host `auth.json` — is kept between runs and never copied from the host. Changes Pi makes inside the container to the synced files (for example a model picked with `/model`, which writes `settings.json`, or edits under `skills/`, `prompts/` or `extensions/`) are replaced at the next launch; edit the host copy instead.
+
+The sync runs on every launch whichever `--agent` you pick, so without a host Pi directory every launch prints one line, `Notice: <dir> not found on host — pi will use the container baseline.` It is harmless. A `PI_CODING_AGENT_DIR` containing whitespace breaks the session's mount flags; keep it to a path without spaces.
+
+A host `AGENTS.md` takes the place of RiotBox's autonomy prompt, as it does for opencode; without one the session gets RiotBox's template. A `RIOTBOX_PROMPT` override beats both. The container then forces these `settings.json` keys:
+
+- `packages` — the preinstalled extensions above (plus Context Mode when `RIOTBOX_CONTEXT_MODE=1`). Host entries are dropped with a notice: local paths name host directories, and npm/git entries would install unpinned code at startup. Put extensions you want in the container in `extensions/` instead.
+- `defaultProjectTrust = "always"`, `enableInstallTelemetry = false`, `enableAnalytics = false`.
+
+The `pi` command also runs with `PI_TELEMETRY=0` and `PI_SKIP_VERSION_CHECK=1`. Pi's model catalog refresh from pi.dev stays on, like opencode's models.dev fetch.
+
+`riotbox tokscale` always counts Pi usage in RiotBox sessions. For your native Pi sessions on the host it relies on tokscale, which looks for them through `PI_CONFIG_DIR`, not `PI_CODING_AGENT_DIR`. If you relocated your Pi directory, native usage is missed unless you also set `PI_CONFIG_DIR`; the value tokscale expects has not been verified.
+
 ## Commands
 
 | Command                               | Description                                                                                                                                 |
 |---------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
 | `riotbox build`                       | Introspect host environment and build the container image                                                                                   |
 | `riotbox rebuild`                     | Force a clean rebuild with no layer cache                                                                                                   |
-| `riotbox update`                      | Re-pull LLM CLI tools — opencode, Claude Code, plugins to latest; headroom, CodeGraph, Context Mode at pinned versions (large re-download)  |
+| `riotbox update`                      | Re-pull LLM CLI tools — opencode, Pi core, Claude Code, plugins to latest; Pi's extensions, headroom, CodeGraph, Context Mode at pinned versions (large re-download) |
 | `riotbox run "<task>" [dir]`          | Run the agent autonomously (defaults to current directory)                                                                                  |
 | `riotbox shell [dir]`                 | Interactive shell (defaults to current directory)                                                                                           |
 | `riotbox resume [dir]`                | Continue the last agent session                                                                                                             |
@@ -209,12 +253,13 @@ the install lands in `~/.cache/opencode`, which RiotBox keeps in a persistent na
 | `riotbox socket-run "<task>" [dir]`   | Run with shared host podman socket (WARNING: grants host root)                                                                              |
 | `riotbox socket-shell [dir]`          | Shell with shared host podman socket (WARNING: grants host root)                                                                            |
 | `riotbox session-list`                | List all RiotBox sessions                                                                                                                   |
-| `riotbox session-remove [key/path]`   | Remove a session by key or project path (or `--all`)                                                                                        |
-| `riotbox session-reset [all] [force]` | Reset session cache (forces fresh skill/config copy); `all` resets every session, `force` skips the confirmation prompt                     |
+| `riotbox session-remove [key/path]`   | Remove a session — its session and state dirs — by key or project path (or `--all`)                                                         |
+| `riotbox session-reset [all] [force]` | Delete the current dir's session and state dirs, pending overlays too ([see](#session-state-directory)); `all`: every one; `force`: no prompt |
+| `riotbox session-migrate [project...]` | Retry moving the current dir's old session data where an upgrade's move failed ([see](#upgrading-from-a-release-that-kept-state-in-the-session-directory)) |
 | `riotbox overlays`                    | List sessions with pending overlay data (podman-only)                                                                                       |
-| `riotbox overlay-diff [project]`      | Show overlay changes vs host project                                                                                                        |
-| `riotbox overlay-accept [project]`    | Apply overlay changes to host project                                                                                                       |
-| `riotbox overlay-reject [project]`    | Discard overlay changes                                                                                                                     |
+| `riotbox overlay-diff [project...]`   | Show overlay changes vs host project(s); name every project of a multi-project session ([see](#overlay-mode-podman-only))                   |
+| `riotbox overlay-accept [project...]` | Apply overlay changes to host project(s)                                                                                                    |
+| `riotbox overlay-reject [project...]` | Discard overlay changes                                                                                                                     |
 | `riotbox checkpoints [dir...]`        | List the pre-session snapshots RiotBox holds for a project (read-only; defaults to the current directory) — see [Recovery](#recovery)       |
 | `riotbox checkpoint-tag <ts> [dir]`   | Promote snapshot `<ts>` to a real tag `riotbox-snapshot/<ts>` that ordinary git commands can see                                            |
 | `riotbox checkpoint-prune [dir...]`   | Delete snapshot refs; needs one selector: `--keep <N>`, `--older-than <N>d`, or `--legacy` (old `riotbox-checkpoint/*` tags)                |
@@ -335,7 +380,7 @@ RiotBox ships a more complete default script with a Unicode progress bar and col
 The mount set comes from two scripts, applied in this order:
 
 1. **`scripts/detect-mounts.sh`** — always-on mounts that don't depend on a project: `~/bin`, `~/.config/riotbox/`, and the named cache volumes. Uses an allowlist (only paths listed in the script are mounted).
-2. **`scripts/mount-projects.sh`** — per-launch mounts: the project bind, the session directory mount, and the per-agent contributions from `agents/<name>/manifest.sh::host_sync` (credentials nest, opencode auth, host plugins, host `~/.claude/{skills,agents,…}` copies, statusline script copy).
+2. **`scripts/mount-projects.sh`** — per-launch mounts: the project bind, the session directory mount, the state-directory mounts (headroom, git-ai, overlay), and the per-agent contributions from `agents/<name>/manifest.sh::host_sync` (credentials nest, opencode config copy and auth, Pi config copy and auth, host plugins, host `~/.claude/{skills,agents,…}` copies, statusline script copy).
 
 Run `riotbox mounts [project ...]` to print the projected mount set — it lists the always-on group, the project + session group, and a static enumeration of what the agent host_sync hooks would add at launch.
 
@@ -353,14 +398,23 @@ Run `riotbox mounts [project ...]` to print the projected mount set — it lists
 |-----------------------------------------------------|-------------------------------|--------------------------------------|
 | Each `<project>` path                               | `/workspace[/<basename>]`     | bind mount (`:z` or `:O` overlay)    |
 | `~/.local/share/riotbox/<session>/`                 | `~/.claude`                   | bind mount (`:z`)                    |
+| `~/.local/share/riotbox-state/<session>/headroom/`  | `~/.headroom`                 | bind mount (`:z`), when `RIOTBOX_HEADROOM=1` |
+| `~/.local/share/riotbox-state/<session>/git-ai/`    | `~/.git-ai`                   | bind mount (`:z`), when `RIOTBOX_GIT_AI` is unset, empty or `1` |
+| `~/.local/share/riotbox-state/<session>/overlay/<name>/` | `/mnt/overlay[/<name>]`  | bind mount (`:z`), when `RIOTBOX_OVERLAY=1` (owned projects) |
 | `~/.claude/.credentials.json`                       | `~/.claude/.credentials.json` | nested bind mount (`:z`, read-write) |
 | `~/.claude.json`                                    | copied into session dir       | file copy                            |
 | `~/.claude/{skills,agents,commands,output-styles}/` | copied into session dir       | file copy (symlinks dereferenced)    |
 | `~/.claude/statusline-command.sh`                   | copied into session dir       | file copy (chmod +x enforced)        |
 | `~/.claude/plugins/`                                | `~/.host-plugins`             | bind mount (read-only, `:z`)         |
-| `~/.local/share/opencode/auth.json`                 | same path in container        | bind mount (rw, when opencode runs)  |
+| `~/.config/opencode/`                               | copied into state dir (`opencode-config/`), mounted at `~/.config/opencode` | file copy (symlinks dereferenced) |
+| `~/.local/share/riotbox-state/<session>/opencode-data/` | `~/.local/share/opencode` | bind mount (`:z`)                    |
+| `~/.local/share/opencode/auth.json`                 | same path in container        | bind mount (rw, when present)        |
+| `~/.pi/agent/` allowlist (see [Pi config](#pi-config)) | copied into state dir (`pi-agent/`), mounted at `~/.pi/agent` | file copy (symlinks dereferenced) |
+| `~/.pi/agent/{auth.json,mcp-auth.json}`             | same path in container        | bind mount (rw, when present)        |
 
 RiotBox sessions are isolated from your host `~/.claude` — it is never mounted directly. `.credentials.json` is bind-mounted read-write so OAuth token refreshes write directly back to the host file (rotating refresh tokens require this). `.claude.json` is copied so each container gets a writable snapshot without host contention.
+
+The headroom, git-ai and overlay mounts and the opencode and Pi copies come from the session's state directory, `~/.local/share/riotbox-state/<session>/`, not from the session directory — see [Session state directory](#session-state-directory), which also covers upgrading from an older release and going back.
 
 > `detect-mounts.sh` and `mount-projects.sh` both accept `--format=podman` (default; one `-v host:container[:flag]` line per mount) and `--format=triple` (one `host:container:mode` line per mount, where `mode` is `rw`/`ro`/`ovl`). The triple format is for tooling that needs to parse the mount table — config generators, tests — without regexing podman flags.
 
@@ -460,11 +514,132 @@ All RiotBox paths follow the [XDG Base Directory Specification](https://specific
 | XDG variable      | Default                   | Contents                  |
 |-------------------|---------------------------|---------------------------|
 | `XDG_CONFIG_HOME` | `~/.config/riotbox/`      | `mounts.conf`, `config`   |
-| `XDG_DATA_HOME`   | `~/.local/share/riotbox/` | Session dirs, git backups |
+| `XDG_DATA_HOME`   | `~/.local/share/riotbox/`, `~/.local/share/riotbox-state/` | Session dirs and git backups; per-session state mounted into the container |
+
+## Session state directory
+
+A session owns two directories on your host:
+
+- `~/.local/share/riotbox/<session>/`, the **session directory**, mounted read-write at `~/.claude`. It holds Claude Code's files and `.projects`, the project list `riotbox session-list` shows.
+- `~/.local/share/riotbox-state/<session>/`, the **state directory** (mode 0700). It holds every other directory RiotBox creates for the session to mount, one subdirectory each: `headroom/`, `git-ai/`, `overlay/<name>/`, `opencode-config/`, `opencode-data/` and `pi-agent/`. Host files mounted in place (`.credentials.json`, the opencode and Pi `auth.json` files, `~/.claude/plugins/`) and the [Context Mode ledger](#context-mode-opt-in) are not in it.
+
+`<session>` is the session key `riotbox session-list` shows: a readable part, then `-` and 16 hex characters that are a hash of the project set's real paths. For one project the readable part is its path with each `/` turned into `-` (`/home/you/src/app` → `home-you-src-app-ccf7e90bf413702b`); for several it is the first project's directory name and how many more there are (`app-2more-…`). The hash makes the key unique to the set, so two projects whose paths differ only by a `-` where the other has a `/` (`/t/a-b/app` and `/t-a/b/app`) get separate sessions. A key that would exceed 255 bytes loses the front of its readable part. A project named twice, directly or through a symlink, is one project: mounted once and keyed as if named once.
+
+Container names are not session keys and are not deterministic. Each launch's container is `riotbox-<project>-<8 random hex>`, or `riotbox-<first project>-<n>more-<hash>-<8 random hex>` for a set, so any number of sessions of one project or set can run side by side. Don't script against a name. Find a session's containers by its label instead: `podman ps --filter label=riotbox.session=<session>`.
+
+The container can change anything in the session directory, including swapping an entry for a symlink to somewhere else on your host. It cannot reach the state directory itself, only the subdirectories that are mounted, so it cannot redirect a mount. The host-side steps of a launch — copying your Claude, opencode and Pi config, writing `.projects`, creating each mount and moving old data across — never write through a link a session planted; they replace it, with a warning where RiotBox did not expect one. Host commands that read what a session wrote (`riotbox session-list`, `riotbox overlays`, `riotbox overlay-accept`, `riotbox git-ai`, `riotbox tokscale`) treat it as untrusted; see [THREAT_MODEL § Session state directory](THREAT_MODEL.md#session-state-directory).
+
+Launches of one project sync your config one at a time, which is why RiotBox needs `flock`. If a launch stops with `Error: <entry> in <dir> changed during sync (…); aborting.`, something modified that entry while the launch was replacing it — most likely a running session of the same project writing to its config. Nothing was written through a link; launch again.
+
+**Removing sessions.** `riotbox session-remove` and `riotbox session-reset` delete the state directory together with the session directory, and `riotbox session-list` counts both in a session's size. That deletes the session's unaccepted overlay changes, Pi session history, headroom memory, opencode data and git-ai store, and neither command checks for pending overlay changes first: run `riotbox overlays` before you remove or reset a session. Both act only on directories RiotBox marked as sessions (they hold `.projects`), and `session-remove` takes a key only as a single name, so `--all` leaves `backups/` and a rootless install's app tree alone; both share `~/.local/share/riotbox/` with the sessions.
+
+**Avoid using a directory that contains your RiotBox data as a project**, such as `$HOME` or `~/.local`. The project is mounted read-write, and with it `~/.local/share/riotbox/`, `~/.local/share/riotbox-state/` and the Context Mode ledger: every session's files, the git backups and, on a rootless install, the RiotBox scripts that run on your host. RiotBox refuses only `/` as a project. For any other project that contains one of these directories, every launch and `riotbox mounts` print `WARN: project <dir> contains RiotBox data:` on stderr, list the directories it contains, and carry on. The check uses real paths, so a data directory you symlinked to another disk is caught when the project contains the link or its target. A project inside the data directory gets no warning.
+
+### Upgrading from a release that kept state in the session directory
+
+Before your first launch or `riotbox overlays` after upgrading, exit every session the older release started. This is required when the two directories are on different disks (see below), where a session still writing would race the copy.
+Stop running opencode sessions of a project before its first launch after upgrading: that launch moves opencode's [Context Mode stores](#context-mode-opt-in) between two mounts by copying, which would race a session still writing them.
+
+Older releases kept `.config-opencode`, `.local-share-opencode`, `.pi-agent`, `headroom`, `git-ai` and `overlay` inside the session directory. Each session moves them into its state directory once, at its first launch after the upgrade or at the first `riotbox overlays`, `riotbox overlay-diff`, `riotbox overlay-accept` or `riotbox overlay-reject` for it, and prints `Notice: moved <old> to <new>` per entry. After that RiotBox never looks at those old paths again, so nothing a session leaves there later is picked up. A later release that moves something else gets the same one-time move for that entry.
+
+- An old entry that is a symlink or not a directory is removed with a warning, never followed.
+- If both an old and a new copy exist, RiotBox warns, naming both, and leaves both; it never merges them. Every later launch repeats a one-line notice until you resolve it (see below). The session uses the new copy. Move anything you need out of the old one, then delete it.
+- If a move fails, RiotBox does not retry it on its own. The warning says so, names `riotbox session-migrate`, and prints the `mv -T -- <old> <new>` that does the same move by hand, which is useful when the cause is not obvious. The old data stays where it was; the new directory may be empty, or partly copied if the move crossed disks, and later launches write to it. If it exists when you run the `mv`, move it aside first.
+- After either of those, every launch and overlay command prints one line while the old directory still holds anything, with the `riotbox session-migrate` command for the session's projects: `Notice: legacy data is still at <old>; once the cause is fixed, run riotbox session-migrate <projects>.`, or, when the new directory holds data too, `Notice: two copies of legacy session data need resolving, <old> and <new>; run riotbox session-migrate <projects> to see how.` The notice stops, and RiotBox forgets the entry, once the old directory is gone or empty (podman leaves empty directories there, which hold nothing to recover).
+- `riotbox session-migrate`, run from the project's directory (or with every project of a multi-project session, as for `overlay-diff`; run from one member, it prints the whole-set command), retries only those failed moves, once each, after you have fixed the cause. It refuses while any session of the project is running or starting, and when the container engine cannot say whether one is: exit every session of the project first, and do not launch one until it has finished, since a launch that starts at the same moment can slip past that check. The launch that left a move undone went on to create the new directory; while that is still empty, the retry moves the old one over it. A move that works is never tried again; one that fails again keeps its notice and prints the warning above. When both copies hold data it cannot merge them: it prints the `diff -rq <old> <new>` to compare them; delete one side (deleting the old one keeps the new one) and run it again. See the recovery steps below for reading the diff. It prints `Nothing to migrate.` when nothing is pending, and exits 1 while any move is still stranded or it refused. It moves whatever is in the old directory by then, which a running session could write to, so look at what it holds before you run it.
+- For `opencode-config` (refreshed from your host at every launch), `pi-agent` once Pi has written to it, and `overlay` in overlay mode, the new directory is rarely empty by the time you retry, so a retry usually means resolving two copies with the `diff -rq` steps. That is expected, not a bug.
+- RiotBox checks that the session directory is writable before it moves anything, so a session directory left owned by another user (`ERROR: … is not writable`, fixed with the `chown -R` it prints) stops the launch before any move is attempted.
+- Until a session has been launched once, or had `riotbox overlays`, `overlay-diff`, `overlay-accept` or `overlay-reject` run for it (each runs the full move, not only `overlay`), `riotbox tokscale` and `riotbox git-ai` do not see its old opencode, Pi and git-ai data.
+
+**When the two directories are on different filesystems** — for example because you replaced `~/.local/share/riotbox-state`, a session's directory in it, or `~/.local/share/riotbox` with a symlink to another disk — the move copies the whole tree and then deletes the old one, so it is not atomic. If it is interrupted, both copies exist and either may be incomplete: stopped while copying, the new copy is missing files (and may hold one cut short); stopped while deleting, the old one is. The next run warns that both exist and leaves them, and the session runs on the new copy, possibly incomplete. To recover, exit every session of that project and compare the two:
+
+```sh
+diff -rq <old> <new>
+```
+
+- Only `Only in <old>` lines (and perhaps one `differ` line): the new copy is incomplete. If no session has run on it since, replace it: `rm -rf <new> && mv -T <old> <new>`; otherwise merge as in the last case.
+- No output, or only `Only in <new>` lines: the old copy is the incomplete one, or holds nothing the new one lacks. Delete it: `rm -rf <old>`.
+- Both kinds, or `differ` lines you cannot explain (the session may have changed files in the new copy since): merge what the new copy lacks without overwriting anything, check the differing files by hand, then delete the old copy: `cp -a --update=none <old>/. <new>/` (with GNU coreutils older than 9.3, use `cp -a --no-clobber` instead).
+
+### Upgrading from a release without hashed session keys
+
+Releases before this one keyed a session by its project paths alone, so projects whose paths differ only by `-` for `/` shared one session. Each session moves to its new key once, at the first launch, `riotbox overlay-diff`, `overlay-accept`, `overlay-reject`, `riotbox session-migrate`, or `riotbox session-remove`/`session-reset` by path for its project set, and prints `Notice: moved <old> to <new>`. Until then `riotbox session-list` shows it under its old key, and `riotbox session-remove <old key>` removes it.
+
+- A session is looked up under the old key of the projects as you named them and, if you named one twice, also under the old key of each named once, so `riotbox /a /a` finds the session `riotbox /a` made.
+- A session moves only to the project set it belongs to: the set this release recorded for it, or, for a session an older release left (which has no record), the set its `.projects` names. The notice then ends with `(matched by its .projects: an older RiotBox left no record)`.
+- If an old session belongs to another project set that had the same old key, it stays where it is and the launch warns, naming that set; the launched set starts a fresh session, and later launches no longer warn. `overlay-diff`, `overlay-reject` and `session-remove` by path create nothing, so they warn each time until the set has been launched. Launching the other set moves the old session to it.
+- Nothing moves, with a warning, when the old state directory's `projects` record exists but cannot be read, or when a session without a record has a name ending in `-` and 16 hex characters (a name a current session can have, so its `.projects` is not trusted). A session whose `.projects` cannot be read or names nothing stays where it is with a one-line notice. Move such a session by hand if it is yours.
+- The move refuses while a container that mounts the old session's directories read-write is running, including one the older release started (it set no `riotbox.session` label), and when the container engine cannot say whether one is: exit that session and launch again. Without the label, a container counts only when it mounts one of those directories or something inside them, so a toolbox or distrobox container that mounts `/` does not block it. A mount is matched both with and without resolving symlinks, so a directory swapped for a link after the container started still counts.
+- If a move fails, the command stops with the reason; fix it and run the command again, which finishes the move.
+- If both the old and the new directory exist, RiotBox warns, naming both, and uses the new one; it never merges them. Move what you need out of the old one, then delete it.
+- `riotbox ctx-stats --by-project` groups by session key, so a project's runs from before the upgrade are listed under its old key.
+
+### Going back to an older release
+
+Exit every RiotBox session, then move each session's state back where an older release looks for it, and give the session the key an older release computes for its projects:
+
+```sh
+data="${XDG_DATA_HOME:-$HOME/.local/share}"
+unrenamed=""
+old_key() { # $1: a state dir's projects file, one path per line
+	n="$(grep -c . "$1")"
+	if [ "$n" -eq 1 ]; then
+		sed 's|/|-|g; s|^-||' "$1"
+		return
+	fi
+	first="$(LC_ALL=C sort "$1" | head -n 1)"
+	first="$(basename "$first" | sed 's/[^a-zA-Z0-9_.-]/-/g; s/--*/-/g; s/^-//; s/-$//')"
+	hash="$(LC_ALL=C sort "$1" | sed 's|/|-|g; s|^-||' | paste -sd'+' - | tr -d '\n' | sha256sum | cut -c1-8)"
+	echo "$first-$((n - 1))more-$hash"
+}
+for ST in "$data"/riotbox-state/*/; do
+	[ -d "$ST" ] || continue
+	ST="${ST%/}"
+	S="$data/riotbox/${ST##*/}"
+	if [ ! -d "$S" ]; then
+		echo "NO SESSION DIR: $ST" >&2
+		continue
+	fi
+	K=""
+	if [ -f "$ST/projects" ]; then
+		K="$(old_key "$ST/projects")"
+	elif printf '%s\n' "${ST##*/}" | grep -qE -- '-[0-9a-f]{16}$'; then
+		echo "NO RECORD: $ST" >&2
+		continue
+	fi
+	for pair in opencode-config:.config-opencode opencode-data:.local-share-opencode \
+	            pi-agent:.pi-agent headroom:headroom git-ai:git-ai overlay:overlay; do
+		if [ -e "$ST/${pair%%:*}" ]; then
+			mv -T "$ST/${pair%%:*}" "$S/${pair#*:}" || echo "NOT MOVED: $ST/${pair%%:*}" >&2
+		fi
+	done
+	rm -f "$ST/.migrated" "$ST/.migrate.lock" "$ST/.sync.lock" "$ST/projects"
+	rmdir "$ST" || echo "NOT EMPTY: $ST" >&2
+	if [ -n "$K" ] && [ "$S" != "$data/riotbox/$K" ]; then
+		if ! mv -T "$S" "$data/riotbox/$K"; then
+			echo "NOT RENAMED: $S -> $K" >&2
+			unrenamed="$unrenamed|$S|"
+		fi
+	fi
+done
+for S in "$data"/riotbox/*/; do
+	S="${S%/}"
+	case "$unrenamed" in *"|$S|"*) continue ;; esac
+	if [ -f "$S/.projects" ] && [ ! -e "$data/riotbox-state/${S##*/}" ] &&
+		printf '%s\n' "${S##*/}" | grep -qE -- '-[0-9a-f]{16}$'; then
+		echo "NO RECORD: $S" >&2
+	fi
+done
+rm -f "$data/riotbox-state/.migrate.lock"
+```
+
+Check the output. `mv -T` refuses to replace a non-empty directory, so `NOT MOVED` means the older path already holds data (an older release recreated it); compare the two and keep what you need. `NOT EMPTY` names a state directory with something left in it; empty it and remove it yourself, because an older release's `session-remove` does not know about `riotbox-state/`. `NO SESSION DIR` names a state directory whose session directory is already gone; nothing can move back into it, so look through it and delete it. `NO RECORD` names a session under a new key that no launch of this release has recorded its projects for (an overlay command moved it); launch it once with this release, exit, and run the script again. `NOT RENAMED` means a session directory already exists under the older key, which happens when two project sets shared it: the older release can only use one of them, so keep the one you want under that key. Running this release again moves everything forward again.
+
+opencode's [Context Mode stores](#context-mode-opt-in) now live in `opencode-data/context-mode`, so they move back as `.local-share-opencode/context-mode`. An older release does not read them there: it kept them in its opencode config copy, which it rebuilds at every launch. Under an older release, opencode's Context Mode starts without that history; this release finds it again. Headroom memory does the same: this release keeps it in the state directory's `headroom/`, while an older release looks for it in `.headroom/` in the working directory, so under an older release it starts empty.
 
 ## Agent wrapper
 
-Inside the container, each agent binary is shadowed by a single generic wrapper (`container/agent-wrapper.sh`) that injects the agent's autonomy flags (Claude Code: `--dangerously-skip-permissions`; opencode: `--auto`) — this is safe here because the container **is** RiotBox. The agent can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
+Inside the container, each agent binary is shadowed by a single generic wrapper (`container/agent-wrapper.sh`) that injects the agent's autonomy flags (Claude Code: `--dangerously-skip-permissions`; opencode: `--auto`; Pi has no approval prompts to switch off, so nothing is injected) — this is safe here because the container **is** RiotBox. The agent can't escape to the host, and the mounted project directory has a git checkpoint for easy rollback.
 
 The system prompt is pre-rendered at build time into `/etc/claude-code/CLAUDE.md` (the managed policy path). This location is loaded automatically by Claude Code, cannot be excluded, and survives context compression. Build-time rendering avoids SELinux AVC denials that occur when `container_t` writes to `etc_t` paths in the overlay filesystem. The `RIOTBOX_PROMPT` env var can override the
 template at runtime if needed. Using the managed policy path frees `~/.claude/CLAUDE.md` for the user's own instructions — personal CLAUDE.md and rules from the host are synced into the session directory at launch.
@@ -647,7 +822,7 @@ What lands where:
   git-ai on the host yourself. Until you do, the host answers every one of them with
   `git: 'ai' is not a git command` — which looks like missing attribution and is not.
 - The daemon's own analytics store (`~/.git-ai` in-container, bind-mounted from
-  `~/.local/share/riotbox/<session>/git-ai`) is **session-local**, so a bare
+  `~/.local/share/riotbox-state/<session>/git-ai`) is **session-local**, so a bare
   `git ai usage` on the host reports on the host's own store and sees no session at
   all. **`riotbox git-ai`** closes that gap — it merges every session store plus
   your own `~/.git-ai` into one report:
@@ -665,7 +840,7 @@ What lands where:
   would make every report mutate the sessions it reports on, archived ones
   included. Reflink makes the copy near-free where the filesystem supports it,
   and only one store is copied at a time. Stores are still read where they live
-  rather than registered anywhere, so a `riotbox reset-session` drops that
+  rather than registered anywhere, so a `riotbox session-reset` drops that
   session from the report.
 
   The read also runs with **no network** (`unshare -rn`, the same rule
@@ -681,6 +856,17 @@ What lands where:
   group is `$GIT_AI_BIN`, a previously cached binary, a matching `git-ai` on `PATH`,
   then a one-time download verified against the release `SHA256SUMS`. Set
   `RIOTBOX_GIT_AI_NO_FETCH=1` to refuse that download.
+
+  A session store and its stamp are written by the container, so the report does
+  not trust them. A stamp that is not a regular file holding a plain version
+  number (`1.7.5`, say) gets the store skipped with `has an invalid
+  .riotbox-version`, and a store that contains a symlink is skipped with
+  `contains a symlink`; the private copy is checked again after copying, in case
+  a running session changed the store meanwhile. git-ai reads that copy with an
+  empty `config.json`. The text report prints as `?` every character from a store
+  that a terminal acts on or that makes text read differently from its bytes:
+  C0 and C1 controls, DEL, bidirectional-text controls, zero-width characters
+  and the Unicode line and paragraph separators.
 
   `git ai analyze` has no `--json`, so there is nothing machine-readable to merge; it
   stays a per-session command.
@@ -707,7 +893,7 @@ whatever upstream ships.
 Two honest limits. Upstream offers no `off` — the modes are `default`, `notes`
 and `local` — so this keeps prompts out of the shared artifact rather than
 stopping capture; prompts may still reach the session-local store, which is
-disposable and wiped by `riotbox reset-session`. And
+disposable and wiped by `riotbox session-reset`. And
 `exclude_prompts_in_repositories` is deliberately **not** used: upstream's help
 describes other keys as globs and this one only as "Repos", so there is no
 evidence a `*` entry matches anything, and a setting that looks protective while
@@ -734,19 +920,45 @@ What changes when enabled:
 
 - The agent launches through a localhost-only compression proxy inside the
   container. Nothing is exposed outside the container.
-- Cross-session memory and failure learning (`--memory`, `--learn`) are on.
-  State persists per project set under the session directory
-  (`~/.local/share/riotbox/<session>/headroom`, also visible in-container at
-  `~/.claude/headroom`) and is shared by all agents of that project set.
+- Cross-session memory is on. Memory and the rest of headroom's state
+  persist per project set in the session's state directory
+  (`~/.local/share/riotbox-state/<session>/headroom`) and are shared by all
+  agents of that project set. RiotBox sets `HEADROOM_MEMORY_DB_PATH` because
+  headroom would otherwise keep its memory in `.headroom/` in the working
+  directory.
+- Headroom writes nothing into your project. RiotBox starts `headroom proxy`
+  itself and points the agent at it, instead of using `headroom wrap`,
+  because `wrap claude` writes `.claude/settings.local.json` and lock, marker
+  and hook entries into the working directory.
+- Failure learning (headroom's `--learn`) is off. It writes what it learns
+  into the project (`CLAUDE.local.md` for Claude, `AGENTS.md` for opencode),
+  and headroom has no setting to send it anywhere else.
 - Model inference is fully offline — the compression models are baked into
   the image at build time.
-- Wired for `--agent=claude` and `--agent=opencode`, both via `headroom
-  wrap`. Other agents print a warning and run uncompressed.
-- For opencode, riotbox starts the proxy itself and then hands off to
-  `headroom wrap opencode --no-proxy`. It starts the proxy rather than
-  letting `wrap` do it because `wrap opencode --memory` appends a memory
-  block to `AGENTS.md` in the working directory — your repository. This way
-  you get cross-session memory and nothing is written to your checkout.
+- Wired for `--agent=claude` and `--agent=opencode`. Other agents, including
+  `--agent=pi` (headroom has no Pi support), print a warning and run
+  uncompressed.
+- For Claude, RiotBox exports `ANTHROPIC_BASE_URL` (or, on Vertex or Azure AI
+  Foundry, `ANTHROPIC_VERTEX_BASE_URL` / `ANTHROPIC_FOUNDRY_BASE_URL`) for the
+  launch, keeps on-demand tool loading on with `ENABLE_TOOL_SEARCH=true`
+  unless you set it, and registers headroom's MCP retrieve tool at user
+  scope in the session's `~/.claude.json`. One gap remains: Claude Code
+  conversation workers that read settings files rather than inheriting the
+  environment (daemon mode) talk to the API directly, uncompressed.
+  `headroom wrap` covered them by writing the project's settings file.
+- For opencode, RiotBox starts the proxy and then hands off to
+  `headroom wrap opencode --no-proxy`, which routes the providers through it
+  via `OPENCODE_CONFIG_CONTENT` and writes nothing into the project.
+- If the proxy does not start, RiotBox warns and runs the agent uncompressed.
+  If something other than headroom already listens on the proxy port
+  (`HEADROOM_PORT`, default 8787 — `wrangler dev` uses it too), RiotBox
+  leaves it alone and starts the proxy on the next free port.
+- If the proxy dies mid-session, the agent gets connection errors until you
+  relaunch it.
+- Each container tracks the proxies it started in its own `/tmp`. If you
+  share the host's `/tmp` between containers (for example with
+  `RIOTBOX_EXTRA_ARGS`), they stop recognising their own proxies and each
+  launch may start another one.
 - If you set a provider `baseURL` yourself in `opencode.json(c)`, headroom
   routes that provider through the proxy anyway and riotbox prints a notice
   naming it. Your endpoint still receives the traffic — the proxy forwards
@@ -763,6 +975,30 @@ The toggle accepts only the literal `1` — anything else disables the feature
 (`riotbox doctor` flags unrecognized values). If a session misbehaves under
 compression, drop the variable and rerun — default behavior is untouched
 when `RIOTBOX_HEADROOM` is unset.
+
+### Headroom leftovers from older releases
+
+Older releases let headroom write into a single-project checkout (in overlay
+mode, into the overlay). Nothing current writes these; remove what you find:
+
+- `.headroom/`, headroom's memory. The first headroom launch of each session
+  prints, once, the commands to delete it, to copy it into the state
+  directory (after exiting every session), or, if it was committed, to
+  untrack it and add it to `.gitignore`. RiotBox never moves or deletes it
+  itself, and `overlay-accept` never copies one from the overlay into the
+  project.
+- `.claude/settings.local.json` entries from `headroom wrap claude`: a
+  `SessionStart` hook whose command mentions `headroom-wrap-selfheal` (it
+  runs `/home/llm/.local/bin/headroom wrap selfheal`, so a `claude` run on the
+  host in that project tries to run it at startup), and, after a session was
+  killed, `env.ANTHROPIC_BASE_URL` pointing at `127.0.0.1` and
+  `env.ENABLE_TOOL_SEARCH`. Delete those entries, or the whole file if it
+  holds nothing else.
+- `.claude/.headroom_wrap_settings.lock`, `.claude/.headroom_wrap_marker.json`
+  and `.claude/.headroom_wrap_owners.json`: delete them.
+- A headroom block (between headroom's marker comments) in `CLAUDE.local.md`
+  or `AGENTS.md`, written by failure learning: delete the block, or the file
+  if headroom created it.
 
 ## Context Mode (opt-in)
 
@@ -782,26 +1018,29 @@ RIOTBOX_CONTEXT_MODE=1 riotbox run "fix the failing tests"
 echo ': "${RIOTBOX_CONTEXT_MODE:=1}"' >> ~/.config/riotbox/config
 ```
 
-**Both agents are supported, and the two paths have nothing in common.**
-Upstream reaches Claude Code through hooks and an MCP server, and opencode
-through a TypeScript plugin that runs inside the agent process; there is no
-shared shape to abstract over. On Claude the image stages upstream's own
-marketplace plugin and the session registers it — riotbox writes no Claude
-wiring at all. On opencode riotbox generates a plugin file, from
-`agents/opencode/context-mode.sh`. `container/context-mode-setup.sh` drives the
+**All three agents are supported, and the paths have little in common.**
+Upstream reaches Claude Code through hooks and an MCP server, opencode
+through a TypeScript plugin that runs inside the agent process, and Pi through
+a Pi package whose extension runs inside Pi and bridges to the MCP server;
+there is no shared shape to abstract over. On Claude the image stages
+upstream's own marketplace plugin and the session registers it — riotbox
+writes no Claude wiring at all. On opencode riotbox generates a plugin file,
+from `agents/opencode/context-mode.sh`. On Pi riotbox adds the installed
+`context-mode` package to `settings.json` `packages`, from
+`agents/pi/context-mode.sh`. `container/context-mode-setup.sh` drives the
 per-session part without naming any agent — see
 [`docs/dev/agent-contract.md`](docs/dev/agent-contract.md#optional-verbs-context-mode)
 for the contract. An agent with no support runs with the feature off after a
 warning naming it.
 
-|                        | `--agent=claude`                                                                | `--agent=opencode`                                                              |
-|------------------------|---------------------------------------------------------------------------------|---------------------------------------------------------------------------------|
-| Where the support comes from | upstream's marketplace plugin, staged in the image at a pinned ref and registered against the session in place | one generated plugin file, `~/.config/opencode/plugins/riotbox-context-mode.js`   |
-| Where the code runs    | a short-lived hook process per matched tool call, plus an MCP child process        | in-process, inside opencode's own embedded bun                                    |
-| How the `ctx_*` tools arrive | over MCP, named `mcp__plugin_context-mode_context-mode__ctx_*`              | eleven native opencode tools the plugin registers directly — no MCP server at all  |
-| Where interception happens | a `PreToolUse` matcher in the plugin's `hooks/hooks.json`                      | `tool.execute.before`, enforced in-process                                        |
-| Slash commands         | `/context-mode:*`, one per bundled skill                                          | none — opencode has no equivalent surface                                         |
-| Store                  | `~/.claude/context-mode`                                                          | `~/.config/opencode/context-mode`                                                 |
+| | `--agent=claude` | `--agent=opencode` | `--agent=pi` |
+|---|---|---|---|
+| Where the support comes from | upstream's marketplace plugin, staged in the image at a pinned ref and registered against the session in place | one generated plugin file, `~/.config/opencode/plugins/riotbox-context-mode.js` | upstream's Pi package: the installed `context-mode` package root, listed in `~/.pi/agent/settings.json` `packages` |
+| Where the code runs | a short-lived hook process per matched tool call, plus an MCP child process | in-process, inside opencode's own embedded bun | in-process, inside Pi, plus an MCP child process the extension starts on the first prompt |
+| How the `ctx_*` tools arrive | over MCP, named `mcp__plugin_context-mode_context-mode__ctx_*` | eleven native opencode tools the plugin registers directly — no MCP server at all | native Pi tools the extension registers and forwards to that MCP child |
+| Where interception happens | a `PreToolUse` matcher in the plugin's `hooks/hooks.json` | `tool.execute.before`, enforced in-process | Pi's `tool_call` event, enforced in-process; at context-mode v1.0.169 only `bash` calls are routed |
+| Slash commands | `/context-mode:*`, one per bundled skill | none — opencode has no equivalent surface | `/ctx-stats` and `/ctx-doctor` |
+| Store | `~/.claude/context-mode` | `~/.local/share/opencode/context-mode` | `~/.pi/agent/context-mode` |
 
 What changes when enabled:
 
@@ -841,24 +1080,49 @@ What changes when enabled:
   maintainer change plus a `riotbox rebuild`, not something a session can do.
   The recipe is in the `Containerfile`, immediately above the
   `CONTEXT_MODE_PLUGIN_REF` ARG.
-- The FTS5 store lives in the session directory
-  (`~/.local/share/riotbox/<session>/context-mode`), under the config directory of
-  the agent that wired it — in-container `~/.claude/context-mode` for Claude Code
-  and `~/.config/opencode/context-mode` for opencode. It holds verbatim tool
+- The FTS5 store lives under a directory of the agent that wired it —
+  in-container `~/.claude/context-mode` for Claude Code (on the host
+  `~/.local/share/riotbox/<session>/context-mode`), opencode's data directory
+  `~/.local/share/opencode/context-mode` for opencode and `~/.pi/agent/context-mode`
+  for Pi (on the host under `~/.local/share/riotbox-state/<session>/opencode-data/`
+  and `pi-agent/`). It holds verbatim tool
   output — treat it with the same sensitivity as your session transcripts.
   `riotbox session-remove` deletes it along with the rest of the session.
 
   The location is per agent rather than shared, which is a deliberate cost: a
   session directory reused with a different `--agent` starts from an empty store,
-  because recall does not cross from one agent's store to the other's. Only one
+  because recall does not cross from one agent's store to another's. Only one
   agent's *wiring* exists in a session directory at a time — starting a session
-  with a different `--agent` strips the other's on the way in — but the stores
-  themselves both stay until the session directory is removed.
-- **Two stores, both in the session directory.** `content/` holds the parked tool
+  with a different `--agent` strips the others' on the way in — but the stores
+  themselves stay until the session is removed.
+- **Two stores, both kept with the session.** `content/` holds the parked tool
   output; `sessions/` holds continuity — what the session did, and the snapshot
   `PreCompact` writes so an autocompact does not lose the thread. Both persist for
   the project set, so `riotbox resume` and a fresh run on the same projects pick up
   what the last one learned.
+
+  opencode's stores sit in its data directory rather than its config directory
+  because a launch replaces the config copy whenever you have a host
+  `~/.config/opencode/`. A host `~/.config/opencode/context-mode/` is not copied
+  in, and neither is `~/.config/opencode/memory/`, upstream's default home for
+  opencode's auto-memory: it holds memory from every project on the host. Each
+  session's auto-memory lives in `~/.local/share/opencode/context-mode/memory`
+  instead, kept with the session's other stores. One case loses out: if your
+  own opencode config loads context-mode as a plugin and RiotBox's Context Mode
+  is off, upstream still reads and writes `~/.config/opencode/memory/`. That
+  session starts with none of your host's auto-memory, and with a host
+  `~/.config/opencode/`, what it writes there is discarded at the next launch.
+  Sessions created by an earlier RiotBox kept them at
+  `~/.config/opencode/context-mode`. Only sessions whose host has no
+  `~/.config/opencode/` still have them: with a host config dir, the first
+  launch after upgrading replaces the config copy before the container starts,
+  as every launch did before, so those stores are lost. Where they survive, the
+  first start after upgrading moves them across. It moves nothing, and warns,
+  when both locations already hold stores (the session uses the new one) or
+  when a `.db-wal` or `.db-shm` file shows another opencode session of the
+  project may have the store open. A crashed session leaves those files behind
+  for good; the warning then gives two recovery commands. Don't delete the
+  `-wal` file: it can hold committed data.
 - **The session prints what it kept out when it exits**, the same way
   `RIOTBOX_HEADROOM=1` prints its token summary:
 
@@ -1011,11 +1275,12 @@ What changes when enabled:
   deliberate actor — the container's user holds `sudo` — and `RIOTBOX_NETWORK=none`
   remains the hard control. See [Context Mode store and
   wiring](THREAT_MODEL.md#context-mode-store-and-wiring).
-- **Starting a session needs no network, on either agent.** On Claude the plugin
+- **Starting a session needs no network, on any agent.** On Claude the plugin
   is cloned at a pinned ref and has its dependencies installed at image build
   time, and the session only writes a registry entry naming that path; on
-  opencode riotbox generates the plugin file itself. Neither path runs
-  `context-mode upgrade`, which clones upstream and overwrites the installed
+  opencode riotbox generates the plugin file itself; on Pi the `packages` entry
+  is the absolute path of the copy installed in the image, so Pi never installs
+  it from npm. No path runs `context-mode upgrade`, which clones upstream and overwrites the installed
   tree with whatever is on `main`. On opencode the same reasoning is why the
   generated plugin file re-exports the copy
   **vendored in the image, by absolute path**, instead of riotbox adding
@@ -1024,11 +1289,12 @@ What changes when enabled:
   needs network (`RIOTBOX_NETWORK=none` forbids it) and floats the version off
   the pin the image build asserts against.
 
-  One outbound request remains on the Claude path, and it is not RiotBox's: the
+  One outbound request remains on the Claude and Pi paths, and it is not RiotBox's: the
   MCP server GETs `https://registry.npmjs.org/context-mode/latest` at startup to
   warn about newer versions. It carries no payload, fails soft, and — unlike
   headroom and CodeGraph — has no off switch; `RIOTBOX_NETWORK=none` is what
-  suppresses it. The opencode path has no counterpart, because it starts no
+  suppresses it. Pi's extension starts the same MCP server as a child, so it
+  makes the same request. The opencode path has no counterpart, because it starts no
   server: the plugin imports the server module with
   `CONTEXT_MODE_EMBEDDED_PLUGIN_TOOLS=1`, which is exactly the flag that skips
   the startup routine the version check lives in. See [Context Mode store and
@@ -1055,12 +1321,16 @@ What changes when enabled:
   filtered out of the `plugin` array of the generated `opencode.jsonc` and a
   warning on stderr names what was dropped and why. Your host config is not
   modified, and with the toggle off nothing is filtered — the entry is then your
-  own plugin choice.
+  own plugin choice. On Pi a `context-mode` entry in your host `packages` is
+  dropped with every other host package (see [Pi config](#pi-config)), whatever
+  the toggle says.
 - Context Mode runs on its own pinned Node 22 inside the image on the Claude
   path, independent of whichever Node versions the build mirrored from your host.
   **The opencode path does not use it**: the plugin runs under opencode's
   embedded bun, and upstream's `bun:sqlite` adapter means the native SQLite
-  addon that forced the pinned Node is never loaded there.
+  addon that forced the pinned Node is never loaded there. Pi runs on its own
+  pinned Node, the same version today, so the extension loads the addon built
+  for it.
 - **`ctx_execute` runs TypeScript because the image ships [bun](https://github.com/oven-sh/bun).**
   Without it upstream reports `TypeScript: not available (install bun, tsx, or
   ts-node)` and TS snippets do not run at all. The version is pinned and the
@@ -1177,8 +1447,8 @@ Details worth knowing:
   `.codegraph/` with the same sensitivity as the project itself.
 - **In overlay mode**, the index is written into the overlay rather than your project and
   is treated as a rebuildable cache rather than a change: it never appears in `riotbox
-  overlay-diff` and never blocks the next session. Because it lives in the session
-  directory there, `riotbox session-remove` and `riotbox session-reset` delete it. See
+  overlay-diff` and never blocks the next session. Because it lives in the session's
+  state directory there, `riotbox session-remove` and `riotbox session-reset` delete it. See
   [Overlay mode](#overlay-mode-podman-only) for what `overlay-accept` and
   `overlay-reject` do with it.
 - **Only a `.codegraph/` at the project root is treated as a cache.** If you index a
@@ -1296,6 +1566,10 @@ left alone because you wrote it rather than riotbox — so keep both streams if
 you are redirecting. If no token variable is set it tells you which ones it
 looked for and writes nothing.
 
+Claude Code and opencode are wired; Pi is not. For Pi the commands print
+`[forge-mcp] pi: no github MCP support — skipped.` (or `gitlab`) on stderr and
+leave its config alone. That skip does not count as a failure.
+
 Three things worth knowing:
 
 - **Start or restart your agent afterwards.** MCP servers are read when an agent
@@ -1354,6 +1628,80 @@ riotbox overlay-accept    # Apply changes to your project
 riotbox overlay-reject    # Discard all changes
 ```
 
+`overlay-diff`, `overlay-accept` and `overlay-reject` take the projects the session was
+launched with: none when you launched from the project directory, the path you gave, or,
+for a multi-project session (`riotbox ~/src/app ~/src/lib`), every path of the set in any
+order. Each project of a set keeps its own overlay. `overlay-diff` shows them one after
+another under an `Overlay diff for: <project>` header. `overlay-accept` and `overlay-reject`
+handle each project in turn, each with its own checks and prompt, then print one result line
+per project (`applied`/`discarded`, `unchanged` when it had nothing to apply, `declined`,
+`failed`, or `interrupted` when Ctrl-C stopped it). If you decline a project or its accept fails, that project's changes stay
+pending, untouched, and the other projects still go ahead. Declining is not a failure. The
+exit status is 0 when every project was handled (declined included), 1 when a project
+failed or the projects could not be resolved, and 130 on Ctrl-C, which stops the remaining
+projects after printing the results so far (the interrupted one keeps its changes). The
+launch that refuses to start while changes are pending prints these three commands with
+every path of the session, and so does `riotbox overlays` (shell-quoted, so you can paste
+them). One project of a set on its own is refused with the command for the whole set. Two
+projects with the same directory name (`a/app` and `b/app`) cannot be mounted together, and
+the overlay commands refuse that set.
+
+Each launch records its project set in the session's state directory
+(`~/.local/share/riotbox-state/<session>/projects`), which no container can reach. The overlay
+commands, `riotbox overlays` and the launch's hints take project paths only from that
+record, never from the session directory's `.projects` (which the session can rewrite), and
+the overlay commands refuse a project list that differs from it, since a session's changes
+must only reach the projects it was launched with. A session last launched by an older RiotBox has no record. `riotbox overlays`
+shows its project as unknown, without commands, and `overlay-accept` refuses until you
+launch the set once with `RIOTBOX_OVERLAY=1`. That launch records the set and, since changes
+are pending, stops before starting a session. `overlay-diff` and `overlay-reject` work
+without the record. A launch that replaces a record naming a different set warns. If a
+launch finds pending changes but no record, and the session's `.projects` names a different
+set, it warns that the changes may belong to that set, which it shows but never offers as a
+command. It still records the set you launched, and keeps that record while the changes are
+pending. If the changes came from the other set, reject them as the recorded set (or accept
+them as it, if they suit those projects), or delete
+`~/.local/share/riotbox-state/<session>/projects` and launch the right set to record it.
+
+The overlay is written by the session, so `overlay-accept` treats it as untrusted:
+
+- `overlay-accept` and `overlay-reject` refuse while a RiotBox container that has this
+  overlay mounted read-write is still running, or when the container engine cannot say whether one
+  is. Exit that session first. Other sessions on the same project (normal mode, or a
+  directory inside it) do not block; `overlay-accept` names the ones that have the project
+  mounted read-write, because they can change it while you review. `overlay-diff` still
+  runs, with a note that the overlay can change while you read it. Every running container
+  is checked by what it mounts, so a session an older RiotBox started, which has no
+  `riotbox.session` label, blocks too. Without the label, a container blocks only when it
+  mounts the overlay itself or something inside it, so a toolbox or distrobox container that
+  mounts `/` does not block; `overlay-accept` still names it in its warning, since it can
+  change the project while the apply runs.
+- A symlink in the overlay is listed as `LINK  path -> target` and applied as a symlink,
+  never followed. Applying a file over a symlink in your project replaces the link.
+  Applied files lose any setuid/setgid bit.
+- The accept stops before changing anything if an entry would be written through a
+  symlinked directory in your project, if an entry's type differs from what is in the
+  project in a way it cannot apply safely (a file over a directory, a directory over a
+  file or a symlink), if a name contains a control character (the review shows it
+  escaped), if a whiteout is malformed, or if the overlay holds a FIFO, socket or device.
+- Everything is checked again after you confirm. If the overlay or the project changed
+  since the review, nothing is applied; run `overlay-accept` again to see the current
+  changes. Validating every entry twice is deliberate; with the apply it costs roughly
+  25 ms per entry (about 5 seconds for 200 files). A change another session makes to the project while the apply itself runs is
+  not detected.
+- If an accept is killed before it finishes, its changes stay in
+  `overlay/<name>.accepting.<pid>` in the session's state dir. `riotbox overlays` lists
+  it with the command that puts it back, and a new overlay session refuses to start until
+  you do.
+- If a session replaces the overlay's `upper` or `work` directory with a symlink or a file,
+  the next overlay launch refuses and prints the `riotbox overlay-reject` command for the
+  session's projects. That command removes the link or file itself, never what it points
+  at, puts an empty directory back, and discards any changes as usual; after it the launch
+  works again.
+
+`riotbox overlays` exits 0 when it lists pending overlays, 1 when there are none, and 2
+when it could not adopt overlay data left by an older RiotBox.
+
 A [CodeGraph](#codegraph-code-intelligence) index (`.codegraph/`) is rebuildable derived
 data, not a change to review, so it is excluded from `overlay-diff`, from the file counts
 in `riotbox overlays`, from the session exit summary, and from the check that refuses to
@@ -1362,8 +1710,16 @@ you out. `overlay-accept` still copies it through to your project alongside the 
 you accepted; an overlay containing *only* an index counts as no changes at all, so both
 `overlay-accept` and `overlay-reject` report nothing to do and the index simply stays in
 the overlay for the next session. One consequence: such an overlay is invisible to
-`riotbox overlays`, including its disk usage, so a large index can sit in the session
-directory unreported — `riotbox session-remove` clears it.
+`riotbox overlays`, including its disk usage, so a large index can sit in the session's
+state directory unreported — `riotbox session-remove` clears it.
+
+A `.headroom/` at the top of the overlay is headroom memory that an older RiotBox let
+headroom write into the overlay (see [Headroom](#headroom-context-compression-opt-in)).
+It is hidden from the same places as an index. Unlike an index, it never reaches your
+project: `overlay-accept` neither copies it nor deletes a `.headroom/` of yours, and both
+`overlay-accept` and `overlay-reject` leave it in the overlay. `overlay-diff` counts the
+hidden files in a closing note. The one-time headroom notice prints the commands to
+delete it or move it to where headroom memory is kept now.
 
 > Overlay mode requires podman. Docker is not supported due to differences in how it handles bind-mounted overlays.
 
@@ -1656,8 +2012,11 @@ Non-interactive callers (`riotbox run`, CI, scripts) never block on the prompt: 
 |------------------------------------------|------------------------------|-----------------------------------------------|
 | Project directory                        | read-write bind mount (`:z`) | Your code — the agent needs full access       |
 | Session data (`~/.local/share/riotbox/`) | bind mount (`:z`)            | Isolated per project set                      |
+| Session state (`~/.local/share/riotbox-state/<session>/`) | one bind mount (`:z`) per subdirectory | Never mounted whole, so the container cannot replace a mount source |
 | `~/.claude/.credentials.json`            | nested bind mount (RW)       | OAuth token refreshes must write back to host |
 | `~/.claude.json`                         | file copy into session dir   | Each container gets a writable snapshot       |
+| opencode and Pi auth files (`~/.local/share/opencode/auth.json`, `~/.pi/agent/auth.json`, `~/.pi/agent/mcp-auth.json`) | bind mount (RW), when present | Token refreshes write back; mounted whichever `--agent` runs |
+| Pi config allowlist (`~/.pi/agent/`)     | file copy into state dir     | See [Pi config](#pi-config); nothing flows back |
 | RiotBox config (`~/.config/riotbox/`)    | bind mount (`:z`)            | `plugins.conf`, `config`, `mounts.conf`       |
 | Host plugins (`~/.claude/plugins/`)      | read-only bind mount         | Merged into session at startup                |
 | User scripts (`~/bin`)                   | read-only bind mount         | Available but not writable                    |
@@ -1815,7 +2174,7 @@ echo "options overlay metacopy=on" | sudo tee /etc/modprobe.d/overlay.conf
 
 ## Troubleshooting
 
-When something breaks, the first thing to try is `riotbox doctor` — it walks every host prerequisite (podman, fuse-overlayfs, image build, credentials, plugin/skill dirs) and prints a fix hint per failure. By default every check runs even if earlier ones failed, so a single invocation surfaces every problem at once; set `RIOTBOX_DOCTOR_FIRST_FAIL=1` to short-circuit at the first failure. The exit code is the FIRST failure encountered (0 on full pass). The same checks run at the end of `./setup.sh`, so a fresh install is self-verifying.
+When something breaks, the first thing to try is `riotbox doctor` — it walks every host prerequisite (podman, fuse-overlayfs, `flock`, image build, credentials, plugin/skill dirs) and prints a fix hint per failure. By default every check runs even if earlier ones failed, so a single invocation surfaces every problem at once; set `RIOTBOX_DOCTOR_FIRST_FAIL=1` to short-circuit at the first failure. The exit code is the FIRST failure encountered (0 on full pass). The same checks run at the end of `./setup.sh`, so a fresh install is self-verifying.
 
 Other knobs:
 
@@ -1892,6 +2251,7 @@ cat ~/.claude/debug/latest
 - **Did the support land?** The signal differs per agent, and on Claude it changed in this release.
   - **`--agent=claude`** — there is no `[context-mode]` startup line any more, because riotbox no longer writes Claude's wiring. The plugin registration prints instead, on stdout: `  [plugins] Context Mode 1.0.169 registered at /home/llm/.riotbox/context-mode-plugin/v1.0.169.` **Do not read that line, or its absence, as the answer.** It is printed only by a call that changed the registry, and how often that happens depends on your host: with no `context-mode` under `~/.claude/plugins` it prints on the first run and then goes quiet, while with one mounted the host merge overwrites the entry every start and the line prints on every run — twice on the first. The definitive negative signal is on stderr instead: `  [context-mode] WARN: no Context Mode plugin is installed and enabled in this session`. To check a quiet session directly, look for the plugin: `riotbox run "/context-mode:ctx-doctor"`, or `jq '.plugins["context-mode@context-mode"]' ~/.local/share/riotbox/<session>/.claude/plugins/installed_plugins.json`.
   - **`--agent=opencode`** — unchanged: `  [context-mode] opencode plugin shim wired at <path>.` on stderr.
+  - **`--agent=pi`** — `  [context-mode] pi package wired in /home/llm/.pi/agent/settings.json.` on stderr.
 
   Either way, every give-up path explains itself on **stderr** as `[context-mode] WARN:` or `[plugins] WARNING:` — streams an autonomous run usually discards. Re-run capturing them: `RIOTBOX_CONTEXT_MODE=1 riotbox run "…" 2>/tmp/rb.err; grep -E 'context-mode|Context Mode' /tmp/rb.err`. Most common causes: the selected agent has no Context Mode support in riotbox (the warning names it), the session config could not be written, the image is older than the plugin-staging layer and staged nothing (`riotbox doctor` catches that one and tells you to rebuild), or — on opencode — `--pure` was on the command line, which disables external plugins outright.
 - **Is the exit report zero rather than absent?** `this run 0 B kept out · 8.0 KB hook log on disk` means the hooks ran and withheld nothing — the feature engaged and saved nothing. The hook-log figure is disk volume, not tokens. `bytesAvoided` only moves when the model actually routes large output through the sandbox tools; a session of small tool results has nothing to redirect. **No report at all** is the different problem, and it points back to the support check above.
@@ -1900,12 +2260,12 @@ cat ~/.claude/debug/latest
 
 ### Session directory owned by wrong UID
 
-**Symptom**: `Permission denied` errors writing to `~/.local/share/riotbox/`.
+**Symptom**: `Permission denied` errors writing to `~/.local/share/riotbox/` or `~/.local/share/riotbox-state/`.
 
-**Cause**: a previous container run without `--userns=keep-id` (or with broken userns) caused files to be created with a subordinate UID. The mount-projects.sh script detects this and exits with an error message. Fix manually:
+**Cause**: a previous container run without `--userns=keep-id` (or with broken userns) caused files to be created with a subordinate UID. For the session directory, `mount-projects.sh` detects this and exits with an error message; the state directory has no such check, so a wrong owner there shows up as a `chmod` or `Permission denied` error at launch. Fix manually:
 
 ```sh
-sudo chown -R $(id -u):$(id -g) ~/.local/share/riotbox/
+sudo chown -R $(id -u):$(id -g) ~/.local/share/riotbox/ ~/.local/share/riotbox-state/
 ```
 
 ### Build fails with permission denied

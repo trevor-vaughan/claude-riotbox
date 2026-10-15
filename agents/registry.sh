@@ -110,7 +110,7 @@ agent_call() {
 
 # agent_registry_csv
 #   Print AGENT_REGISTRY as a comma-separated list. Used by --agent error
-#   messages to show "must be one of: claude, opencode" without the caller
+#   messages to show "must be one of: claude, opencode, pi" without the caller
 #   having to re-stringify the array.
 agent_registry_csv() {
 	local IFS=,

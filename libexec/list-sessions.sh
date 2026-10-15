@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # List RiotBox session directories with project paths and usage info.
+# Required env: ROOT_DIR
 
-session_root="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
+source "${ROOT_DIR}/scripts/mount-projects.sh"
+source "${ROOT_DIR}/libexec/session-summary.sh"
+resolve_data_roots
+session_root="${RIOTBOX_DATA_DIR}"
 
-_session_list_check="$(ls -A "${session_root}" 2>/dev/null)"
-if [[ ! -d "${session_root}" ]] || [[ -z "${_session_list_check}" ]]; then
+if [[ ! -d "${session_root}" ]]; then
+	echo "No sessions found."
+	exit 0
+fi
+_session_list_check="$(ls -A "${session_root}")"
+if [[ -z "${_session_list_check}" ]]; then
 	echo "No sessions found."
 	exit 0
 fi
@@ -28,13 +36,24 @@ for session_dir in "${session_root}"/*/; do
 
 	found=$((found + 1))
 
-	mapfile -t project_paths <"${session_dir}/.projects"
+	# .projects is container-written: read it only when it is not a link,
+	# and print only its cleaned copy. Existence is checked on the recorded
+	# paths.
+	raw_paths=()
+	# shellcheck disable=SC2310 # a refused .projects shows as unknown
+	if raw="$(session_projects "${session_dir%/}")"; then
+		mapfile -t raw_paths <<<"${raw}"
+		cleaned="$(printf '%s\n' "${raw_paths[@]}" | terminal_clean line)"
+		mapfile -t project_paths <<<"${cleaned}"
+	else
+		project_paths=("(unknown)")
+	fi
 
 	# Last used: mtime of the session dir (updated on each launch)
 	last_used="$(stat -c '%y' "${session_dir}" 2>/dev/null | cut -d. -f1)"
 
-	# Size on disk
-	size="$(du -sh "${session_dir}" 2>/dev/null | cut -f1)"
+	# Size on disk, the session's state dir included
+	size="$(session_size "${session_dir%/}" "${RIOTBOX_STATE_ROOT}/${name}")"
 
 	# Contents inventory
 	contents=()
@@ -51,8 +70,8 @@ for session_dir in "${session_root}"/*/; do
 
 	# Whether the projects still exist on disk
 	missing=()
-	for p in "${project_paths[@]}"; do
-		[[ -d "${p}" ]] || missing+=("${p}")
+	for i in "${!raw_paths[@]}"; do
+		[[ -d "${raw_paths[i]}" ]] || missing+=("${project_paths[i]}")
 	done
 
 	# Print

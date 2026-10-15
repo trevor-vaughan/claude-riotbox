@@ -1,0 +1,390 @@
+name: headroom claude — proxy lifecycle, routing env, fallbacks
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  shared_helpers: "{{.root}}/tests/lib/wrapper-shared.sh"
+
+# Pins agents/claude/headroom-exec.sh. `headroom wrap claude` is not used: it
+# writes .claude/settings.local.json, its lock and a SessionStart hook into
+# the CWD, which in a session is the caller's checkout (cli/wrap.py:5253,
+# 1672). The helper instead starts `headroom proxy --memory --no-learn`
+# (shared with opencode, agents/lib/headroom-proxy.sh), registers headroom's
+# MCP retrieve tool at user scope, and runs claude with the routing env that
+# wrap would have exported. --no-learn because the traffic learner writes
+# learned patterns into the project (learn/writer.py:279-286).
+#
+# Every case takes its ports from the kernel at runtime (PORT, and PORT+1
+# where that is verified free), so parallel runs cannot meet on a fixed
+# port or inside each other's 100-port scan. Output that names a port goes
+# through port_names, which shows it as PORT / PORT1 for the assertions.
+# Fake listeners serve until a deadline and are killed by each case's EXIT
+# trap (tests/lib/headroom-fakes.sh).
+
+testcases:
+  - name: spawn path — proxy started once without learning, claude routed through it
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          claude -p "do work" 2>&1 | port_names
+          calls="${HOME}/headroom-calls.log"
+          port_names <"${calls}"
+          [ "$(grep -c '^HR=proxy' "${calls}")" = 1 ] || { echo "FAIL: proxy not spawned once" >&2; exit 1; }
+          grep -qF "HRENV agent=claude stack=wrap_claude memdb=${HOME}/.headroom/memory.db" "${calls}" || { echo "FAIL: proxy env" >&2; exit 1; }
+          ! grep -q '^HR=wrap' "${calls}" || { echo "FAIL: wrap used" >&2; exit 1; }
+          echo "SPAWN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SPAWN_OK"
+          - result.systemout ShouldContainSubstring "HR=proxy --port PORT --memory --no-learn"
+          - result.systemout ShouldContainSubstring "HR=mcp install --agent claude --proxy-url http://127.0.0.1:PORT"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=http://127.0.0.1:PORT"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ENABLE_TOOL_SEARCH=true"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_VERTEX_BASE_URL=unset"
+          - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
+          - result.systemout ShouldContainSubstring "arg=do work"
+          - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_UNEXPECTED"
+
+  - name: a user's ENABLE_TOOL_SEARCH wins, an empty one gets the default
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          ENABLE_TOOL_SEARCH=auto claude -p x 2>&1 | grep -F 'CLAUDE_ENV ENABLE_TOOL_SEARCH'
+          ENABLE_TOOL_SEARCH=' ' claude -p x 2>&1 | grep -F 'CLAUDE_ENV ENABLE_TOOL_SEARCH'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ENABLE_TOOL_SEARCH=auto"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ENABLE_TOOL_SEARCH=true"
+
+  - name: a proxy the helper started with the same launch config is reused
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          claude -p one >/dev/null 2>&1
+          claude -p two 2>&1 | port_names
+          [ "$(grep -c '^HR=proxy' "${HOME}/headroom-calls.log")" = 1 ] || { echo "FAIL: proxy respawned" >&2; exit 1; }
+          echo "REUSE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REUSE_OK"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=http://127.0.0.1:PORT"
+          - result.systemout ShouldNotContainSubstring "not started by RiotBox"
+
+  - name: two containers of one project, sharing ~/.headroom, do not disturb each other's proxy reuse
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          command -v unshare >/dev/null && unshare -rn --pid --fork --mount-proc true 2>/dev/null \
+            || { echo "TWO_CONTAINERS_OK (SKIPPED: no unprivileged user/net/pid namespaces)"; exit 0; }
+          # Container A is this shell. Container B gets its own network and
+          # PID namespaces and its own /tmp-style record dir, and shares
+          # HOME, as two RiotBox containers of one project share the
+          # ~/.headroom mount. Both pick the same port, each in its own
+          # network namespace.
+          claude -p a1 >"${TEST_DIR}/a1" 2>&1
+          RIOTBOX_HEADROOM_RUN_DIR="${TEST_DIR}/run-b" in_other_container \
+            bash -c 'claude -p b1 >"$0/b1" 2>&1 && claude -p b2 >"$0/b2" 2>&1' "${TEST_DIR}"
+          claude -p a2 >"${TEST_DIR}/a2" 2>&1
+          for f in a1 b1 b2 a2; do echo "--- ${f}"; port_names <"${TEST_DIR}/${f}"; done
+          # One proxy each, each launch routed to its own container's.
+          [ "$(grep -c '^HR=proxy' "${HOME}/headroom-calls.log")" = 2 ] || { echo "FAIL: $(grep -c '^HR=proxy' "${HOME}/headroom-calls.log") proxies started" >&2; exit 1; }
+          for f in a1 b1 b2 a2; do
+            grep -qx "CLAUDE_ENV ANTHROPIC_BASE_URL=http://127.0.0.1:${PORT}" "${TEST_DIR}/${f}" || { echo "FAIL: ${f} not routed to its proxy" >&2; exit 1; }
+            ! grep -q 'not started by RiotBox' "${TEST_DIR}/${f}" || { echo "FAIL: ${f} distrusted its own container's proxy" >&2; exit 1; }
+          done
+          echo "TWO_CONTAINERS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "TWO_CONTAINERS_OK"
+
+  - name: an outbound proxy setting is part of the launch config, so a different one is not reused
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          PORT="$(free_port_pair)"
+          export HEADROOM_PORT="${PORT}"
+          unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy HEADROOM_HTTP_PROXY
+          # httpx in the proxy honours HTTPS_PROXY (upstream_pinning.py:48):
+          # a proxy started with one sends its upstream traffic there.
+          HTTPS_PROXY=http://corp.example:3128 claude -p one >/dev/null 2>&1
+          { claude -p two 2>&1; grep '^HR=proxy' "${HOME}/headroom-calls.log"; } | port_names
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "not started by RiotBox with this agent's provider settings"
+          - result.systemout ShouldContainSubstring "HR=proxy --port PORT --memory --no-learn"
+          - result.systemout ShouldContainSubstring "HR=proxy --port PORT1 --memory --no-learn"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=http://127.0.0.1:PORT1"
+
+  - name: a headroom proxy RiotBox did not start is not reused
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          PORT="$(free_port_pair)"
+          export HEADROOM_PORT="${PORT}"
+          # Healthy headroom, but no record: its upstream is unknown.
+          start_fake_listener "${PORT}" headroom
+          { claude -p x 2>&1; grep '^HR=proxy' "${HOME}/headroom-calls.log"; } | port_names
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "the headroom proxy on port"
+          - result.systemout ShouldContainSubstring "not started by RiotBox with this agent's provider settings"
+          - result.systemout ShouldContainSubstring "HR=proxy --port PORT1 --memory --no-learn"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=http://127.0.0.1:PORT1"
+
+  - name: a stale record does not make a new headroom on the port reusable
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          PORT="$(free_port_pair)"
+          export HEADROOM_PORT="${PORT}"
+          claude -p one >/dev/null 2>&1
+          [ -f "${RIOTBOX_HEADROOM_RUN_DIR}/proxy.${PORT}" ] || { echo "FAIL: no record written" >&2; exit 1; }
+          # That proxy dies; another headroom, with any upstream, takes the
+          # port. The record still names the same config, but not this
+          # process.
+          kill_fakes
+          for _ in $(seq 1 50); do (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null || break; sleep 0.1; done
+          start_fake_listener "${PORT}" headroom
+          rm -f "${HOME}/headroom-calls.log"
+          { claude -p two 2>&1; grep '^HR=proxy' "${HOME}/headroom-calls.log"; } | port_names
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "not started by RiotBox"
+          - result.systemout ShouldContainSubstring "HR=proxy --port PORT1 --memory --no-learn"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=http://127.0.0.1:PORT1"
+
+  - name: opencode's default proxy is not reused by a Foundry claude, which starts its own
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          PORT="$(free_port_pair)"
+          export HEADROOM_PORT="${PORT}"
+          install_generic_wrapper_for opencode
+          printf '#!/usr/bin/env bash\necho FAKE_REAL_opencode_INVOKED\n' >"${TEST_DIR}/realbin/opencode"
+          chmod +x "${TEST_DIR}/realbin/opencode"
+          opencode run x 2>&1
+          # The proxy fixes its upstream at start (proxy/server.py:6495):
+          # reusing opencode's would send Foundry requests, and the Azure
+          # credentials, to api.anthropic.com.
+          CLAUDE_CODE_USE_FOUNDRY=1 ANTHROPIC_FOUNDRY_RESOURCE=myres claude -p x 2>&1 | port_names
+          grep '^HR=proxy' "${HOME}/headroom-calls.log" | port_names
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAKE_REAL_opencode_INVOKED"
+          - result.systemout ShouldContainSubstring "HR=proxy --port PORT --memory --no-learn"
+          - result.systemout ShouldContainSubstring "HR=proxy --port PORT1 --memory --no-learn --anthropic-api-url https://myres.services.ai.azure.com/anthropic"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_FOUNDRY_BASE_URL=http://127.0.0.1:PORT1/anthropic"
+
+  - name: Vertex mode routes ANTHROPIC_VERTEX_BASE_URL through the proxy and keeps HTTP/1.1
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          export CLAUDE_CODE_USE_VERTEX=1
+          claude -p x 2>&1 | port_names
+          grep -F 'HRENV' "${HOME}/headroom-calls.log" | head -1
+          # A custom Vertex gateway becomes the proxy's upstream
+          # (cli/wrap.py:1161-1180). A second free port, so a fresh proxy
+          # starts with that environment.
+          rm -f "${HOME}/headroom-calls.log"
+          ANTHROPIC_VERTEX_BASE_URL=https://gw.example/v1 HEADROOM_PORT="$(free_port)" claude -p x >/dev/null 2>&1
+          grep -F 'HRENV' "${HOME}/headroom-calls.log" | head -1 | sed 's/^/CUSTOM /'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_VERTEX_BASE_URL=http://127.0.0.1:PORT"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=unset"
+          - result.systemout ShouldContainSubstring "http2=false vtarget=unset"
+          - result.systemout ShouldContainSubstring "CUSTOM HRENV"
+          - result.systemout ShouldContainSubstring "vtarget=https://gw.example/v1"
+
+  - name: Foundry mode sends the derived upstream to the proxy and the /anthropic URL to claude
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          export CLAUDE_CODE_USE_FOUNDRY=1 ANTHROPIC_FOUNDRY_RESOURCE=myres
+          { claude -p x 2>&1; grep '^HR=proxy' "${HOME}/headroom-calls.log"; } | port_names
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "HR=proxy --port PORT --memory --no-learn --anthropic-api-url https://myres.services.ai.azure.com/anthropic"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_FOUNDRY_BASE_URL=http://127.0.0.1:PORT/anthropic"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=unset"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ENABLE_TOOL_SEARCH=false"
+
+  - name: HEADROOM_MODE is passed to the proxy as --mode
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          export HEADROOM_MODE=cache
+          claude -p x >/dev/null 2>&1
+          grep '^HR=proxy' "${HOME}/headroom-calls.log" | port_names
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "HR=proxy --port PORT --memory --no-learn --mode cache"
+
+  - name: proxy dies at startup — warn, run claude unrouted
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          export FAKE_PROXY_DIE=1
+          claude -p x 2>&1
+          ! grep -q '^HR=mcp' "${HOME}/headroom-calls.log" || echo "MCP_CALLED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "headroom proxy exited during startup"
+          - result.systemout ShouldContainSubstring "running claude unwrapped"
+          - result.systemout ShouldContainSubstring "FAKE_REAL_claude_INVOKED"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=unset"
+          - result.systemout ShouldNotContainSubstring "MCP_CALLED"
+
+  - name: a failed MCP registration warns and still launches through the proxy
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          export FAKE_MCP_RC=1
+          claude -p x 2>&1 | port_names
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "could not register headroom's MCP retrieve tool"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=http://127.0.0.1:PORT"
+
+  - name: a listener that is not headroom keeps its port; the proxy starts on the next one
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          # A base port whose next one is verified free. The foreign
+          # listener stands for `wrangler dev`, which also defaults to 8787:
+          # it must never receive the agent's API traffic or credentials.
+          PORT="$(free_port_pair)"
+          export HEADROOM_PORT="${PORT}"
+          start_fake_listener "${PORT}" foreign
+          { claude -p x 2>&1; grep '^HR=proxy\|^HR=mcp' "${HOME}/headroom-calls.log"; } | port_names | tee "${TEST_DIR}/out"
+          ! grep -qE "127\.0\.0\.1:PORT([^0-9]|$)" "${TEST_DIR}/out" || { echo "FAIL: routed to the foreign listener" >&2; exit 1; }
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "is not a healthy headroom proxy (or is busy)"
+          - result.systemout ShouldContainSubstring "HR=proxy --port PORT1 --memory --no-learn"
+          - result.systemout ShouldContainSubstring "HR=mcp install --agent claude --proxy-url http://127.0.0.1:PORT1"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=http://127.0.0.1:PORT1"
+
+  - name: two claude launches at once start one proxy, and the lock is released while it runs
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          claude -p one >"${TEST_DIR}/one" 2>&1 &
+          a=$!
+          claude -p two >"${TEST_DIR}/two" 2>&1 &
+          b=$!
+          wait "${a}"; wait "${b}"
+          cat "${TEST_DIR}/one" "${TEST_DIR}/two" | port_names
+          [ "$(grep -c '^HR=proxy' "${HOME}/headroom-calls.log")" = 1 ] || { echo "FAIL: proxies started: $(grep -c '^HR=proxy' "${HOME}/headroom-calls.log")" >&2; exit 1; }
+          [ "$(cat "${TEST_DIR}/one" "${TEST_DIR}/two" | grep -c "ANTHROPIC_BASE_URL=http://127.0.0.1:${PORT}$")" = 2 ] \
+            || { echo "FAIL: a launch was not routed" >&2; exit 1; }
+          # The one fake proxy is still running, holding whatever fds it
+          # inherited, so a free lock shows it did not inherit the lock.
+          [ "$(wc -l <"${FAKE_PIDFILE}")" = 1 ] && kill -0 "$(cat "${FAKE_PIDFILE}")" \
+            || { echo "FAIL: fake proxy not running; the lock check proves nothing" >&2; exit 1; }
+          flock -n "${RIOTBOX_HEADROOM_RUN_DIR}/proxy.lock" true || { echo "FAIL: the proxy holds the start lock" >&2; exit 1; }
+          echo "ONE_PROXY_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ONE_PROXY_OK"
+
+  - name: no usable port — warn and run claude unrouted
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          # The one fixed port: the scan stops at 65535, so a foreign
+          # listener there leaves no usable port at all. Parallel runs take
+          # turns on it through a lock every copy of this suite shares; the
+          # fd stays open (and the lock held) until this case exits.
+          exec {port_lock}>/tmp/riotbox-headroom-test-port-65535.lock
+          flock -w 120 "${port_lock}" || { echo "FAIL: port 65535 lock" >&2; exit 1; }
+          start_fake_listener 65535 foreign || exit 1
+          export HEADROOM_PORT=65535
+          claude -p x 2>&1
+          ! grep -q '^HR=proxy' "${HOME}/headroom-calls.log" 2>/dev/null || echo "PROXY_STARTED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "no port in 65535-65535 is free or runs headroom"
+          - result.systemout ShouldContainSubstring "running claude unwrapped"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=unset"
+          - result.systemout ShouldNotContainSubstring "PROXY_STARTED"
+
+  - name: an unwritable ~/.headroom falls back instead of killing the helper
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          rm -rf "${HOME}/.headroom"
+          : > "${HOME}/.headroom"
+          claude -p x 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "could not create"
+          - result.systemout ShouldContainSubstring "running claude unwrapped"
+          - result.systemout ShouldContainSubstring "FAKE_REAL_claude_INVOKED"

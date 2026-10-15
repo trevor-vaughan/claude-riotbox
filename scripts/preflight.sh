@@ -54,6 +54,7 @@
 #       or the image lacks a working Context Mode
 #   23  RIOTBOX_GIT_AI set but invalid, or the image's git-ai does not match
 #       the Containerfile's pinned version
+#   24  flock missing
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Strict mode applies only when this file is run as a script. When sourced as
@@ -186,6 +187,16 @@ preflight_check_jq() {
 		return 16
 	fi
 	_preflight_report jq ok "${label}"
+	return 0
+}
+
+preflight_check_flock() {
+	local label="flock available"
+	if ! command -v flock >/dev/null 2>&1; then
+		_preflight_report flock fail "${label}" 24 "Install flock (from util-linux)"
+		return 24
+	fi
+	_preflight_report flock ok "${label}"
 	return 0
 }
 
@@ -547,6 +558,7 @@ preflight_run() {
 		preflight_check_fuse_overlayfs
 		preflight_check_git
 		preflight_check_jq
+		preflight_check_flock
 		preflight_check_image
 		preflight_check_creds
 		preflight_check_plugins_dir

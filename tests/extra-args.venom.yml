@@ -183,9 +183,8 @@ testcases:
           mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
           cat > "${TMP}/fake-cmd" <<'FAKE'
           #!/usr/bin/env bash
-          # setup_projects probes the engine with `ps -a` to pick a free
-          # container name before the gate runs; record only the container
-          # `run` so the assertion measures the gate, not the name probe.
+          # Record only the container `run`, so the assertion measures the
+          # gate and not any other engine call the launch makes.
           [ "${1:-}" = "run" ] && printf 'RAN\n' > "${CAPTURE}"
           FAKE
           chmod +x "${TMP}/fake-cmd"

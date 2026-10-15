@@ -31,8 +31,17 @@ _agent_opencode_cm_shim_path() {
 	printf '%s\n' "${OPENCODE_CONFIG_DIR:-${HOME}/.config/opencode}/plugins/riotbox-context-mode.js"
 }
 
+# Under the data mount, not the config one. The stores are data: the session
+# DB and ctx_* stores hold verbatim tool output and the auto-memory outlives
+# any one run, and all of it is meant to persist for the project set until
+# `riotbox session-remove`. The config mount cannot hold it — whenever the
+# host has a ~/.config/opencode, every launch's sync (sync-settings.sh)
+# deletes the state dir's opencode-config copy and renames a fresh one into
+# its place. opencode-data, mounted at ~/.local/share/opencode, is only ever
+# created, never re-staged. Spelled from HOME rather than XDG_DATA_HOME: the
+# mount point is fixed (sync-settings.sh), whatever opencode itself resolves.
 agent_opencode_context_mode_store_dir() {
-	printf '%s\n' "${OPENCODE_CONFIG_DIR:-${HOME}/.config/opencode}/context-mode"
+	printf '%s\n' "${HOME}/.local/share/opencode/context-mode"
 }
 
 # See agents/claude/context-mode.sh for why this is pinned rather than
@@ -46,12 +55,12 @@ agent_opencode_context_mode_platform() {
 # Claude does not, because the two adapters find their config dir differently:
 # claude-code's resolveClaudeConfigDir() reads CLAUDE_CONFIG_DIR, which
 # entrypoint.sh exports at the session bind mount, so its session DB is already
-# pinned. OpenCodeAdapter.getConfigDir() reads XDG_CONFIG_HOME — unset in the
-# image — and falls back to ${HOME}/.config/opencode, which is the session
-# mount only by coincidence. The plugin's session DB holds verbatim tool
-# output; left on the coincidence, an upstream change to that fallback would
-# move it onto the container overlay, where it would vanish at exit and escape
-# `riotbox session-remove`.
+# pinned. OpenCodeAdapter.getSessionDir() falls back to getConfigDir(), which
+# reads XDG_CONFIG_HOME — unset in the image — and lands on
+# ${HOME}/.config/opencode: the config mount, whose contents the host sync
+# replaces on relaunch (see agent_opencode_context_mode_store_dir). The
+# plugin's session DB holds verbatim tool output, so it is pinned beside the
+# ctx_* stores under the data mount instead.
 #
 # The value is the parent of context_mode_store_dir's, not the same path:
 # BaseAdapter and the opencode adapter both build the DB directory as
@@ -60,14 +69,105 @@ agent_opencode_context_mode_platform() {
 # path here would land the DB at `<store>/context-mode/sessions`, one level
 # below the ctx_* stores rather than beside them.
 #
-# One consequence worth naming: upstream's BaseAdapter.getMemoryDir() follows
-# this root as well, so auto-memory moves from `<config>/memory` to
-# `<config>/context-mode/memory`. Both are inside the session directory, and
-# opencode has never had Context Mode before this, so nothing in a reusable
-# session directory is orphaned by it — every piece of context-mode-owned
-# state ends up under the one pinned root.
+# Upstream's BaseAdapter.getMemoryDir() follows this root as well, so
+# auto-memory lands in `<root>/context-mode/memory`: every piece of
+# context-mode-owned state ends up under the one store directory, and
+# _agent_opencode_cm_migrate_store can carry a session's older stores across
+# by moving that one directory.
 agent_opencode_context_mode_data_dir() {
-	printf '%s\n' "${OPENCODE_CONFIG_DIR:-${HOME}/.config/opencode}"
+	printf '%s\n' "${HOME}/.local/share/opencode"
+}
+
+# One-time move of the stores an earlier RiotBox kept under the config mount
+# (<config>/context-mode) to the data mount. A session whose host has no
+# ~/.config/opencode was never re-staged, so its stores are still there and
+# would be orphaned by the new pins. Called from container setup, which runs
+# before Context Mode starts. Acts on the container's own files only. Never
+# merges: when both exist either may hold what the user wants, so both stay
+# and the session uses the new one. Always returns 0 — a store left behind is
+# reported, not fatal.
+#
+# The two paths are separate bind mounts, so mv cannot rename: it copies, then
+# deletes. That is unsafe while an older session of the same project still
+# has the session DB open — the copy can catch a half-done write, the old
+# session's later writes are lost, and it recreates <config>/context-mode. A
+# SQLite *.db-wal or *.db-shm file is the sign the DB may be live, so its
+# presence skips the move. The same files outlive a crashed session (SIGKILL,
+# OOM, stop timeout: upstream removes them only in an exit handler), and the
+# WAL can hold committed rows not yet in the .db, so the warning gives the
+# recovery and never suggests deleting it.
+_agent_opencode_cm_migrate_store() {
+	local old new parent entry target live db
+	old="${OPENCODE_CONFIG_DIR:-${HOME}/.config/opencode}/context-mode"
+	new="$(agent_opencode_context_mode_store_dir)"
+	parent="${new%/*}"
+
+	[[ -e "${old}" ]] || [[ -L "${old}" ]] || return 0
+
+	if [[ -L "${old}" ]] || [[ ! -d "${old}" ]]; then
+		echo "  [context-mode] WARN: ${old} is not a real directory — left in place, not moved." >&2
+		return 0
+	fi
+
+	# A link at the new path always warns, even beside an empty old dir: mv
+	# would replace it, and the session's stores would land wherever it points.
+	if [[ -L "${new}" ]]; then
+		target="$(readlink -- "${new}")"
+		echo "  [context-mode] WARN: ${new} is a link (target: ${target})," >&2
+		echo "  [context-mode] not a directory — ${old} was not moved onto it." >&2
+		echo "  [context-mode] Remove the link and relaunch to carry the stores across." >&2
+		return 0
+	fi
+
+	if [[ -e "${new}" ]]; then
+		# An empty leftover holds nothing to keep; warning about it on every
+		# launch would be noise. If rmdir fails, something appeared in it since
+		# the check (or find could not read it), and the warning below applies.
+		if entry="$(find "${old}" -mindepth 1 -print -quit 2>/dev/null)" &&
+			[[ -z "${entry}" ]] && rmdir -- "${old}" 2>/dev/null; then
+			return 0
+		fi
+		echo "  [context-mode] WARN: Context Mode stores exist at both ${old}" >&2
+		echo "  [context-mode] and ${new}. Leaving both; this session uses the second." >&2
+		echo "  [context-mode] Delete or move the first by hand to resolve." >&2
+		return 0
+	fi
+
+	# An old session that has not opened its DB yet has no WAL, so the move
+	# goes ahead; if it then creates the DB at the old path, the next launch
+	# gets the both-exist warning. The README's upgrade advice covers this.
+	# find's stderr is folded into its output: on failure it is the reason.
+	if ! live="$(find "${old}" \( -name '*.db-wal' -o -name '*.db-shm' \) -print -quit 2>&1)"; then
+		echo "  [context-mode] WARN: could not check ${old} for an open session DB —" >&2
+		echo "  [context-mode] not moved. Check permissions under it. find said:" >&2
+		printf '  [context-mode]   %s\n' "${live}" >&2
+		return 0
+	fi
+	if [[ -n "${live}" ]]; then
+		db="${live%-*}"
+		echo "  [context-mode] WARN: ${live} exists: an opencode session of this project" >&2
+		echo "  [context-mode] may have the store open, so ${old} was not moved." >&2
+		echo "  [context-mode] If one is running, exit it and relaunch. If none is, the file is" >&2
+		echo "  [context-mode] left from a crash and may hold committed data; never delete it." >&2
+		echo "  [context-mode] Either fold it into the DB (each such .db), then relaunch:" >&2
+		echo "  [context-mode]   sqlite3 '${db}' 'PRAGMA wal_checkpoint(TRUNCATE);'" >&2
+		echo "  [context-mode] or move the whole directory, -wal and -shm beside the .db:" >&2
+		echo "  [context-mode]   mv -T '${old}' '${new}'" >&2
+		return 0
+	fi
+
+	if [[ ! -d "${parent}" ]]; then
+		echo "  [context-mode] WARN: ${parent} is missing — ${old} was not moved." >&2
+		return 0
+	fi
+
+	if ! mv -T -- "${old}" "${new}"; then
+		echo "  [context-mode] WARN: could not move ${old} to ${new} —" >&2
+		echo "  [context-mode] a cross-mount copy may have left part of it at each; check both." >&2
+		return 0
+	fi
+
+	echo "  [context-mode] Moved opencode's Context Mode stores to ${new}." >&2
 }
 
 # Write the plugin shim. All-or-nothing: returns 0 only when the shim landed,

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# scripts/lib/overlay-ignore.sh — derived-cache filter for overlay bookkeeping.
+# scripts/lib/overlay-ignore.sh — derived-cache and agent-state filter for
+# overlay bookkeeping.
 #
-# Sourced by the host overlay tooling (scripts/overlay.sh, libexec/launch.sh)
+# Sourced by the host overlay tooling (scripts/overlay.sh, libexec/launch.sh,
+# scripts/mount-projects.sh)
 # and, inside the container, by container/entrypoint.sh so overlay-setup.sh's
-# teardown stats use the same rules. One definition, four call sites.
+# teardown stats use the same rules. One definition, five call sites.
 #
 # Bookkeeping (the pending-overlay launch guard, `riotbox overlays` counts and
 # `riotbox overlay-diff`) answers "what did this session change that I need to
@@ -17,10 +19,15 @@
 # simply stays in the overlay for the next session — nothing is wiped, so
 # there is nothing for it to survive.
 #
+# The one exception is OVERLAY_KEPT_NAMES: names that must never reach the
+# project, whatever the user accepts. Accept neither copies nor deletes them
+# in the project, and both verbs move them into the fresh upper instead of
+# wiping them, so they stay in the overlay until the user removes them.
+#
 # Public:
 #   overlay_path_ignored <relative-path>
-#     Exit 0 when the FIRST component of the path is a derived-cache directory
-#     (or its overlayfs whiteout form). Matching is by name alone and ignores
+#     Exit 0 when the FIRST component of the path is in OVERLAY_IGNORED_NAMES
+#     (or is its overlayfs whiteout form). Matching is by name alone and ignores
 #     file type, so a regular file literally named `.codegraph` is filtered
 #     too.
 #
@@ -35,21 +42,52 @@
 #     showed. A deliberately-indexed subdirectory now shows up as a change,
 #     which is the safe direction to be wrong in.
 #
+#   overlay_path_kept <relative-path>
+#     Exit 0 when the FIRST component of the path is in OVERLAY_KEPT_NAMES (or
+#     is its whiteout form): overlay-accept and overlay-reject leave the entry
+#     in the overlay and never apply it. Anchored like overlay_path_ignored.
+#
 #   overlay_upper_changes <upper-dir>
-#     Print one upper-relative path per non-ignored, non-directory entry.
+#     Print one upper-relative path per non-ignored, non-directory entry,
+#     each terminated by NUL (read with `read -r -d ''`): the names are
+#     container-chosen and may hold newlines.
 #     Directories are excluded because overlayfs materializes a parent for
 #     every write, so a bare directory carries no signal — the same basis
 #     overlay_diff and the overlay_list counter already use.
 #
 #   overlay_upper_has_changes <upper-dir>
-#     Exit 0 when overlay_upper_changes would print at least one line.
+#     Exit 0 when overlay_upper_changes would print at least one entry.
+#
+#   overlay_is_stranded_snapshot <dir>
+#     Exit 0 when <dir> (an entry of a state dir's overlay/) is the snapshot
+#     of an upper that an overlay-accept took and never put back (it was
+#     killed, or is still running): named <name>.accepting.<pid>, next to the
+#     overlay folder <name> it came from, and not itself an overlay folder
+#     (those always hold both upper/ and work/). A project whose name merely
+#     contains ".accepting." is not matched.
+#
+#   overlay_state_pending <state-dir>
+#     Exit 0 when the session holds overlay changes not yet accepted or
+#     rejected: an upper with changes, or a stranded snapshot (above).
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Directory names that hold derived caches rather than project content.
 #   .codegraph — CodeGraph's per-project index. Rebuilt by `codegraph init`,
 #                self-gitignored by CodeGraph itself. See README "CodeGraph
 #                code intelligence".
-OVERLAY_IGNORED_NAMES=(".codegraph")
+#   .headroom  headroom memory. Since the agent wrapper sets
+#              HEADROOM_MEMORY_DB_PATH it lives in the state dir, but older
+#              releases let headroom write it into the working directory,
+#              which in overlay mode is the overlay upper. Also kept (below).
+OVERLAY_IGNORED_NAMES=(".codegraph" ".headroom")
+
+# Names overlay-accept never copies into the project and overlay-reject never
+# discards — a subset of OVERLAY_IGNORED_NAMES, so they are hidden from review
+# too. .headroom is the agent's memory store, not project content: copying it
+# would put the old memory into the user's checkout, the very write the
+# state-dir location exists to prevent. The one-time notice
+# (notice_project_headroom) says how to delete or keep it.
+OVERLAY_KEPT_NAMES=(".headroom")
 
 overlay_path_ignored() {
 	local rel="${1:-}"
@@ -65,6 +103,16 @@ overlay_path_ignored() {
 	return 1
 }
 
+overlay_path_kept() {
+	local first="${1%%/*}" name
+	for name in "${OVERLAY_KEPT_NAMES[@]}"; do
+		if [[ "${first}" = "${name}" ]] || [[ "${first}" = ".wh.${name}" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
 overlay_upper_changes() {
 	local upper="${1:?overlay_upper_changes requires an upper directory}"
 	[[ -d "${upper}" ]] || return 0
@@ -72,12 +120,12 @@ overlay_upper_changes() {
 	# paths; consumers join what we print onto a project directory.
 	upper="${upper%/}"
 	local path rel
-	while IFS= read -r path; do
+	while IFS= read -r -d '' path; do
 		rel="${path#"${upper}"/}"
 		if overlay_path_ignored "${rel}"; then
 			continue
 		fi
-		printf '%s\n' "${rel}"
+		printf '%s\0' "${rel}"
 	done < <(
 		# find's own diagnostics (an unreadable subdirectory, say) stay on
 		# stderr, and a non-zero status becomes an explicit warning: a partial
@@ -87,7 +135,7 @@ overlay_upper_changes() {
 		# overlay_upper_has_changes does, not a traversal failure.
 		find_status=0
 		# shellcheck disable=SC2312  # find's status is not masked: the || below captures it
-		find "${upper}" -mindepth 1 -not -type d || find_status=$?
+		find "${upper}" -mindepth 1 -not -type d -print0 || find_status=$?
 		if ((find_status != 0 && find_status < 128)); then
 			printf 'overlay_upper_changes: find exited %d under %s; listing may be incomplete\n' \
 				"${find_status}" "${upper}" >&2
@@ -97,13 +145,35 @@ overlay_upper_changes() {
 
 overlay_upper_has_changes() {
 	local upper="${1:?overlay_upper_has_changes requires an upper directory}"
-	# The first line ends the walk: a large index-free upper needs no full
+	# The first entry ends the walk: a large index-free upper needs no full
 	# traversal. Process substitution rather than a pipeline into `head`, so
 	# the walker's SIGPIPE death on early exit cannot surface as a non-zero
 	# pipeline status and abort an errexit/pipefail caller.
 	# shellcheck disable=SC2312  # the walker's status is dropped on purpose: this loop may stop it early
-	while IFS= read -r _; do
+	while IFS= read -r -d '' _; do
 		return 0
 	done < <(overlay_upper_changes "${upper}")
 	return 1
+}
+
+overlay_state_pending() {
+	local dir
+	for dir in "$1/overlay"/*/; do
+		dir="${dir%/}"
+		# shellcheck disable=SC2310 # designed to be tested in conditions
+		if overlay_is_stranded_snapshot "${dir}" ||
+			{ [[ -d "${dir}/upper" ]] && overlay_upper_has_changes "${dir}/upper"; }; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+overlay_is_stranded_snapshot() {
+	local dir="${1%/}" base
+	base="${dir##*/}"
+	[[ "${base}" =~ ^(.+)\.accepting\.[0-9]+$ ]] || return 1
+	[[ -d "${dir}" ]] && [[ ! -L "${dir}" ]] || return 1
+	[[ -d "${dir%/*}/${BASH_REMATCH[1]}" ]] && [[ ! -L "${dir%/*}/${BASH_REMATCH[1]}" ]] || return 1
+	! { [[ -d "${dir}/upper" ]] && [[ -d "${dir}/work" ]]; }
 }

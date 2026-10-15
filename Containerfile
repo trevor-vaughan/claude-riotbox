@@ -229,6 +229,7 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         zlib-devel \
         bzip2-devel \
         readline-devel \
+        sqlite \
         sqlite-devel \
         libffi-devel \
         xz-devel \
@@ -249,8 +250,9 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         gnupg2 \
     && dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
            epel-release \
+    # fd-find: Pi's find tool otherwise downloads an unpinned fd from GitHub into ~/.pi/agent/bin.
     && dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
-           ripgrep bats \
+           ripgrep fd-find bats \
     && if [ "${RIOTBOX_DIAGRAMS}" = "1" ]; then \
            dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
                chromium; \
@@ -775,21 +777,26 @@ RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 # the final offline preload proves the cache is complete at build time.
 # NOTE: preload() is internal headroom API — acceptable because the version
 # is pinned; a pin bump that breaks it fails THIS layer, not a user session.
-# Through 0.25.0 this layer carried a sed patch: `headroom wrap --memory`
-# spawns `python -m headroom.memory.sync`, which built its backend config with
-# the dataclass default embedder (torch sentence-transformers — excluded here)
-# instead of the ONNX embedder the proxy auto-selects, with no flag or env var
-# to steer it. Upstream fixed it (headroom #1092): _build_sync_backend now
-# passes embedder_backend="onnx" itself, so the patch is gone. The grep stays
-# as the tripwire in its place — a future pin that regresses the sync path to
-# the torch default fails THIS layer instead of a user session, which is the
-# only place the regression would otherwise surface.
-# The smoke test then runs the exact sync command the wrap emits, offline,
-# against a seeded memory file under a throwaway HOME — proving the ONNX
-# embedder path AND the pre-warmed model cache end to end. PYTHONPATH is
-# pinned to the user site because overriding HOME hides pip's --user dir.
-# The hf-xet chunk cache is transfer-time scratch — the offline loads above
-# prove the hub cache alone suffices, so it is removed.
+# The smoke test then runs the proxy the way a session does — `headroom
+# proxy --memory --no-learn`, offline, HEADROOM_MEMORY_DB_PATH set, in a
+# throwaway HOME — and waits for /livez to answer as headroom
+# (proxy/server.py:3832-3847) and for its log to say the memory backend came
+# up at that path with the ONNX embedder ("Memory: Initialized LocalBackend at
+# <db> (embedder: onnx)", proxy/memory_handler.py:398-401) and that the
+# embedder then really encoded something ("Memory: embedder warm-up encode
+# complete", :2367). The first line is logged before the model loads, and a
+# failed warm-up only logs "Memory: embedder warm-up failed" (:2370) and
+# carries on, so the smoke fails on that line at once. That proves the
+# pre-warmed model cache and the memory path end to end, and a pin that
+# regresses the embedder to the torch default (excluded here) fails THIS layer
+# instead of a user session. It also asserts nothing went to $HOME/.headroom
+# instead. The DB's directory is created first: headroom does not create it
+# ("unable to open database file"); in a session it is the state-dir mount.
+# Through this release the smoke ran `python -m headroom.memory.sync`, the
+# command `headroom wrap claude --memory` spawns; no session runs it any more.
+# PYTHONPATH is pinned to the user site because overriding HOME hides pip's
+# --user dir. The hf-xet chunk cache is transfer-time scratch — the offline
+# loads above prove the hub cache alone suffices, so it is removed.
 #
 # The MiniLM warm-up goes through headroom's own hf_hub_download_local_first
 # rather than huggingface_hub's hf_hub_download, because since 0.36.5 headroom
@@ -816,32 +823,43 @@ RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 # runtime before live traffic depends on it, which is the whole reason it
 # exists. tests/headroom.venom.yml pins both halves of that.
 ARG HEADROOM_VERSION=0.39.0
+# DL3001: the `kill` stops the smoke test's own background proxy, not a
+# service in the image.
+# hadolint ignore=DL3001
 RUN pip3 install --user --no-cache-dir --break-system-packages \
-        "headroom-ai[proxy,code]==${HEADROOM_VERSION}" && \
-    /home/llm/.local/bin/headroom --version && \
-    SYNC="$(python3 -c 'import headroom.memory.sync as m; print(m.__file__)')" && \
-    grep -qF 'embedder_backend="onnx"' "${SYNC}" && \
+        "headroom-ai[proxy,code]==${HEADROOM_VERSION}" || { echo "headroom layer: pip install of headroom-ai ${HEADROOM_VERSION} failed" >&2; exit 1; }; \
+    /home/llm/.local/bin/headroom --version || { echo "headroom layer: the installed headroom does not run" >&2; exit 1; }; \
     HEADROOM_KOMPRESS_CANARY_SECONDS=0 python3 -c "from headroom.transforms.kompress_compressor import KompressCompressor; \
-print('kompress backend:', KompressCompressor().preload(allow_download=True))" && \
+print('kompress backend:', KompressCompressor().preload(allow_download=True))" || { echo "headroom layer: downloading the Kompress model failed" >&2; exit 1; }; \
     python3 -c "from headroom.onnx_runtime import hf_hub_download_local_first as d; \
-[d('Qdrant/all-MiniLM-L6-v2-onnx', f) for f in ('model.onnx', 'tokenizer.json')]" && \
+[d('Qdrant/all-MiniLM-L6-v2-onnx', f) for f in ('model.onnx', 'tokenizer.json')]" || { echo "headroom layer: downloading the MiniLM embedder failed" >&2; exit 1; }; \
     HF_HUB_OFFLINE=1 HEADROOM_KOMPRESS_CANARY_SECONDS=0 python3 -c "from headroom.transforms.kompress_compressor import KompressCompressor; \
-KompressCompressor().preload(allow_download=False)" && \
+KompressCompressor().preload(allow_download=False)" || { echo "headroom layer: the Kompress model does not load offline from the cache" >&2; exit 1; }; \
     HF_HUB_OFFLINE=1 python3 -c "from headroom.onnx_runtime import hf_hub_download_local_first as d; \
-[d('Qdrant/all-MiniLM-L6-v2-onnx', f, allow_network=False) for f in ('model.onnx', 'tokenizer.json')]" && \
+[d('Qdrant/all-MiniLM-L6-v2-onnx', f, allow_network=False) for f in ('model.onnx', 'tokenizer.json')]" || { echo "headroom layer: the MiniLM embedder does not load offline from the cache" >&2; exit 1; }; \
     USERSITE="$(python3 -m site --user-site)" && \
-    SMOKE="$(mktemp -d)" && \
-    MEMDIR="${SMOKE}/.claude/projects/$(python3 -c "import sys; from pathlib import Path; \
-from headroom.memory.sync_adapters.claude_code import encode_claude_project_path; \
-print(encode_claude_project_path(Path(sys.argv[1])))" "${SMOKE}/work")/memory" && \
-    mkdir -p "${SMOKE}/work" "${MEMDIR}" && \
-    printf -- '---\nname: smoke\ndescription: build-time sync smoke test\n---\n\nBuild-time smoke test fact.\n' \
-        > "${MEMDIR}/smoke.md" && \
-    env -C "${SMOKE}/work" HOME="${SMOKE}" HF_HUB_OFFLINE=1 \
-        HF_HOME=/home/llm/.cache/huggingface \
-        PYTHONPATH="${USERSITE}" python3 -m headroom.memory.sync \
-        --db "${SMOKE}/memory.db" --user smoke --agent claude --force \
-        | tee /dev/stderr | grep -q '"imported": 1' && \
+    SMOKE="$(mktemp -d)" && mkdir "${SMOKE}/state" && \
+    { env -C "${SMOKE}" HOME="${SMOKE}" HF_HUB_OFFLINE=1 HF_HOME=/home/llm/.cache/huggingface \
+        PYTHONPATH="${USERSITE}" HEADROOM_MEMORY_DB_PATH="${SMOKE}/state/memory.db" \
+        /home/llm/.local/bin/headroom proxy --port 18999 --memory --no-learn \
+        >"${SMOKE}/proxy.out" 2>&1 & } && \
+    PID=$! && READY="" && LINE="" && WARM="" && \
+    for _ in $(seq 1 180); do \
+        if [ -z "${READY}" ] && python3 -c "import json, sys, urllib.request as u; \
+b = json.load(u.urlopen('http://127.0.0.1:18999/livez', timeout=2)); \
+sys.exit(0 if b.get('service') == 'headroom-proxy' and b.get('status') == 'healthy' else 1)" 2>/dev/null; then READY=1; fi; \
+        LOG="${SMOKE}/.headroom/logs/proxy-18999.log"; \
+        if grep -qF "Memory: embedder warm-up failed" "${LOG}" 2>/dev/null; then WARM=failed; break; fi; \
+        if [ -n "${READY}" ] && grep -qF "Memory: Initialized LocalBackend at ${SMOKE}/state/memory.db (embedder: onnx)" "${LOG}" 2>/dev/null && \
+            grep -qF "Memory: embedder warm-up encode complete" "${LOG}"; then LINE=1; WARM=ok; break; fi; \
+        kill -0 "${PID}" 2>/dev/null || break; \
+        sleep 1; \
+    done; \
+    kill "${PID}" 2>/dev/null; wait "${PID}" 2>/dev/null; \
+    if [ -z "${READY}" ] || [ -z "${LINE}" ] || [ "${WARM}" != ok ] || [ ! -s "${SMOKE}/state/memory.db" ] || [ -e "${SMOKE}/.headroom/memory.db" ]; then \
+        echo "headroom proxy smoke failed (ready=${READY:-no} memory-line=${LINE:-no} embedder-warm-up=${WARM:-none})" >&2; \
+        cat "${SMOKE}/proxy.out" "${SMOKE}/.headroom/logs/proxy-18999.log" >&2; exit 1; \
+    fi && \
     rm -rf "${SMOKE}" && \
     rm -rf /home/llm/.cache/huggingface/xet
 
@@ -908,6 +926,108 @@ RUN bash -o pipefail -c '\
             printf "%s\n" "${h}" >&2; \
             exit 1; }; \
     done'
+
+# ── Pi (https://pi.dev) ─────────────────────────────────────────────────────
+# Pi core floats to the latest release, like opencode and Claude Code, and is
+# refreshed by `riotbox update` because this layer sits below the
+# LLM_TOOL_UPDATE cache bust. It is NOT unlocked: pi.dev publishes the exact
+# package.json + package-lock.json its own installer uses for every release,
+# and this layer installs from that lock, so every version in the tree is the
+# one upstream shipped for the release it resolves. Integrity is upstream's
+# where the lock carries it; upstream omits it for Pi's own @earendil-works/*
+# packages, which `npm ci` would then install unverified, so
+# container/pi/lock-integrity.sh first pins every entry to its exact registry
+# tarball on registry.npmjs.org and fills each missing hash from the
+# configured npm registry's dist.integrity (registry.npmjs.org unless the
+# host ~/.npmrc copied into the image names a mirror). Upstream's
+# install.sh is not used: it is interactive, and its managed install lives
+# under ~/.pi/agent/install, which the session bind mount of ~/.pi/agent
+# would shadow.
+#
+# The extensions are pinned (issue #16) in container/pi/package.json and its
+# committed lock. They install with --legacy-peer-deps into their own prefix
+# so the lock carries no second Pi core: Pi's extension loader supplies the
+# SDK modules extensions import. agents/pi/setup.sh derives settings.json
+# `packages` from that same package.json, so adding an extension is: edit
+# container/pi/package.json, then regenerate the lock with
+#   (cd container/pi && npm install --package-lock-only --legacy-peer-deps \
+#        --ignore-scripts --no-audit --no-fund)
+# and update the parity list in container/pi/smoke.mjs if it adds a tool.
+#
+# --ignore-scripts on both installs, so no lifecycle script runs unreviewed
+# at build time. The extension lock declares none (tests/pi.venom.yml asserts
+# it). The core lock for 1.2.0 declares two, both safe to skip:
+# @google/genai's preinstall is `echo 'preinstall: no-op'` and protobufjs's
+# postinstall only prints a version notice. A future script that Pi actually
+# needs is not caught by the smoke, which only checks that extensions load
+# and register their tools; review a new hasInstallScript entry in the core
+# lock when one appears.
+#
+# PI_NODE matches CONTEXT_MODE_NODE today, so nvm installs it once and the
+# Context Mode layer reuses it; Context Mode's Pi extension then runs on the
+# same Node ABI it was installed with. They are separate ARGs so either can
+# move without the other. Pi needs Node >= 22.19.
+#
+# The smoke is the compatibility gate for the floating core: it loads every
+# pinned extension into a real offline Pi session and fails the build when
+# one does not load or stops registering its tool.
+#
+# The trailing npm cache strip is the one "Why every npm layer empties
+# /home/llm/.npm" explains.
+ARG PI_NODE=22.23.3
+ENV RIOTBOX_PI_DIR=/home/llm/.riotbox/pi
+COPY --chown=llm:llm container/pi/ /tmp/riotbox-pi/
+RUN bash -o pipefail -c '\
+    set -e; \
+    export NVM_DIR=/home/llm/.nvm; \
+    . "${NVM_DIR}/nvm.sh"; \
+    nvm install "${PI_NODE}" >/dev/null; \
+    node_bin="$(dirname "$(nvm which "${PI_NODE}")")"; \
+    export PATH="${node_bin}:${PATH}"; \
+    core="${RIOTBOX_PI_DIR}/core"; \
+    ext="${RIOTBOX_PI_DIR}/extensions"; \
+    mkdir -p "${core}" "${ext}"; \
+    ver="$(npm view @earendil-works/pi-coding-agent@latest version)"; \
+    printf "%s\n" "${ver}" | grep -qxE "[0-9]+\.[0-9]+\.[0-9]+" || { \
+        echo "npm reported no bare X.Y.Z for the latest Pi: ${ver}" >&2; exit 1; }; \
+    printf "1.2.0\n%s\n" "${ver}" | sort -VC || { \
+        echo "latest Pi ${ver} is below the 1.2.0 floor agents/pi was verified against" >&2; exit 1; }; \
+    curl -fsSL -o "${core}/package.json" "https://pi.dev/api/installer/releases/${ver}/package.json"; \
+    curl -fsSL -o "${core}/package-lock.json" "https://pi.dev/api/installer/releases/${ver}/package-lock.json"; \
+    [ "$(jq -r ".dependencies[\"@earendil-works/pi-coding-agent\"]" "${core}/package.json")" = "${ver}" ] || { \
+        echo "pi.dev installer manifest for ${ver} does not pin @earendil-works/pi-coding-agent@${ver}" >&2; exit 1; }; \
+    bash /tmp/riotbox-pi/lock-integrity.sh "${core}/package-lock.json"; \
+    (cd "${core}" && npm ci --ignore-scripts --omit=dev --no-audit --no-fund); \
+    cp /tmp/riotbox-pi/package.json /tmp/riotbox-pi/package-lock.json "${ext}/"; \
+    (cd "${ext}" && npm ci --ignore-scripts --omit=dev --legacy-peer-deps --no-audit --no-fund); \
+    pkg="${core}/node_modules/@earendil-works/pi-coding-agent"; \
+    entry="$(jq -r ".bin.pi" "${pkg}/package.json")"; \
+    [[ "${entry}" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "unexpected bin.pi path: ${entry}" >&2; exit 1; }; \
+    [ -f "${pkg}/${entry}" ] || { echo "Pi ${ver} has no bin.pi entry at ${pkg}/${entry}" >&2; exit 1; }; \
+    printf "%s\n" \
+        "#!/usr/bin/env bash" \
+        "# Generated by the RiotBox image build. Pins the interpreter to PI_NODE." \
+        "export PI_TELEMETRY=0" \
+        "export PI_SKIP_VERSION_CHECK=1" \
+        "exec \"${node_bin}/node\" \"${pkg}/${entry}\" \"\$@\"" \
+        > /home/llm/.local/bin/pi; \
+    chmod +x /home/llm/.local/bin/pi; \
+    probe_home="$(mktemp -d)"; \
+    [ "$(HOME="${probe_home}" /home/llm/.local/bin/pi --version)" = "${ver}" ] || { \
+        echo "the generated pi shim does not report ${ver}" >&2; exit 1; }; \
+    h="$(HOME="${probe_home}" /home/llm/.local/bin/pi --help 2>&1)" || { \
+        echo "pi --help failed" >&2; \
+        printf "%s\n" "${h}" >&2; \
+        exit 1; }; \
+    for flag in --print --continue; do \
+        printf "%s\n" "${h}" | grep -qE -- "(^|[[:space:]])${flag}([[:space:],]|$)" || { \
+            echo "Pi ${ver} no longer lists ${flag}; agents/pi/manifest.sh depends on it" >&2; \
+            printf "%s\n" "${h}" >&2; exit 1; }; \
+    done; \
+    rm -rf "${probe_home}"; \
+    node /tmp/riotbox-pi/smoke.mjs "${pkg}" "${ext}"; \
+    rm -rf /tmp/riotbox-pi; \
+    find /home/llm/.npm -mindepth 1 -delete'
 
 # ── Claude Code (LAST — changes most frequently, preserves layer cache) ─────
 RUN bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && claude --version'

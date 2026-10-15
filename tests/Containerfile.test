@@ -22,9 +22,16 @@ FROM quay.io/centos/centos:stream10
 # cannot tell "files differ" (exit 1) from "cmp is not installed" (exit 127) —
 # the suite reports a corrupted file rather than a missing tool. Declared here
 # so the next republish cannot take it away silently.
+#
+# file is here because overlay-diff asks `file` whether each side is text
+# before showing a unified diff. The base image does not ship it, and the
+# failure is the same deceptive shape: `file x | grep -q text` cannot tell
+# "binary" from "file is not installed", so every file reports
+# "(binary file)" and the text-diff path goes untested.
 RUN dnf -y install \
         bash \
         diffutils \
+        file \
         git \
         gnupg2 \
         podman \

@@ -3,10 +3,18 @@ set -euo pipefail
 # Remove one or more RiotBox sessions by session key or project path.
 # Required env: ROOT_DIR
 # Arguments: <session-key-or-path> [...] | --all
+#
+# A session is a directory under the data dir that carries the .projects
+# marker scripts/mount-projects.sh writes at launch, plus its state dir
+# under RIOTBOX_STATE_ROOT; removing a session removes both. Nothing without
+# the marker is ever removed: on a rootless install the app tree (bin/,
+# libexec/, scripts/, ...) and backups/ share the data dir with the sessions.
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
 source "${ROOT_DIR}/libexec/session-summary.sh"
-session_root="${XDG_DATA_HOME:-$HOME/.local/share}/riotbox"
+resolve_data_roots
+session_root="${RIOTBOX_DATA_DIR}"
+state_root="${RIOTBOX_STATE_ROOT}"
 
 if [[ $# -eq 0 ]]; then
 	cat >&2 <<EOF
@@ -30,45 +38,65 @@ fi
 to_remove=()
 
 if [[ "$1" = "--all" ]]; then
-	if [[ -d "${session_root}" ]]; then
-		for d in "${session_root}"/*/; do
-			[[ -d "${d}" ]] || continue
-			[[ "$(basename "${d}")" = "backups" ]] && continue
-			to_remove+=("${d}")
-		done
-	fi
+	for d in "${session_root}"/*/; do
+		[[ -f "${d}.projects" ]] || continue
+		to_remove+=("${d%/}")
+	done
 	if [[ ${#to_remove[@]} -eq 0 ]]; then
 		echo "No sessions found."
 		exit 0
 	fi
 else
 	for arg in "$@"; do
-		# Try as an exact session key
-		candidate="${session_root}/${arg}"
-		if [[ -d "${candidate}" ]]; then
-			to_remove+=("${candidate}")
+		if [[ -z "${arg}" ]]; then
+			echo "ERROR: empty session key or path." >&2
+			exit 1
+		fi
+		# An exact session key is one path component naming a marked session.
+		# Keys never contain "/", and "." or ".." would leave the data dir.
+		if [[ "${arg}" != */* && "${arg}" != "." && "${arg}" != ".." &&
+			-f "${session_root}/${arg}/.projects" ]]; then
+			to_remove+=("${session_root}/${arg}")
 			continue
 		fi
 		# Try as a project path — resolve to session key
 		if [[ -e "${arg}" ]]; then
 			resolve_projects "${arg}"
-			if [[ -d "${RIOTBOX_SESSION_DIR}" ]]; then
+			migrate_session_key
+			if [[ -f "${RIOTBOX_SESSION_DIR}/.projects" ]]; then
 				to_remove+=("${RIOTBOX_SESSION_DIR}")
 				continue
-			else
-				echo "ERROR: no session found for project '${arg}'" >&2
-				echo "Run 'riotbox session-list' to see available sessions." >&2
-				exit 1
 			fi
+			echo "ERROR: no session found for project '${arg}'" >&2
+			echo "Run 'riotbox session-list' to see available sessions." >&2
+			exit 1
 		fi
-		echo "ERROR: '${arg}' is not a session key or an existing path." >&2
+		if [[ -e "${session_root}/${arg}" ]]; then
+			echo "ERROR: '${arg}' is not a session (no .projects marker); refusing to remove it." >&2
+		else
+			echo "ERROR: '${arg}' is not a session key or an existing path." >&2
+		fi
 		echo "Run 'riotbox session-list' to see available sessions." >&2
 		exit 1
 	done
 fi
 
+# Defence in depth: resolve_projects already refuses /, but this guards rm -rf.
+for d in "${to_remove[@]}"; do
+	if [[ "${d%/}" = "${session_root%/}" ]]; then
+		echo "ERROR: refusing to remove the RiotBox data dir '${d}'." >&2
+		exit 1
+	fi
+	# The state path is <state root>/<key>; a bad key would aim rm at the root.
+	key="$(basename "${d}")"
+	if [[ -z "${key}" || "${key}" = "." || "${key}" = ".." ]]; then
+		echo "ERROR: refusing to remove state for invalid session key '${key}'." >&2
+		exit 1
+	fi
+done
+
 echo "Sessions to remove:"
-for d in "${to_remove[@]}"; do session_summary "${d}"; done
+for d in "${to_remove[@]}"; do session_summary "${d}" "${state_root}/$(basename "${d}")"; done
 echo ""
 
 read -rp "Remove ${#to_remove[@]} session(s)? [y/N] " answer
@@ -77,5 +105,5 @@ read -rp "Remove ${#to_remove[@]} session(s)? [y/N] " answer
 	exit 0
 }
 
-for d in "${to_remove[@]}"; do rm -rf "${d}"; done
+for d in "${to_remove[@]}"; do rm -rf -- "${d:?}" "${state_root:?}/$(basename "${d}")"; done
 echo "Removed ${#to_remove[@]} session(s)."

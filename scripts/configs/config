@@ -107,8 +107,8 @@
 #   IMAGE_NAME=riotbox-gh-glab riotbox doctor
 
 # ── Agent selection ──────────────────────────────────────────────────────
-# Choose between Claude Code and opencode for `run`/`resume`/`shell`
-# commands. Inside the container both binaries are always on PATH; this
+# Choose between Claude Code, opencode and Pi for `run`/`resume`/`shell`
+# commands. Inside the container all three binaries are always on PATH; this
 # setting only affects which one the convenience verbs invoke. May also
 # be overridden per-invocation with the --agent=<name> flag.
 #
@@ -147,6 +147,9 @@
 #   * opencode (agents/opencode/manifest.sh): ANTHROPIC_API_KEY,
 #     OPENAI_API_KEY, OPENROUTER_API_KEY, GEMINI_API_KEY, GROQ_API_KEY,
 #     MISTRAL_API_KEY, DEEPSEEK_API_KEY, XAI_API_KEY.
+#   * Pi (agents/pi/manifest.sh): the same eight keys as opencode. Pi's other
+#     built-in providers (e.g. NVIDIA_API_KEY, CEREBRAS_API_KEY) are not
+#     forwarded by default — add them to RIOTBOX_PASSTHROUGH_EXTRA_VARS.
 #
 # Setting RIOTBOX_PASSTHROUGH_VARS REPLACES the default — it does not
 # merge. If you set it, list everything you want forwarded. To ADD to

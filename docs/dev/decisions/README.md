@@ -18,6 +18,8 @@ they turned out to be wrong.
 | [Should a pre-session checkpoint be a commit and a tag, or a ref?](checkpoint-snapshots-refs-not-tags.md) | 2026-08-04 | **A ref** — no automatic tags, on-demand `riotbox-snapshot/*` |
 | [Should the agent run in a git worktree instead of the user's checkout?](should-the-agent-run-in-a-worktree.md) | 2026-08-04 | **No** — it hides uncommitted work and shares the ref store anyway |
 | [Should RiotBox author Claude Code's Context Mode wiring, or install upstream's plugin?](context-mode-native-plugin.md) | 2026-08-24 | **Install the plugin** — the authored wiring was inert and nothing could tell |
+| [How should RiotBox add Pi as a third agent?](pi-support.md) | 2026-10-13 | **Natively** — floating core, pinned extensions; memory/QMD deferred |
+| [Where should the state RiotBox mounts into a session live?](session-state-dir.md) | 2026-10-13 | **Beside the session dir**, in a never-mounted `riotbox-state/<key>/` |
 
 For how the Context Mode integration actually behaves today, read
 [../context-mode.md](../context-mode.md) instead of any of the four records

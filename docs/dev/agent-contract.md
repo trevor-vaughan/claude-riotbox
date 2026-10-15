@@ -69,6 +69,7 @@ Print the argv (one NUL-terminated token per write) for non-interactive
 |------------|-------------------------------|
 | `claude`   | `claude`, `-p`, `<prompt>`    |
 | `opencode` | `opencode`, `run`, `<prompt>` |
+| `pi`       | `pi`, `-p`, `--`, `<prompt>`  |
 
 The caller does `mapfile -d '' -t argv < <(agent_call <name> run_argv
 "$prompt")` and `exec` from there. NUL framing keeps multi-line argv
@@ -84,7 +85,7 @@ agent_<name>_resume_argv() {
 ```
 
 Print the argv to resume the most recent session in the current project.
-Examples: `claude --continue`; `opencode run --continue`.
+Examples: `claude --continue`; `opencode run --continue`; `pi -c`.
 
 ### `agent_<name>_audit_argv`
 
@@ -115,7 +116,8 @@ This is the only function with non-trivial logic. It's called by
 `container/agent-wrapper.sh` to decide:
 
 - **What flags to inject** (claude: `--dangerously-skip-permissions`;
-  opencode: `--auto`)
+  opencode: `--auto`; pi: none — it has no approval prompts, and project
+  trust comes from `settings.json`)
 - **Where to inject them** (claude: at the root; opencode: immediately
   after the `run` subcommand, or at the root only when argv carries no
   positional token at all — `--auto` is registered on `run` and on the
@@ -128,7 +130,8 @@ This is the only function with non-trivial logic. It's called by
   `opencode /workspace` runs ask-first. The position is per-CLI, which is
   exactly why this is a hook and not a constant)
 - **When to set `CI=true`** (claude: when `-p`/`--prompt` is present;
-  opencode: when `run` is present)
+  opencode: when `run` is present; pi: when `-p`/`--print` or the two-token
+  `--mode json`/`--mode rpc` appears before `--`)
 
 The contract is:
 
@@ -169,8 +172,8 @@ For opencode the injected flag is not the only thing granting autonomy —
 merged config on every container start. `THREAT_MODEL.md` records how the
 two divide the work and why neither replaces the other.
 
-See `agents/claude/manifest.sh` and `agents/opencode/manifest.sh` for two
-complete implementations.
+See `agents/claude/manifest.sh`, `agents/opencode/manifest.sh` and
+`agents/pi/manifest.sh` for three complete implementations.
 
 ### `agent_<name>_container_setup`
 
@@ -195,20 +198,60 @@ manifest.
 
 ```bash
 agent_<name>_host_sync() {
-    local session_dir="${1:?host_sync requires a session_dir argument}"
+    local state_dir="${2:?host_sync requires a state_dir argument}"
     "${_AGENT_<NAME>_DIR}/sync-settings.sh" \
         "${HOME}/.config/<name>" \
-        "${session_dir}"
+        "${state_dir}"
 }
 ```
 
-Called by `scripts/mount-projects.sh` on the host. Should:
+Called by `scripts/mount-projects.sh` on the host as
+`agent_<name>_host_sync <session_dir> <state_dir>`. Should:
 
-- Copy whatever the agent needs from `${HOME}` into the session directory.
-- Print `-v` flags on stdout (one per line) for the container runtime to
-  bind-mount the session-dir copies into the container's filesystem.
+- Copy whatever the agent needs from `${HOME}` into its own subdirectory of
+  `<state_dir>` (the session's `${XDG_DATA_HOME}/riotbox-state/<key>/`), for
+  example `<state_dir>/<name>-config`.
+- Print `-v` flags on stdout (one per line) that bind-mount those state-dir
+  copies, or host files in place, into the container's filesystem.
 - Print notices on stderr if the host has no config to sync.
 - Empty stdout is allowed (means "nothing to mount").
+- Exit non-zero to abort the launch; `setup_projects` stops at the first
+  failing `host_sync`.
+- **Never write into, or mount anything from inside, `<session_dir>`.** It is
+  mounted read-write at `~/.claude`, so the container can swap anything nested
+  in it for a symlink to any host directory before the next launch, and podman
+  would mount the link's target. The container cannot reach `<state_dir>`
+  itself, only the subdirectories that are mounted. The one exception is
+  Claude, whose whole tree *is* the session dir; its `host_sync` ignores
+  `<state_dir>`. `tests/agents.venom.yml` enforces both rules for every
+  registered agent.
+
+It runs for **every registered agent on every launch**, whichever `--agent`
+was selected, so whatever it mounts reaches every agent's container. Every
+agent's `host_sync` runs while `setup_projects` holds an exclusive per-project
+lock (`<state_dir>/.sync.lock`), so two launches of one project never sync at
+once; a running session of that project can still change a mounted copy at
+any moment.
+
+So never write into a mounted directory in place. Create each mount source with
+`ensure_real_dir` from `scripts/lib/session-state.sh` (sync scripts are
+executed, not sourced, so they source it from their own path, as
+`agents/opencode/sync-settings.sh` and `agents/pi/sync-settings.sh` do); it
+replaces a symlink or file with a real directory instead of following it.
+Then build the copy in a fresh `mktemp -d "<state_dir>/.sync.XXXXXX"` dir —
+the state dir's top level is never mounted, and it is on the same filesystem —
+and install it with `rm -rf` of the old copy followed by `mv -T`. The rename
+never follows anything at the destination. A staged file silently replaces a
+file or link there; a staged directory silently replaces an empty directory and
+fails on anything else — a link, a file or a non-empty directory re-planted
+after the `rm -rf`. Treat that failure as `changed during sync`, say so on
+stderr and exit 1. A single file at the state dir's top level, as in
+the aider example in [adding-an-agent.md](adding-an-agent.md), can be copied
+directly: the container cannot reach that level to plant a link there. An agent that keeps its own state beside its
+config, as Pi does, renames only an allowlist of entries rather than the whole
+copy; see that script's header. Claude's sync applies the same staging to the
+session dir, using a `.claude-sync.*` dir in `riotbox/` (see
+`agents/claude/sync-settings.sh`).
 
 If the agent has no host config story (e.g. it reads everything from env
 vars and never persists state), make this a no-op:
@@ -235,7 +278,11 @@ The launcher (`libexec/passthrough-vars.sh`) sources the
 registry, calls this verb on every registered agent, dedupes the union
 with `sort -u`, and emits `-e <NAME>` for each name whose value is set
 on the host. Adding a new provider key for an agent is a one-line edit
-to its manifest — no central list to maintain.
+to its manifest — no central list to maintain. The union reaches **every**
+container whatever `--agent` says, so a key added for one agent is forwarded
+into all of them; that is why `agents/pi/manifest.sh` lists only opencode's
+eight keys and leaves Pi's other providers to
+`RIOTBOX_PASSTHROUGH_EXTRA_VARS`.
 
 Constraints:
 
@@ -267,33 +314,15 @@ Emits (NUL-terminated, like the other argv verbs) the command line the
 wrapper execs instead of the real binary when `RIOTBOX_HEADROOM=1`. The
 wrapper exports `RIOTBOX_HEADROOM_ACTIVE=1` first, so when the emitted
 command eventually re-invokes the agent by name, the shim's second pass
-takes the normal inject-and-exec path. Two shapes exist:
+takes the normal inject-and-exec path.
 
-**Wrap-shaped** — for tools headroom supports natively
-(`headroom wrap claude|codex|goose|…`):
-
-```bash
-agent_<name>_headroom_argv() {
-	printf '%s\0' headroom wrap <real-binary> <flags...> --
-	local arg
-	for arg in "$@"; do
-		printf '%s\0' "${arg}"
-	done
-}
-```
-
-A wrap-shaped verb MUST:
-
-- start with `headroom wrap <real-binary>`,
-- disable anything that downloads at session start (the claude manifest
-  passes `--code-memory none` — the image is offline-after-build),
-- place all caller args after a literal `--` (headroom's wrap subcommands
-  define their own flags, e.g. `-p/--port`, that would otherwise swallow
-  agent flags).
-
-**Proxy-routed** — for tools headroom has no wrap subcommand for. Emit an
-executable helper co-located in your agent's directory, followed by the
-caller args verbatim:
+The one rule above all others: **headroom must write nothing into the CWD**,
+which in a session is the caller's bind-mounted project. That rules out
+emitting `headroom wrap <tool>` directly for every tool checked so far:
+`wrap claude` writes `.claude/settings.local.json`, lock, marker and owner
+files and a `SessionStart` hook there, and `wrap opencode --memory` appends
+to `AGENTS.md` (headroom 0.39.0). So the verb emits an executable helper
+co-located in your agent's directory, followed by the caller args verbatim:
 
 ```bash
 agent_<name>_headroom_argv() {
@@ -307,38 +336,58 @@ agent_<name>_headroom_argv() {
 
 The helper owns whatever routing the tool needs and MUST:
 
-- ensure `headroom proxy` is listening (reuse a live one, else spawn with
-  `--memory --learn`, log to `~/.headroom/logs/proxy.log`, and wait for
-  TCP readiness with a timeout),
+- ensure the proxy with `headroom_proxy_ensure <agent-type> <plan-fn>`
+  from `agents/lib/headroom-proxy.sh`. `<plan-fn> <port>` sets
+  `HEADROOM_PROXY_ARGS` and exports the routing env the agent needs with a
+  proxy on that port. Under a start lock (`proxy.lock` in the container-local
+  `/tmp/riotbox-headroom-<uid>/`; `RIOTBOX_HEADROOM_RUN_DIR` overrides it,
+  for tests only)
+  the library scans up to 100 ports from `HEADROOM_PORT`. It reuses a port
+  only when `/livez` answers as a healthy headroom proxy AND
+  `proxy.<port>` there records the same launch config (the
+  arguments and the env that decides the upstream) for a process still
+  alive with the same start time. The proxy fixes its upstream when it
+  starts, so a proxy started for another provider must not be shared. The
+  records are container-local because `~/.headroom` is the state-dir mount,
+  shared by every concurrent container of the project, each with its own
+  network and PID namespace.
+  Otherwise it starts `headroom proxy --memory --no-learn` on the first free
+  port, logs to `~/.headroom/logs/proxy.log`, waits for `/livez` until a
+  deadline (`RIOTBOX_HEADROOM_PROXY_TIMEOUT` seconds), writes the record and
+  releases the lock. The port actually used is in `HEADROOM_PROXY_PORT`.
+  The wrapper has already exported `HEADROOM_MEMORY_DB_PATH=~/.headroom/memory.db`,
+  which keeps the proxy's memory out of the CWD; do not override it.
+  `--no-learn` is not optional: the traffic learner writes into the project
+  and cannot be pointed elsewhere (the library's header has the evidence),
 - apply agent-specific routing only AFTER the proxy answers,
 - degrade to unwrapped on any failure — warn on stderr, leave config
   untouched, `exec <real-binary-name> "$@"`,
 - end by exec'ing something that reaches `<real-binary-name>`, so the shim's
   guarded second pass applies the agent's normal injection rules. That may
-  be the binary directly, or `headroom wrap <tool>`, which launches it.
+  be the binary directly (claude), or `headroom wrap <tool> --no-proxy` when
+  that subcommand provably writes nothing into the CWD with the flags passed
+  (opencode, without `--memory`),
+- be verified by a sandboxed run with the pinned headroom and a stub agent
+  that leaves the project byte-identical.
 
-A helper is the right shape whenever `headroom wrap <tool>` does most of the
-job but one of its side effects is unacceptable in a container. The opencode
-helper exists for exactly one such effect: `wrap opencode --memory` writes a
-memory block into `AGENTS.md` in the CWD, which in a session is the caller's
-bind-mounted repository. Owning the proxy locally buys memory without that
-write; everything else is delegated to `wrap opencode --no-proxy`.
-
-`agents/opencode/headroom-exec.sh` is the reference implementation.
+`agents/claude/headroom-exec.sh` sets the routing env itself and documents
+what it keeps from and drops relative to `wrap claude`;
+`agents/opencode/headroom-exec.sh` delegates routing to
+`wrap opencode --no-proxy`.
 
 Agents without the verb run unwrapped under `RIOTBOX_HEADROOM=1`, with a
 warning on stderr.
 
 Contract coverage lives in `tests/agents.venom.yml` ("Headroom optional
-verb" cases), `tests/headroom.venom.yml` (wrapper gate, guard, and
-fallbacks), and `tests/headroom-opencode.venom.yml` (proxy-routed helper
-behavior).
+verb" cases), `tests/headroom.venom.yml` (wrapper gate, guard, fallbacks,
+and the untouched-project run), `tests/headroom-claude.venom.yml` and
+`tests/headroom-opencode.venom.yml` (helper behavior).
 
 ## Optional verbs: Context Mode
 
 Six optional verbs carry [Context Mode](../../README.md#context-mode-opt-in)
 support for an agent. Five run per session; the sixth runs at image build
-time. Claude implements four of them, opencode all six:
+time. Claude implements four of them, opencode and Pi all six:
 
 | Verb | When | Contract |
 |------|------|----------|
@@ -410,10 +459,11 @@ source "${_AGENT_<NAME>_DIR}/context-mode.sh"
 That keeps the upstream constants, whatever depends on them, and the build
 guard that asserts them in one file. `agents/claude/context-mode.sh` (no
 wiring — a store path, a platform token, and a stripper for what an older
-release wrote) and `agents/opencode/context-mode.sh` (one generated plugin
-file) are the two worked examples, and they are deliberately different
-shapes — the registry contract is about the lifecycle, not about what wiring
-looks like.
+release wrote), `agents/opencode/context-mode.sh` (one generated plugin
+file) and `agents/pi/context-mode.sh` (one entry in a RiotBox-owned
+`packages` list) are the three worked examples, and they are deliberately
+different shapes — the registry contract is about the lifecycle, not about
+what wiring looks like.
 
 ### `agent_<name>_context_mode_store_dir`
 
@@ -458,11 +508,13 @@ fallback:
   one more thing for a future reader to explain.
 - **opencode does.** `OpenCodeAdapter.getConfigDir()` reads
   `XDG_CONFIG_HOME`, which the image never sets, and falls back to
-  `~/.config/opencode`. That is the session mount today, but by coincidence
-  rather than by anything riotbox stated — and the DB holds verbatim tool
-  output, so an upstream change to that fallback would move it onto the
-  container overlay, where it vanishes at exit and escapes
-  `riotbox session-remove`.
+  `~/.config/opencode`: the config mount, whose contents the host sync
+  replaces on relaunch whenever the host has a `~/.config/opencode`. The DB
+  holds verbatim tool output that has to persist with the session, so the verb
+  pins it under the data mount, `~/.local/share/opencode`.
+- **Pi does.** PiAdapter's default DB root is `~/.pi/context-mode` — outside
+  the `~/.pi/agent` session mount — so without the pin its verbatim tool
+  output would land on the container overlay.
 
 **Print the parent of `context_mode_store_dir`'s path, not the same path.**
 Upstream builds the DB directory as `<root>/context-mode/sessions`, whereas
@@ -487,9 +539,9 @@ agent_<name>_context_mode_platform() {
 ```
 
 Print the token upstream keys its hook dispatch and adapter detection off —
-`claude-code` for Claude, `opencode` for opencode — and nothing else. The
-session exports it as `CONTEXT_MODE_PLATFORM`, which is the same remedy
-upstream applies to its own Copilot CLI bundle for the same reason.
+`claude-code` for Claude, `opencode` for opencode, `pi` for Pi — and nothing
+else. The session exports it as `CONTEXT_MODE_PLATFORM`, which is the same
+remedy upstream applies to its own Copilot CLI bundle for the same reason.
 
 **Pin it rather than letting upstream detect it.** `hookDispatch` resolves
 the hook script through `getPluginRoot()`, which branches on
@@ -517,7 +569,10 @@ reach Context Mode. Claude Code does not: the image stages upstream's
 marketplace plugin and `container/plugin-setup.sh` registers it against the
 session, so there is nothing left for a wire verb to write and the verb was
 removed. opencode still needs one, because its support is a plugin file in
-the session config directory that only riotbox can put there.
+the session config directory that only riotbox can put there. So does Pi: its
+support is an entry in `settings.json` `packages`, a list `agents/pi/setup.sh`
+rewrites on every container start (before `context_mode_setup` runs), so the
+wire verb appends the entry and the strip verb removes it.
 
 Write whatever form of wiring this agent needs, and return 0 **only** when
 every artifact landed. On any failure: warn on stderr, leave nothing behind
@@ -627,7 +682,9 @@ either one moves.
 Contract coverage lives in `tests/context-mode.venom.yml` (the Claude
 path, plus the strip-every-other-agent rule),
 `tests/context-mode-opencode.venom.yml` (the opencode path, including the
-foreign-file refusal and the `--pure` warning), and
+foreign-file refusal and the `--pure` warning),
+`tests/context-mode-pi.venom.yml` (the Pi path, including the strip that
+leaves user entries merely containing `context-mode`), and
 `tests/doctor-context-mode.venom.yml` (the preflight check for an agent
 with no support).
 
@@ -662,10 +719,10 @@ value, and write a reference the agent expands when it spawns the server —
 `${NAME}` for Claude Code, `{env:NAME}` for opencode.
 
 This is not a style preference and must not be "simplified" away. The agent
-config directories resolve into the session directory, which is a bind mount
-from the host: a token written there outlives the container, survives the
-agent exiting, and stays readable by anything on the host that can read the
-session directory. `tests/forge-mcp.venom.yml` asserts the property directly
+config directories resolve into the session directory or its state directory,
+both bind mounts from the host: a token written there outlives the container,
+survives the agent exiting, and stays readable by anything on the host that can
+read those directories. `tests/forge-mcp.venom.yml` asserts the property directly
 by wiring with sentinel token values and grepping the whole tree for them.
 
 Deciding *which* variable holds the token is the caller's job, not the
@@ -802,8 +859,8 @@ than a gap.
 
 **RiotBox does not write git-ai's wiring — upstream's `install-hooks` does.**
 `container/git-ai-setup.sh` calls it once per session and lets it write the Claude
-hook stanzas, the opencode plugin, and the `~/.gitconfig` Trace2 target. RiotBox
-does not hand-author any of those shapes, for the same reason
+hook stanzas, the opencode plugin, the Pi extension, and the `~/.gitconfig` Trace2
+target. RiotBox does not hand-author any of those shapes, for the same reason
 `agent_<name>_context_mode_wire` is missing on Claude Code: upstream's own docs
 have already drifted from what its binary installs once — the documented Claude
 matcher is `Write|Edit|MultiEdit`, the matcher v1.7.4 actually writes is `"*"` — so
@@ -831,7 +888,7 @@ strip verbs follow. It is idempotent, silent when there is nothing to remove, an
 always returns 0: a failure to clean is a warning on stderr, not a non-zero status,
 because nothing upstream of it has a better answer than carrying on.
 
-The two shipped agents decide ownership by different means, because the wiring
+The three shipped agents decide ownership by different means, because the wiring
 upstream writes for each one has a different shape:
 
 - **`agents/claude/git-ai.sh`** matches the binary as a **whole
@@ -854,6 +911,15 @@ upstream writes for each one has a different shape:
   block-comment line at the position upstream's generator actually writes it. The
   tighter gate leaves that file alone and only takes the file whose shape matches
   what a real `git-ai install-hooks` run produces.
+- **`agents/pi/git-ai.sh`** is content-gated too, but upstream's Pi template
+  (v1.7.5) carries no banner. It removes `~/.pi/agent/extensions/git-ai.ts`
+  only when the file's first 12 lines hold **both** of two template lines
+  exactly as upstream writes them: the comment
+  `// Optional user-owned override file. Managed installer never writes it.` as
+  a whole line, and a line starting `const GIT_AI_BIN = '`. Anything lacking
+  either is left in place with a NOTE on stderr. Because `install-hooks` runs
+  after `host_sync`, it also replaces any host copy the sync brought in, whose
+  baked binary path is a host path.
 
 ### `agent_<name>_github_mcp_wire`
 

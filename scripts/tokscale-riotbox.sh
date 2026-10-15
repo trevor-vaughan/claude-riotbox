@@ -4,11 +4,14 @@
 # with zero telemetry.
 #
 # riotbox isolates each run's agent home under
-#   $XDG_DATA_HOME/riotbox/<session-key>/
+#   $XDG_DATA_HOME/riotbox/<session-key>/        (<session>)
+#   $XDG_DATA_HOME/riotbox-state/<session-key>/  (<state>)
 # with Claude Code transcripts at  <session>/projects/<slug>/*.jsonl
-# and opencode data at             <session>/.local-share-opencode/{storage,project}/...
+# and opencode data at             <state>/opencode-data/{storage,project}/...
+# and pi sessions at               <state>/pi-agent/sessions/<cwd>/*.jsonl
 # tokscale, left alone, scans only the ONE native home (~/.claude,
-# ~/.local/share/opencode), so it never sees riotbox work.
+# ~/.local/share/opencode, ~/.pi/agent/sessions), so it never sees riotbox
+# work.
 #
 # This wrapper leaves the native home scan intact and adds every riotbox session
 # as an extra scan root via tokscale's TOKSCALE_EXTRA_DIRS — comma-separated
@@ -37,8 +40,9 @@
 #   tokscale-riotbox.sh                      # no args → tokscale TUI
 #
 # Env overrides:
-#   RIOTBOX_DATA_DIR  riotbox session root (default: ${XDG_DATA_HOME:-~/.local/share}/riotbox)
-#   TOKSCALE_BIN      tokscale path        (default: PATH, else npx-cached, else fetched)
+#   RIOTBOX_DATA_DIR    riotbox session root (default: ${XDG_DATA_HOME:-~/.local/share}/riotbox)
+#   RIOTBOX_STATE_ROOT  riotbox state root   (default: ${XDG_DATA_HOME:-~/.local/share}/riotbox-state)
+#   TOKSCALE_BIN        tokscale path        (default: PATH, else npx-cached, else fetched)
 
 # -E (errtrace): without it the ERR trap is NOT inherited by functions or
 # subshells, so a failure inside a helper would exit silently with no line
@@ -47,6 +51,7 @@ set -Eeuo pipefail
 trap 'echo "tokscale-riotbox: failed at line ${LINENO}" >&2' ERR
 
 RIOTBOX_DATA_DIR="${RIOTBOX_DATA_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/riotbox}"
+RIOTBOX_STATE_ROOT="${RIOTBOX_STATE_ROOT:-${XDG_DATA_HOME:-${HOME}/.local/share}/riotbox-state}"
 TOKSCALE_BIN="${TOKSCALE_BIN:-}"
 NPX_CACHE="${NPM_CONFIG_CACHE:-${HOME}/.npm}/_npx"
 
@@ -82,26 +87,34 @@ resolve_tokscale_bin() {
 }
 
 # Build tokscale's TOKSCALE_EXTRA_DIRS value: one `client:path` entry per live
-# riotbox session home, comma-joined. Claude sessions expose a projects/ dir
-# (tokscale recurses it for *.jsonl); opencode exposes its data dir — we add both
+# riotbox session store, comma-joined. Claude sessions expose a projects/ dir
+# in the session dir (tokscale recurses it for *.jsonl). opencode and Pi keep
+# theirs in the session's state dir: opencode exposes its data dir — we add both
 # the data root and its storage/message subdir so tokscale finds usage whether it
 # roots the opencode scan at the home dir or at the sessions dir (redundant hits
-# are path-deduped by tokscale). Runs in the caller's command-substitution
-# subshell, so `nullglob` here does not leak. Prints the joined value, or nothing
-# when there are no sessions.
+# are path-deduped by tokscale) — and Pi its sessions dir (tokscale client id
+# `pi`). A store an older RiotBox left inside a session dir is not scanned: that
+# project's next launch moves it into the state dir. Runs in the caller's
+# command-substitution subshell, so `nullglob` here does not leak. Prints the
+# joined value, or nothing when there are no sessions. A scan root that is a
+# symlink is skipped: the container writes these dirs and could plant a link to
+# a host path (e.g. pi-agent/sessions -> /etc).
 build_extra_dirs() {
-	local src="${RIOTBOX_DATA_DIR}"
-	[[ -d "${src}" ]] || return 0
 	shopt -s nullglob
-	local session ocdata entries=()
-	for session in "${src}"/*/; do
+	local session state ocdata entries=()
+	for session in "${RIOTBOX_DATA_DIR}"/*/; do
 		session="${session%/}"
-		[[ -d "${session}/projects" ]] && entries+=("claude:${session}/projects")
-		ocdata="${session}/.local-share-opencode"
+		[[ -d "${session}/projects" && ! -L "${session}/projects" ]] && entries+=("claude:${session}/projects")
+	done
+	for state in "${RIOTBOX_STATE_ROOT}"/*/; do
+		state="${state%/}"
+		ocdata="${state}/opencode-data"
 		if [[ -d "${ocdata}" ]]; then
 			entries+=("opencode:${ocdata}")
-			[[ -d "${ocdata}/storage/message" ]] && entries+=("opencode:${ocdata}/storage/message")
+			[[ -d "${ocdata}/storage/message" && ! -L "${ocdata}/storage/message" ]] && entries+=("opencode:${ocdata}/storage/message")
 		fi
+		# Pi (tokscale client id `pi`, native root .pi/agent/sessions).
+		[[ -d "${state}/pi-agent/sessions" && ! -L "${state}/pi-agent/sessions" ]] && entries+=("pi:${state}/pi-agent/sessions")
 	done
 	[[ ${#entries[@]} -gt 0 ]] || return 0
 	local IFS=,
@@ -127,9 +140,9 @@ if [[ -z "${tokscale_bin}" ]]; then
 fi
 
 # Native HOME is left intact so tokscale scans your real ~/.claude and
-# ~/.local/share/opencode live; TOKSCALE_EXTRA_DIRS layers every riotbox session
-# on top. Both are read-only to tokscale. unshare -rn removes the network so no
-# usage can be submitted.
+# ~/.local/share/opencode and ~/.pi/agent/sessions live; TOKSCALE_EXTRA_DIRS
+# layers every riotbox session on top. Both are read-only to tokscale.
+# unshare -rn removes the network so no usage can be submitted.
 extra_dirs="$(build_extra_dirs)"
 exec unshare -rn env \
 	TOKSCALE_EXTRA_DIRS="${extra_dirs}" \

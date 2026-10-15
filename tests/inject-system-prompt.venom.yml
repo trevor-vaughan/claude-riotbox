@@ -62,7 +62,7 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           run_inject
           # Should not contain the raw template placeholder
-          ! grep -F '{{OS_PRETTY_NAME}}' "${MANAGED_POLICY_MD}"
+          if grep -F '{{OS_PRETTY_NAME}}' "${MANAGED_POLICY_MD}"; then echo "FAIL: the template placeholder was not substituted"; exit 1; fi
           # Should contain an actual OS name (at minimum "Linux")
           grep -q 'Running on .' "${MANAGED_POLICY_MD}"
           echo "template_substituted=true"
@@ -141,7 +141,7 @@ testcases:
           run_inject
           # Must be replaced with the custom prompt
           grep -F "Custom override prompt." "${MANAGED_POLICY_MD}"
-          ! grep -F "Build-time content." "${MANAGED_POLICY_MD}"
+          if grep -F "Build-time content." "${MANAGED_POLICY_MD}"; then echo "FAIL: the build-time render survived the override"; exit 1; fi
           echo "override_applied=true"
         assertions:
           - result.code ShouldEqual 0

@@ -42,6 +42,19 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
+  - name: preflight_check_flock passes when flock is on PATH
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          preflight_check_flock
+          rc=$?
+          [ "${rc}" = "0" ] || { echo "BAD rc=${rc}" >&2; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
   - name: preflight_check_fuse_overlayfs passes when binary is present
     steps:
       - type: exec
@@ -155,6 +168,29 @@ testcases:
           esac
           case "${out}" in
               *"Install podman"*) echo "OK" ;;
+              *) echo "BAD: missing install hint" >&2; exit 1 ;;
+          esac
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: preflight_check_flock fails with exit 24 when flock is missing
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          # An empty stub dir as PATH, as in the podman case above, so
+          # `command -v flock` fails wherever the host keeps it.
+          STUB_DIR="$(mktemp -d)"
+          trap 'rm -rf "${STUB_DIR}"' EXIT
+          out="$(PATH="${STUB_DIR}" preflight_check_flock 2>&1 || echo "EXIT=$?")"
+          echo "${out}"
+          case "${out}" in
+              *"EXIT=24"*) ;;
+              *) echo "BAD: missing exit 24" >&2; exit 1 ;;
+          esac
+          case "${out}" in
+              *"Install flock (from util-linux)"*) echo "OK" ;;
               *) echo "BAD: missing install hint" >&2; exit 1 ;;
           esac
         assertions:

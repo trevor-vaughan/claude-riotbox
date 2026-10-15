@@ -1,0 +1,1809 @@
+name: session state dir — mount sources live outside the container-writable session dir
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# The session dir is the container's read-write ~/.claude, so anything nested
+# in it can be swapped for a symlink before the next launch. Every other mount
+# source lives in the session's state dir (scripts/lib/session-state.sh). These
+# cases pin the helpers that create and migrate it, and the launch path that
+# uses them, against planted links: relative, absolute and dangling, at the
+# legacy paths inside the session dir and at the new paths in the state dir.
+# A followed link shows up as a change to the victim directory.
+
+testcases:
+  # ── ensure_real_dir ─────────────────────────────────────────────────────
+
+  - name: ensure_real_dir creates a missing directory and leaves a real one alone
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          ensure_real_dir "${T}/a/b" 2>"${T}/err"
+          [ -d "${T}/a/b" ] || { echo "FAIL: not created"; exit 1; }
+          echo data > "${T}/a/b/f"
+          ensure_real_dir "${T}/a/b" 2>>"${T}/err"
+          [ "$(cat "${T}/a/b/f")" = data ] || { echo "FAIL: a real dir lost its content"; exit 1; }
+          [ ! -s "${T}/err" ] || { echo "FAIL: warned about a real dir"; cat "${T}/err"; exit 1; }
+          echo "ENSURE_PLAIN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ENSURE_PLAIN_OK"
+
+  - name: ensure_real_dir replaces relative, absolute and dangling symlinks without following them
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${T}/d"
+          ln -s ../victim "${T}/d/relative"
+          ln -s "${VICTIM}" "${T}/d/absolute"
+          ln -s ../nowhere "${T}/d/dangling"
+          [ "$(readlink -f "${T}/d/relative")" = "${VICTIM}" ] || { echo "FAIL: fixture link is wrong"; exit 1; }
+          for kind in relative absolute dangling; do
+            ensure_real_dir "${T}/d/${kind}" 2>"${T}/err"
+            [ -d "${T}/d/${kind}" ] && [ ! -L "${T}/d/${kind}" ] || { echo "FAIL: ${kind}: not a real dir"; exit 1; }
+            [ -z "$(ls -A "${T}/d/${kind}")" ] || { echo "FAIL: ${kind}: replacement is not empty"; exit 1; }
+            grep -qF "${T}/d/${kind} is not a real directory" "${T}/err" || { echo "FAIL: ${kind}: no warning"; exit 1; }
+          done
+          [ ! -e "${T}/nowhere" ] || { echo "FAIL: the dangling link's target was created"; exit 1; }
+          assert_victim_intact
+          echo "ENSURE_LINKS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ENSURE_LINKS_OK"
+
+  - name: ensure_real_dir detects a symlink named with a trailing slash
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          ln -s "${VICTIM}" "${T}/lnk"
+          ensure_real_dir "${T}/lnk/" 2>"${T}/err"
+          [ -d "${T}/lnk" ] && [ ! -L "${T}/lnk" ] || { echo "FAIL: link not replaced"; exit 1; }
+          grep -qF 'is not a real directory' "${T}/err" || { echo "FAIL: no warning"; exit 1; }
+          assert_victim_intact
+          echo "ENSURE_SLASH_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ENSURE_SLASH_OK"
+
+  - name: ensure_real_dir replaces a regular file with a directory
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          echo junk > "${T}/f"
+          ensure_real_dir "${T}/f" 2>"${T}/err"
+          [ -d "${T}/f" ] || { echo "FAIL: not replaced"; exit 1; }
+          grep -qF 'is not a real directory' "${T}/err" || { echo "FAIL: no warning"; exit 1; }
+          echo "ENSURE_FILE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ENSURE_FILE_OK"
+
+  # ── migrate_legacy_state ────────────────────────────────────────────────
+
+  - name: migrate_legacy_state does nothing, and creates nothing, when no legacy entry exists
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${SESSION}"
+          migrate_legacy_state "${SESSION}" "${STATE}" headroom:headroom git-ai:git-ai 2>"${T}/err"
+          [ ! -s "${T}/err" ] || { echo "FAIL: spoke with nothing to do"; cat "${T}/err"; exit 1; }
+          [ ! -e "${STATE}" ] || { echo "FAIL: created the state dir with nothing to move"; exit 1; }
+          echo "MIGRATE_ABSENT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_ABSENT_OK"
+
+  - name: migrate_legacy_state moves a real legacy dir once, and a second run is a no-op
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${SESSION}/.pi-agent/sessions"
+          echo history > "${SESSION}/.pi-agent/sessions/one.jsonl"
+          migrate_legacy_state "${SESSION}" "${STATE}" .pi-agent:pi-agent 2>"${T}/err1"
+          [ "$(cat "${STATE}/pi-agent/sessions/one.jsonl")" = history ] || { echo "FAIL: not moved"; exit 1; }
+          [ ! -e "${SESSION}/.pi-agent" ] || { echo "FAIL: legacy dir left behind"; exit 1; }
+          [ "$(grep -c '^Notice: moved' "${T}/err1")" -eq 1 ] || { echo "FAIL: want exactly one notice"; cat "${T}/err1"; exit 1; }
+          [ "$(stat -c '%a' "${STATE}")" = 700 ] || { echo "FAIL: state dir not 0700"; exit 1; }
+          [ "$(stat -c '%a' "${STATE%/*}")" = 700 ] || { echo "FAIL: state root not 0700"; exit 1; }
+          migrate_legacy_state "${SESSION}" "${STATE}" .pi-agent:pi-agent 2>"${T}/err2"
+          [ ! -s "${T}/err2" ] || { echo "FAIL: second run was not silent"; cat "${T}/err2"; exit 1; }
+          [ "$(cat "${STATE}/pi-agent/sessions/one.jsonl")" = history ] || { echo "FAIL: second run changed data"; exit 1; }
+          echo "MIGRATE_MOVE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_MOVE_OK"
+
+  - name: migrate_legacy_state removes legacy symlinks and files without following them
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${SESSION}"
+          # SESSION is ${T}/data/riotbox/<key>, so ../../../victim is ${VICTIM}.
+          ln -s ../../../victim "${SESSION}/headroom"
+          ln -s "${VICTIM}" "${SESSION}/git-ai"
+          ln -s ../nowhere "${SESSION}/overlay"
+          echo junk > "${SESSION}/.pi-agent"
+          [ "$(readlink -f "${SESSION}/headroom")" = "${VICTIM}" ] || { echo "FAIL: fixture link is wrong"; exit 1; }
+          migrate_legacy_state "${SESSION}" "${STATE}" \
+            headroom:headroom git-ai:git-ai overlay:overlay .pi-agent:pi-agent 2>"${T}/err"
+          for legacy in headroom git-ai overlay .pi-agent; do
+            [ ! -e "${SESSION}/${legacy}" ] && [ ! -L "${SESSION}/${legacy}" ] || { echo "FAIL: ${legacy} not removed"; exit 1; }
+          done
+          [ "$(grep -c 'not a real directory' "${T}/err")" -eq 4 ] || { echo "FAIL: want one warning per entry"; cat "${T}/err"; exit 1; }
+          [ ! -e "${STATE}" ] || { echo "FAIL: a planted entry was migrated"; exit 1; }
+          assert_victim_intact
+          echo "MIGRATE_LINKS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_LINKS_OK"
+
+  - name: migrate_legacy_state never merges when both the legacy and the new dir exist
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${SESSION}/headroom" "${STATE}/headroom" "${SESSION}/git-ai" "${STATE}"
+          echo old > "${SESSION}/headroom/mem"
+          echo new > "${STATE}/headroom/mem"
+          echo old > "${SESSION}/git-ai/config.json"
+          # A symlink at the new path counts as present, and is not followed.
+          ln -s "${VICTIM}" "${STATE}/git-ai"
+          rc=0
+          migrate_legacy_state "${SESSION}" "${STATE}" headroom:headroom git-ai:git-ai 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 2 ] || { echo "FAIL: exit ${rc}, want 2 (left stranded)"; exit 1; }
+          [ "$(cat "${SESSION}/headroom/mem")" = old ] || { echo "FAIL: legacy changed"; exit 1; }
+          [ "$(cat "${STATE}/headroom/mem")" = new ] || { echo "FAIL: new changed"; exit 1; }
+          [ ! -e "${STATE}/headroom/headroom" ] || { echo "FAIL: legacy was moved into new"; exit 1; }
+          [ "$(cat "${SESSION}/git-ai/config.json")" = old ] || { echo "FAIL: git-ai legacy changed"; exit 1; }
+          [ -L "${STATE}/git-ai" ] || { echo "FAIL: the new-path link was replaced"; exit 1; }
+          grep -qF "both ${SESSION}/headroom and ${STATE}/headroom exist" "${T}/err" || { echo "FAIL: warning does not name both"; cat "${T}/err"; exit 1; }
+          [ "$(grep -c '^Warning: both' "${T}/err")" -eq 2 ] || { echo "FAIL: want one warning per conflict"; cat "${T}/err"; exit 1; }
+          assert_victim_intact
+          echo "MIGRATE_CONFLICT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_CONFLICT_OK"
+
+  - name: migrate_legacy_state leaves the legacy dir in place when the move fails
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${SESSION}/headroom" "${T}/shim"
+          echo keep > "${SESSION}/headroom/mem"
+          printf '#!/bin/sh\necho "mv: simulated failure" >&2\nexit 1\n' > "${T}/shim/mv"
+          chmod +x "${T}/shim/mv"
+          rc=0
+          PATH="${T}/shim:${PATH}" migrate_legacy_state "${SESSION}" "${STATE}" headroom:headroom 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 2 ] || { echo "FAIL: exit ${rc}, want 2 (left stranded)"; exit 1; }
+          [ "$(cat "${SESSION}/headroom/mem")" = keep ] || { echo "FAIL: legacy data lost"; exit 1; }
+          [ -d "${SESSION}/headroom" ] && [ ! -L "${SESSION}/headroom" ] || { echo "FAIL: legacy dir is no longer a real dir"; exit 1; }
+          grep -qF "could not move ${SESSION}/headroom" "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
+          grep -qF 'simulated failure' "${T}/err" || { echo "FAIL: mv's own error was dropped"; exit 1; }
+          grep -qF 'will not retry this move on its own' "${T}/err" || { echo "FAIL: no word that the move is not retried"; cat "${T}/err"; exit 1; }
+          grep -qF 'riotbox session-migrate' "${T}/err" || { echo "FAIL: no word of session-migrate"; cat "${T}/err"; exit 1; }
+          grep -qF "mv -T -- ${SESSION}/headroom ${STATE}/headroom" "${T}/err" || { echo "FAIL: no recovery command"; cat "${T}/err"; exit 1; }
+          grep -qF "If ${STATE}/headroom exists by then" "${T}/err" || { echo "FAIL: no advice for an existing new dir"; cat "${T}/err"; exit 1; }
+          echo "MIGRATE_MVFAIL_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_MVFAIL_OK"
+
+  - name: migrate_legacy_state discards a legacy dir swapped for a symlink during the move
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          export VICTIM
+          mkdir -p "${SESSION}/headroom" "${T}/shim"
+          echo mem > "${SESSION}/headroom/mem"
+          # The shim stands for a container swapping the entry between the
+          # type check and the rename: it plants a link, then really moves it.
+          printf '#!/bin/sh\nrm -rf "$2"\nln -s "$VICTIM" "$2"\nexec /usr/bin/mv "$@"\n' > "${T}/shim/mv"
+          chmod +x "${T}/shim/mv"
+          PATH="${T}/shim:${PATH}" migrate_legacy_state "${SESSION}" "${STATE}" headroom:headroom 2>"${T}/err"
+          [ ! -e "${STATE}/headroom" ] && [ ! -L "${STATE}/headroom" ] || { echo "FAIL: the swapped-in link reached the state dir"; exit 1; }
+          [ ! -e "${SESSION}/headroom" ] && [ ! -L "${SESSION}/headroom" ] || { echo "FAIL: legacy entry left behind"; exit 1; }
+          grep -qF "${SESSION}/headroom changed during the move" "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
+          assert_victim_intact
+          echo "MIGRATE_SWAP_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_SWAP_OK"
+
+  - name: migrate_legacy_state removes FIFO and socket legacy entries
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${SESSION}"
+          mkfifo "${SESSION}/headroom"
+          python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "${SESSION}/git-ai"
+          [ -p "${SESSION}/headroom" ] && [ -S "${SESSION}/git-ai" ] || { echo "FAIL: fixtures not created"; exit 1; }
+          migrate_legacy_state "${SESSION}" "${STATE}" headroom:headroom git-ai:git-ai 2>"${T}/err"
+          for legacy in headroom git-ai; do
+            [ ! -e "${SESSION}/${legacy}" ] && [ ! -L "${SESSION}/${legacy}" ] || { echo "FAIL: ${legacy} not removed"; exit 1; }
+          done
+          [ "$(grep -c 'not a real directory' "${T}/err")" -eq 2 ] || { echo "FAIL: want one warning per entry"; cat "${T}/err"; exit 1; }
+          [ ! -e "${STATE}" ] || { echo "FAIL: a special file was migrated"; exit 1; }
+          echo "MIGRATE_SPECIAL_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_SPECIAL_OK"
+
+  # ── setup_projects ──────────────────────────────────────────────────────
+
+  - name: setup_projects creates a private state dir beside the session dir, except under dry run
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          RIOTBOX_DRY_RUN=1 setup_projects "${PROJ}" 2>/dev/null
+          [ ! -e "${XDG_DATA_HOME}/riotbox-state" ] || { echo "FAIL: dry run created the state root"; exit 1; }
+          setup_projects "${PROJ}" 2>/dev/null
+          [ "${RIOTBOX_STATE_DIR}" = "${STATE}" ] || { echo "FAIL: state dir ${RIOTBOX_STATE_DIR}, want ${STATE}"; exit 1; }
+          [ -d "${STATE}" ] || { echo "FAIL: state dir not created"; exit 1; }
+          [ "$(stat -c '%a' "${STATE}")" = 700 ] || { echo "FAIL: state dir not 0700"; exit 1; }
+          [ "$(stat -c '%a' "${XDG_DATA_HOME}/riotbox-state")" = 700 ] || { echo "FAIL: state root not 0700"; exit 1; }
+          echo "SETUP_STATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_STATE_OK"
+
+  # ── Projects that contain the RiotBox data roots ───────────────────────
+  # Such a project bind-mounts other sessions' data (and a rootless install's
+  # app tree) into the container. The user's decision is to warn, not refuse.
+
+  - name: a project that is the data home's parent warns once on launch and still succeeds
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${T}" 2>"${T}/err"
+          [ "$(grep -c 'contains RiotBox data' "${T}/err")" -eq 1 ] || { echo "FAIL: want exactly one warning"; cat "${T}/err"; exit 1; }
+          grep -qF "WARN: project ${T} contains RiotBox data:" "${T}/err" || { echo "FAIL: warning does not name the project"; cat "${T}/err"; exit 1; }
+          grep -qxF "        ${XDG_DATA_HOME}/riotbox" "${T}/err" || { echo "FAIL: data dir not listed"; cat "${T}/err"; exit 1; }
+          grep -qxF "        ${XDG_DATA_HOME}/riotbox-state" "${T}/err" || { echo "FAIL: state root not listed"; cat "${T}/err"; exit 1; }
+          grep -qF "other sessions" "${T}/err" || { echo "FAIL: warning does not say what is exposed"; cat "${T}/err"; exit 1; }
+          grep -qF "narrower project" "${T}/err" || { echo "FAIL: warning does not suggest a fix"; cat "${T}/err"; exit 1; }
+          [ -d "${RIOTBOX_SESSION_DIR}" ] || { echo "FAIL: the launch did not continue"; exit 1; }
+          echo "ANCESTOR_WARN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ANCESTOR_WARN_OK"
+
+  - name: riotbox mounts warns once about a project that contains the data dir and writes nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          # Script mode reads RIOTBOX_PROJECTS and the system config; keep both hermetic.
+          unset RIOTBOX_PROJECTS
+          export RIOTBOX_SYSCONF_DIR="${T}/etc"
+          RIOTBOX_DRY_RUN=1 "{{.riotbox_dir}}/scripts/mount-projects.sh" --format=triple "${T}" >"${T}/out" 2>"${T}/err"
+          [ "$(grep -c 'contains RiotBox data' "${T}/err")" -eq 1 ] || { echo "FAIL: want exactly one warning"; cat "${T}/err"; exit 1; }
+          grep -q ":/workspace:rw$" "${T}/out" || { echo "FAIL: no mount table"; cat "${T}/out"; exit 1; }
+          # Only RiotBox's own roots: podman, run for the container name, keeps its storage under XDG_DATA_HOME.
+          for d in riotbox riotbox-state riotbox-context-mode; do
+            [ ! -e "${XDG_DATA_HOME}/${d}" ] || { echo "FAIL: dry run created ${d}"; exit 1; }
+          done
+          echo "MOUNTS_WARN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MOUNTS_WARN_OK"
+
+  - name: a project that is the data dir itself warns and names only the data dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${XDG_DATA_HOME}/riotbox"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          RIOTBOX_DRY_RUN=1 setup_projects "${XDG_DATA_HOME}/riotbox" 2>"${T}/err"
+          grep -qF "WARN: project ${XDG_DATA_HOME}/riotbox contains RiotBox data:" "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
+          grep -qxF "        ${XDG_DATA_HOME}/riotbox" "${T}/err" || { echo "FAIL: data dir not listed"; cat "${T}/err"; exit 1; }
+          if grep -qF "riotbox-state" "${T}/err"; then echo "FAIL: listed the state root, which it does not contain"; cat "${T}/err"; exit 1; fi
+          echo "DATA_DIR_WARN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DATA_DIR_WARN_OK"
+
+  - name: a project that contains the state root only through its symlink target warns
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          # riotbox-state moved to "another disk"; the project is that disk.
+          mkdir -p "${T}/disk/state" "${XDG_DATA_HOME}"
+          ln -s "${T}/disk/state" "${XDG_DATA_HOME}/riotbox-state"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          RIOTBOX_DRY_RUN=1 setup_projects "${T}/disk" 2>"${T}/err"
+          grep -qF "WARN: project ${T}/disk contains RiotBox data:" "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
+          grep -qxF "        ${XDG_DATA_HOME}/riotbox-state -> ${T}/disk/state" "${T}/err" || { echo "FAIL: state root and its target not listed"; cat "${T}/err"; exit 1; }
+          if grep -qxF "        ${XDG_DATA_HOME}/riotbox" "${T}/err"; then echo "FAIL: listed the data dir, which it does not contain"; cat "${T}/err"; exit 1; fi
+          echo "SYMLINK_TARGET_WARN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SYMLINK_TARGET_WARN_OK"
+
+  - name: a project that holds the Context Mode ledger root is reported
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          export RIOTBOX_CONTEXT_LEDGER="${PROJ}/ledger"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          RIOTBOX_DRY_RUN=1 setup_projects "${PROJ}" 2>"${T}/err"
+          grep -qF "WARN: project ${PROJ} contains RiotBox data:" "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
+          grep -qxF "        ${PROJ}/ledger" "${T}/err" || { echo "FAIL: ledger root not listed"; cat "${T}/err"; exit 1; }
+          if grep -qF "${XDG_DATA_HOME}" "${T}/err"; then echo "FAIL: listed a root the project does not contain"; cat "${T}/err"; exit 1; fi
+          echo "LEDGER_WARN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEDGER_WARN_OK"
+
+  - name: a project that holds only the link to a root, not its target, is reported
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          # The session cannot read the target, but it can replace the link.
+          mkdir -p "${T}/disk/ledger"
+          ln -s "${T}/disk/ledger" "${PROJ}/ledger"
+          export RIOTBOX_CONTEXT_LEDGER="${PROJ}/ledger"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          RIOTBOX_DRY_RUN=1 setup_projects "${PROJ}" 2>"${T}/err"
+          grep -qF "WARN: project ${PROJ} contains RiotBox data:" "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
+          grep -qxF "        ${PROJ}/ledger -> ${T}/disk/ledger" "${T}/err" || { echo "FAIL: link and target not listed"; cat "${T}/err"; exit 1; }
+          grep -qF "replace the link" "${T}/err" || { echo "FAIL: warning does not cover a held link"; cat "${T}/err"; exit 1; }
+          echo "LINK_ONLY_WARN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LINK_ONLY_WARN_OK"
+
+  - name: a data home path whose .. follows a symlink is resolved the way the kernel does
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          # lnk/.. is deep, not T: collapsing .. before resolving the link would miss it.
+          mkdir -p "${T}/deep/dir"
+          ln -s "${T}/deep/dir" "${T}/lnk"
+          export XDG_DATA_HOME="${T}/lnk/../x"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          RIOTBOX_DRY_RUN=1 setup_projects "${T}/deep" 2>"${T}/err"
+          grep -qF "WARN: project ${T}/deep contains RiotBox data:" "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
+          grep -qF "${T}/deep/x/riotbox-state" "${T}/err" || { echo "FAIL: resolved state root not listed"; cat "${T}/err"; exit 1; }
+          echo "DOTDOT_WARN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DOTDOT_WARN_OK"
+
+  - name: in a project set, only the project that contains a root is warned about, once, and a shared root is listed once
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${XDG_DATA_HOME}"
+          # The ledger set to the data dir: one directory, listed once.
+          export RIOTBOX_CONTEXT_LEDGER="${XDG_DATA_HOME}/riotbox"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          RIOTBOX_DRY_RUN=1 setup_projects "${XDG_DATA_HOME} ${PROJ}" 2>"${T}/err"
+          [ "$(grep -c 'contains RiotBox data' "${T}/err")" -eq 1 ] || { echo "FAIL: want exactly one warning"; cat "${T}/err"; exit 1; }
+          grep -qF "WARN: project ${XDG_DATA_HOME} contains RiotBox data:" "${T}/err" || { echo "FAIL: wrong project named"; cat "${T}/err"; exit 1; }
+          [ "$(grep -cxF "        ${XDG_DATA_HOME}/riotbox" "${T}/err")" -eq 1 ] || { echo "FAIL: the shared root is not listed exactly once"; cat "${T}/err"; exit 1; }
+          [ "$(grep -c 'narrower project' "${T}/err")" -eq 1 ] || { echo "FAIL: advice not printed exactly once"; cat "${T}/err"; exit 1; }
+          echo "PROJECT_SET_WARN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PROJECT_SET_WARN_OK"
+
+  - name: two projects that contain roots share one advice block
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          export RIOTBOX_CONTEXT_LEDGER="${PROJ}/ledger"
+          mkdir -p "${XDG_DATA_HOME}"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          RIOTBOX_DRY_RUN=1 setup_projects "${XDG_DATA_HOME} ${PROJ}" 2>"${T}/err"
+          [ "$(grep -c 'contains RiotBox data' "${T}/err")" -eq 2 ] || { echo "FAIL: want one warning per project"; cat "${T}/err"; exit 1; }
+          [ "$(grep -c 'narrower project' "${T}/err")" -eq 1 ] || { echo "FAIL: advice not printed exactly once"; cat "${T}/err"; exit 1; }
+          echo "SHARED_ADVICE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SHARED_ADVICE_OK"
+
+  - name: a data root of / neither aborts the launch nor warns
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          # A fresh shell, so errexit is live as in launch.sh: a `||` here would disable it.
+          for ledger in / //; do
+            set +e
+            RIOTBOX_CONTEXT_LEDGER="${ledger}" RIOTBOX_DRY_RUN=1 bash -c 'set -euo pipefail; source "$1"; setup_projects "$2"' _ \
+              "{{.riotbox_dir}}/scripts/mount-projects.sh" "${PROJ}" >/dev/null 2>"${T}/err"
+            rc=$?
+            set -e
+            [ "${rc}" -eq 0 ] || { echo "FAIL: ledger ${ledger}: exit ${rc}"; cat "${T}/err"; exit 1; }
+            if grep -qF "contains RiotBox data" "${T}/err"; then echo "FAIL: ledger ${ledger}: warned"; cat "${T}/err"; exit 1; fi
+          done
+          echo "ROOT_LEDGER_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ROOT_LEDGER_OK"
+
+  - name: an unrelated project and one nested inside the data dir print no data warning
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>"${T}/err"
+          if grep -qF "contains RiotBox data" "${T}/err"; then echo "FAIL: warned about an unrelated project"; cat "${T}/err"; exit 1; fi
+          mkdir -p "${XDG_DATA_HOME}/riotbox/nested"
+          RIOTBOX_DRY_RUN=1 setup_projects "${XDG_DATA_HOME}/riotbox/nested" 2>"${T}/err"
+          if grep -qF "contains RiotBox data" "${T}/err"; then echo "FAIL: warned about a project nested in the data dir"; cat "${T}/err"; exit 1; fi
+          echo "NO_DATA_WARN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NO_DATA_WARN_OK"
+
+  - name: setup_projects stops on an unwritable session dir before it migrates or records anything
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'chmod 700 "${SESSION}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          mkdir -p "${SESSION}/headroom" "${T}/shim"
+          echo memory > "${SESSION}/headroom/mem.db"
+          # A session dir left owned by a subordinate UID: setup_projects'
+          # chmod cannot make it writable, so the shim leaves the mode alone.
+          printf '#!/bin/sh\nexit 0\n' > "${T}/shim/chmod"
+          chmod +x "${T}/shim/chmod"
+          chmod 500 "${SESSION}"
+          rc=0
+          (
+            PATH="${T}/shim:${PATH}"
+            source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+            setup_projects "${PROJ}"
+          ) 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "FAIL: exit ${rc}, want 1"; cat "${T}/err"; exit 1; }
+          grep -qF "${SESSION} is not writable" "${T}/err" || { echo "FAIL: no wrong-UID error"; cat "${T}/err"; exit 1; }
+          [ ! -e "${STATE}/.migrated" ] || { echo "FAIL: .migrated written before the check"; cat "${STATE}/.migrated"; exit 1; }
+          [ "$(cat "${SESSION}/headroom/mem.db")" = memory ] || { echo "FAIL: the legacy dir was touched"; exit 1; }
+          if grep -qF 'could not move' "${T}/err"; then echo "FAIL: the migration ran"; cat "${T}/err"; exit 1; fi
+          echo "UNWRITABLE_SESSION_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "UNWRITABLE_SESSION_OK"
+
+  - name: a contended sync or migration lock says what the launch is waiting for, then proceeds
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>/dev/null
+          flock "${STATE}/.sync.lock" sleep 2 &
+          holder=$!
+          sleep 0.5
+          setup_projects "${PROJ}" 2>"${T}/err"
+          wait "${holder}"
+          grep -qF 'Waiting for another launch of this project to finish syncing' "${T}/err" || { echo "FAIL: no waiting message"; cat "${T}/err"; exit 1; }
+          flock "${STATE}/.migrate.lock" sleep 2 &
+          holder=$!
+          sleep 0.5
+          setup_projects "${PROJ}" 2>"${T}/err"
+          wait "${holder}"
+          grep -qF 'Waiting for another RiotBox command on this session to finish migrating' "${T}/err" || { echo "FAIL: no migration waiting message"; cat "${T}/err"; exit 1; }
+          setup_projects "${PROJ}" 2>"${T}/err2"
+          if grep -qF 'Waiting for' "${T}/err2"; then echo "FAIL: an uncontended lock printed the message"; exit 1; fi
+          echo "LOCK_WAIT_MESSAGE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LOCK_WAIT_MESSAGE_OK"
+
+  - name: setup_projects moves legacy headroom and git-ai dirs into the state dir and mounts them from there
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${SESSION}/headroom" "${SESSION}/git-ai"
+          echo memory > "${SESSION}/headroom/mem.db"
+          echo '{}' > "${SESSION}/git-ai/config.json"
+          export RIOTBOX_HEADROOM=1
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>"${T}/err1"
+          [ "$(cat "${STATE}/headroom/mem.db")" = memory ] || { echo "FAIL: headroom not moved"; exit 1; }
+          [ -f "${STATE}/git-ai/config.json" ] || { echo "FAIL: git-ai not moved"; exit 1; }
+          [ ! -e "${SESSION}/headroom" ] && [ ! -e "${SESSION}/git-ai" ] || { echo "FAIL: legacy dir left in the session dir"; exit 1; }
+          [ "$(grep -c '^Notice: moved' "${T}/err1")" -eq 2 ] || { echo "FAIL: want one notice per entry"; cat "${T}/err1"; exit 1; }
+          printf '%s\n' "${PROJECT_VOLUME_FLAGS}" | grep -qF -- "-v ${STATE}/headroom:/home/llm/.headroom:z" || { echo "FAIL: headroom mount"; exit 1; }
+          printf '%s\n' "${PROJECT_VOLUME_FLAGS}" | grep -qF -- "-v ${STATE}/git-ai:/home/llm/.git-ai:z" || { echo "FAIL: git-ai mount"; exit 1; }
+          setup_projects "${PROJ}" 2>"${T}/err2"
+          if grep -qE '^(Notice: moved|Warning)' "${T}/err2"; then echo "FAIL: second launch was not a no-op"; cat "${T}/err2"; exit 1; fi
+          [ "$(cat "${STATE}/headroom/mem.db")" = memory ] || { echo "FAIL: second launch changed the data"; exit 1; }
+          echo "SETUP_MIGRATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_MIGRATE_OK"
+
+  - name: setup_projects removes headroom and git-ai links planted in the session dir without following them
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${SESSION}"
+          ln -s ../../../victim "${SESSION}/headroom"
+          ln -s "${VICTIM}" "${SESSION}/git-ai"
+          [ "$(readlink -f "${SESSION}/headroom")" = "${VICTIM}" ] || { echo "FAIL: fixture link is wrong"; exit 1; }
+          export RIOTBOX_HEADROOM=1
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>"${T}/err"
+          assert_victim_intact
+          for d in headroom git-ai; do
+            [ ! -L "${SESSION}/${d}" ] || { echo "FAIL: ${d}: planted link kept"; exit 1; }
+            [ -d "${STATE}/${d}" ] && [ ! -L "${STATE}/${d}" ] || { echo "FAIL: ${d}: no real state dir"; exit 1; }
+          done
+          if printf '%s\n' "${PROJECT_VOLUME_FLAGS}" | grep -qF -- "${VICTIM}"; then echo "FAIL: the victim is mounted"; exit 1; fi
+          [ "$(grep -c 'not a real directory' "${T}/err")" -eq 2 ] || { echo "FAIL: want one warning per link"; cat "${T}/err"; exit 1; }
+          echo "SETUP_LEGACY_LINKS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_LEGACY_LINKS_OK"
+
+  - name: setup_projects replaces headroom and git-ai links at the state-dir path without following them
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${STATE}"
+          # STATE is ${T}/data/riotbox-state/<key>, so ../../../victim is ${VICTIM}.
+          ln -s ../../../victim "${STATE}/headroom"
+          ln -s "${VICTIM}" "${STATE}/git-ai"
+          [ "$(readlink -f "${STATE}/headroom")" = "${VICTIM}" ] || { echo "FAIL: fixture link is wrong"; exit 1; }
+          export RIOTBOX_HEADROOM=1
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>"${T}/err"
+          assert_victim_intact
+          for d in headroom git-ai; do
+            [ -d "${STATE}/${d}" ] && [ ! -L "${STATE}/${d}" ] || { echo "FAIL: ${d}: link not replaced"; exit 1; }
+          done
+          if printf '%s\n' "${PROJECT_VOLUME_FLAGS}" | grep -qF -- "${VICTIM}"; then echo "FAIL: the victim is mounted"; exit 1; fi
+          echo "SETUP_STATE_LINKS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_STATE_LINKS_OK"
+
+  - name: launch.sh pre-labels the state dir as well as the session dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          source "{{.riotbox_dir}}/tests/lib/chcon-stub.sh"
+          trap 'rm -rf "${T}" "${CHCON_STUB_DIR:-}"' EXIT
+          mkdir -p "${T}/etc"
+          printf '#!/usr/bin/env bash\nexit 0\n' > "${T}/fake-cmd"
+          chmod +x "${T}/fake-cmd"
+          RIOTBOX_DRY_RUN=1 RIOTBOX_PROJECTS="${PROJ}" RIOTBOX_SYSCONF_DIR="${T}/etc" \
+          CONTAINER_CMD="${T}/fake-cmd" IMAGE_NAME=riotbox \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" bash >/dev/null 2>"${T}/err" \
+            || { echo "FAIL: launch failed"; cat "${T}/err"; exit 1; }
+          grep -qF -- " ${STATE}" "${CHCON_MARKER}" || { echo "FAIL: the state dir was not labelled"; cat "${CHCON_MARKER}"; exit 1; }
+          grep -qF -- " ${SESSION}" "${CHCON_MARKER}" || { echo "FAIL: the session dir was not labelled"; exit 1; }
+          echo "CHCON_STATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CHCON_STATE_OK"
+
+  - name: setup_projects moves a legacy overlay tree into the state dir and mounts it from there
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${SESSION}/overlay/project/upper" "${SESSION}/overlay/project/work"
+          echo pending > "${SESSION}/overlay/project/upper/change.txt"
+          export RIOTBOX_OVERLAY=1
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>"${T}/err"
+          [ "$(cat "${STATE}/overlay/project/upper/change.txt")" = pending ] || { echo "FAIL: overlay data not moved"; exit 1; }
+          [ ! -e "${SESSION}/overlay" ] || { echo "FAIL: legacy overlay left in the session dir"; exit 1; }
+          printf '%s\n' "${PROJECT_VOLUME_FLAGS}" | grep -qF -- "-v ${STATE}/overlay/project:/mnt/overlay:z" || { echo "FAIL: overlay mount"; exit 1; }
+          echo "SETUP_OVERLAY_MIGRATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_OVERLAY_MIGRATE_OK"
+
+  - name: setup_projects drops overlay entries planted inside a legacy overlay tree without following them
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${SESSION}/overlay"
+          # A real overlay/ passes migrate_legacy_state; the link one level
+          # down is what the container could have planted.
+          ln -s "${VICTIM}" "${SESSION}/overlay/project"
+          ln -s ../../../../victim "${SESSION}/overlay/other"
+          echo junk > "${SESSION}/overlay/stray"
+          [ "$(readlink -f "${SESSION}/overlay/other")" = "${VICTIM}" ] || { echo "FAIL: fixture link is wrong"; exit 1; }
+          export RIOTBOX_OVERLAY=1
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>"${T}/err"
+          assert_victim_intact
+          [ -d "${STATE}/overlay/project/upper" ] && [ ! -L "${STATE}/overlay/project" ] || { echo "FAIL: no real overlay dir"; exit 1; }
+          [ ! -e "${STATE}/overlay/other" ] && [ ! -L "${STATE}/overlay/other" ] || { echo "FAIL: planted link kept"; exit 1; }
+          [ ! -e "${STATE}/overlay/stray" ] || { echo "FAIL: planted file kept"; exit 1; }
+          [ "$(grep -c 'not a real directory' "${T}/err")" -eq 3 ] || { echo "FAIL: want one warning per entry"; cat "${T}/err"; exit 1; }
+          echo "SETUP_OVERLAY_PLANTED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_OVERLAY_PLANTED_OK"
+
+  - name: setup_projects replaces overlay links at the state-dir path without following them
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          export RIOTBOX_OVERLAY=1
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          for kind in relative absolute; do
+            rm -rf "${STATE}"
+            mkdir -p "${STATE}"
+            case "${kind}" in
+              relative) ln -s ../../../victim "${STATE}/overlay" ;;
+              absolute) ln -s "${VICTIM}" "${STATE}/overlay" ;;
+            esac
+            [ "$(readlink -f "${STATE}/overlay")" = "${VICTIM}" ] || { echo "FAIL: ${kind}: fixture link is wrong"; exit 1; }
+            setup_projects "${PROJ}" 2>"${T}/err"
+            assert_victim_intact
+            [ -d "${STATE}/overlay/project/upper" ] && [ ! -L "${STATE}/overlay" ] || { echo "FAIL: ${kind}: link not replaced"; exit 1; }
+          done
+          echo "SETUP_OVERLAY_STATE_LINK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_OVERLAY_STATE_LINK_OK"
+
+  - name: setup_projects moves legacy opencode and Pi dirs into the state dir and keeps Pi's history
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${SESSION}/.config-opencode" "${SESSION}/.local-share-opencode/storage" "${SESSION}/.pi-agent/sessions"
+          echo '{}' > "${SESSION}/.config-opencode/opencode.json"
+          echo usage > "${SESSION}/.local-share-opencode/storage/msg"
+          echo history > "${SESSION}/.pi-agent/sessions/one.jsonl"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>"${T}/err"
+          [ "$(cat "${STATE}/opencode-data/storage/msg")" = usage ] || { echo "FAIL: opencode data not moved"; exit 1; }
+          [ "$(cat "${STATE}/pi-agent/sessions/one.jsonl")" = history ] || { echo "FAIL: Pi history not moved"; exit 1; }
+          [ -d "${STATE}/opencode-config" ] || { echo "FAIL: opencode config not moved"; exit 1; }
+          for legacy in .config-opencode .local-share-opencode .pi-agent; do
+            [ ! -e "${SESSION}/${legacy}" ] || { echo "FAIL: ${legacy} left in the session dir"; exit 1; }
+          done
+          [ "$(grep -c '^Notice: moved' "${T}/err")" -eq 3 ] || { echo "FAIL: want one notice per entry"; cat "${T}/err"; exit 1; }
+          echo "SETUP_AGENT_MIGRATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_AGENT_MIGRATE_OK"
+
+  - name: setup_projects removes opencode and Pi links planted in the session dir without following them
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${SESSION}"
+          ln -s ../../../victim "${SESSION}/.config-opencode"
+          ln -s "${VICTIM}" "${SESSION}/.pi-agent"
+          ln -s ../nowhere "${SESSION}/.local-share-opencode"
+          [ "$(readlink -f "${SESSION}/.config-opencode")" = "${VICTIM}" ] || { echo "FAIL: fixture link is wrong"; exit 1; }
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>"${T}/err"
+          assert_victim_intact
+          for legacy in .config-opencode .local-share-opencode .pi-agent; do
+            [ ! -e "${SESSION}/${legacy}" ] && [ ! -L "${SESSION}/${legacy}" ] || { echo "FAIL: ${legacy} kept"; exit 1; }
+          done
+          if printf '%s\n' "${PROJECT_VOLUME_FLAGS}" | grep -qF -- "${VICTIM}"; then echo "FAIL: the victim is mounted"; exit 1; fi
+          echo "SETUP_AGENT_LINKS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SETUP_AGENT_LINKS_OK"
+
+  - name: with every feature on, no mount source except the session dir itself lies inside the session dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${HOME}/.config/opencode" "${HOME}/.local/share/opencode" "${HOME}/.pi/agent" "${HOME}/.claude/plugins"
+          echo '{}' > "${HOME}/.local/share/opencode/auth.json"
+          echo '{}' > "${HOME}/.pi/agent/auth.json"
+          echo '{}' > "${HOME}/.claude/.credentials.json"
+          export RIOTBOX_HEADROOM=1 RIOTBOX_OVERLAY=1
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>/dev/null
+          n=0
+          # shellcheck disable=SC2086 # the flag string is word-split by design
+          set -- ${PROJECT_VOLUME_FLAGS}
+          while [ $# -ge 2 ]; do
+            case "$1" in
+              -v) ;;
+              -v*|--volume*|--mount*) echo "FAIL: unparsed mount flag: $1"; exit 1 ;;
+              *) shift; continue ;;
+            esac
+            src="$(realpath -m -- "${2%%:*}")"; shift 2
+            n=$((n + 1))
+            [ "${src}" = "$(realpath -m -- "${SESSION}")" ] && continue
+            case "${src}/" in
+              "$(realpath -m -- "${SESSION}")/"*) echo "FAIL: ${src} is nested in the session dir"; exit 1 ;;
+              *) ;;
+            esac
+          done
+          [ "${n}" -ge 8 ] || { echo "FAIL: only ${n} mounts; a feature is off"; echo "${PROJECT_VOLUME_FLAGS}"; exit 1; }
+          echo "NO_NESTED_SOURCES_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NO_NESTED_SOURCES_OK"
+
+  # ── Concurrent launches ──────────────────────────────────────────────────
+  # Sessions of one project share the session dir and the state dir, and the
+  # user starts several at once. Each agent sync removes its old copy and
+  # renames a fresh one into place, so two unserialized syncs collide: one
+  # rename finds the other's copy already there and aborts as if tampered
+  # with. setup_projects serializes the host_sync loop per project.
+  - name: concurrent setup_projects runs of one project all succeed
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${HOME}/.claude/rules" "${HOME}/.claude/skills/s" \
+              "${HOME}/.config/opencode/agents" "${HOME}/.pi/agent/skills/s"
+          echo rule >"${HOME}/.claude/rules/r.md"
+          echo skill >"${HOME}/.claude/skills/s/SKILL.md"
+          echo agent >"${HOME}/.config/opencode/agents/a.md"
+          echo skill >"${HOME}/.pi/agent/skills/s/SKILL.md"
+          echo '{"host":true}' >"${HOME}/.claude.json"
+          failed=0
+          for i in $(seq 1 20); do
+              for run in a b; do
+                  (
+                      source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+                      setup_projects "${PROJ}"
+                  ) >/dev/null 2>"${T}/err.${i}.${run}" &
+              done
+              for job in $(jobs -p); do
+                  wait "${job}" || { failed=$((failed + 1)); cat "${T}/err.${i}".*; }
+              done
+          done
+          [ "${failed}" -eq 0 ] || { echo "FAIL: ${failed} of 40 runs failed"; exit 1; }
+          [ -f "${SESSION}/rules/r.md" ] && [ -f "${SESSION}/skills/s/SKILL.md" ] || { echo "FAIL: claude copies missing"; exit 1; }
+          ! ls -A "${XDG_DATA_HOME}/riotbox" "${STATE}" | grep -vx '\.sync\.lock' | grep -q '^\.\(claude-\)\?sync\.' || { echo "FAIL: staging dir left behind"; exit 1; }
+          echo "CONCURRENT_SYNC_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CONCURRENT_SYNC_OK"
+
+  # ── .projects ────────────────────────────────────────────────────────────
+  # setup_projects rewrites <session>/.projects on every launch, and the
+  # container can replace it with a link or a directory at any moment.
+
+  - name: setup_projects replaces a .projects link planted in the session dir without following it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          for kind in relative absolute; do
+            rm -rf "${SESSION}"
+            mkdir -p "${SESSION}"
+            # SESSION is ${T}/data/riotbox/<key>; three levels up is ${T}.
+            case "${kind}" in
+              relative) ln -s ../../../victim/keep "${SESSION}/.projects" ;;
+              absolute) ln -s "${VICTIM}/keep" "${SESSION}/.projects" ;;
+            esac
+            [ "$(readlink -f "${SESSION}/.projects")" = "${VICTIM}/keep" ] || { echo "FAIL: ${kind}: fixture link is wrong"; exit 1; }
+            setup_projects "${PROJ}" 2>"${T}/err"
+            assert_victim_intact
+            [ -f "${SESSION}/.projects" ] && [ ! -L "${SESSION}/.projects" ] || { echo "FAIL: ${kind}: .projects is not a regular file"; exit 1; }
+            [ "$(cat "${SESSION}/.projects")" = "${PROJ}" ] || { echo "FAIL: ${kind}: .projects does not hold the project path"; exit 1; }
+          done
+          echo "PROJECTS_LINK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PROJECTS_LINK_OK"
+
+  - name: setup_projects replaces a .projects directory planted in the session dir with a warning
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${SESSION}/.projects/sub"
+          ln -s "${VICTIM}" "${SESSION}/.projects/sub/link"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>"${T}/err"
+          grep -qF "Warning: ${SESSION}/.projects is not a regular file; removing it." "${T}/err" || { echo "FAIL: no warning naming the path"; cat "${T}/err"; exit 1; }
+          [ -f "${SESSION}/.projects" ] && [ ! -L "${SESSION}/.projects" ] || { echo "FAIL: .projects is not a regular file"; exit 1; }
+          [ "$(cat "${SESSION}/.projects")" = "${PROJ}" ] || { echo "FAIL: .projects does not hold the project path"; exit 1; }
+          assert_victim_intact
+          if ls -A "${XDG_DATA_HOME}/riotbox" "${SESSION}" | grep -q '^\.projects\.'; then echo "FAIL: temp file left behind"; exit 1; fi
+          echo "PROJECTS_DIR_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PROJECTS_DIR_OK"
+
+  - name: session_projects reads at most 64 KiB of an oversized .projects, quickly
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${SESSION}"
+          printf '%s\n' "${PROJ}" > "${SESSION}/.projects"
+          truncate -s 200M "${SESSION}/.projects"
+          rc=0
+          timeout 20 bash -c 'source "$1"; session_projects "$2" > "$3"' _ \
+              "{{.riotbox_dir}}/scripts/lib/session-state.sh" "${SESSION}" "${T}/out" 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 0 ] || { echo "FAIL: exit ${rc}"; cat "${T}/err"; exit 1; }
+          size="$(stat -c '%s' "${T}/out")"
+          [ "${size}" -le 65536 ] || { echo "FAIL: printed ${size} bytes"; exit 1; }
+          [ "$(head -n 1 "${T}/out")" = "${PROJ}" ] || { echo "FAIL: the project line is missing"; exit 1; }
+          echo "PROJECTS_CAPPED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PROJECTS_CAPPED_OK"
+
+  - name: session_projects never hangs on a FIFO swapped in for .projects
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          mkdir -p "${SESSION}"
+          printf '%s\n' "${PROJ}" > "${SESSION}/.projects"
+          # What a running container can do: keep renaming a FIFO and a
+          # regular file over .projects, so one lands between the type test
+          # and the open.
+          python3 -I -c '
+          import os, sys
+          dest, fifo, reg = sys.argv[1], sys.argv[1] + ".f", sys.argv[1] + ".r"
+          while True:
+              os.mkfifo(fifo)
+              os.rename(fifo, dest)
+              with open(reg, "w") as f:
+                  f.write(sys.argv[2] + "\n")
+              os.rename(reg, dest)
+          ' "${SESSION}/.projects" "${PROJ}" &
+          racer=$!
+          trap 'kill "${racer}" 2>/dev/null || true; wait "${racer}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          rc=0
+          timeout 30 bash -c 'source "$1"; for _ in $(seq 1 1000); do session_projects "$2" >/dev/null || true; done' _ \
+              "{{.riotbox_dir}}/scripts/lib/session-state.sh" "${SESSION}" || rc=$?
+          [ "${rc}" -ne 124 ] || { echo "FAIL: session_projects hung on a FIFO"; exit 1; }
+          [ "${rc}" -eq 0 ] || { echo "FAIL: exit ${rc}"; exit 1; }
+          echo "PROJECTS_FIFO_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PROJECTS_FIFO_OK"
+
+  # ── One-shot migration marker ────────────────────────────────────────────
+  # Migration imports session-dir content into the host-only state dir as
+  # trusted data, so it must run only for a session dir an older RiotBox
+  # left behind, never for what a running container plants later.
+  # migrate_session_state records a finished migration in <state>/.migrated.
+
+  - name: a relaunch and the overlay commands never import legacy entries planted after the first launch
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          RIOTBOX_READONLY=1 setup_projects "${PROJ}" 2>/dev/null
+          [ -f "${STATE}/.migrated" ] || { echo "FAIL: first launch wrote no marker"; exit 1; }
+          # What a RIOTBOX_READONLY=1 session can do to its ~/.claude.
+          mkdir -p "${SESSION}/overlay/project/upper" "${SESSION}/.pi-agent"
+          echo 'echo pwned' > "${SESSION}/overlay/project/upper/injected.sh"
+          echo '{}' > "${SESSION}/.pi-agent/settings.json"
+          before="$(find "${STATE}" -printf '%P %y %s\n' | sort)"
+          RIOTBOX_READONLY=1 setup_projects "${PROJ}" 2>"${T}/err"
+          rc=0
+          "{{.riotbox_dir}}/scripts/overlay.sh" list >"${T}/list" 2>>"${T}/err" || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "FAIL: overlays exit ${rc}, want 1 (none pending)"; cat "${T}/list" "${T}/err"; exit 1; }
+          rc=0
+          "{{.riotbox_dir}}/scripts/overlay.sh" diff "${PROJ}" >/dev/null 2>>"${T}/err" || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "FAIL: overlay-diff exit ${rc}, want 1"; exit 1; }
+          after="$(find "${STATE}" -printf '%P %y %s\n' | sort)"
+          [ "${before}" = "${after}" ] || { echo "FAIL: the state dir changed"; diff <(printf '%s\n' "${before}") <(printf '%s\n' "${after}"); exit 1; }
+          if grep -qF injected "${T}/list"; then echo "FAIL: overlays listed the planted overlay"; exit 1; fi
+          if grep -qF 'Notice: moved' "${T}/err"; then echo "FAIL: something was imported"; cat "${T}/err"; exit 1; fi
+          [ -f "${SESSION}/overlay/project/upper/injected.sh" ] && [ -f "${SESSION}/.pi-agent/settings.json" ] || { echo "FAIL: the planted entries were touched"; exit 1; }
+          echo "NO_REIMPORT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "NO_REIMPORT_OK"
+
+  - name: migrate_session_state does not record a pair that failed hard, so the next run retries it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${SESSION}" "${STATE}" "${T}/shim"
+          ln -s "${VICTIM}" "${SESSION}/headroom"
+          printf '#!/bin/sh\necho "rm: simulated failure" >&2\nexit 1\n' > "${T}/shim/rm"
+          chmod +x "${T}/shim/rm"
+          rc=0
+          PATH="${T}/shim:${PATH}" migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err" || rc=$?
+          [ "${rc}" -ne 0 ] || { echo "FAIL: a failed removal returned 0"; exit 1; }
+          if grep -qxF headroom "${STATE}/.migrated" 2>/dev/null; then echo "FAIL: the failed pair was recorded"; exit 1; fi
+          migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err"
+          [ ! -e "${SESSION}/headroom" ] && [ ! -L "${SESSION}/headroom" ] || { echo "FAIL: the retry did not remove the link"; exit 1; }
+          grep -qxF headroom "${STATE}/.migrated" || { echo "FAIL: the retry did not record the pair"; exit 1; }
+          assert_victim_intact
+          echo "MARKER_RETRY_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MARKER_RETRY_OK"
+
+  - name: a pair added after a session was marked migrates once, and the old pairs are not re-imported
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${SESSION}" "${STATE}"
+          migrate_session_state "${SESSION}" "${STATE}" 2>/dev/null
+          # Planted after marking: an old pair, and the legacy path of a pair
+          # a later release adds.
+          mkdir -p "${SESSION}/headroom" "${SESSION}/.newlegacy"
+          echo planted > "${SESSION}/headroom/mem.db"
+          echo legacy > "${SESSION}/.newlegacy/data"
+          SESSION_STATE_MIGRATIONS+=(.newlegacy:newstate)
+          migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err"
+          [ "$(cat "${STATE}/newstate/data" 2>/dev/null)" = legacy ] || { echo "FAIL: the new pair was not migrated"; cat "${T}/err"; exit 1; }
+          [ ! -e "${STATE}/headroom" ] || { echo "FAIL: an old pair was re-imported"; exit 1; }
+          [ -f "${SESSION}/headroom/mem.db" ] || { echo "FAIL: the planted old entry was touched"; exit 1; }
+          grep -qxF .newlegacy "${STATE}/.migrated" || { echo "FAIL: the new pair was not recorded"; cat "${STATE}/.migrated"; exit 1; }
+          [ "$(grep -c '^Notice: moved' "${T}/err")" -eq 1 ] || { echo "FAIL: want exactly one move"; cat "${T}/err"; exit 1; }
+          mkdir -p "${SESSION}/.newlegacy"
+          echo again > "${SESSION}/.newlegacy/again"
+          migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err2"
+          [ ! -e "${STATE}/newstate/again" ] || { echo "FAIL: the new pair was imported twice"; exit 1; }
+          [ ! -s "${T}/err2" ] || { echo "FAIL: a recorded pair ran again"; cat "${T}/err2"; exit 1; }
+          echo "MARKER_NEW_PAIR_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MARKER_NEW_PAIR_OK"
+
+  - name: a marker whose last line has no newline still counts that entry, and the append keeps one name per line
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${SESSION}/headroom" "${SESSION}/overlay/project/upper" "${SESSION}/.newlegacy" "${STATE}"
+          echo planted > "${SESSION}/headroom/mem.db"
+          echo planted > "${SESSION}/overlay/project/upper/injected.sh"
+          echo legacy > "${SESSION}/.newlegacy/data"
+          printf '%s\n' "${SESSION_STATE_MIGRATIONS[@]%%:*}" | head -c -1 > "${STATE}/.migrated"
+          [ -n "$(tail -c 1 "${STATE}/.migrated")" ] || { echo "FAIL: fixture ends in a newline"; exit 1; }
+          SESSION_STATE_MIGRATIONS+=(.newlegacy:newstate)
+          migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err"
+          [ ! -e "${STATE}/overlay" ] || { echo "FAIL: the unterminated last entry ran again"; exit 1; }
+          [ ! -e "${STATE}/headroom" ] || { echo "FAIL: a recorded pair was re-imported"; exit 1; }
+          [ "$(cat "${STATE}/newstate/data")" = legacy ] || { echo "FAIL: the new pair was not migrated"; exit 1; }
+          want="$(printf '%s\n' "${SESSION_STATE_MIGRATIONS[@]%%:*}")"
+          [ "$(cat "${STATE}/.migrated")" = "${want}" ] || { echo "FAIL: marker is not one name per line"; od -c "${STATE}/.migrated" | tail -5; exit 1; }
+          echo "MARKER_NO_NEWLINE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MARKER_NO_NEWLINE_OK"
+
+  - name: setup_projects names the step that failed when .projects cannot be installed, and leaves no temp file
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/shim"
+          # Fails only the rename onto .projects, as a directory re-planted
+          # after the removal would.
+          printf '#!/bin/sh\nfor a; do case "$a" in */.projects) echo "mv: simulated failure" >&2; exit 1 ;; esac; done\nexec /usr/bin/mv "$@"\n' > "${T}/shim/mv"
+          chmod +x "${T}/shim/mv"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          rc=0
+          PATH="${T}/shim:${PATH}" setup_projects "${PROJ}" 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "FAIL: exit ${rc}, want 1"; exit 1; }
+          grep -qF "Error: could not rename the project list onto ${SESSION}/.projects" "${T}/err" || { echo "FAIL: no error naming the step and path"; cat "${T}/err"; exit 1; }
+          if grep -qF 'another process' "${T}/err"; then echo "FAIL: blames another process"; exit 1; fi
+          if ls -A "${XDG_DATA_HOME}/riotbox" | grep -q '^\.projects\.'; then echo "FAIL: temp file left behind"; exit 1; fi
+          echo "PROJECTS_INSTALL_ERROR_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PROJECTS_INSTALL_ERROR_OK"
+
+  - name: concurrent first launches of a legacy-layout session record every migration
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          want="$(printf '%s\n' "${SESSION_STATE_MIGRATIONS[@]%%:*}" | sort)"
+          failed=0
+          for i in $(seq 1 20); do
+              rm -rf "${SESSION}" "${STATE}"
+              mkdir -p "${SESSION}/headroom" "${SESSION}/git-ai" "${SESSION}/.config-opencode" \
+                  "${SESSION}/.local-share-opencode" "${SESSION}/.pi-agent" "${SESSION}/overlay/project/upper"
+              printf '%s\n' "${PROJ}" > "${SESSION}/.projects"
+              for run in a b; do
+                  (
+                      source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+                      setup_projects "${PROJ}"
+                  ) >/dev/null 2>"${T}/err.${i}.${run}" &
+              done
+              for job in $(jobs -p); do
+                  wait "${job}" || { failed=$((failed + 1)); cat "${T}/err.${i}".*; }
+              done
+              got="$(sort "${STATE}/.migrated")"
+              [ "${got}" = "${want}" ] || { echo "FAIL: round ${i}: .migrated is"; cat "${STATE}/.migrated"; exit 1; }
+          done
+          [ "${failed}" -eq 0 ] || { echo "FAIL: ${failed} of 40 runs failed"; exit 1; }
+          echo "CONCURRENT_MIGRATE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CONCURRENT_MIGRATE_OK"
+
+  - name: migrate_session_state records a run that left both dirs in place and warns only once, then notices
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${SESSION}/git-ai" "${STATE}/git-ai"
+          echo old > "${SESSION}/git-ai/config.json"
+          migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err1"
+          grep -qF "both ${SESSION}/git-ai and ${STATE}/git-ai exist" "${T}/err1" || { echo "FAIL: no warning"; cat "${T}/err1"; exit 1; }
+          [ -f "${STATE}/.migrated" ] || { echo "FAIL: a warning blocked the marker"; exit 1; }
+          if grep -qF 'Notice:' "${T}/err1"; then echo "FAIL: the first run also printed a notice"; cat "${T}/err1"; exit 1; fi
+          migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err2"
+          if grep -qF 'Warning:' "${T}/err2"; then echo "FAIL: the second run warned again"; cat "${T}/err2"; exit 1; fi
+          [ "$(wc -l < "${T}/err2")" -eq 1 ] || { echo "FAIL: want one notice line"; cat "${T}/err2"; exit 1; }
+          [ -d "${SESSION}/git-ai" ] && [ -d "${STATE}/git-ai" ] || { echo "FAIL: a dir was touched"; exit 1; }
+          echo "MARKER_WARN_ONCE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MARKER_WARN_ONCE_OK"
+
+  - name: the marker works when the user links the state key dir to another disk
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/otherdisk/${KEY}" "${XDG_DATA_HOME}/riotbox-state" "${SESSION}/headroom"
+          echo legacy > "${SESSION}/headroom/mem.db"
+          ln -s "${T}/otherdisk/${KEY}" "${STATE}"
+          export RIOTBOX_HEADROOM=1 RIOTBOX_GIT_AI=0
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>/dev/null
+          [ -L "${STATE}" ] || { echo "FAIL: the user's link was replaced"; exit 1; }
+          [ "$(cat "${T}/otherdisk/${KEY}/headroom/mem.db")" = legacy ] || { echo "FAIL: first launch did not migrate"; exit 1; }
+          [ -f "${T}/otherdisk/${KEY}/.migrated" ] || { echo "FAIL: no marker on the other disk"; exit 1; }
+          # git-ai is off, so only a migration would create its state dir.
+          mkdir -p "${SESSION}/git-ai"
+          echo '{}' > "${SESSION}/git-ai/config.json"
+          setup_projects "${PROJ}" 2>"${T}/err"
+          [ ! -e "${T}/otherdisk/${KEY}/git-ai" ] || { echo "FAIL: the planted git-ai dir was imported"; exit 1; }
+          [ -f "${SESSION}/git-ai/config.json" ] || { echo "FAIL: the planted entry was touched"; exit 1; }
+          echo "MARKER_KEY_LINK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MARKER_KEY_LINK_OK"
+
+  # ── failed moves and riotbox session-migrate ────────────────────────────
+  # A pair whose legacy data stays stranded (the move failed, or both copies
+  # exist) is recorded as "<name>" plus "failed:<name>". The plain line keeps
+  # every launch and overlay command from retrying it, so a container cannot
+  # hold the import window open by forcing failures; the failed: line drives a
+  # per-launch notice and lets the user retry with libexec/migrate-session.sh.
+  # The mv shim fails only the move of ${FAIL_MV} and logs each attempt.
+
+  - name: a failed move is recorded as failed, and the next launch prints a notice instead of retrying it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          write_failing_mv_shim
+          export FAIL_MV="${SESSION}/headroom"
+          mkdir -p "${SESSION}/headroom"
+          echo keep > "${SESSION}/headroom/mem.db"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          PATH="${T}/shim:${PATH}" setup_projects "${PROJ}" 2>"${T}/err1"
+          grep -qF "could not move ${SESSION}/headroom" "${T}/err1" || { echo "FAIL: no warning"; cat "${T}/err1"; exit 1; }
+          grep -qF 'riotbox session-migrate' "${T}/err1" || { echo "FAIL: the warning does not name session-migrate"; cat "${T}/err1"; exit 1; }
+          grep -qF "mv -T -- ${SESSION}/headroom ${STATE}/headroom" "${T}/err1" || { echo "FAIL: the manual command is gone"; cat "${T}/err1"; exit 1; }
+          grep -qxF headroom "${STATE}/.migrated" || { echo "FAIL: the pair is not closed to automatic runs"; cat "${STATE}/.migrated"; exit 1; }
+          [ "$(grep -x 'headroom\|failed:headroom' "${STATE}/.migrated" | tail -n 1)" = failed:headroom ] || { echo "FAIL: the pair is not recorded as failed"; cat "${STATE}/.migrated"; exit 1; }
+          [ "$(wc -l < "${MV_LOG}")" -eq 1 ] || { echo "FAIL: want one attempt"; exit 1; }
+          PATH="${T}/shim:${PATH}" setup_projects "${PROJ}" 2>"${T}/err2"
+          [ "$(wc -l < "${MV_LOG}")" -eq 1 ] || { echo "FAIL: the next launch retried the move"; exit 1; }
+          if grep -qF 'could not move' "${T}/err2"; then echo "FAIL: the warning printed again"; cat "${T}/err2"; exit 1; fi
+          [ "$(grep -c "${SESSION}/headroom" "${T}/err2")" -eq 1 ] || { echo "FAIL: want one notice line"; cat "${T}/err2"; exit 1; }
+          grep -F "${SESSION}/headroom" "${T}/err2" | grep -qF "riotbox session-migrate ${PROJ}" || { echo "FAIL: the notice does not name the command for this project"; cat "${T}/err2"; exit 1; }
+          [ "$(cat "${SESSION}/headroom/mem.db")" = keep ] || { echo "FAIL: legacy data lost"; exit 1; }
+          echo "FAILED_RECORDED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAILED_RECORDED_OK"
+
+  - name: a failed pair whose legacy entry is emptied, removed or replaced by a link gets no notice and is dropped
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          write_failing_mv_shim
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          for name in headroom git-ai .pi-agent; do
+              mkdir -p "${SESSION}/${name}"
+              echo keep > "${SESSION}/${name}/f"
+          done
+          FAIL_MV="${SESSION}/headroom ${SESSION}/git-ai ${SESSION}/.pi-agent" PATH="${T}/shim:${PATH}" setup_projects "${PROJ}" 2>/dev/null
+          for name in headroom git-ai .pi-agent; do
+              grep -qxF "failed:${name}" "${STATE}/.migrated" || { echo "FAIL: fixture: ${name} not failed"; cat "${STATE}/.migrated"; exit 1; }
+          done
+          # Emptied (as podman leaves a mountpoint), removed, and a link.
+          rm -f "${SESSION}/headroom/f"
+          rm -rf "${SESSION}/git-ai"
+          rm -rf "${SESSION}/.pi-agent"
+          ln -s "${VICTIM}" "${SESSION}/.pi-agent"
+          setup_projects "${PROJ}" 2>"${T}/err"
+          for name in headroom git-ai .pi-agent; do
+              if grep -qF "${SESSION}/${name}" "${T}/err"; then echo "FAIL: ${name}: a notice or warning printed"; cat "${T}/err"; exit 1; fi
+              [ "$(grep -x "${name}\|failed:${name}" "${STATE}/.migrated" | tail -n 1)" = "${name}" ] || { echo "FAIL: ${name}: still failed"; cat "${STATE}/.migrated"; exit 1; }
+          done
+          [ -L "${SESSION}/.pi-agent" ] || { echo "FAIL: the launch touched the link"; exit 1; }
+          [ ! -e "${STATE}/pi-agent/keep" ] || { echo "FAIL: the link was followed"; exit 1; }
+          assert_victim_intact
+          setup_projects "${PROJ}" 2>"${T}/err2"
+          if grep -qF "${SESSION}/" "${T}/err2"; then echo "FAIL: a dropped pair came back"; cat "${T}/err2"; exit 1; fi
+          echo "FAILED_DROPPED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "FAILED_DROPPED_OK"
+
+  - name: session-migrate after the cause is fixed moves the data, records it done and silences the notice
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          write_failing_mv_shim
+          export FAIL_MV="${SESSION}/headroom"
+          mkdir -p "${SESSION}/headroom"
+          echo keep > "${SESSION}/headroom/mem.db"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          PATH="${T}/shim:${PATH}" setup_projects "${PROJ}" 2>/dev/null
+          rc=0
+          (cd "${PROJ}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/out" 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 0 ] || { echo "FAIL: exit ${rc}, want 0"; cat "${T}/out" "${T}/err"; exit 1; }
+          grep -qF "Notice: moved ${SESSION}/headroom to ${STATE}/headroom" "${T}/err" || { echo "FAIL: no move notice"; cat "${T}/err"; exit 1; }
+          [ "$(cat "${STATE}/headroom/mem.db")" = keep ] || { echo "FAIL: the data did not move"; exit 1; }
+          [ ! -e "${SESSION}/headroom" ] || { echo "FAIL: the legacy dir is still there"; exit 1; }
+          [ "$(grep -x 'headroom\|failed:headroom' "${STATE}/.migrated" | tail -n 1)" = headroom ] || { echo "FAIL: not recorded done"; cat "${STATE}/.migrated"; exit 1; }
+          setup_projects "${PROJ}" 2>"${T}/err2"
+          if grep -qF "${SESSION}/headroom" "${T}/err2"; then echo "FAIL: the next launch still names the legacy path"; cat "${T}/err2"; exit 1; fi
+          echo "MIGRATE_RETRY_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_RETRY_OK"
+
+  - name: session-migrate with nothing pending prints Nothing to migrate and exits 0
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          rc=0
+          (cd "${PROJ}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/out0" 2>&1 || rc=$?
+          [ "${rc}" -eq 0 ] || { echo "FAIL: no session: exit ${rc}"; cat "${T}/out0"; exit 1; }
+          grep -qF "No session dir found for ${PROJ}." "${T}/out0" || { echo "FAIL: no session: wrong message"; cat "${T}/out0"; exit 1; }
+          [ ! -e "${STATE}" ] || { echo "FAIL: created a state dir"; exit 1; }
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>/dev/null
+          before="$(cat "${STATE}/.migrated")"
+          (cd "${PROJ}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/out" 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 0 ] || { echo "FAIL: exit ${rc}"; cat "${T}/out" "${T}/err"; exit 1; }
+          [ "$(cat "${T}/out")" = "Nothing to migrate." ] || { echo "FAIL: stdout is"; cat "${T}/out"; exit 1; }
+          [ ! -s "${T}/err" ] || { echo "FAIL: stderr is not empty"; cat "${T}/err"; exit 1; }
+          [ "$(cat "${STATE}/.migrated")" = "${before}" ] || { echo "FAIL: the marker changed"; exit 1; }
+          echo "MIGRATE_NOTHING_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_NOTHING_OK"
+
+  - name: session-migrate while the cause persists exits 1 with the recovery text and keeps the pair failed
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          write_failing_mv_shim
+          export FAIL_MV="${SESSION}/headroom"
+          mkdir -p "${SESSION}/headroom"
+          echo keep > "${SESSION}/headroom/mem.db"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          PATH="${T}/shim:${PATH}" setup_projects "${PROJ}" 2>/dev/null
+          rc=0
+          (cd "${PROJ}" && PATH="${T}/shim:${PATH}" bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/out" 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "FAIL: exit ${rc}, want 1"; cat "${T}/out" "${T}/err"; exit 1; }
+          [ "$(wc -l < "${MV_LOG}")" -eq 2 ] || { echo "FAIL: want exactly one retry"; exit 1; }
+          grep -qF "could not move ${SESSION}/headroom" "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
+          grep -qF 'simulated failure' "${T}/err" || { echo "FAIL: mv's own error was dropped"; cat "${T}/err"; exit 1; }
+          grep -qF "mv -T -- ${SESSION}/headroom ${STATE}/headroom" "${T}/err" || { echo "FAIL: no recovery command"; cat "${T}/err"; exit 1; }
+          [ "$(grep -x 'headroom\|failed:headroom' "${STATE}/.migrated" | tail -n 1)" = failed:headroom ] || { echo "FAIL: no longer failed"; cat "${STATE}/.migrated"; exit 1; }
+          [ "$(cat "${SESSION}/headroom/mem.db")" = keep ] || { echo "FAIL: legacy data lost"; exit 1; }
+          if grep -qF 'Nothing to migrate' "${T}/out"; then echo "FAIL: claims nothing pending"; exit 1; fi
+          echo "MIGRATE_STILL_FAILS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_STILL_FAILS_OK"
+
+  - name: both copies existing counts as failed, notices until resolved, and session-migrate explains how to resolve it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${SESSION}/git-ai" "${STATE}/git-ai" "${SESSION}/headroom" "${STATE}/headroom"
+          echo old > "${SESSION}/git-ai/config.json"
+          echo new > "${STATE}/git-ai/config.json"
+          echo old > "${SESSION}/headroom/mem.db"
+          echo new > "${STATE}/headroom/mem.db"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>"${T}/err1"
+          grep -qF "both ${SESSION}/git-ai and ${STATE}/git-ai exist" "${T}/err1" || { echo "FAIL: no warning"; cat "${T}/err1"; exit 1; }
+          grep -qxF failed:git-ai "${STATE}/.migrated" || { echo "FAIL: not recorded failed"; cat "${STATE}/.migrated"; exit 1; }
+          setup_projects "${PROJ}" 2>"${T}/err2"
+          if grep -qF 'Warning: both' "${T}/err2"; then echo "FAIL: the warning printed again"; cat "${T}/err2"; exit 1; fi
+          grep -F "${SESSION}/git-ai" "${T}/err2" | grep -qF 'riotbox session-migrate' || { echo "FAIL: no notice"; cat "${T}/err2"; exit 1; }
+          grep -F "${SESSION}/git-ai" "${T}/err2" | grep -qF 'two copies' || { echo "FAIL: the notice does not say two copies need resolving"; cat "${T}/err2"; exit 1; }
+          if grep -F "${SESSION}/git-ai" "${T}/err2" | grep -qF 'once the cause is fixed'; then echo "FAIL: the notice talks of a cause"; cat "${T}/err2"; exit 1; fi
+          rc=0
+          (cd "${PROJ}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/out" 2>"${T}/err3" || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "FAIL: exit ${rc}, want 1"; cat "${T}/out" "${T}/err3"; exit 1; }
+          grep -qF "diff -rq ${SESSION}/git-ai ${STATE}/git-ai" "${T}/err3" || { echo "FAIL: no compare command"; cat "${T}/err3"; exit 1; }
+          grep -qF 'README' "${T}/err3" || { echo "FAIL: no README pointer"; cat "${T}/err3"; exit 1; }
+          [ "$(cat "${SESSION}/git-ai/config.json")" = old ] && [ "$(cat "${STATE}/git-ai/config.json")" = new ] || { echo "FAIL: a side was changed"; exit 1; }
+          # The user keeps the new git-ai copy and the old headroom one.
+          rm -rf "${SESSION}/git-ai" "${STATE}/headroom"
+          rc=0
+          (cd "${PROJ}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/out4" 2>"${T}/err4" || rc=$?
+          [ "${rc}" -eq 0 ] || { echo "FAIL: resolved retry exit ${rc}"; cat "${T}/out4" "${T}/err4"; exit 1; }
+          [ "$(cat "${STATE}/headroom/mem.db")" = old ] || { echo "FAIL: the old headroom copy did not move"; cat "${T}/err4"; exit 1; }
+          for name in git-ai headroom; do
+              [ "$(grep -x "${name}\|failed:${name}" "${STATE}/.migrated" | tail -n 1)" = "${name}" ] || { echo "FAIL: ${name} still failed"; cat "${STATE}/.migrated"; exit 1; }
+          done
+          setup_projects "${PROJ}" 2>"${T}/err5"
+          if grep -qF "${SESSION}/" "${T}/err5"; then echo "FAIL: a resolved pair still prints"; cat "${T}/err5"; exit 1; fi
+          echo "BOTH_EXIST_FAILED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BOTH_EXIST_FAILED_OK"
+
+  - name: session-migrate never follows a link planted at a failed pair's legacy path
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          write_failing_mv_shim
+          export FAIL_MV="${SESSION}/headroom"
+          mkdir -p "${SESSION}/headroom"
+          echo keep > "${SESSION}/headroom/mem.db"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          PATH="${T}/shim:${PATH}" setup_projects "${PROJ}" 2>/dev/null
+          rm -rf "${SESSION}/headroom"
+          ln -s "${VICTIM}" "${SESSION}/headroom"
+          rc=0
+          (cd "${PROJ}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/out" 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 0 ] || { echo "FAIL: exit ${rc}"; cat "${T}/out" "${T}/err"; exit 1; }
+          [ ! -e "${STATE}/headroom/keep" ] || { echo "FAIL: the link's target was imported"; exit 1; }
+          [ ! -L "${STATE}/headroom" ] || { echo "FAIL: the link was moved into the state dir"; exit 1; }
+          if grep -qF 'Notice: moved' "${T}/err"; then echo "FAIL: something was moved"; cat "${T}/err"; exit 1; fi
+          [ "$(grep -x 'headroom\|failed:headroom' "${STATE}/.migrated" | tail -n 1)" = headroom ] || { echo "FAIL: not dropped"; cat "${STATE}/.migrated"; exit 1; }
+          assert_victim_intact
+          echo "MIGRATE_LINK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_LINK_OK"
+
+  - name: session-migrate and launches never re-run a done pair, even when its legacy entry is planted again
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          write_failing_mv_shim
+          export FAIL_MV="${SESSION}/headroom"
+          mkdir -p "${SESSION}/headroom" "${SESSION}/git-ai"
+          echo keep > "${SESSION}/headroom/mem.db"
+          echo keep > "${SESSION}/git-ai/config.json"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          PATH="${T}/shim:${PATH}" setup_projects "${PROJ}" 2>/dev/null
+          (cd "${PROJ}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >/dev/null 2>&1
+          # Both pairs are now done: git-ai at the first launch, headroom by
+          # the retry. Plant both again.
+          mkdir -p "${SESSION}/headroom" "${SESSION}/git-ai"
+          echo planted > "${SESSION}/headroom/planted"
+          echo planted > "${SESSION}/git-ai/planted"
+          before="$(find "${STATE}" -printf '%P %y %s\n' | sort)"
+          rc=0
+          (cd "${PROJ}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/out" 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 0 ] || { echo "FAIL: exit ${rc}"; cat "${T}/out" "${T}/err"; exit 1; }
+          [ "$(cat "${T}/out")" = "Nothing to migrate." ] || { echo "FAIL: stdout is"; cat "${T}/out" "${T}/err"; exit 1; }
+          setup_projects "${PROJ}" 2>"${T}/err2"
+          after="$(find "${STATE}" -printf '%P %y %s\n' | grep -v '^\.migrated ' | sort)"
+          [ "$(printf '%s\n' "${before}" | grep -v '^\.migrated ')" = "${after}" ] || { echo "FAIL: the state dir changed"; exit 1; }
+          if grep -qF "${SESSION}/" "${T}/err" "${T}/err2"; then echo "FAIL: a done pair was looked at"; cat "${T}/err" "${T}/err2"; exit 1; fi
+          [ -f "${SESSION}/headroom/planted" ] && [ -f "${SESSION}/git-ai/planted" ] || { echo "FAIL: a planted entry was touched"; exit 1; }
+          echo "DONE_NEVER_RERUN_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DONE_NEVER_RERUN_OK"
+
+  - name: a marker of plain names only, as an older release wrote it, means every pair is done
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${STATE}" "${SESSION}/headroom" "${SESSION}/overlay/project/upper"
+          printf '%s\n' "${PROJ}" > "${SESSION}/.projects"
+          echo planted > "${SESSION}/headroom/mem.db"
+          echo planted > "${SESSION}/overlay/project/upper/x"
+          printf '%s\n' "${SESSION_STATE_MIGRATIONS[@]%%:*}" > "${STATE}/.migrated"
+          cp "${STATE}/.migrated" "${T}/marker.before"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${PROJ}" 2>"${T}/err"
+          if grep -qF "${SESSION}/" "${T}/err"; then echo "FAIL: the launch looked at a legacy path"; cat "${T}/err"; exit 1; fi
+          rc=0
+          (cd "${PROJ}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/out" 2>"${T}/err2" || rc=$?
+          [ "${rc}" -eq 0 ] && [ "$(cat "${T}/out")" = "Nothing to migrate." ] || { echo "FAIL: exit ${rc}"; cat "${T}/out" "${T}/err2"; exit 1; }
+          cmp -s "${T}/marker.before" "${STATE}/.migrated" || { echo "FAIL: the marker changed"; cat "${STATE}/.migrated"; exit 1; }
+          [ ! -e "${STATE}/headroom" ] && [ ! -e "${STATE}/overlay/project/upper/x" ] || { echo "FAIL: something was imported"; exit 1; }
+          echo "OLD_MARKER_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OLD_MARKER_OK"
+
+  # ── session-migrate: the new dir a later launch made, running sessions ──
+  # A stranded pair does not stop the launch, which then creates the new dir
+  # (git-ai is on by default). Only the user's retry may replace that dir,
+  # and only while it is an empty real dir and no running RiotBox container
+  # has the session's state or session dir mounted.
+
+  - name: session-migrate replaces the empty new dir a launch created after the failed move
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          write_failing_mv_shim
+          export FAIL_MV="${SESSION}/git-ai"
+          mkdir -p "${SESSION}/git-ai"
+          echo keep > "${SESSION}/git-ai/config.json"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          PATH="${T}/shim:${PATH}" setup_projects "${PROJ}" 2>/dev/null
+          [ -d "${STATE}/git-ai" ] && [ -z "$(ls -A "${STATE}/git-ai")" ] || { echo "FAIL: fixture: the launch did not create an empty new dir"; exit 1; }
+          echo "abc123 /elsewhere true" > "${STUB_RUNNING}"
+          rc=0
+          (cd "${PROJ}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/out" 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 0 ] || { echo "FAIL: exit ${rc}, want 0"; cat "${T}/out" "${T}/err"; exit 1; }
+          [ "$(cat "${STATE}/git-ai/config.json")" = keep ] || { echo "FAIL: the data did not move"; cat "${T}/err"; exit 1; }
+          [ ! -e "${SESSION}/git-ai" ] || { echo "FAIL: the legacy dir is still there"; exit 1; }
+          [ "$(grep -x 'git-ai\|failed:git-ai' "${STATE}/.migrated" | tail -n 1)" = git-ai ] || { echo "FAIL: not recorded done"; cat "${STATE}/.migrated"; exit 1; }
+          echo "MIGRATE_REPLACES_EMPTY_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_REPLACES_EMPTY_OK"
+
+  - name: session-migrate leaves a non-empty new dir alone, and a first launch never replaces an empty one
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          write_failing_mv_shim
+          export FAIL_MV="${SESSION}/git-ai"
+          mkdir -p "${SESSION}/git-ai"
+          echo keep > "${SESSION}/git-ai/config.json"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          PATH="${T}/shim:${PATH}" setup_projects "${PROJ}" 2>/dev/null
+          echo session > "${STATE}/git-ai/written-by-a-session"
+          rc=0
+          (cd "${PROJ}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/out" 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "FAIL: exit ${rc}, want 1"; cat "${T}/out" "${T}/err"; exit 1; }
+          grep -qF "both ${SESSION}/git-ai and ${STATE}/git-ai exist" "${T}/err" || { echo "FAIL: no both-exist warning"; cat "${T}/err"; exit 1; }
+          grep -qF "diff -rq ${SESSION}/git-ai ${STATE}/git-ai" "${T}/err" || { echo "FAIL: no compare command"; cat "${T}/err"; exit 1; }
+          [ "$(cat "${SESSION}/git-ai/config.json")" = keep ] && [ "$(cat "${STATE}/git-ai/written-by-a-session")" = session ] || { echo "FAIL: a side changed"; exit 1; }
+          # A first launch keeps its rule: an existing new dir, even empty, is never replaced.
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${T}/s2/headroom" "${T}/st2/headroom"
+          echo old > "${T}/s2/headroom/mem.db"
+          migrate_session_state "${T}/s2" "${T}/st2" 2>"${T}/err2"
+          grep -qF "both ${T}/s2/headroom and ${T}/st2/headroom exist" "${T}/err2" || { echo "FAIL: a first launch replaced an empty new dir"; cat "${T}/err2"; exit 1; }
+          [ -f "${T}/s2/headroom/mem.db" ] || { echo "FAIL: legacy moved"; exit 1; }
+          echo "MIGRATE_KEEPS_NONEMPTY_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_KEEPS_NONEMPTY_OK"
+
+  - name: a mount whose path a link replaced after the container started still reaches the session dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${STATE}/git-ai" "${T}/elsewhere"
+          # The container was given ${STATE}/git-ai; then git-ai became a
+          # link out of the state dir. The container still writes the old dir.
+          echo "old1 ${STATE}/git-ai true running unlabelled" > "${STUB_RUNNING}"
+          mv -T "${STATE}/git-ai" "${T}/moved"
+          ln -s "${T}/elsewhere" "${STATE}/git-ai"
+          running_session_mounts
+          [ "${#RUNNING_MOUNT_IDS[@]}" -eq 1 ] || { echo "FAIL: no mount listed"; exit 1; }
+          running_mount_reaches 0 "$(realpath -m -- "${STATE}")" "$(realpath -ms -- "${STATE}")" \
+            || { echo "FAIL: the resolved source ${RUNNING_MOUNT_SOURCES[0]} hid the mount"; exit 1; }
+          running_mount_reaches 0 "$(realpath -m -- "${T}/unrelated")" "$(realpath -ms -- "${T}/unrelated")" \
+            && { echo "FAIL: an unrelated dir counts"; exit 1; }
+          echo "LEXICAL_MOUNT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "LEXICAL_MOUNT_OK"
+
+  - name: session-migrate refuses while a running RiotBox container mounts the session, and fails closed
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          write_failing_mv_shim
+          export FAIL_MV="${SESSION}/git-ai"
+          mkdir -p "${SESSION}/git-ai"
+          echo keep > "${SESSION}/git-ai/config.json"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          PATH="${T}/shim:${PATH}" setup_projects "${PROJ}" 2>/dev/null
+          run_migrate() {
+              rc=0
+              (cd "${PROJ}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/out" 2>"${T}/err" || rc=$?
+          }
+          assert_untouched() {
+              [ "${rc}" -eq 1 ] || { echo "FAIL: $1: exit ${rc}, want 1"; cat "${T}/out" "${T}/err"; exit 1; }
+              [ "$(cat "${SESSION}/git-ai/config.json")" = keep ] && [ -z "$(ls -A "${STATE}/git-ai")" ] || { echo "FAIL: $1: something moved"; exit 1; }
+              [ "$(grep -x 'git-ai\|failed:git-ai' "${STATE}/.migrated" | tail -n 1)" = failed:git-ai ] || { echo "FAIL: $1: no longer failed"; exit 1; }
+              if grep -qF 'Notice: moved' "${T}/err"; then echo "FAIL: $1: moved"; exit 1; fi
+          }
+          for src in "${STATE}/git-ai" "${STATE}" "${SESSION}"; do
+              echo "abc123 ${src} true" > "${STUB_RUNNING}"
+              run_migrate
+              assert_untouched "mounted ${src}"
+              grep -qF 'container abc123 mounts' "${T}/err" || { echo "FAIL: ${src}: no refusal naming the container"; cat "${T}/err"; exit 1; }
+              grep -qF "${PROJ}" "${T}/err" || { echo "FAIL: ${src}: the refusal does not name the session's project"; cat "${T}/err"; exit 1; }
+              grep -qF 'Stop that container' "${T}/err" || { echo "FAIL: ${src}: no word to exit it"; cat "${T}/err"; exit 1; }
+          done
+          rm -f "${STUB_RUNNING}"
+          STUB_ENGINE_FAIL=1 run_migrate
+          assert_untouched "engine down"
+          grep -qF 'could not ask' "${T}/err" || { echo "FAIL: engine down: no message"; cat "${T}/err"; exit 1; }
+          echo "abc123 /elsewhere true" > "${STUB_RUNNING}"
+          STUB_INSPECT_FAIL=1 run_migrate
+          assert_untouched "inspect fails"
+          grep -qF 'could not ask' "${T}/err" || { echo "FAIL: inspect fails: no message"; cat "${T}/err"; exit 1; }
+          CONTAINER_CMD="${T}/no-such-engine" run_migrate
+          assert_untouched "engine missing"
+          # A container created but not yet started already has its mounts,
+          # and a paused one keeps them; an exited one is gone.
+          for state in created paused; do
+              echo "abc123 ${STATE}/git-ai true ${state}" > "${STUB_RUNNING}"
+              run_migrate
+              assert_untouched "${state} container"
+              grep -qF 'container abc123 mounts' "${T}/err" || { echo "FAIL: ${state}: no refusal"; cat "${T}/err"; exit 1; }
+          done
+          # A read-only mount of the state is not a holder.
+          printf '%s\n' "abc123 ${STATE}/git-ai false" "def456 ${STATE}/git-ai true exited" > "${STUB_RUNNING}"
+          run_migrate
+          [ "${rc}" -eq 0 ] || { echo "FAIL: a read-only mount or an exited container blocked the retry"; cat "${T}/err"; exit 1; }
+          echo "MIGRATE_RUNNING_GUARD_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_RUNNING_GUARD_OK"
+
+  - name: session-migrate from one member of a multi-project set names the whole set, and the notice names the projects
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/a/app" "${T}/b/lib"
+          P1="$(cd "${T}/a/app" && pwd -P)"
+          P2="$(cd "${T}/b/lib" && pwd -P)"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          resolve_projects "${P1} ${P2}"
+          MS="${RIOTBOX_SESSION_DIR}" MST="${RIOTBOX_STATE_DIR}"
+          write_failing_mv_shim
+          export FAIL_MV="${MS}/headroom"
+          mkdir -p "${MS}/headroom"
+          echo keep > "${MS}/headroom/mem.db"
+          PATH="${T}/shim:${PATH}" setup_projects "${P1} ${P2}" 2>/dev/null
+          setup_projects "${P1} ${P2}" 2>"${T}/err0"
+          grep -F "${MS}/headroom" "${T}/err0" | grep -qF "riotbox session-migrate ${P1} ${P2}" || { echo "FAIL: the notice does not name the set"; cat "${T}/err0"; exit 1; }
+          rc=0
+          (cd "${P1}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh") >"${T}/out" 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "FAIL: exit ${rc}, want 1"; cat "${T}/out" "${T}/err"; exit 1; }
+          grep -qF "No session dir found for ${P1}." "${T}/out" || { echo "FAIL: no not-found line"; cat "${T}/out"; exit 1; }
+          grep -qF 'It is part of a multi-project session; name the whole set:' "${T}/err" || { echo "FAIL: no member hint"; cat "${T}/err"; exit 1; }
+          grep -qxF "    riotbox session-migrate ${P1} ${P2}" "${T}/err" || { echo "FAIL: no whole-set command"; cat "${T}/err"; exit 1; }
+          [ -f "${MS}/headroom/mem.db" ] || { echo "FAIL: something moved"; exit 1; }
+          rc=0
+          (cd "${T}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh" "${P2}" "${P1}") >"${T}/out2" 2>"${T}/err2" || rc=$?
+          [ "${rc}" -eq 0 ] && [ "$(cat "${MST}/headroom/mem.db")" = keep ] || { echo "FAIL: the whole set did not migrate (exit ${rc})"; cat "${T}/out2" "${T}/err2"; exit 1; }
+          # Without the host-only record the notice falls back to generic advice.
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${T}/s3/headroom" "${T}/st3"
+          echo keep > "${T}/s3/headroom/mem.db"
+          printf '%s\n' headroom failed:headroom > "${T}/st3/.migrated"
+          migrate_session_state "${T}/s3" "${T}/st3" 2>"${T}/err3"
+          grep -F "${T}/s3/headroom" "${T}/err3" | grep -qF "riotbox session-migrate from the project's directory" || { echo "FAIL: no fallback advice"; cat "${T}/err3"; exit 1; }
+          echo "MIGRATE_MEMBER_HINT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "MIGRATE_MEMBER_HINT_OK"

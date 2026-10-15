@@ -203,3 +203,267 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "mixed-population-correct"
+
+  # ── Planted links in the session dir ────────────────────────────────────────
+  # The session dir is the container's read-write ~/.claude, so the container
+  # can replace any entry in it with a symlink before the next launch. `cp`
+  # and `chmod` follow a symlink at their destination, so the sync builds each
+  # copy in a private staging dir and renames it into place, which replaces a
+  # planted link instead of writing through it to a host file.
+
+  - name: Never writes through a .claude.json symlink planted in the session dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo '{"host":true}' > "${HOME}/.claude.json"
+          for kind in relative absolute; do
+              echo victim > "${EXTERNAL_DIR}/victim-${kind}"
+              chmod 644 "${EXTERNAL_DIR}/victim-${kind}"
+              rm -f "${SESSION_DIR}/.claude.json"
+              case "${kind}" in
+                  relative) ln -s "../external/victim-${kind}" "${SESSION_DIR}/.claude.json" ;;
+                  absolute) ln -s "${EXTERNAL_DIR}/victim-${kind}" "${SESSION_DIR}/.claude.json" ;;
+              esac
+              run_sync >/dev/null 2>"${TEST_DIR}/err"
+              [ "$(cat "${EXTERNAL_DIR}/victim-${kind}")" = victim ] || { echo "FAIL: ${kind}: link target overwritten"; exit 1; }
+              [ "$(stat -c '%a' "${EXTERNAL_DIR}/victim-${kind}")" = 644 ] || { echo "FAIL: ${kind}: link target chmod'ed"; exit 1; }
+              [ -f "${SESSION_DIR}/.claude.json" ] && [ ! -L "${SESSION_DIR}/.claude.json" ] || { echo "FAIL: ${kind}: no regular copy"; exit 1; }
+              grep -q '"host"' "${SESSION_DIR}/.claude.json" || { echo "FAIL: ${kind}: host content missing"; exit 1; }
+              [ "$(stat -c '%a' "${SESSION_DIR}/.claude.json")" = 600 ] || { echo "FAIL: ${kind}: copy not 0600"; exit 1; }
+              grep -qF 'is not a regular file' "${TEST_DIR}/err" || { echo "FAIL: ${kind}: no warning"; exit 1; }
+          done
+          echo "claude-json-link-safe"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude-json-link-safe"
+
+  - name: Never writes through CLAUDE.md or statusline-command.sh symlinks planted in the session dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo '# host' > "${HOST_CLAUDE}/CLAUDE.md"
+          printf '#!/bin/sh\necho host\n' > "${HOST_CLAUDE}/statusline-command.sh"
+          for f in CLAUDE.md statusline-command.sh; do
+              echo victim > "${EXTERNAL_DIR}/${f}"
+              chmod 644 "${EXTERNAL_DIR}/${f}"
+              ln -s "../external/${f}" "${SESSION_DIR}/${f}"
+          done
+          run_sync >/dev/null 2>"${TEST_DIR}/err"
+          for f in CLAUDE.md statusline-command.sh; do
+              [ "$(cat "${EXTERNAL_DIR}/${f}")" = victim ] || { echo "FAIL: ${f}: link target overwritten"; exit 1; }
+              [ "$(stat -c '%a' "${EXTERNAL_DIR}/${f}")" = 644 ] || { echo "FAIL: ${f}: link target chmod'ed"; exit 1; }
+              [ -f "${SESSION_DIR}/${f}" ] && [ ! -L "${SESSION_DIR}/${f}" ] || { echo "FAIL: ${f}: no regular copy"; exit 1; }
+          done
+          [ -x "${SESSION_DIR}/statusline-command.sh" ] || { echo "FAIL: statusline copy not executable"; exit 1; }
+          echo "md-statusline-link-safe"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "md-statusline-link-safe"
+
+  - name: Removes planted links and directories where the host has no such file
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo victim > "${EXTERNAL_DIR}/victim"
+          ln -s "${EXTERNAL_DIR}/victim" "${SESSION_DIR}/CLAUDE.md"
+          mkdir -p "${SESSION_DIR}/statusline-command.sh/sub"
+          run_sync >/dev/null 2>"${TEST_DIR}/err"
+          [ "$(cat "${EXTERNAL_DIR}/victim")" = victim ] || { echo "FAIL: link target touched"; exit 1; }
+          [ ! -e "${SESSION_DIR}/CLAUDE.md" ] && [ ! -L "${SESSION_DIR}/CLAUDE.md" ] || { echo "FAIL: CLAUDE.md link kept"; exit 1; }
+          [ ! -e "${SESSION_DIR}/statusline-command.sh" ] || { echo "FAIL: planted directory kept"; exit 1; }
+          echo "stale-plants-removed"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "stale-plants-removed"
+
+  - name: Replaces a directory planted at .claude.json with the host copy
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo '{"host":true}' > "${HOME}/.claude.json"
+          mkdir -p "${SESSION_DIR}/.claude.json"
+          run_sync >/dev/null 2>/dev/null
+          [ -f "${SESSION_DIR}/.claude.json" ] || { echo "FAIL: directory not replaced"; exit 1; }
+          grep -q '"host"' "${SESSION_DIR}/.claude.json" || { echo "FAIL: host content missing"; exit 1; }
+          echo "claude-json-dir-replaced"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude-json-dir-replaced"
+
+  # Directories are built in the staging dir; the old entry is removed with
+  # `rm -rf` (which removes a link rather than following it) and the copy is
+  # renamed into place. Pinned here so a refactor that switches to copying
+  # into an existing directory is caught.
+  - name: Never writes through rules/ or skills/ symlinks planted in the session dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${HOST_CLAUDE}/rules" "${HOST_CLAUDE}/skills/s" "${EXTERNAL_DIR}/victim"
+          echo rule > "${HOST_CLAUDE}/rules/r.md"
+          echo skill > "${HOST_CLAUDE}/skills/s/SKILL.md"
+          echo precious > "${EXTERNAL_DIR}/victim/keep"
+          ln -s ../external/victim "${SESSION_DIR}/rules"
+          ln -s "${EXTERNAL_DIR}/victim" "${SESSION_DIR}/skills"
+          run_sync >/dev/null 2>/dev/null
+          [ "$(ls -A "${EXTERNAL_DIR}/victim")" = keep ] || { echo "FAIL: written into the link target"; ls -A "${EXTERNAL_DIR}/victim"; exit 1; }
+          [ -f "${SESSION_DIR}/rules/r.md" ] && [ ! -L "${SESSION_DIR}/rules" ] || { echo "FAIL: rules not a real copy"; exit 1; }
+          [ -f "${SESSION_DIR}/skills/s/SKILL.md" ] && [ ! -L "${SESSION_DIR}/skills" ] || { echo "FAIL: skills not a real copy"; exit 1; }
+          echo "dir-links-safe"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "dir-links-safe"
+
+  # ── Re-planted links during the sync ────────────────────────────────────────
+  # Several sessions of one project run at once, so a running container can
+  # re-plant a link after any check this script makes. The shim mv re-plants
+  # the destination just before the rename that installs it; the rename must
+  # replace a file link and refuse a directory link, never follow either.
+
+  - name: Installs .claude.json over a link re-planted just before the rename
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo '{"host":true}' > "${HOME}/.claude.json"
+          echo victim > "${EXTERNAL_DIR}/victim"
+          chmod 644 "${EXTERNAL_DIR}/victim"
+          install_replant_shim .claude.json "${EXTERNAL_DIR}/victim"
+          PATH="${SHIM_DIR}:${PATH}" run_sync >/dev/null
+          [ -f "${TEST_DIR}/shim-fired" ] || { echo "FAIL: shim never fired"; exit 1; }
+          [ "$(cat "${EXTERNAL_DIR}/victim")" = victim ] || { echo "FAIL: link target overwritten"; exit 1; }
+          [ "$(stat -c '%a' "${EXTERNAL_DIR}/victim")" = 644 ] || { echo "FAIL: link target chmod'ed"; exit 1; }
+          [ -f "${SESSION_DIR}/.claude.json" ] && [ ! -L "${SESSION_DIR}/.claude.json" ] || { echo "FAIL: no regular copy"; exit 1; }
+          grep -q '"host"' "${SESSION_DIR}/.claude.json" || { echo "FAIL: host content missing"; exit 1; }
+          [ "$(stat -c '%a' "${SESSION_DIR}/.claude.json")" = 600 ] || { echo "FAIL: copy not 0600"; exit 1; }
+          ! ls -A "${TEST_DIR}" | grep -q '^\.claude-sync\.' || { echo "FAIL: staging dir left behind"; exit 1; }
+          echo "claude-json-race-safe"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude-json-race-safe"
+
+  - name: Aborts when rules/ is re-planted as a link just before the rename
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${HOST_CLAUDE}/rules" "${EXTERNAL_DIR}/victim"
+          echo rule > "${HOST_CLAUDE}/rules/r.md"
+          echo precious > "${EXTERNAL_DIR}/victim/keep"
+          install_replant_shim rules "${EXTERNAL_DIR}/victim"
+          rc=0
+          PATH="${SHIM_DIR}:${PATH}" run_sync >/dev/null 2>"${TEST_DIR}/err" || rc=$?
+          [ -f "${TEST_DIR}/shim-fired" ] || { echo "FAIL: shim never fired"; exit 1; }
+          [ "${rc}" = 1 ] || { echo "FAIL: exit ${rc}, want 1"; exit 1; }
+          grep -qF 'rules in '"${SESSION_DIR}"' changed during sync' "${TEST_DIR}/err" || { echo "FAIL: no abort error"; cat "${TEST_DIR}/err"; exit 1; }
+          [ "$(ls -A "${EXTERNAL_DIR}/victim")" = keep ] || { echo "FAIL: written into the link target"; ls -A "${EXTERNAL_DIR}/victim"; exit 1; }
+          [ "$(cat "${EXTERNAL_DIR}/victim/keep")" = precious ] || { echo "FAIL: link target content changed"; exit 1; }
+          ! ls -A "${TEST_DIR}" | grep -q '^\.claude-sync\.' || { echo "FAIL: staging dir left behind"; exit 1; }
+          echo "rules-race-aborts"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "rules-race-aborts"
+
+  - name: Aborts when a directory is re-planted at .claude.json just before the rename
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo '{"host":true}' > "${HOME}/.claude.json"
+          install_replant_shim .claude.json --dir
+          rc=0
+          PATH="${SHIM_DIR}:${PATH}" run_sync >/dev/null 2>"${TEST_DIR}/err" || rc=$?
+          [ -f "${TEST_DIR}/shim-fired" ] || { echo "FAIL: shim never fired"; exit 1; }
+          [ "${rc}" = 1 ] || { echo "FAIL: exit ${rc}, want 1"; exit 1; }
+          grep -qF '.claude.json in '"${SESSION_DIR}"' changed during sync' "${TEST_DIR}/err" || { echo "FAIL: no abort error"; cat "${TEST_DIR}/err"; exit 1; }
+          [ -d "${SESSION_DIR}/.claude.json" ] && [ -z "$(ls -A "${SESSION_DIR}/.claude.json")" ] || { echo "FAIL: copied into the planted directory"; exit 1; }
+          [ -z "$(ls -A "${EXTERNAL_DIR}")" ] || { echo "FAIL: written outside the session dir"; ls -A "${EXTERNAL_DIR}"; exit 1; }
+          ! ls -A "${TEST_DIR}" | grep -q '^\.claude-sync\.' || { echo "FAIL: staging dir left behind"; exit 1; }
+          echo "claude-json-dir-race-aborts"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "claude-json-dir-race-aborts"
+
+  - name: Aborts when skills/ is re-planted as a link just before the rename
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          mkdir -p "${HOST_CLAUDE}/skills/s" "${EXTERNAL_DIR}/victim"
+          echo skill > "${HOST_CLAUDE}/skills/s/SKILL.md"
+          echo precious > "${EXTERNAL_DIR}/victim/keep"
+          install_replant_shim skills "${EXTERNAL_DIR}/victim"
+          rc=0
+          PATH="${SHIM_DIR}:${PATH}" run_sync >/dev/null 2>"${TEST_DIR}/err" || rc=$?
+          [ -f "${TEST_DIR}/shim-fired" ] || { echo "FAIL: shim never fired"; exit 1; }
+          [ "${rc}" = 1 ] || { echo "FAIL: exit ${rc}, want 1"; exit 1; }
+          grep -qF 'skills in '"${SESSION_DIR}"' changed during sync' "${TEST_DIR}/err" || { echo "FAIL: no abort error"; cat "${TEST_DIR}/err"; exit 1; }
+          [ "$(ls -A "${EXTERNAL_DIR}/victim")" = keep ] || { echo "FAIL: written into the link target"; ls -A "${EXTERNAL_DIR}/victim"; exit 1; }
+          [ "$(cat "${EXTERNAL_DIR}/victim/keep")" = precious ] || { echo "FAIL: link target content changed"; exit 1; }
+          ! ls -A "${TEST_DIR}" | grep -q '^\.claude-sync\.' || { echo "FAIL: staging dir left behind"; exit 1; }
+          echo "skills-race-aborts"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "skills-race-aborts"
+
+  - name: Rejects a relative session dir before writing anything
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.sync_helpers}}"
+          setup_sync_test
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo '{"host":true}' > "${HOME}/.claude.json"
+          cd "${TEST_DIR}"
+          rc=0
+          "${RIOTBOX_DIR}/agents/claude/sync-settings.sh" "${HOST_CLAUDE}" session >/dev/null 2>"${TEST_DIR}/err" || rc=$?
+          [ "${rc}" = 1 ] || { echo "FAIL: exit ${rc}, want 1"; exit 1; }
+          grep -qF 'session dir must be an absolute path' "${TEST_DIR}/err" || { echo "FAIL: no error"; cat "${TEST_DIR}/err"; exit 1; }
+          [ -z "$(ls -A "${SESSION_DIR}")" ] || { echo "FAIL: wrote into the session dir"; exit 1; }
+          ! ls -A "${TEST_DIR}" "${SESSION_DIR}" | grep -q '^\.claude-sync\.' || { echo "FAIL: staging dir created"; exit 1; }
+          echo "relative-session-dir-rejected"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "relative-session-dir-rejected"

@@ -254,7 +254,7 @@ testcases:
           export RIOTBOX_AGENT=opencode
           export RIOTBOX_SESSION_KEY=probe-session
           export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/ledger"
-          export CONTEXT_MODE_DIR="${HOME}/.config/opencode/context-mode"
+          export CONTEXT_MODE_DIR="${HOME}/.local/share/opencode/context-mode"
           # context_mode_ledger_append writes only for a wired session.
           export _CONTEXT_MODE_WIRED=1
           mkdir -p "${CONTEXT_MODE_LEDGER_DIR}" "${CONTEXT_MODE_DIR}"

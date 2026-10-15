@@ -29,10 +29,12 @@
 #     renaming each other's half-written file over the user's config.
 #   * A rename adopts the source inode's mode, so the staging file must carry
 #     the mode the target should end up with. Whatever mode the file has is
-#     preserved and a new one is created 0600 rather than at the process
-#     umask: these paths resolve into the host session directory, so a mode
-#     this code picks persists on the host, and a config the user chose to
-#     restrict must never come back looser than they left it.
+#     preserved — read through a symlink with `stat -L`, because the link's
+#     own mode is always 0777 — and a new file, or a dangling link, gets 0600
+#     rather than the process umask: these paths resolve into the host
+#     session directory, so a mode this code picks persists on the host, and
+#     a config the user chose to restrict must never come back looser than
+#     they left it.
 #   * The target is a regular file or it does not exist yet. Anything else is
 #     refused up front, before a staging file exists, because the two steps
 #     that would otherwise carry the write both succeed while doing the wrong
@@ -67,7 +69,7 @@ json_write_atomic() {
 	fi
 
 	local mode
-	if ! mode="$(stat -c '%a' "${target_file}" 2>/dev/null)" || [[ -z "${mode}" ]]; then
+	if ! mode="$(stat -L -c '%a' "${target_file}" 2>/dev/null)" || [[ -z "${mode}" ]]; then
 		mode=600
 	fi
 

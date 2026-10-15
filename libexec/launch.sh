@@ -63,6 +63,37 @@ EOF
 fi
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
+
+# Overlay guard, part 1: an overlay-accept's snapshot holds reviewed changes
+# that were never applied or put back. Checked before setup_projects, which
+# creates overlay/<name>/upper: an accept still at its prompt has renamed its
+# upper to the snapshot, and can put it back only while no upper exists.
+# Checked again afterwards for a snapshot the migration just adopted.
+refuse_stranded_overlay_snapshot() {
+	local snapshot
+	for snapshot in "${RIOTBOX_STATE_DIR}/overlay"/*/; do
+		snapshot="${snapshot%/}"
+		# shellcheck disable=SC2310 # designed to be tested in conditions
+		overlay_is_stranded_snapshot "${snapshot}" || continue
+		echo "ERROR: An overlay-accept that was interrupted (or is still running) left its changes in ${snapshot}." >&2
+		echo "  Put them back, then review them again:" >&2
+		# shellcheck disable=SC2312 # quoting cannot fail
+		echo "    mv -T $(quote_words "${snapshot}" "${snapshot%.accepting.*}/upper")" >&2
+		print_overlay_commands diff
+		exit 1
+	done
+}
+if [[ "${RIOTBOX_OVERLAY:-}" = "1" ]]; then
+	# shellcheck source=../scripts/lib/overlay-ignore.sh disable=SC1091
+	source "${ROOT_DIR}/scripts/lib/overlay-ignore.sh"
+	resolve_projects "${RIOTBOX_PROJECTS:-}"
+	# The snapshot check reads the state dir, so an old-key session must be
+	# under this set's key first (setup_projects' call is then a no-op).
+	# shellcheck disable=SC2310 # it has already said why it failed
+	migrate_session_key || exit 1
+	refuse_stranded_overlay_snapshot
+fi
+
 setup_projects "${RIOTBOX_PROJECTS:-}"
 MOUNTS="$("${ROOT_DIR}/scripts/detect-mounts.sh")"
 
@@ -74,22 +105,23 @@ if [[ "${RIOTBOX_OVERLAY:-}" = "1" ]]; then
 	fi
 fi
 
-# Overlay guard: block launch if pending overlay data exists. Derived caches
-# (a CodeGraph index) are not pending data — a session that only rebuilt its
-# index must not lock the next launch. See scripts/lib/overlay-ignore.sh.
+# Overlay guard, part 2: block launch if pending overlay data exists, or a
+# snapshot, checked after setup_projects, whose migration may have just
+# adopted either. Derived
+# caches (a CodeGraph index) are not pending data — a session that only
+# rebuilt its index must not lock the next launch. See
+# scripts/lib/overlay-ignore.sh.
 if [[ "${RIOTBOX_OVERLAY:-}" = "1" ]]; then
-	# shellcheck source=../scripts/lib/overlay-ignore.sh disable=SC1091
-	source "${ROOT_DIR}/scripts/lib/overlay-ignore.sh"
-	overlay_base="${RIOTBOX_SESSION_DIR}/overlay"
+	refuse_stranded_overlay_snapshot
+	overlay_base="${RIOTBOX_STATE_DIR}/overlay"
 	if [[ -d "${overlay_base}" ]]; then
 		for overlay_subdir in "${overlay_base}"/*/; do
 			[[ -d "${overlay_subdir}/upper" ]] || continue
 			# shellcheck disable=SC2310 # designed to be tested in conditions
 			if overlay_upper_has_changes "${overlay_subdir}/upper"; then
 				echo "ERROR: Pending overlay data exists. Accept or reject before starting a new session." >&2
-				echo "  riotbox overlay-diff      Review changes" >&2
-				echo "  riotbox overlay-accept     Apply to project" >&2
-				echo "  riotbox overlay-reject     Discard changes" >&2
+				echo "  Review the changes, then apply them to the project(s) or discard them:" >&2
+				print_overlay_commands diff accept reject
 				exit 1
 			fi
 		done
@@ -101,6 +133,12 @@ fi
 _session_ts="$(date +%Y%m%d-%H%M%S)"
 _session_rand="$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 SESSION_ID="${_session_ts}-${_session_rand}"
+
+# The session key labels every container of the session, so overlay-accept and
+# overlay-reject (scripts/overlay.sh) can refuse while one still runs and can
+# change the overlay. Container names cannot serve: generate_container_name
+# gives every launch a random suffix.
+SESSION_KEY="$(basename "${RIOTBOX_SESSION_DIR}")"
 
 # Podman rootless --userns=keep-id preserves the host user's UID/GID inside
 # the container. Both uid= and gid= are passed explicitly: podman's default
@@ -219,13 +257,14 @@ fi
 # the container process can hit files before their mount's relabel completes.
 # In Enforcing mode this produces AVC denials; in Permissive mode the denials
 # are logged without blocking, but still pollute the audit log and mask real
-# issues. Pre-label everything we created so the context is already correct.
+# issues. Pre-label everything we created — the session dir and the state dir
+# whose subdirs are mounted — so the context is already correct.
 #
 # Guard on chcon (the tool we actually call), not getenforce — a system can
 # have SELinux in the kernel without the getenforce binary installed, but if
 # chcon is missing there is nothing we can do regardless.
 if command -v chcon &>/dev/null; then
-	chcon -R -t container_file_t "${RIOTBOX_SESSION_DIR}" 2>/dev/null || true
+	chcon -R -t container_file_t "${RIOTBOX_SESSION_DIR}" "${RIOTBOX_STATE_DIR}" 2>/dev/null || true
 fi
 
 # shellcheck source=./passthrough-vars.sh disable=SC1091
@@ -266,6 +305,7 @@ CREDFILE_FLAGS="$(credfile_flags)"
 # shellcheck disable=SC2154  # IMAGE_NAME is required env — set by the caller (riotbox CLI)
 ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${USER_FLAG} ${INIT_FLAG} \
 	--name "${CONTAINER_NAME}" \
+	--label "riotbox.session=${SESSION_KEY}" \
 	${NET_FLAG} \
 	${NESTED_FLAGS} \
 	${OVERLAY_FLAGS} \
@@ -282,7 +322,7 @@ ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${USER_FLAG} ${IN
 	${RIOTBOX_HEADROOM:+-e RIOTBOX_HEADROOM="${RIOTBOX_HEADROOM}"} \
 	${RIOTBOX_GIT_AI:+-e RIOTBOX_GIT_AI="${RIOTBOX_GIT_AI}"} \
 	${RIOTBOX_CONTEXT_MODE:+-e RIOTBOX_CONTEXT_MODE="${RIOTBOX_CONTEXT_MODE}"} \
-	${RIOTBOX_CONTEXT_MODE:+-e RIOTBOX_SESSION_KEY="$(basename "${RIOTBOX_SESSION_DIR}")"} \
+	${RIOTBOX_CONTEXT_MODE:+-e RIOTBOX_SESSION_KEY="${SESSION_KEY}"} \
 	${RIOTBOX_HEADROOM_PROXY_TIMEOUT:+-e RIOTBOX_HEADROOM_PROXY_TIMEOUT="${RIOTBOX_HEADROOM_PROXY_TIMEOUT}"} \
 	${RIOTBOX_EXTRA_ARGS:-} \
 	-w "${WORKDIR}" \

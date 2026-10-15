@@ -6,8 +6,11 @@
 # first pass when RIOTBOX_HEADROOM=1, with RIOTBOX_HEADROOM_ACTIVE=1 already
 # exported:
 #
-#   1. Ensure a proxy is listening on 127.0.0.1:${HEADROOM_PORT:-8787} —
-#      reuse a live one, else spawn `headroom proxy --memory --learn`.
+#   1. Ensure a headroom proxy answers on 127.0.0.1:${HEADROOM_PORT:-8787},
+#      or the next port up when something else holds that one — reuse a
+#      live one, else spawn `headroom proxy --memory --no-learn`
+#      (agents/lib/headroom-proxy.sh, shared with the claude helper, says
+#      why learning is off).
 #   2. Warn when routing will override a baseURL the user set themselves.
 #   3. exec `headroom wrap opencode --no-proxy` — upstream builds
 #      OPENCODE_CONFIG_CONTENT and launches opencode, which resolves back to
@@ -28,8 +31,13 @@
 # it; in a session the CWD is /workspace, the caller's bind-mounted
 # repository. (`wrap claude --memory` does not do this — the injection is on
 # the opencode and codex paths only.) Spawning the proxy here with --memory
-# gets cross-session memory without writing to anyone's checkout, so step 1
-# stays and --memory is deliberately NOT forwarded to `wrap opencode`.
+# gets cross-session memory without that write, so step 1 stays and
+# --memory is deliberately NOT forwarded to `wrap opencode`. The proxy's
+# own memory DB defaults to $PWD/.headroom too; the wrapper exports
+# HEADROOM_MEMORY_DB_PATH (~/.headroom/memory.db, the state-dir mount),
+# which `headroom proxy` reads as its --memory-db-path. Without --memory,
+# `wrap opencode` touches the CWD nowhere (its only $PWD writes are under
+# `if memory:`, cli/wrap.py:7919, 7983).
 #
 # The delegated flags, all load-bearing:
 #   --no-proxy    we started the proxy; without this upstream starts a second
@@ -52,22 +60,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-port="${HEADROOM_PORT:-8787}"
-timeout_s="${RIOTBOX_HEADROOM_PROXY_TIMEOUT:-120}"
-# A non-integer timeout (e.g. 2.5) would make the [[ -ge ]] comparison in the
-# readiness loop error on every iteration, so the timeout would never fire.
-if ! [[ "${timeout_s}" =~ ^[0-9]+$ ]]; then
-	echo "NOTICE: RIOTBOX_HEADROOM_PROXY_TIMEOUT='${timeout_s}' is not a non-negative integer — using 120." >&2
-	timeout_s=120
-fi
-# Force base-10: a leading zero (e.g. 08) would otherwise be read as an
-# invalid octal literal by [[ -ge ]], reproducing the never-fires bug.
-timeout_s=$((10#${timeout_s}))
+_helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=agents/lib/headroom-proxy.sh
+source "${_helper_dir}/../lib/headroom-proxy.sh"
 config="${HOME}/.config/opencode/opencode.jsonc"
-# opencode's ai-sdk providers build request paths relative to a base that
-# already contains /v1, which is the shape upstream writes too — so this is
-# only ever compared against, never injected.
-proxy_base="http://127.0.0.1:${port}/v1"
 
 # "$@" is consumed by _fallback from inside functions, so snapshot it.
 USER_ARGS=("$@")
@@ -77,47 +73,21 @@ _fallback() {
 	exec opencode "${USER_ARGS[@]}"
 }
 
-_proxy_listening() {
-	# Plain TCP connect — mirrors upstream's readiness check (wrap.py
-	# _check_proxy). /dev/tcp is a bash built-in redirection target.
-	(exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null || return 1
-	return 0
-}
-
 # ── 1. Ensure the proxy ──────────────────────────────────────────────────────
-# shellcheck disable=SC2310  # _proxy_listening is a predicate; its 0/1 return is the control signal, so set -e suppression is intentional.
-if ! _proxy_listening; then
-	log_dir="${HOME}/.headroom/logs"
-	mkdir -p "${log_dir}"
-	# HEADROOM_AGENT_TYPE/STACK label the traffic for `headroom perf` the
-	# same way `headroom wrap <tool>` does. setsid starts the proxy in a
-	# new session with no controlling terminal (upstream uses
-	# start_new_session=True), so TTY-delivered SIGHUP/SIGINT reach only
-	# the foreground agent, never the proxy.
-	if command -v setsid >/dev/null 2>&1; then
-		HEADROOM_AGENT_TYPE=opencode HEADROOM_STACK=wrap_opencode \
-			setsid headroom proxy --port "${port}" --memory --learn \
-			>>"${log_dir}/proxy.log" 2>&1 &
-	else
-		HEADROOM_AGENT_TYPE=opencode HEADROOM_STACK=wrap_opencode \
-			headroom proxy --port "${port}" --memory --learn \
-			>>"${log_dir}/proxy.log" 2>&1 &
-	fi
-	proxy_pid=$!
-	waited=0
-	# shellcheck disable=SC2310  # _proxy_listening is a predicate; its 0/1 return is the control signal, so set -e suppression is intentional.
-	until _proxy_listening; do
-		if ! kill -0 "${proxy_pid}" 2>/dev/null; then
-			_fallback "headroom proxy exited during startup (see ${log_dir}/proxy.log)"
-		fi
-		if [[ "${waited}" -ge "${timeout_s}" ]]; then
-			kill "${proxy_pid}" 2>/dev/null || true
-			_fallback "headroom proxy not ready after ${timeout_s}s (see ${log_dir}/proxy.log)"
-		fi
-		sleep 1
-		waited=$((waited + 1))
-	done
-fi
+# shellcheck disable=SC2310 # its status picks the fallback
+# opencode adds no proxy arguments or routing env of its own: its launch
+# config is the container's environment as it stands.
+_opencode_proxy_plan() {
+	HEADROOM_PROXY_ARGS=()
+}
+# shellcheck disable=SC2310 # its status picks the fallback
+headroom_proxy_ensure opencode _opencode_proxy_plan || _fallback "${HEADROOM_PROXY_FAILURE}"
+# The port the proxy actually uses: another may have been taken.
+port="${HEADROOM_PROXY_PORT}"
+# opencode's ai-sdk providers build request paths relative to a base that
+# already contains /v1, which is the shape upstream writes too — so this is
+# only ever compared against, never injected.
+proxy_base="http://127.0.0.1:${port}/v1"
 
 # ── 2. Notice when routing overrides a user-set baseURL ──────────────────────
 # OPENCODE_CONFIG_CONTENT is merged OVER the config file, so upstream's

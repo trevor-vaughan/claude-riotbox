@@ -49,7 +49,7 @@ setup_wrapper_test() {
 	# baked in at write time (unquoted heredoc) so each stub is self-contained.
 	local libexec_stubs=(
 		run.sh launch.sh checkpoint.sh checkpoints.sh resume.sh audit.sh
-		list-sessions.sh remove-session.sh reset-session.sh install-hooks.sh
+		list-sessions.sh remove-session.sh reset-session.sh migrate-session.sh install-hooks.sh
 	)
 	local scripts_stubs=(
 		build.sh overlay.sh reown-commits.sh preflight.sh

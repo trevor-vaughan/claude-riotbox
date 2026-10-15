@@ -180,6 +180,81 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "atomic_symlink_dir_target=pass"
 
+  # A symlink to a regular file passes the type check above (`-f` follows it),
+  # so the mode read has to follow it too: `stat -c %a` on the link itself
+  # reports the link's own 0777, and the rename would hand that to the regular
+  # file that replaces it — a world-writable config on the host.
+  - name: a symlink to a 0600 file becomes a 0600 regular file and the target is untouched
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo '{"victim":true}' > "${TEST_DIR}/victim.json"
+          chmod 600 "${TEST_DIR}/victim.json"
+          ln -s victim.json "${TEST_DIR}/settings.json"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          json_write_atomic "${TEST_DIR}/settings.json" '{"a":1}'
+
+          [ -f "${TEST_DIR}/settings.json" ] && [ ! -L "${TEST_DIR}/settings.json" ] \
+            || { echo "FAIL: the link was not replaced by a regular file"; exit 1; }
+          mode="$(stat -c '%a' "${TEST_DIR}/settings.json")"
+          [ "${mode}" = "600" ] || { echo "FAIL: mode ${mode}, want 600"; exit 1; }
+          jq -e '.a == 1' "${TEST_DIR}/settings.json" >/dev/null \
+            || { echo "FAIL: content not written"; exit 1; }
+          jq -e '.victim == true' "${TEST_DIR}/victim.json" >/dev/null \
+            || { echo "FAIL: the link target was written"; exit 1; }
+          echo "symlink_0600=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "symlink_0600=pass"
+
+  - name: a symlink to a 0640 file takes the target's 0640, not the link's 0777
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo '{}' > "${TEST_DIR}/victim.json"
+          chmod 640 "${TEST_DIR}/victim.json"
+          ln -s "${TEST_DIR}/victim.json" "${TEST_DIR}/settings.json"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          json_write_atomic "${TEST_DIR}/settings.json" '{"a":1}'
+
+          mode="$(stat -c '%a' "${TEST_DIR}/settings.json")"
+          [ "${mode}" = "640" ] || { echo "FAIL: mode ${mode}, want 640"; exit 1; }
+          echo "symlink_0640=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "symlink_0640=pass"
+
+  - name: a dangling symlink becomes a 0600 regular file and its target is not created
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          ln -s missing.json "${TEST_DIR}/settings.json"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          json_write_atomic "${TEST_DIR}/settings.json" '{"a":1}'
+
+          [ -f "${TEST_DIR}/settings.json" ] && [ ! -L "${TEST_DIR}/settings.json" ] \
+            || { echo "FAIL: the link was not replaced by a regular file"; exit 1; }
+          mode="$(stat -c '%a' "${TEST_DIR}/settings.json")"
+          [ "${mode}" = "600" ] || { echo "FAIL: mode ${mode}, want 600"; exit 1; }
+          [ ! -e "${TEST_DIR}/missing.json" ] \
+            || { echo "FAIL: the dangling link's target was created"; exit 1; }
+          echo "dangling=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "dangling=pass"
+
   # The writer is shared because the entrypoint sources codegraph-setup.sh and
   # context-mode-setup.sh independently, so neither may own it. That only works
   # if the library is sourced first: a source line moved below either setup

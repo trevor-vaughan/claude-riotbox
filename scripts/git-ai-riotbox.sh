@@ -8,7 +8,7 @@
 # the repo, so `git ai log`/`blame`/`stats` already work on the host. The
 # analytics store — token spend, session counts, streaks — is a SQLite tree the
 # daemon owns, and riotbox mounts it per session from
-# $RIOTBOX_DATA_DIR/<session>/git-ai, deliberately NOT the host's ~/.git-ai (the
+# $RIOTBOX_STATE_ROOT/<session>/git-ai, deliberately NOT the host's ~/.git-ai (the
 # directory holds trace2.sock, which the host's gitconfig names; a container
 # that judged the host daemon dead would unlink and rebind it). So `git ai
 # usage` on the host reports on the host's own store and is blind to every
@@ -72,8 +72,8 @@
 #   git-ai-riotbox.sh --list              # what stores exist and who can read them
 #
 # Env overrides:
-#   RIOTBOX_DATA_DIR  session root (default: ${XDG_DATA_HOME:-~/.local/share}/riotbox)
-#   GIT_AI_BIN        force one binary for every store (skips version matching)
+#   RIOTBOX_STATE_ROOT  session state root (default: ${XDG_DATA_HOME:-~/.local/share}/riotbox-state)
+#   GIT_AI_BIN          force one binary for every store (skips version matching)
 #   RIOTBOX_GIT_AI_NO_FETCH=1   never download; report unreadable groups instead
 
 # -E so the ERR trap is inherited by functions and subshells; without it a
@@ -83,7 +83,7 @@ trap 'echo "git-ai-riotbox: failed at line ${LINENO}" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MERGE_PROGRAM="${SCRIPT_DIR}/lib/git-ai-merge.jq"
-RIOTBOX_DATA_DIR="${RIOTBOX_DATA_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/riotbox}"
+RIOTBOX_STATE_ROOT="${RIOTBOX_STATE_ROOT:-${XDG_DATA_HOME:-${HOME}/.local/share}/riotbox-state}"
 CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/riotbox/git-ai"
 RELEASES_URL="https://github.com/git-ai-project/git-ai/releases/download"
 
@@ -133,29 +133,56 @@ done
 declare -a STORE_PATHS=()
 declare -a STORE_VERSIONS=()
 
+# A version stamp is `git-ai --version` output (container/git-ai-setup.sh), and
+# it is written by the container, so it is untrusted: it names a cache
+# directory and a download URL, and must never be able to traverse out of them.
+is_valid_version() {
+	[[ "$1" =~ ^[0-9]+(\.[0-9]+){1,3}([-+][0-9A-Za-z.]+)?$ ]]
+}
+
+# Container-written stores are untrusted: `untrusted` is "1" for session
+# stores and "0" for the host's own ~/.git-ai. A store holding any symlink is
+# skipped, because copying it would carry the link into the scratch HOME and
+# git-ai could follow it to a host path.
 record_store() {
-	local path="$1" version=""
+	local path="$1" untrusted="$2" version="" link="" stamp="${1}/.riotbox-version"
 	[[ -d "${path}" ]] || return 0
 	# An empty store (a session that never ran git-ai) has nothing to add and
 	# would only show up as a version-less skip notice.
 	[[ -e "${path}/config.json" || -d "${path}/internal" ]] || return 0
-	if [[ -r "${path}/.riotbox-version" ]]; then
-		version="$(tr -d '[:space:]' <"${path}/.riotbox-version" 2>/dev/null || true)"
+	if [[ "${untrusted}" = "1" ]]; then
+		link="$(find "${path}" -type l -print -quit 2>/dev/null || true)"
+	fi
+	if [[ -n "${link}" ]]; then
+		echo "git-ai-riotbox: ${path} contains a symlink — skipped (not read)." >&2
+		return 0
+	fi
+	if [[ -e "${stamp}" || -L "${stamp}" ]]; then
+		if [[ -f "${stamp}" && ! -L "${stamp}" && -r "${stamp}" ]]; then
+			version="$(tr -d '[:space:]' <"${stamp}" 2>/dev/null || true)"
+		fi
+		# shellcheck disable=SC2310 # is_valid_version is a pure test
+		if ! is_valid_version "${version}"; then
+			echo "git-ai-riotbox: ${path} has an invalid .riotbox-version — skipped (not read)." >&2
+			return 0
+		fi
 	fi
 	STORE_PATHS+=("${path}")
 	STORE_VERSIONS+=("${version}")
 }
 
-record_store "${HOME}/.git-ai"
-if [[ -d "${RIOTBOX_DATA_DIR}" ]]; then
-	for session in "${RIOTBOX_DATA_DIR}"/*/; do
-		record_store "${session%/}/git-ai"
+record_store "${HOME}/.git-ai" 0
+# A store an older RiotBox left at riotbox/<session>/git-ai is not read: the
+# next launch of that project moves it here (scripts/lib/session-state.sh).
+if [[ -d "${RIOTBOX_STATE_ROOT}" ]]; then
+	for session in "${RIOTBOX_STATE_ROOT}"/*/; do
+		record_store "${session%/}/git-ai" 1
 	done
 fi
 
 if [[ ${#STORE_PATHS[@]} -eq 0 ]]; then
 	echo "git-ai-riotbox: no git-ai stores found." >&2
-	echo "  Looked in ${HOME}/.git-ai and ${RIOTBOX_DATA_DIR}/*/git-ai." >&2
+	echo "  Looked in ${HOME}/.git-ai and ${RIOTBOX_STATE_ROOT}/*/git-ai." >&2
 	exit 1
 fi
 
@@ -191,6 +218,8 @@ binary_version() {
 fetch_binary() {
 	local version="$1" asset dest tmp sums expected actual
 	[[ "${RIOTBOX_GIT_AI_NO_FETCH:-0}" != "1" ]] || return 0
+	# shellcheck disable=SC2310 # is_valid_version is a pure test
+	is_valid_version "${version}" || return 0
 	asset="$(host_arch_asset)"
 	[[ -n "${asset}" ]] || return 0
 	dest="${CACHE_DIR}/${version}/git-ai"
@@ -232,6 +261,8 @@ resolve_binary_for() {
 		printf '%s\n' "${GIT_AI_BIN}"
 		return 0
 	fi
+	# shellcheck disable=SC2310 # is_valid_version is a pure test
+	is_valid_version "${version}" || return 0
 	cached="${CACHE_DIR}/${version}/git-ai"
 	if [[ -x "${cached}" ]]; then
 		printf '%s\n' "${cached}"
@@ -250,7 +281,7 @@ resolve_binary_for() {
 
 # ── Read one store through a HOME shim ──────────────────────────────────────
 read_store() {
-	local bin="$1" store="$2" shim out
+	local bin="$1" store="$2" shim out odd
 	shim="$(mktemp -d)"
 
 	# --reflink=auto is GNU cp; a host whose cp lacks it (macOS) falls back to
@@ -262,6 +293,19 @@ read_store() {
 			return 0
 		fi
 	fi
+
+	# The early scan in record_store ran before this copy, and the container
+	# may still be running: re-check the private copy, and fail closed if the
+	# check itself fails. Only plain files and directories may remain.
+	if ! odd="$(find "${shim}/.git-ai" \( -type l -o ! -type f ! -type d \) -print -quit 2>/dev/null)" || [[ -n "${odd}" ]]; then
+		rm -rf "${shim}"
+		echo "git-ai-riotbox: ${store} changed during the copy (link or special file in the private copy) — skipped." >&2
+		return 0
+	fi
+	# config.json is container-written and git-ai takes settings from it (the
+	# git binary to run, for one); usage reads only the DBs, so give the host
+	# reader an empty one.
+	printf '{}\n' >"${shim}/.git-ai/config.json"
 
 	out="$(unshare -rn env HOME="${shim}" "${bin}" usage --period "${period}" --json 2>/dev/null || true)"
 	rm -rf "${shim}"
@@ -351,26 +395,30 @@ fi
 # Deliberately plain: git-ai's own renderer draws from its store and has no
 # mode that takes a merged document, so this reports the merged numbers rather
 # than imitating that output and implying it came from git-ai itself.
-jq -r --arg stores "${read_count}" '
-  def money: "$" + (. * 100 | round / 100 | tostring);
-  def n: tostring;
-  "git-ai across \($stores) store(s) — \(.period_label)",
+# Every string below came from a container-written store: control characters
+# (terminal escapes) are replaced so the report cannot drive the terminal (see
+# scripts/lib/terminal-clean.jq).
+jq -r -L "${SCRIPT_DIR}/lib" --arg stores "${read_count}" '
+  include "terminal-clean";
+  def money: "$" + (try (. * 100 | round / 100 | tostring) catch "?");
+  def n: clean;
+  "git-ai across \($stores) store(s) — \(.period_label | clean)",
   "",
   "  Commits          \(.commits.total | n)  (\(.commits.ai_lines | n) AI / \(.commits.human_lines | n) human lines)",
   "  Checkpoints      \(.checkpoints.total | n)  (\(.checkpoints.files_edited | n) files touched)",
   "  Sessions         \(.sessions.total | n)  (\(.sessions.yield_stats.shipped | n) shipped, \(.sessions.yield_stats.abandoned | n) abandoned)",
   "  Token spend      \(.tokens.estimated_cost_usd | money)  (\(.tokens.output | n) output tokens)",
   "  Active days      \(.summary.active_days | n)  (longest streak \(.summary.longest_streak | n))",
-  "  Favorite model   \(.summary.favorite_model // "n/a")",
+  "  Favorite model   \((.summary.favorite_model // "n/a") | clean)",
   "",
   "  By tool:",
-  (.commits.by_tool[]? | "    \(.[0])  \(.[1] | n) lines"),
+  (.commits.by_tool[]? | "    \(.[0] | clean)  \(.[1] | n) lines"),
   "",
   "  By model:",
-  (.tokens.by_model[]? | "    \(.model)  \(.estimated_cost_usd | money)  (\(.sessions | n) sessions)"),
+  (.tokens.by_model[]? | "    \(.model | clean)  \(.estimated_cost_usd | money)  (\(.sessions | n) sessions)"),
   "",
   "  Top repos:",
-  (.repos[0:5][]? | "    \(.repo_url)  \(.ai_lines | n) AI lines")
+  (.repos[0:5][]? | "    \(.repo_url | clean)  \(.ai_lines | n) AI lines")
 ' "${merged}"
 
 if [[ "${skipped_unstamped}" -gt 0 ]]; then
