@@ -5,6 +5,21 @@ generated from [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org); do not edit it by hand — run
 `task release:bump` instead.
 
+## [0.6.0] - 2026-10-15
+
+### 🚀 Features
+
+- *(pi)* Add Pi as a RiotBox agent
+- *(session)* [**breaking**] Move mount sources to a per-session state dir
+
+### 🐛 Bug Fixes
+
+- *(container)* Make git honor the copied ~/.gitignore_global
+- *(ci)* Stage gitignore stub in build fixtures; allow quoted tilde
+- *(session,headroom)* Give sessions unique keys; keep headroom out of projects
+- *(test)* Install file in the test image
+- *(headroom)* Treat a zombie proxy's record as stale
+
 ## [0.5.3] - 2026-10-02
 
 ### 💼 Other
