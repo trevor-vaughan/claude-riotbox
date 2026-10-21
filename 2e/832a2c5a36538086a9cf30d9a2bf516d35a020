@@ -1,0 +1,43 @@
+.taskfiles/container.yml
+  s_afca4be7dae224::t_1de1582e5484c0 18
+scripts/lib/json-write.sh
+  s_afca4be7dae224::t_7e8de086eefccc 55-56
+tests/context-mode.venom.yml
+  s_afca4be7dae224::t_4344b4e5322c04 1102-1103
+container/codegraph-setup.sh
+  s_afca4be7dae224::t_7e8de086eefccc 57-60
+scripts/configs/config
+  s_afca4be7dae224::t_4344b4e5322c04 186-187
+bin/riotbox
+  s_afca4be7dae224::t_1de1582e5484c0 195
+container/plugin-setup.sh
+  s_afca4be7dae224::t_4344b4e5322c04 135-136
+Containerfile
+  s_afca4be7dae224::t_fc7ac49c35c03d 1756
+  s_afca4be7dae224::t_4f99e5fc21b601 1757-1758,1767,1777
+  s_afca4be7dae224::t_451854aa4ad5f6 773,1112-1113,1151,1755,1790,1795-1796,1799
+.taskfiles/build.yml
+  s_afca4be7dae224::t_1de1582e5484c0 21
+scripts/build.sh
+  s_afca4be7dae224::t_1de1582e5484c0 8,394
+  s_afca4be7dae224::t_7e8de086eefccc 11
+  s_afca4be7dae224::t_f28d4f5d270cb5 9-10
+tests/gh-glab-build.venom.yml
+  s_afca4be7dae224::t_8f82dd4b0e24b4 416,420-432,434-436,439
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2e832a2c5a36538086a9cf30d9a2bf516d35a020",
+  "prompts": {},
+  "sessions": {
+    "s_afca4be7dae224": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5748b254-915c-42af-9971-6637ec8b162f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
