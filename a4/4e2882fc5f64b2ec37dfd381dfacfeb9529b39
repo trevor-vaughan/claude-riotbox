@@ -1,0 +1,19 @@
+tests/forge-mcp.venom.yml
+  s_afca4be7dae224::t_6d0745840f721d 653-654,660-661,697-698,704-705,747-748,784,786,948-953
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a44e2882fc5f64b2ec37dfd381dfacfeb9529b39",
+  "prompts": {},
+  "sessions": {
+    "s_afca4be7dae224": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5748b254-915c-42af-9971-6637ec8b162f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
