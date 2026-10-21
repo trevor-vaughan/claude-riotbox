@@ -600,6 +600,13 @@ export DEBIAN_FRONTEND=noninteractive
 # Bigger history — useful when Claude needs to review what it already ran
 export HISTSIZE=10000
 export HISTFILESIZE=10000
+# ignoreboth = ignorespace + ignoredups. A command typed with a leading space
+# (` export TOKEN=…`) stays out of ~/.bash_history, so secrets need not land
+# on disk; repeated commands are recorded once.
+export HISTCONTROL=ignoreboth
+# Timestamp each entry so the history shows when a command ran, not just
+# that it did — the first question when reconstructing a session.
+export HISTTIMEFORMAT='%F %T '
 
 # Make it obvious we're in RiotBox
 export PS1='[\[\e[36m\]riotbox\[\e[0m\]] \w \$ '

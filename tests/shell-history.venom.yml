@@ -1,0 +1,58 @@
+name: image shell history defaults
+vars:
+  root: "."
+  riotbox_dir: "."
+
+# The Containerfile's .bashrc block sets the history behavior of every
+# interactive shell in the image. These cases run that block in a real
+# interactive bash and inspect what lands in HISTFILE, so they pin behavior
+# rather than the spelling of a variable.
+
+testcases:
+  # HISTCONTROL=ignorespace is the conventional way to keep a secret typed on
+  # the command line (` export TOKEN=...`) out of ~/.bash_history.
+  - name: a command with a leading space is not recorded
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/tests/lib/shell-history-helpers.sh"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          printf ' echo hidden-marker\necho kept-marker\n' \
+            | run_riotbox_shell "{{.riotbox_dir}}" "${tmp}/history"
+          cat "${tmp}/history"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "echo kept-marker"
+          - result.systemout ShouldNotContainSubstring "hidden-marker"
+
+  - name: consecutive duplicate commands are recorded once
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/tests/lib/shell-history-helpers.sh"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          printf 'echo dup-marker\necho dup-marker\n' \
+            | run_riotbox_shell "{{.riotbox_dir}}" "${tmp}/history"
+          echo "count=$(grep -c '^echo dup-marker$' "${tmp}/history")"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "count=1"
+
+  # Timestamps turn the history file into a usable record of when a command
+  # ran — the first question when reconstructing what a session did.
+  - name: history entries carry timestamps
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/tests/lib/shell-history-helpers.sh"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          printf 'echo stamped-marker\n' \
+            | run_riotbox_shell "{{.riotbox_dir}}" "${tmp}/history"
+          grep -B1 '^echo stamped-marker$' "${tmp}/history"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "(?m)^#[0-9]+$"
+
