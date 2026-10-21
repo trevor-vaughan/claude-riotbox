@@ -34,6 +34,10 @@ testcases:
           # Stub runtime: record argv, succeed.
           cat >"${TMP}/bin/podman" <<'STUB'
           #!/usr/bin/env bash
+          if [[ "$1" = unshare ]]; then
+            printf '0 0 4294967295\n'
+            exit 0
+          fi
           printf '%s\n' "$@" >>"${STUB_LOG}"
           exit 0
           STUB
@@ -75,6 +79,10 @@ testcases:
           : >"${TMP}/proj/Containerfile"
           cat >"${TMP}/bin/podman" <<'STUB'
           #!/usr/bin/env bash
+          if [[ "$1" = unshare ]]; then
+            printf '0 0 4294967295\n'
+            exit 0
+          fi
           printf '%s\n' "$@" >>"${STUB_LOG}"
           exit 0
           STUB
@@ -111,6 +119,10 @@ testcases:
           : >"${TMP}/proj/Containerfile"
           cat >"${TMP}/bin/podman" <<'STUB'
           #!/usr/bin/env bash
+          if [[ "$1" = unshare ]]; then
+            printf '0 0 4294967295\n'
+            exit 0
+          fi
           printf '%s\n' "$@" >>"${STUB_LOG}"
           exit 0
           STUB
@@ -155,6 +167,10 @@ testcases:
 
           cat >"${TMP}/bin/podman" <<'STUB'
           #!/usr/bin/env bash
+          if [[ "$1" = unshare ]]; then
+            printf '0 0 4294967295\n'
+            exit 0
+          fi
           printf '%s\n' "$@" >>"${STUB_LOG}"
           exit 0
           STUB
@@ -201,6 +217,10 @@ testcases:
           : >"${TMP}/proj/Containerfile"
           cat >"${TMP}/bin/podman" <<'STUB'
           #!/usr/bin/env bash
+          if [[ "$1" = unshare ]]; then
+            printf '0 0 4294967295\n'
+            exit 0
+          fi
           printf '%s\n' "$@" >>"${STUB_LOG}"
           exit 0
           STUB
@@ -244,6 +264,10 @@ testcases:
           : >"${TMP}/proj/Containerfile"
           cat >"${TMP}/bin/podman" <<'STUB'
           #!/usr/bin/env bash
+          if [[ "$1" = unshare ]]; then
+            printf '0 0 4294967295\n'
+            exit 0
+          fi
           printf '%s\n' "$@" >>"${STUB_LOG}"
           exit 0
           STUB

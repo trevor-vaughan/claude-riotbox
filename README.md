@@ -2123,6 +2123,46 @@ Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/
 
 Rootless podman requires `fuse-overlayfs` for this project. Without it, `--userns=keep-id` triggers a full ID-mapped layer copy on the ~8 GB image, which hangs indefinitely.
 
+### Required: build UID/GID mappings
+
+The image creates its `llm` account with your host UID and primary GID. Both numeric IDs must be mapped **as container IDs** during a rootless Podman build. A typical 65,536-ID subordinate allocation cannot cover a UID in the millions, even though Podman maps that host user to container root. Otherwise the build eventually fails at `chown llm /workspace` with `Invalid argument`.
+
+`riotbox build` and the `task build:*` image builds check the effective Podman maps before detecting toolchains or staging configs. The check reports each unmapped ID and the current map, including stale mappings after an allocation change. It also prints a `sudo usermod` command with a proposed range sized for your IDs, above all account and group IDs returned by `getent` and all allocations in `/etc/subuid` and `/etc/subgid`. An administrator must confirm the range is unused in any centrally managed allocations before running it. If lookups fail or there is insufficient space above the visible IDs, the check asks the administrator to choose a range instead.
+
+Inspect the effective maps:
+
+```sh
+id -u
+id -g
+podman unshare cat /proc/self/uid_map /proc/self/gid_map
+```
+
+Each row is `container_start host_start count`. Your UID must fall within a UID-map row's container range, and your primary GID within a GID-map row's container range: `container_start <= ID < container_start + count`. Check every row; allocations can be split across several ranges.
+
+If either ID is missing:
+
+1. Have an administrator choose additional unused host ranges for `/etc/subuid` and `/etc/subgid`. They must not overlap real account IDs, group IDs, or other subordinate allocations. Keep existing allocations in place and choose new ranges above all of your existing host ranges in each file. Podman sorts allocations by host ID; adding a lower range shifts existing container IDs and can break ownership in container storage, even when the entry is appended at the end of the file.
+2. Stop services that automatically restart your containers, then run `podman system migrate` as your normal user. This stops that user's running containers and releases Podman's persistent namespace. Avoid further Podman commands until the allocations have been updated.
+3. Have the administrator append the ranges. For example, **only if host IDs 10000000–14999999 are available and above your existing ranges in both files**, this adds five million subordinate UIDs and GIDs:
+
+   ```sh
+   sudo usermod --add-subuids 10000000-14999999 \
+     --add-subgids 10000000-14999999 "$(id -un)"
+   ```
+
+   With an existing `165536:165536` allocation, the effective map would then be:
+
+   ```text
+   0        <your host UID or GID> 1
+   1        165536                165536
+   165537   10000000              5000000
+   ```
+
+   This covers container IDs through 5165536, including UID/GID 4243795. Choose a larger additional allocation if your IDs require it; the host range's start does not determine the container range's start.
+4. Re-run `podman unshare cat /proc/self/uid_map /proc/self/gid_map`, confirm both IDs are covered, and retry the same build command. Restart container services as needed.
+
+This repair does not require `podman system reset`. See [Podman's migration documentation](https://docs.podman.io/en/latest/markdown/podman-system-migrate.1.html) for why the persistent namespace must be stopped before editing subordinate allocations.
+
 ### Required: install fuse-overlayfs
 
 ```sh

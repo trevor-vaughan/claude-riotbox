@@ -47,6 +47,97 @@ HOST_GID="$(id -g)"
 echo "→ HOST_UID: ${HOST_UID}"
 echo "→ HOST_GID: ${HOST_GID}"
 
+# Podman maps the host user to container root; that does not make the same
+# numeric UID/GID available to the llm account created during the build.
+if [[ "${CONTAINER_CMD}" = "podman" && "${HOST_UID}" != "0" ]]; then
+	_mapping_missing=0
+	for _kind in uid gid; do
+		_target="${HOST_UID}"
+		[[ "${_kind}" = "gid" ]] && _target="${HOST_GID}"
+		if ! _map="$(podman unshare cat "/proc/self/${_kind}_map")"; then
+			echo "ERROR: cannot inspect Podman's ${_kind} map; fix the namespace error above before building." >&2
+			exit 1
+		fi
+		# The first column is the container ID, the second is its host backing ID.
+		if ! awk -v id="${_target}" '
+			NF == 3 && id >= $1 && id - $1 < $3 { mapped = 1 }
+			END { exit !mapped }
+		' <<<"${_map}"; then
+			echo "ERROR: container ${_kind^^} ${_target} is not mapped in Podman's build namespace." >&2
+			printf '  Current %s map (container ID, host ID, count):\n%s\n' "${_kind}" "${_map}" >&2
+			_mapping_missing=1
+		fi
+	done
+	if [[ "${_mapping_missing}" = "1" ]]; then
+		_range=""
+		if _passwd="$(getent passwd)" && _groups="$(getent group)" &&
+			_subids="$(cat /etc/subuid /etc/subgid)" && _login="$(id -un)"; then
+			# Stay above visible allocations to preserve existing map offsets.
+			# A full UID/GID-sized addition also works with small existing ranges.
+			_range="$(awk -F: -v uid="${HOST_UID}" -v gid="${HOST_GID}" '
+				BEGIN {
+					count = int((uid > gid ? uid : gid) / 1000000 + 1) * 1000000
+					start = 10000000
+					if (uid >= start) start = uid + 1
+					if (gid >= start) start = gid + 1
+				}
+				NF == 0 { next }
+				NF == 3 && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $3 > 0 {
+					end = $2 + $3
+				}
+				NF == 7 && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ {
+					end = ($3 > $4 ? $3 : $4) + 1
+				}
+				NF == 4 && $3 ~ /^[0-9]+$/ { end = $3 + 1 }
+				{
+					if (end == 0) invalid = 1
+					if (end > start) start = end
+					end = 0
+				}
+				END {
+					start = int((start + 999999) / 1000000) * 1000000
+					if (!invalid && start + count <= 4294967295)
+						printf "%.0f-%.0f", start, start + count - 1
+				}
+			' <<<"${_passwd}
+${_groups}
+${_subids}")"
+		fi
+		cat >&2 <<'EOF'
+The image creates llm with your host UID/GID; an unmapped ID makes chown fail
+with "Invalid argument" late in the build.
+
+Ask your administrator to append enough unused, non-overlapping subordinate
+IDs in /etc/subuid and /etc/subgid to cover the container IDs above. Keep
+existing allocations and place new ranges above all of your existing host
+ranges in each file, so stored images and containers keep their ownership.
+Stop auto-restarting container services, then run as your normal user
+(this stops your running containers):
+  podman system migrate
+Avoid further Podman commands until the administrator updates the allocations.
+EOF
+		if [[ -n "${_range}" ]]; then
+			cat >&2 <<'EOF'
+
+Suggested range, sized for your IDs and above all visible account/group IDs
+and /etc/subuid + /etc/subgid allocations. The administrator should confirm
+it is also unused in any centrally managed allocations, then copy/paste:
+EOF
+			printf '  sudo usermod --add-subuids %s --add-subgids %s -- %q\n' \
+				"${_range}" "${_range}" "${_login}" >&2
+		else
+			echo 'Cannot suggest a range: account/allocation lookup failed or no space remains above visible IDs; ask your administrator to choose one.' >&2
+		fi
+		cat >&2 <<'EOF'
+
+After the change, verify both maps:
+  podman unshare cat /proc/self/uid_map /proc/self/gid_map
+Then retry the build. See README.md#required-build-uidgid-mappings for steps.
+EOF
+		exit 1
+	fi
+fi
+
 # ── 2. nvm ────────────────────────────────────────────────────────────────────
 NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
 
