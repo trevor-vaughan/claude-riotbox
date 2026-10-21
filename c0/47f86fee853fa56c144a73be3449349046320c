@@ -1,0 +1,29 @@
+tests/gh-glab-build.venom.yml
+  s_afca4be7dae224::t_04d89db9459e5d 420,422-424,436
+Containerfile
+  s_afca4be7dae224::t_c719ef738bed38 1113-1115,1147-1153,1756-1758,1766-1768,1776-1777
+scripts/configs/config
+  s_afca4be7dae224::t_04d89db9459e5d 187-191
+tests/context-mode.venom.yml
+  s_afca4be7dae224::t_c719ef738bed38 1103-1105
+container/plugin-setup.sh
+  s_afca4be7dae224::t_c719ef738bed38 135-140
+scripts/build.sh
+  s_afca4be7dae224::t_c719ef738bed38 11-12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c047f86fee853fa56c144a73be3449349046320c",
+  "prompts": {},
+  "sessions": {
+    "s_afca4be7dae224": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5748b254-915c-42af-9971-6637ec8b162f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
