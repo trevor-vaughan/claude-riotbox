@@ -20,7 +20,7 @@ testcases:
           sb="$(mktemp -d)"
           trap 'rm -rf "${sb}"' EXIT
           mkdir -p "${sb}/bin" "${sb}/home" "${sb}/repo"
-          printf '#!/bin/sh\nexit 0\n' >"${sb}/bin/podman"
+          printf '#!/bin/sh\nif [ "$1" = unshare ]; then printf "0 0 4294967295\\n"; fi\nexit 0\n' >"${sb}/bin/podman"
           chmod +x "${sb}/bin/podman"
           cp -a "${root}/." "${sb}/repo/"
           rm -rf "${sb}/repo/configs"
@@ -47,7 +47,7 @@ testcases:
           sb="$(mktemp -d)"
           trap 'rm -rf "${sb}"' EXIT
           mkdir -p "${sb}/bin" "${sb}/home" "${sb}/repo"
-          printf '#!/bin/sh\nexit 0\n' >"${sb}/bin/podman"
+          printf '#!/bin/sh\nif [ "$1" = unshare ]; then printf "0 0 4294967295\\n"; fi\nexit 0\n' >"${sb}/bin/podman"
           chmod +x "${sb}/bin/podman"
           cp -a "${root}/." "${sb}/repo/"
           rm -rf "${sb}/repo/configs"

@@ -1,0 +1,166 @@
+name: build UID and GID mapping preflight
+vars:
+  root: "."
+
+testcases:
+  - name: unmapped IDs stop before config staging or image build with recovery instructions
+    steps:
+      - type: exec
+        script: |
+          source "{{.root}}/tests/lib/build-test-helpers.sh"
+          setup_build_test "{{.root}}"
+          run_build_test
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldContainSubstring "UID 4243795"
+          - result.systemout ShouldContainSubstring "GID 5243795"
+          - result.systemout ShouldContainSubstring "/etc/subuid"
+          - result.systemout ShouldContainSubstring "/etc/subgid"
+          - result.systemout ShouldContainSubstring "podman system migrate"
+          - result.systemout ShouldContainSubstring "sudo usermod --add-subuids 10000000-15999999 --add-subgids 10000000-15999999 -- tvaughan"
+          - result.systemout ShouldContainSubstring "README.md#required-build-uidgid-mappings"
+          - result.systemout ShouldContainSubstring "BUILD_NOT_CALLED"
+          - result.systemout ShouldContainSubstring "CONFIGS_PRESERVED"
+
+  - name: suggested allocation clears existing subordinate ranges and account IDs
+    steps:
+      - type: exec
+        script: |
+          source "{{.root}}/tests/lib/build-test-helpers.sh"
+          setup_build_test "{{.root}}"
+          export TEST_SUBIDS='tvaughan:165536:165536
+          other:20000000:1000000'
+          export TEST_PASSWD='other:x:22000000:22000000::/:/bin/false'
+          export TEST_GROUP='other:x:23000000:'
+          run_build_test
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldContainSubstring "sudo usermod --add-subuids 24000000-29999999 --add-subgids 24000000-29999999 -- tvaughan"
+          - result.systemout ShouldContainSubstring "BUILD_NOT_CALLED"
+
+  - name: no command is suggested when account lookup fails
+    steps:
+      - type: exec
+        script: |
+          source "{{.root}}/tests/lib/build-test-helpers.sh"
+          setup_build_test "{{.root}}"
+          export ACCOUNT_PROBE_FAILURE=1
+          run_build_test
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldNotContainSubstring "sudo usermod"
+          - result.systemout ShouldContainSubstring "Cannot suggest a range"
+
+  - name: suggested allocation never exceeds the usable ID limit
+    steps:
+      - type: exec
+        script: |
+          source "{{.root}}/tests/lib/build-test-helpers.sh"
+          setup_build_test "{{.root}}"
+          export TEST_SUBIDS='other:4294000000:900000'
+          run_build_test
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldNotContainSubstring "sudo usermod"
+          - result.systemout ShouldContainSubstring "Cannot suggest a range"
+
+  - name: GID is checked independently when UID is mapped
+    steps:
+      - type: exec
+        script: |
+          source "{{.root}}/tests/lib/build-test-helpers.sh"
+          setup_build_test "{{.root}}"
+          export UID_MAP='0 4243795 1
+          1 10000000 5000000'
+          run_build_test
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldContainSubstring "GID 5243795"
+          - result.systemout ShouldContainSubstring "BUILD_NOT_CALLED"
+          - result.systemout ShouldContainSubstring "CONFIGS_PRESERVED"
+
+  - name: split mappings cover their final included UID and GID
+    steps:
+      - type: exec
+        script: |
+          source "{{.root}}/tests/lib/build-test-helpers.sh"
+          setup_build_test "{{.root}}"
+          export UID_MAP='0 4243795 1
+          1 165536 65536
+          65537 10000000 4178259'
+          export GID_MAP='0 5243795 1
+          1 231072 65536
+          65537 15000000 5178259'
+          run_build_test
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BUILD_CALLED"
+
+  - name: an ID at the exclusive end of a mapping is rejected
+    steps:
+      - type: exec
+        script: |
+          source "{{.root}}/tests/lib/build-test-helpers.sh"
+          setup_build_test "{{.root}}"
+          export UID_MAP='0 10000000 4243795'
+          export GID_MAP='0 15000000 5243796'
+          run_build_test
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldContainSubstring "UID 4243795"
+          - result.systemout ShouldContainSubstring "BUILD_NOT_CALLED"
+
+  - name: an ID in a gap is rejected even when later ranges exist
+    steps:
+      - type: exec
+        script: |
+          source "{{.root}}/tests/lib/build-test-helpers.sh"
+          setup_build_test "{{.root}}"
+          export UID_MAP='0 10000000 65537
+          4243796 15000000 100'
+          run_build_test
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldContainSubstring "UID 4243795"
+          - result.systemout ShouldContainSubstring "BUILD_NOT_CALLED"
+
+  - name: a failed namespace probe preserves the runtime error and stops the build
+    steps:
+      - type: exec
+        script: |
+          source "{{.root}}/tests/lib/build-test-helpers.sh"
+          setup_build_test "{{.root}}"
+          export PROBE_FAILURE=1
+          run_build_test
+        assertions:
+          - result.code ShouldEqual 1
+          - 'result.systemout ShouldContainSubstring "newuidmap: fixture permission denied"'
+          - result.systemout ShouldContainSubstring "ERROR:"
+          - result.systemout ShouldContainSubstring "BUILD_NOT_CALLED"
+          - result.systemout ShouldContainSubstring "CONFIGS_PRESERVED"
+
+  - name: an empty namespace map cannot silently bypass the check
+    steps:
+      - type: exec
+        script: |
+          source "{{.root}}/tests/lib/build-test-helpers.sh"
+          setup_build_test "{{.root}}"
+          export UID_MAP=''
+          run_build_test
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldContainSubstring "UID 4243795"
+          - result.systemout ShouldContainSubstring "BUILD_NOT_CALLED"
+
+  - name: rootful Podman builds do not call the rootless-only unshare command
+    steps:
+      - type: exec
+        script: |
+          source "{{.root}}/tests/lib/build-test-helpers.sh"
+          setup_build_test "{{.root}}"
+          export TEST_UID=0 TEST_GID=0
+          export PROBE_FAILURE=1
+          run_build_test
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BUILD_CALLED"
