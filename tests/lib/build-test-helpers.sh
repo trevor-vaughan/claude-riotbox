@@ -16,7 +16,8 @@ setup_build_test() {
 	export TEST_SUBIDS='tvaughan:165536:165536'
 	export TEST_PASSWD='tvaughan:x:4243795:5243795::/home/tvaughan:/bin/bash'
 	export TEST_GROUP='tvaughan:x:5243795:'
-	export TEST_REAL_CAT="$(command -v cat)"
+	TEST_REAL_CAT="$(command -v cat)"
+	export TEST_REAL_CAT
 	export UID_MAP='0 4243795 1
 1 165536 65536'
 	export GID_MAP='0 5243795 1
