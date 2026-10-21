@@ -1,0 +1,25 @@
+README.md
+  s_afca4be7dae224::t_c7790a87406274 216,1465,1532,1544-1546,1552,1556-1564
+docs/dev/adding-an-agent.md
+  s_afca4be7dae224::t_664ac807b219d5 59
+docs/dev/agent-contract.md
+  s_afca4be7dae224::t_931d4a03bbcdd6 188-191,727,733
+THREAT_MODEL.md
+  s_afca4be7dae224::t_5e9d8c0e26f661 962-963,1035-1036,1044-1065,1244-1245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eada815397f6d06c08e7e945bddc09c6081ca2cd",
+  "prompts": {},
+  "sessions": {
+    "s_afca4be7dae224": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5748b254-915c-42af-9971-6637ec8b162f",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
