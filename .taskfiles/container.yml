@@ -15,7 +15,7 @@ tasks:
     cmd: "{{.ROOT_DIR}}/scripts/build.sh"
 
   build-gh-glab:
-    desc: Build the riotbox-gh-glab flavor (base image plus the gh and glab CLIs and the GitHub MCP server)
+    desc: Build the riotbox-gh-glab flavor (base image plus the gh and glab CLIs)
     env:
       RIOTBOX_GH_GLAB: "1"
     cmd: "{{.ROOT_DIR}}/scripts/build.sh"

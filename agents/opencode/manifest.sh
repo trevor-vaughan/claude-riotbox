@@ -18,9 +18,7 @@ _AGENT_OPENCODE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./context-mode.sh
 source "${_AGENT_OPENCODE_DIR}/context-mode.sh"
 
-# GitHub/GitLab MCP verbs (optional contract — see docs/dev/agent-contract.md).
-# Only the riotbox-gh-glab image ships the commands that call these; the verbs
-# themselves are harmless everywhere else, since nothing invokes them unasked.
+# Removal of the GitHub/GitLab MCP entries earlier images wired (issue #19).
 # shellcheck source=./forge-mcp.sh
 source "${_AGENT_OPENCODE_DIR}/forge-mcp.sh"
 
@@ -157,11 +155,15 @@ agent_opencode_headroom_argv() {
 # opencode.jsonc (combining host opencode.json + opencode.jsonc with
 # riotbox-mandatory overrides) on every container start; both are idempotent.
 # Then move Context Mode stores an earlier release left under the config dir
-# (see context-mode.sh). entrypoint.sh runs this before context_mode_setup.
+# (see context-mode.sh). Finally strip any GitHub/GitLab MCP entry an earlier
+# image left in the persisted opencode.jsonc, which opencode_setup merges back
+# in. entrypoint.sh runs this before context_mode_setup, after sourcing
+# scripts/lib/json-write.sh.
 agent_opencode_container_setup() {
 	# shellcheck source=./setup.sh
 	source "${_AGENT_OPENCODE_DIR}/setup.sh"
 	opencode_setup
+	opencode_strip_forge_mcp_entries
 	_agent_opencode_cm_migrate_store
 }
 

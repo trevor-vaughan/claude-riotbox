@@ -18,6 +18,6 @@ tasks:
       - task: :container:build
 
   gh-glab:
-    desc: "Build the riotbox-gh-glab flavor (adds the gh and glab CLIs and the GitHub MCP server)"
+    desc: "Build the riotbox-gh-glab flavor (adds the gh and glab CLIs)"
     cmds:
       - task: :container:build-gh-glab

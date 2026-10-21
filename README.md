@@ -213,7 +213,7 @@ Pi core tracks the latest release, like opencode and Claude Code: each image bui
 
 Pi runs without approval prompts and trusts every project: a project's `.pi/` settings, extensions, skills, prompt templates and MCP servers load without a prompt. As with the other agents, the container is the security boundary.
 
-Pi is not wired for [headroom](#headroom-context-compression-opt-in) (headroom has no Pi wrapper) or for the [forge MCP servers](#github-and-gitlab-the-riotbox-gh-glab-flavor). It is wired for [Context Mode](#context-mode-opt-in) and [git-ai](#ai-authorship-attribution-git-ai).
+Pi is not wired for [headroom](#headroom-context-compression-opt-in) (headroom has no Pi wrapper). It is wired for [Context Mode](#context-mode-opt-in) and [git-ai](#ai-authorship-attribution-git-ai).
 
 ### Pi auth
 
@@ -308,7 +308,6 @@ The image comes with a broad set of tools pre-installed so the agent can start w
 
 - [`gh`](https://github.com/cli/cli) — GitHub CLI
 - [`glab`](https://gitlab.com/gitlab-org/cli) — GitLab CLI
-- [`github-mcp-server`](https://github.com/github/github-mcp-server) — GitHub's MCP server (registered on demand, never by default)
 
 ## Plugins
 
@@ -1463,9 +1462,7 @@ Details worth knowing:
 
 ## GitHub and GitLab (the riotbox-gh-glab flavor)
 
-A second image, `riotbox-gh-glab`, adds the `gh` and `glab` CLIs and can attach the
-GitHub and GitLab MCP servers to your agents. Neither MCP server is registered by
-default — you turn each one on per session, with a command.
+A second image, `riotbox-gh-glab`, adds the `gh` and `glab` CLIs (from EPEL).
 
 ```sh
 # Build it. Tags riotbox-gh-glab; the base riotbox image is untouched.
@@ -1532,7 +1529,7 @@ podman rmi riotbox-gh-glab          # or: docker rmi riotbox-gh-glab
 
 ### Getting your tokens into the session
 
-The MCP servers authenticate with tokens from the environment, and those have to
+`gh` and `glab` authenticate with tokens from the environment, and those have to
 reach the container. They are deliberately **not** forwarded by default — that would
 push your forge credentials into every riotbox session, including ones with no forge
 tooling and no reason to hold a token.
@@ -1544,68 +1541,33 @@ RIOTBOX_PASSTHROUGH_EXTRA_VARS="GITHUB_TOKEN GITLAB_TOKEN GITLAB_HOST"
 
 | Variable | Used by | Notes |
 |---|---|---|
-| `GITHUB_TOKEN` | GitHub MCP server, `gh` | `GITHUB_PERSONAL_ACCESS_TOKEN` is used instead when both are set |
-| `GITLAB_TOKEN` | GitLab MCP server, `glab` | needs GitLab's `mcp` token scope |
-| `GITLAB_HOST` | GitLab MCP server, `glab` | bare host or full URL; defaults to `gitlab.com` |
-
-### Turning the servers on and off
-
-Inside the container:
-
-```sh
-enable_github_mcp      # register the GitHub MCP server with every agent
-enable_gitlab_mcp      # register the GitLab MCP server with every agent
-
-disable_github_mcp     # take it back out
-disable_gitlab_mcp
-```
-
-Each command prints one status line per agent and exits non-zero if any agent
-failed. The detail is on stderr — which entry was removed, and which one was
-left alone because you wrote it rather than riotbox — so keep both streams if
-you are redirecting. If no token variable is set it tells you which ones it
-looked for and writes nothing.
-
-Claude Code and opencode are wired; Pi is not. For Pi the commands print
-`[forge-mcp] pi: no github MCP support — skipped.` (or `gitlab`) on stderr and
-leave its config alone. That skip does not count as a failure.
-
-Three things worth knowing:
-
-- **Start or restart your agent afterwards.** MCP servers are read when an agent
-  starts, so a `claude` already running in another pane will not see the change.
-- **Re-run these after a container restart if you use opencode.** riotbox rebuilds
-  opencode's config from your host config at every session start, so opencode wiring
-  lasts one session. Claude Code's persists.
-- **Your token is never written to disk.** What lands in the agent config is a
-  *reference* to the environment variable — `${GITHUB_TOKEN}` for Claude Code,
-  `{env:GITHUB_TOKEN}` for opencode — which the agent expands when it launches the
-  server. Session directories live on your host and outlast the container, so a token
-  written into one would outlast it too.
-
-### GitLab specifics
-
-GitLab's MCP server is not a separate program: it is an endpoint on your own GitLab
-instance at `https://<host>/api/v4/mcp`, and `enable_gitlab_mcp` points your agents
-at it. Your instance has to have it switched on — see
-[GitLab's MCP server documentation](https://docs.gitlab.com/user/model_context_protocol/mcp_server/)
-for the instance and group settings involved.
-
-Create a personal access token with the **`mcp`** scope and export it as
-`GITLAB_TOKEN`. GitLab documents browser-based OAuth as the usual way to connect,
-which is no use in a headless container; a token in the `Authorization` header is the
-path that works here.
+| `GITHUB_TOKEN` | `gh` | `gh` prefers `GH_TOKEN` when both are set |
+| `GITLAB_TOKEN` | `glab` | |
+| `GITLAB_HOST` | `glab` | host or URL of a self-managed instance, e.g. `gitlab.example.com`; defaults to `gitlab.com` |
 
 ### `gh` and `glab` themselves
 
 Both are on `PATH` and read their own environment variables (`GITHUB_TOKEN`,
 `GITLAB_TOKEN`, `GITLAB_HOST`), so once those are passed through they work with no
-further setup. Neither is touched by the enable commands — those are only about MCP.
+further setup.
 
 > **A word on prompt injection.** Pointing an autonomous agent at issues, pull
 > requests and merge requests means feeding it text written by anyone who can open
-> one. Treat MCP tool output as untrusted input; enable these servers for work on
-> repositories whose contributors you trust. See [Security model](#security-model).
+> one. Treat what the CLIs print — issue bodies, PR comments — as untrusted input,
+> and use a token scoped no wider than the work needs. See
+> [Security model](#security-model).
+
+Earlier images also offered `enable_github_mcp` and `enable_gitlab_mcp`. They were
+removed in favor of the CLIs, which models already know and which cost no context
+until used. Any server entry they wrote into a session's Claude Code or opencode
+config is removed automatically at the next session start, with a note on stderr.
+A server you configured yourself is left alone unless it exactly matches what
+riotbox wrote: an unmodified `github-mcp-server stdio` entry, or a GitLab
+`/api/v4/mcp` entry whose only header is a bearer token variable reference
+(`Bearer ${VAR}` for Claude Code, `Bearer {env:VAR}` for opencode). To keep such
+a server, change what riotbox matches on: add an argument, an environment
+variable or a header, or use a literal token. Other fields, such as a timeout,
+do not count.
 
 ## Overlay mode (podman-only)
 

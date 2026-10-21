@@ -5,12 +5,11 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-# Build flavor. RIOTBOX_GH_GLAB=1 adds the gh and glab CLIs and the GitHub MCP
-# server binary, and names the result riotbox-gh-glab so it sits alongside the
-# base image rather than replacing it. An IMAGE_NAME the caller set explicitly
-# still wins — it is the documented knob every launcher and preflight check
-# already reads, and a flavor default that overrode it would break `IMAGE_NAME=
-# my-tag riotbox build` for no gain.
+# Build flavor. RIOTBOX_GH_GLAB=1 adds the gh and glab CLIs and names the result
+# riotbox-gh-glab so it sits alongside the base image rather than replacing it.
+# An IMAGE_NAME the caller set explicitly still wins — it is the documented knob
+# every launcher and preflight check already reads, and a flavor default that
+# overrode it would break `IMAGE_NAME= my-tag riotbox build` for no gain.
 RIOTBOX_GH_GLAB="${RIOTBOX_GH_GLAB:-0}"
 if [[ "${RIOTBOX_GH_GLAB}" = "1" ]]; then
 	IMAGE_NAME="${IMAGE_NAME:-riotbox-gh-glab}"
@@ -392,7 +391,7 @@ else
 fi
 echo "  Diagram tools:   ${_diagrams}"
 if [[ "${RIOTBOX_GH_GLAB}" = "1" ]]; then
-	_gh_glab="gh + glab + github-mcp-server"
+	_gh_glab="gh + glab"
 else
 	_gh_glab="(skipped — set RIOTBOX_GH_GLAB=1 to include)"
 fi

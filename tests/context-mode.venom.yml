@@ -1099,10 +1099,10 @@ testcases:
   # it before installing it.
   #
   # The file-wide greps below pin SHAPE only: that the ARGs exist and carry the
-  # right form, in the shape tests/gh-glab-build.venom.yml pins
-  # github-mcp-server's. Whether the layer GATES the install on any of it is a
-  # property of the block, not of the file, so the rest is scoped to the lines
-  # between the first bun ARG and the pin-mismatch message.
+  # right form, as the venom pin in the tools stage has them. Whether the layer
+  # GATES the install on any of it is a property of the block, not of the file,
+  # so the rest is scoped to the lines between the first bun ARG and the
+  # pin-mismatch message.
   #
   # The block's own boundaries are asserted first, in both directions, because
   # a sed range that has stopped delimiting silently widens every check below

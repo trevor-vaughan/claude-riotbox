@@ -19,9 +19,7 @@ _AGENT_CLAUDE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./context-mode.sh
 source "${_AGENT_CLAUDE_DIR}/context-mode.sh"
 
-# GitHub/GitLab MCP verbs (optional contract — see docs/dev/agent-contract.md).
-# Only the riotbox-gh-glab image ships the commands that call these; the verbs
-# themselves are harmless everywhere else, since nothing invokes them unasked.
+# Removal of the GitHub/GitLab MCP entries earlier images wired (issue #19).
 # shellcheck source=./forge-mcp.sh
 source "${_AGENT_CLAUDE_DIR}/forge-mcp.sh"
 
@@ -99,11 +97,13 @@ agent_claude_headroom_argv() {
 # Container-side runtime setup. setup.sh is a no-op in the common case
 # (managed policy /etc/claude-code/CLAUDE.md is rendered at build time);
 # it only does work when RIOTBOX_PROMPT overrides or the build-time render
-# is missing.
+# is missing. The forge MCP strip then takes back any GitHub/GitLab server
+# entry an earlier image left in the persisted .claude.json.
 agent_claude_container_setup() {
 	# shellcheck source=./setup.sh
 	source "${_AGENT_CLAUDE_DIR}/setup.sh"
 	claude_setup
+	claude_strip_forge_mcp_entries
 }
 
 # Host-side config sync. sync-settings.sh handles credentials, config,

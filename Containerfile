@@ -770,7 +770,7 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
 # Mode event-bridge directories only chmods and re-asserts local paths, so an
 # update re-runs it for free. The gh/glab block does nothing unless
 # RIOTBOX_GH_GLAB=1 selected that flavor — where an update also re-installs gh
-# and glab from EPEL and re-downloads the pinned github-mcp-server tarball.
+# and glab from EPEL.
 #
 # headroom, CodeGraph, bun, Context Mode and its plugin tree are
 # version-pinned, so an update re-installs them unchanged, re-fetching
@@ -1109,10 +1109,10 @@ RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
 #
 # The release asset, not https://bun.sh/install: RIOTBOX-20260312-001 is open
 # and asks every download in this image for download-then-verify against a
-# pinned SHA256, which a piped installer cannot give. Same treatment venom and
-# github-mcp-server get, and pinning costs nothing extra here — the version was
-# already the only control over what lands, since nothing in this layer probes
-# for a feature the way the opencode block probes for --auto.
+# pinned SHA256, which a piped installer cannot give. Same treatment venom gets,
+# and pinning costs nothing extra here — the version was already the only
+# control over what lands, since nothing in this layer probes for a feature the
+# way the opencode block probes for --auto.
 #
 # Unlike venom, upstream publishes SHASUMS256.txt per release, so the digests
 # below are transcribed from it rather than self-computed. They are still
@@ -1144,14 +1144,13 @@ RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
 #   3. Update BUN_VERSION + BUN_SHA256_AMD64 + BUN_SHA256_ARM64 below
 #
 # Three naming divergences below, all deliberate. The ARG suffixes follow this
-# file's _AMD64/_ARM64 convention. The case labels do not: they match
-# `uname -m` untranslated (x86_64, aarch64) rather than venom's sed to
-# amd64/arm64, and each arm sets upstream's asset name beside the digest
-# that goes with it, so the two cannot drift apart. And BUN_VERSION is bare
-# where VENOM_VERSION and GITHUB_MCP_SERVER_VERSION both carry a leading v —
-# `bun --version` prints 1.4.2, so the bare form is what the check at the end
-# can compare against, and the URL puts the v back as part of the
-# bun-v${BUN_VERSION} tag.
+# file's _AMD64/_ARM64 convention. The case labels do not: they match `uname -m`
+# untranslated (x86_64, aarch64) rather than venom's sed to amd64/arm64, and
+# each arm sets upstream's asset name beside the digest that goes with it, so
+# the two cannot drift apart. And BUN_VERSION is bare where VENOM_VERSION
+# carries a leading v — `bun --version` prints 1.4.2, so the bare form is what
+# the check at the end can compare against, and the URL puts the v back as part
+# of the bun-v${BUN_VERSION} tag.
 ARG BUN_VERSION=1.4.2
 ARG BUN_SHA256_AMD64=c678040f14fe0440eb839d37cbd0ce4c051a32da72806ac97de6a6aab6bf728f
 ARG BUN_SHA256_ARM64=54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7
@@ -1752,10 +1751,11 @@ RUN STAGING_DIR=/home/llm/.riotbox/plugins-staging/.claude && \
 # ═════════════════════════════════════════════════════════════════════════════
 # Build flavor: riotbox-gh-glab (opt-in, RIOTBOX_GH_GLAB=1)
 # ═════════════════════════════════════════════════════════════════════════════
-# Adds the gh and glab CLIs plus the GitHub MCP server binary, and ships the
-# four commands that wire the GitHub and GitLab MCP servers into every agent on
-# demand. Build it with `task container:build-gh-glab`, which tags the result
-# riotbox-gh-glab so it sits beside the base image rather than replacing it.
+# Adds the gh and glab CLIs. There is no GitHub or GitLab MCP server: models
+# already drive both CLIs well and the servers' tool schemas cost more context
+# than they returned (issue #19). Build it with `task container:build-gh-glab`,
+# which tags the result riotbox-gh-glab so it sits beside the base image rather
+# than replacing it.
 #
 # ── Why this block is at the very bottom of the file ────────────────────────
 #
@@ -1763,44 +1763,18 @@ RUN STAGING_DIR=/home/llm/.riotbox/plugins-staging/.claude && \
 # after that point rebuilds. RIOTBOX_DIAGRAMS (near the top) is the pattern this
 # follows but deliberately not the placement: it gates a base system package, so
 # it has to be consumed early and a diagrams build genuinely does rebuild the
-# world. This flavor is two rpms and one static binary. Consumed last, the base
-# image and the flavor share every layer up to this one, and building the flavor
-# after the base costs a minute instead of an hour.
+# world. This flavor is two rpms. Consumed last, the base image and the flavor
+# share every layer up to this one, and building the flavor after the base costs
+# a minute instead of an hour.
 #
 # tests/gh-glab-build.venom.yml asserts this ARG stays in the last tenth of the
 # file, because losing the property costs an hour per build and is invisible in
 # a build that otherwise succeeds.
 
-# The commands are copied unconditionally — COPY cannot be made conditional, and
-# they are inert here. ~/.riotbox is a library directory: nothing runs anything
-# from it unprompted, and only the flavor below puts these on PATH. Copying them
-# in every image keeps one COPY instead of a duplicated conditional one.
-COPY --chown=llm:llm container/forge-mcp.sh /home/llm/.riotbox/forge-mcp.sh
-COPY --chown=llm:llm container/enable_github_mcp /home/llm/.riotbox/enable_github_mcp
-COPY --chown=llm:llm container/enable_gitlab_mcp /home/llm/.riotbox/enable_gitlab_mcp
-COPY --chown=llm:llm container/disable_github_mcp /home/llm/.riotbox/disable_github_mcp
-COPY --chown=llm:llm container/disable_gitlab_mcp /home/llm/.riotbox/disable_gitlab_mcp
-
 ARG RIOTBOX_GH_GLAB=0
 
-# github-mcp-server — GitHub's own MCP server (https://github.com/github/github-mcp-server)
-# Pinned per supply-chain review, same treatment as venom in the tools stage.
-# Upstream DOES publish a checksums file, but fetching it at build time would
-# authenticate the download against a file from the same unauthenticated place,
-# which proves nothing. The digests are therefore pinned here, transcribed once
-# from that file at review time. To refresh:
-#   1. Pick a new tag at https://github.com/github/github-mcp-server/releases
-#   2. Read the Linux digests out of the release's checksums file:
-#        curl -sL "https://github.com/github/github-mcp-server/releases/download/<TAG>/github-mcp-server_<VER>_checksums.txt" \
-#          | grep -E 'Linux_(x86_64|arm64)'
-#   3. Update the three ARGs below (VERSION carries the leading v, the
-#      tarball name does not)
-ARG GITHUB_MCP_SERVER_VERSION=v1.12.2
-ARG GITHUB_MCP_SERVER_SHA256_AMD64=95843162759da2c31dde082dd145be35db82164594796c294414b69790c2290e
-ARG GITHUB_MCP_SERVER_SHA256_ARM64=2b30f9fcc061b57456cbe38ddc0f13c88863bad49557508a9196f2d1c4cb17a5
-
-# Root for the rpm install and for writing to /usr/local/bin; back to llm at the
-# end, since the entrypoint and every agent run as llm.
+# Root for the rpm install; back to llm at the end, since the entrypoint and
+# every agent run as llm.
 #
 # gh and glab both come from EPEL, which is already enabled in the system
 # packages layer. One provenance model, distro-signed, no checksum table to
@@ -1812,41 +1786,14 @@ RUN if [ "${RIOTBOX_GH_GLAB}" = "1" ]; then \
         dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
             gh glab \
         && dnf clean all \
-        && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc /usr/share/info \
-        && bash -o pipefail -c '\
-            ARCH=$(uname -m | sed "s/aarch64/arm64/") && \
-            case "${ARCH}" in \
-                x86_64) EXPECTED_SHA="'"${GITHUB_MCP_SERVER_SHA256_AMD64}"'" ;; \
-                arm64)  EXPECTED_SHA="'"${GITHUB_MCP_SERVER_SHA256_ARM64}"'" ;; \
-                *) echo "unsupported arch: ${ARCH}" >&2; exit 1 ;; \
-            esac && \
-            VER="'"${GITHUB_MCP_SERVER_VERSION}"'" && \
-            curl -fsSLo /tmp/gh-mcp.tar.gz \
-                "https://github.com/github/github-mcp-server/releases/download/${VER}/github-mcp-server_Linux_${ARCH}.tar.gz" && \
-            echo "${EXPECTED_SHA}  /tmp/gh-mcp.tar.gz" | sha256sum -c - && \
-            tar -xzf /tmp/gh-mcp.tar.gz -C /tmp github-mcp-server && \
-            install -m 0755 /tmp/github-mcp-server /usr/local/bin/github-mcp-server && \
-            rm -f /tmp/gh-mcp.tar.gz /tmp/github-mcp-server' \
-        && for c in enable_github_mcp enable_gitlab_mcp disable_github_mcp disable_gitlab_mcp; do \
-               ln -sf "/home/llm/.riotbox/${c}" "/home/llm/.local/bin/${c}"; \
-           done; \
+        && rm -rf /var/cache/dnf /var/log/dnf* /usr/share/man /usr/share/doc /usr/share/info; \
     fi
 USER llm
 
 # Fail the build, not a user session, when the flavor did not come out whole.
-# Each of these is something a user would otherwise discover as a missing
-# command halfway through a task: an EPEL package renamed, a release asset gone,
-# a symlink pointing at a file that was never copied. The final disable_github_mcp
-# call is an execution probe, not just a PATH probe: a command can resolve on
-# PATH and still fail to find its own library, which command -v and -x cannot
-# catch (see the four commands' BASH_SOURCE-vs-symlink history).
+# An EPEL package renamed would otherwise surface as a missing command halfway
+# through a task; running --version also proves each binary executes.
 RUN if [ "${RIOTBOX_GH_GLAB}" = "1" ]; then \
         gh --version && \
-        glab --version && \
-        github-mcp-server --version && \
-        for c in enable_github_mcp enable_gitlab_mcp disable_github_mcp disable_gitlab_mcp; do \
-            command -v "${c}" >/dev/null || { echo "${c} is not on PATH" >&2; exit 1; }; \
-            [ -x "/home/llm/.riotbox/${c}" ] || { echo "${c} is not executable" >&2; exit 1; }; \
-        done && \
-        { disable_github_mcp || { echo "disable_github_mcp failed when invoked through PATH" >&2; exit 1; }; }; \
+        glab --version; \
     fi
