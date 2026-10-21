@@ -1,0 +1,68 @@
+name: image disables tool update checks and telemetry
+vars:
+  root: "."
+  riotbox_dir: "."
+
+# Every tool below is version-pinned by the image, so a startup update check
+# is only an outbound request — a leak surface the image otherwise closes
+# (see the opencode opt-outs beside these exports). The variable names were
+# taken from each tool's own docs: `glab --help` (GLAB_*), `gh help
+# environment`, `grype config` / `syft config` (the "(env: …)" annotations),
+# and `trivy fs --help` (--skip-version-check, --disable-telemetry; trivy
+# reads each flag from TRIVY_<FLAG>, confirmed with `trivy --debug`).
+# None of these tools are in the test image, so the cases check what a shell
+# sourcing the .bashrc block exports rather than running the tools.
+
+testcases:
+  - name: glab update check and telemetry are off
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/tests/lib/bashrc-test-helpers.sh"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          riotbox_shell_env "{{.riotbox_dir}}" "${tmp}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "(?m)^GLAB_CHECK_UPDATE=false$"
+          - result.systemout ShouldMatchRegex "(?m)^GLAB_SEND_TELEMETRY=false$"
+
+  - name: gh update notifier is off
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/tests/lib/bashrc-test-helpers.sh"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          riotbox_shell_env "{{.riotbox_dir}}" "${tmp}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "(?m)^GH_NO_UPDATE_NOTIFIER=1$"
+
+  - name: scanner update checks are off
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/tests/lib/bashrc-test-helpers.sh"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          riotbox_shell_env "{{.riotbox_dir}}" "${tmp}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "(?m)^GRYPE_CHECK_FOR_APP_UPDATE=false$"
+          - result.systemout ShouldMatchRegex "(?m)^SYFT_CHECK_FOR_APP_UPDATE=false$"
+          - result.systemout ShouldMatchRegex "(?m)^TRIVY_SKIP_VERSION_CHECK=true$"
+
+  # trivy ignores DO_NOT_TRACK: with only the version check skipped, its
+  # --debug log still reads "Telemetry sent".
+  - name: trivy telemetry is off
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/tests/lib/bashrc-test-helpers.sh"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          riotbox_shell_env "{{.riotbox_dir}}" "${tmp}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "(?m)^TRIVY_DISABLE_TELEMETRY=true$"
