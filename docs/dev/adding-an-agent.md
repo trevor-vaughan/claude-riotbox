@@ -46,7 +46,6 @@ agents/<name>/
   setup.sh           ← optional: container-side runtime setup
   sync-settings.sh   ← optional: host-side config sync
   context-mode.sh    ← optional: Context Mode verbs (sourced by manifest.sh)
-  forge-mcp.sh       ← optional: GitHub/GitLab MCP verbs (sourced by manifest.sh)
 ```
 
 The registry sources `agents/<name>/manifest.sh`. The manifest decides
@@ -57,9 +56,7 @@ are agent-private — the rest of the system never references them.
 ## The contract
 
 Every `agents/<name>/manifest.sh` must define eight functions, and may define
-optional ones for headroom, Context Mode, and the [GitHub/GitLab MCP
-servers](agent-contract.md#optional-verbs-forge-mcp-servers) that
-`enable_github_mcp` / `enable_gitlab_mcp` drive.
+optional ones for headroom and Context Mode.
 
 **→ [The agent contract](agent-contract.md)** documents each verb: its signature,
 what it must print, and the rules it has to honour.

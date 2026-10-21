@@ -413,36 +413,32 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "ARG_IS_LATE"
 
-  - name: github-mcp-server is version-pinned and checksum-verified for both arches
+  - name: the image ships no forge MCP server and no forge MCP commands
     steps:
       - type: exec
         script: |
           set -euo pipefail
-          cd "{{.root}}"
-          grep -E '^ARG GITHUB_MCP_SERVER_VERSION=v[0-9]+\.[0-9]+\.[0-9]+$' Containerfile
-          grep -E '^ARG GITHUB_MCP_SERVER_SHA256_AMD64=[0-9a-f]{64}$' Containerfile
-          grep -E '^ARG GITHUB_MCP_SERVER_SHA256_ARM64=[0-9a-f]{64}$' Containerfile
-          grep -q 'sha256sum -c -' Containerfile
-          echo "PINNED_AND_VERIFIED"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "PINNED_AND_VERIFIED"
-
-  - name: the four forge commands are copied into the image
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          cd "{{.root}}"
-          for c in enable_github_mcp enable_gitlab_mcp disable_github_mcp disable_gitlab_mcp; do
-            test -x "container/${c}" || { echo "FAIL: container/${c} is not executable" >&2; exit 1; }
-            grep -q "container/${c}" Containerfile || { echo "FAIL: ${c} is never COPYed" >&2; exit 1; }
+          cf="{{.root}}/Containerfile"
+          # Issue #19: the gh-glab flavor is the gh and glab CLIs only. The
+          # github-mcp-server needle forbids that string anywhere in the
+          # Containerfile, comments included.
+          for needle in github-mcp-server GITHUB_MCP_SERVER container/forge-mcp.sh \
+            enable_github_mcp disable_github_mcp enable_gitlab_mcp disable_gitlab_mcp; do
+            if grep -q "${needle}" "${cf}"; then
+              echo "FAIL: Containerfile still mentions ${needle}"; exit 1
+            fi
           done
-          grep -q 'container/forge-mcp.sh' Containerfile
-          echo "COMMANDS_SHIPPED"
+          for f in container/forge-mcp.sh container/enable_github_mcp \
+            container/disable_github_mcp container/enable_gitlab_mcp \
+            container/disable_gitlab_mcp; do
+            [ ! -e "{{.root}}/${f}" ] || { echo "FAIL: ${f} still exists"; exit 1; }
+          done
+          grep -qE '^[[:space:]]+gh glab \\$' "${cf}" \
+            || { echo "FAIL: the flavor no longer installs gh and glab"; exit 1; }
+          echo "no_forge_mcp=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "COMMANDS_SHIPPED"
+          - result.systemout ShouldContainSubstring "no_forge_mcp=pass"
 
   # `task build` and `task build:gh-glab` are the developer-facing pair. --dry
   # resolves and prints each one without running it, which proves the task

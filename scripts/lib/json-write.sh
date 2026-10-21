@@ -52,8 +52,8 @@
 #     (`-e` and `-f` both follow them), so a config path symlinked into a
 #     directory is refused on the same grounds. It is spelled as a test rather
 #     than as `mv -T` because that flag is GNU-only and the image is not the
-#     only place this file runs: container/forge-mcp.sh sources it from the
-#     source tree as well, on whatever host a developer runs the suites from.
+#     only place this file runs: the test suites source it from the
+#     source tree too, on whatever host a developer runs them from.
 json_write_atomic() {
 	local target_file="${1:?json_write_atomic requires a target file}"
 	local content="${2?json_write_atomic requires content}"

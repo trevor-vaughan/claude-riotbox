@@ -54,9 +54,10 @@ CODEGRAPH_WORKSPACE="${CODEGRAPH_WORKSPACE:-/workspace}"
 # starts a working second server — the exact conflict this change exists to end.
 #
 # Ownership is decided on the entry's SHAPE, never on the key name;
-# agents/claude/forge-mcp.sh sets out the reasoning at length. The same file
-# holds whatever the user configured on the host, under this very key, and an
-# entry they narrowed themselves is theirs to keep.
+# agents/claude/forge-mcp.sh applies the same rule to the forge entries. The
+# same file holds whatever the user configured on the host, under this very
+# key (sync-settings copies it in), and an entry they narrowed themselves is
+# theirs to keep.
 codegraph_strip_mcp_entry() {
 	local config="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/.claude.json"
 	[[ -f "${config}" ]] || return 0

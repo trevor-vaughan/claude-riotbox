@@ -192,7 +192,7 @@ print_command_help() {
 		echo "Environment knobs:"
 		echo "  NODE_VERSIONS_MAX=<N>|all  Cap baked-in Node versions (default 3)"
 		echo "  RIOTBOX_DIAGRAMS=1         Include Chromium + mmdc"
-		echo "  RIOTBOX_GH_GLAB=1          Include gh, glab + the GitHub MCP server;"
+		echo "  RIOTBOX_GH_GLAB=1          Include gh + glab;"
 		echo "                             tags 'riotbox-gh-glab', not 'riotbox'"
 		echo "  RIOTBOX_NONINTERACTIVE_BUILD=1  Skip the proceed prompt"
 		echo "  IMAGE_NAME=<tag>           Override the image tag"

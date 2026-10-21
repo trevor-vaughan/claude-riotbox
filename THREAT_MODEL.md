@@ -959,8 +959,8 @@ turns it off.
 
 **A new binary and its provenance.** `git-ai` is a static-PIE ELF pulled from a
 GitHub release asset, pinned by version (`v1.7.5`) and per-arch SHA256 in the
-`Containerfile` — the same download-then-verify shape venom, bun, and
-`github-mcp-server` already get, in place of upstream's own curl-to-shell
+`Containerfile` — the same download-then-verify shape venom and bun
+already get, in place of upstream's own curl-to-shell
 installer. The same limit applies as everywhere else in this image: the digest is
 transcribed from upstream's own `SHA256SUMS` at review time rather than fetched
 alongside the artifact, so it catches the bytes behind a fixed tag changing after
@@ -1032,23 +1032,9 @@ trap that has bitten this project twice.
 
 ## Forge credentials and the gh-glab flavor
 
-The `riotbox-gh-glab` image adds the `gh` and `glab` CLIs and can register the
-GitHub and GitLab MCP servers with the session's agents. It is a separate image and
-the MCP servers are off until a user runs `enable_github_mcp` or `enable_gitlab_mcp`,
-so nothing below applies to the base image or to a flavor session that never runs
-those commands.
-
-**No credential value is written to disk.** The wire verbs
-(`agents/*/forge-mcp.sh`) are handed the *name* of the variable holding the token and
-write a reference the agent expands when it spawns the server — `${GITHUB_TOKEN}` for
-Claude Code, `{env:GITHUB_TOKEN}` for opencode. This is a deliberate control, not
-incidental: `CLAUDE_CONFIG_DIR` and `OPENCODE_CONFIG_DIR` resolve into the session
-directory, which is a bind mount from the host, so a token written into an agent
-config would outlive the container, survive the agent exiting, and remain readable by
-anything on the host that can read the session directory — including after
-`riotbox session-remove` is forgotten. `tests/forge-mcp.venom.yml` asserts the
-property directly by wiring with sentinel token values and searching the whole tree
-for them, so a later refactor that inlines a value fails the suite.
+The `riotbox-gh-glab` image adds the `gh` and `glab` CLIs. It is a separate image,
+so nothing below applies to the base image, except the session-start strip of stale
+MCP entries, which runs in every image.
 
 **The tokens are not forwarded by default.** `GITHUB_TOKEN`, `GITLAB_TOKEN` and
 `GITLAB_HOST` are absent from the agent-registry passthrough union and reach a
@@ -1056,55 +1042,36 @@ session only through `RIOTBOX_PASSTHROUGH_EXTRA_VARS`. Adding them to the defaul
 would put a user's forge credentials into every riotbox session, base image included.
 Opting in per session keeps the blast radius at the sessions that asked for it.
 
-**What a token grants is the user's decision and is not narrowed here.** A GitHub PAT
-or a GitLab PAT carrying the `mcp` scope reaches whatever that token can reach, and an
-autonomous agent will use it. RiotBox does not write `--read-only` or a restricted
-`GITHUB_TOOLSETS` into the config: the server reads both from its inherited
-environment, so a session that wants them sets them, and a scope decision imposed
-here would be one the user did not make. Scope the token at the forge — that is the
-boundary that actually holds.
+**What a token grants is the user's decision and is not narrowed here.** A GitHub or
+GitLab token reaches whatever its scopes reach, and an autonomous agent will use it
+through the CLIs. Scope the token at the forge, as narrowly as the work allows — that
+is the boundary that actually holds.
 
-**A forge server you configured yourself is not deleted, and not replaced
-quietly.** The enable commands write the bare `github` and `gitlab` keys, and
-riotbox copies your host agent configuration into the session at launch — so an
-MCP entry you configured on the host, perhaps a deliberately narrowed one, sits
-under the same key. RiotBox decides whether an entry is its own from that
-entry's shape, never from the key name: `enable_*` warns on stderr before
-replacing an entry it did not write, naming the key and saying the entry's
-restrictions are not preserved, and `disable_*` leaves such an entry exactly
-where it is, warns, and reports success.
+**Prompt injection is the live exposure, and it is not mitigated.** The CLIs pull
+issues, pull requests, merge requests, comments and file contents into the agent's
+context — text written by anyone able to open an issue on a repository the token can
+read. That output is untrusted input. The agent runs with
+`--dangerously-skip-permissions` (claude) or `permission = "allow"` (opencode) and
+holds a credential that can write back. The controls that apply are the ones already
+in this document — the container boundary, `RIOTBOX_NETWORK` where a session can
+tolerate it, and a narrowly scoped token — plus the user's judgement about whose
+repositories to point an autonomous agent at. Recorded as an accepted risk of the
+feature.
 
-The shape is an exact statement of what riotbox writes — transport, argv, the
-GitLab endpoint path, and a credential block holding one variable reference and
-nothing else — so the narrowings people actually apply all read as differences:
-`--read-only` in argv, a `GITHUB_TOOLSETS` beside the token, a literal token in
-place of a reference, an extra header, a different endpoint. Two limits are
-worth stating plainly rather than claiming more than holds. An entry you wrote
-by hand that is identical *in shape* — same transport, same endpoint path, and
-a single credential reference, whatever variable it names — is indistinguishable
-from riotbox's by construction, and `disable_*` removes it. And `enable_*` does
-replace a foreign entry after warning — so on a session where you deliberately
-narrowed the server, read the warning instead of running the enable command out
-of habit.
-
-**Prompt injection is the live exposure, and it is not mitigated.** These servers
-exist to pull issues, pull requests, merge requests, comments and file contents into
-the agent's context — text written by anyone able to open an issue on a repository
-the token can read. The agent runs with `--dangerously-skip-permissions` (claude) or
-`permission = "allow"` (opencode) and holds a credential that can write back. GitLab's
-own documentation raises this for interactive clients; it is sharper here. The
-controls that apply are the ones already in this document — the container boundary,
-`RIOTBOX_NETWORK` where a session can tolerate it, and the fact that the servers are
-off unless switched on — plus the user's judgement about whose repositories to point
-an autonomous agent at. Recorded as an accepted risk of the feature.
+**Stale MCP entries from earlier images are removed at session start.** Earlier
+images could register GitHub and GitLab MCP servers in the session's Claude Code and
+opencode config. The session-start strip (`agents/claude/forge-mcp.sh`,
+`agents/opencode/forge-mcp.sh`) deletes only entries matching the exact shape riotbox
+wrote, never deciding on the key name. An entry the user narrowed (`--read-only`,
+`GITHUB_TOOLSETS`, a literal token, an extra header, a different endpoint) is left
+alone. An entry written by hand that is identical in shape (same transport, same
+command or `/api/v4/mcp` endpoint, and a single credential-variable reference)
+cannot be told apart from riotbox's and is removed from the session copy; the host
+file is never modified. The strip adds no credential value, rewrites the file only
+when it removed an entry, and re-emits every other entry unchanged.
 
 **Supply chain.** `gh` and `glab` come from EPEL and carry the distribution's
 signatures, checked by `dnf`, at the cost of trailing upstream by a few releases.
-`github-mcp-server` is a pinned release tarball verified against a SHA256 recorded in
-the `Containerfile` — the same treatment venom gets, and for the same reason: the
-digest is transcribed at review time rather than fetched alongside the artifact,
-because a checksum retrieved from the same unauthenticated place as the file it
-describes proves nothing.
 
 ## Findings
 
@@ -1280,8 +1247,8 @@ and exfiltrate credentials.
   verify SHA256 against a pinned hash, (3) execute only if hash matches. For the
   base image, use FROM quay.io/centos/centos:stream10@sha256:<digest>. For tools
   with published checksums (trivy, grype, syft), verify them. For venom (no
-  published checksums), compute and pin a self-managed SHA256. Done for venom,
-  github-mcp-server, and bun — each fetches a version-pinned release asset and
+  published checksums), compute and pin a self-managed SHA256. Done for venom
+  and bun — each fetches a version-pinned release asset and
   verifies it against a SHA256 recorded in the `Containerfile` before use; bun
   takes its digests from the `SHASUMS256.txt` upstream publishes per release
   rather than self-computing them, and reaches the binary directly instead of

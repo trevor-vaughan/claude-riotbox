@@ -132,14 +132,12 @@ context_mode_staged_version() {
 #
 # The two files record one fact between them — where this session's Context Mode
 # is — so both replacement documents are parsed, built and formatted before
-# either is written, the rule agents/claude/forge-mcp.sh states for the config it
-# owns and the one docs/dev/agent-contract.md puts on a wire verb. Every failure
-# that can be seen before the filesystem is touched at all is therefore seen
-# while both files are still exactly as the user left them, rather than after
-# the registry has been committed to a path the marketplace file never learns
-# about. That covers both files being unreadable, both entries being unbuildable
-# and both documents being unformattable — every way this can fail except the
-# writes themselves.
+# either is written. Any failure that can be seen before the filesystem is
+# touched at all is therefore seen while both files are still exactly as the
+# user left them, rather than after the registry has been committed to a path
+# the marketplace file never learns about. That covers both files being
+# unreadable, both entries being unbuildable and both documents being
+# unformattable — every way this can fail except the writes themselves.
 #
 # What that does not buy is a transaction, and nothing here should be read as
 # claiming one. json_write_atomic makes each file's replacement atomic on its

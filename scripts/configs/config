@@ -183,13 +183,12 @@
 #   * SSH_AUTH_SOCK — Unix socket forwarding has a different mount
 #     model and gives the container live signing access for the host
 #     SSH agent's lifetime; out of scope here.
-#   * Forge credentials — GITHUB_TOKEN, GITHUB_PERSONAL_ACCESS_TOKEN,
-#     GITLAB_TOKEN, plus GITLAB_HOST for a self-managed instance.
-#     Forwarding them by default would put a token that can push code
-#     and open merge requests into every session, including the ones
-#     with no forge tooling in the image. Only the riotbox-gh-glab
-#     flavor has anything that uses them. See "GitHub and GitLab (the
-#     riotbox-gh-glab flavor)" in the README.
+#   * Forge credentials — GITHUB_TOKEN, GITLAB_TOKEN, plus GITLAB_HOST for a
+#     self-managed instance. Forwarding them by default would put a token
+#     that can push code and open merge requests into every session,
+#     including the ones with no forge tooling in the image. Only the
+#     riotbox-gh-glab flavor has anything that uses them. See "GitHub and
+#     GitLab (the riotbox-gh-glab flavor)" in the README.
 #
 # Examples:
 #
