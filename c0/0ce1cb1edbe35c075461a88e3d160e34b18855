@@ -1,0 +1,24 @@
+tests/lib/shell-history-helpers.sh
+  s_48ce7274f13541::t_e9e5bb3f1b78c2 1-30
+tests/shell-history.venom.yml
+  s_48ce7274f13541::t_52d94d5bda8e17 1-3,5-17,19-21,23-32,34-36,38-48,50-52,54-58
+  s_48ce7274f13541::t_6eaa5a61a5ec27 4,18,22,33,37,49,53
+Containerfile
+  s_48ce7274f13541::t_fceda028211d49 603-609
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a82b55eefcde9c0b2a328a07f9d8dfe35fc1f6ce",
+  "prompts": {},
+  "sessions": {
+    "s_48ce7274f13541": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5add4c24-205d-42c4-9ea1-9fc67945adb1",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
