@@ -594,6 +594,18 @@ export NPM_CONFIG_UPDATE_NOTIFIER=false
 export OPENCODE_DISABLE_AUTOUPDATE=1
 export OPENCODE_DISABLE_LSP_DOWNLOAD=1
 
+# Same reasoning for the CLIs and scanners baked into the image: their
+# versions are pinned here, so a startup update check only leaks traffic.
+# glab and trivy also send telemetry, and neither honors the DO_NOT_TRACK
+# the entrypoint exports (gh does), so each needs its own opt-out.
+export GLAB_CHECK_UPDATE=false
+export GLAB_SEND_TELEMETRY=false
+export GH_NO_UPDATE_NOTIFIER=1
+export GRYPE_CHECK_FOR_APP_UPDATE=false
+export SYFT_CHECK_FOR_APP_UPDATE=false
+export TRIVY_SKIP_VERSION_CHECK=true
+export TRIVY_DISABLE_TELEMETRY=true
+
 # Not on Debian, but some scripts check this to skip interactive prompts
 export DEBIAN_FRONTEND=noninteractive
 

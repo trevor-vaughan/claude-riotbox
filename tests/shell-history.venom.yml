@@ -15,7 +15,7 @@ testcases:
     steps:
       - type: exec
         script: |
-          source "{{.riotbox_dir}}/tests/lib/shell-history-helpers.sh"
+          source "{{.riotbox_dir}}/tests/lib/bashrc-test-helpers.sh"
           tmp="$(mktemp -d)"
           trap 'rm -rf "${tmp}"' EXIT
           printf ' echo hidden-marker\necho kept-marker\n' \
@@ -30,7 +30,7 @@ testcases:
     steps:
       - type: exec
         script: |
-          source "{{.riotbox_dir}}/tests/lib/shell-history-helpers.sh"
+          source "{{.riotbox_dir}}/tests/lib/bashrc-test-helpers.sh"
           tmp="$(mktemp -d)"
           trap 'rm -rf "${tmp}"' EXIT
           printf 'echo dup-marker\necho dup-marker\n' \
@@ -46,7 +46,7 @@ testcases:
     steps:
       - type: exec
         script: |
-          source "{{.riotbox_dir}}/tests/lib/shell-history-helpers.sh"
+          source "{{.riotbox_dir}}/tests/lib/bashrc-test-helpers.sh"
           tmp="$(mktemp -d)"
           trap 'rm -rf "${tmp}"' EXIT
           printf 'echo stamped-marker\n' \
