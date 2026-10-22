@@ -5,6 +5,26 @@ generated from [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org); do not edit it by hand — run
 `task release:bump` instead.
 
+## [0.7.0] - 2026-10-22
+
+### 🚀 Features
+
+- *(image)* Keep space-prefixed commands out of shell history
+- *(image)* Turn off update checks in pinned gh, glab and scanners
+- *(image)* [**breaking**] Remove the GitHub and GitLab MCP servers
+
+### 🐛 Bug Fixes
+
+- *(build)* Check Podman ID mappings before builds
+- *(tests)* Split TEST_REAL_CAT assignment from export
+- *(headroom)* Route Claude background sessions through the proxy
+- *(headroom)* Pass a merged user --settings as a private file
+- *(headroom)* Leave routing keys set in a settings.json env to that file
+
+### 🚜 Refactor
+
+- *(session)* Share session-key validation and replace-then-rename
+
 ## [0.6.1] - 2026-10-15
 
 ### 🐛 Bug Fixes
