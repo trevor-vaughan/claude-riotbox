@@ -102,6 +102,132 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "ENSURE_FILE_OK"
 
+  # ── valid_session_key ───────────────────────────────────────────────────
+
+  - name: valid_session_key accepts one path component and rejects anything that leaves the data dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          for key in abc -home-user-proj a.b ... '.x' 'a b'; do
+            valid_session_key "${key}" || { echo "FAIL: rejected '${key}'"; exit 1; }
+          done
+          for key in '' . .. / a/b ../x a/ /a; do
+            if valid_session_key "${key}"; then echo "FAIL: accepted '${key}'"; exit 1; fi
+          done
+          echo "VALID_KEY_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "VALID_KEY_OK"
+
+  # ── replace_entry ───────────────────────────────────────────────────────
+
+  - name: replace_entry renames a staged file over relative, absolute and dangling links without following them
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${T}/dest"
+          for target in "../victim/keep" "${VICTIM}/keep" "${T}/missing"; do
+            rm -f "${T}/dest/f"
+            ln -s "${target}" "${T}/dest/f"
+            echo new > "${T}/staged"
+            replace_entry "${T}/staged" "${T}/dest/f" 2>"${T}/err"
+            assert_victim_intact
+            [ -f "${T}/dest/f" ] && [ ! -L "${T}/dest/f" ] || { echo "FAIL: ${target}: not a regular file"; exit 1; }
+            [ "$(cat "${T}/dest/f")" = new ] || { echo "FAIL: ${target}: wrong content"; exit 1; }
+            [ ! -e "${T}/staged" ] || { echo "FAIL: ${target}: staged copy left behind"; exit 1; }
+            grep -qF "Warning: ${T}/dest/f is not a regular file; removing it." "${T}/err" || { echo "FAIL: ${target}: no warning"; cat "${T}/err"; exit 1; }
+          done
+          echo "REPLACE_LINK_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REPLACE_LINK_OK"
+
+  - name: replace_entry replaces a directory at a file's destination with a warning, and a regular file silently
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${T}/dest/f/sub"
+          ln -s "${VICTIM}" "${T}/dest/f/sub/link"
+          echo new > "${T}/staged"
+          replace_entry "${T}/staged" "${T}/dest/f" 2>"${T}/err"
+          assert_victim_intact
+          [ "$(cat "${T}/dest/f")" = new ] || { echo "FAIL: directory not replaced"; exit 1; }
+          grep -qF "Warning: ${T}/dest/f is not a regular file; removing it." "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
+          echo newer > "${T}/staged"
+          replace_entry "${T}/staged" "${T}/dest/f" 2>"${T}/err"
+          [ "$(cat "${T}/dest/f")" = newer ] || { echo "FAIL: file not replaced"; exit 1; }
+          [ ! -s "${T}/err" ] || { echo "FAIL: warned about a regular file"; cat "${T}/err"; exit 1; }
+          echo "REPLACE_FILE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REPLACE_FILE_OK"
+
+  - name: replace_entry replaces a directory with a staged directory instead of merging into it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${T}/dest/d" "${T}/staged"
+          echo stale > "${T}/dest/d/old"
+          ln -s "${VICTIM}" "${T}/dest/d/link"
+          echo new > "${T}/staged/new"
+          replace_entry "${T}/staged" "${T}/dest/d" 2>"${T}/err"
+          assert_victim_intact
+          [ "$(ls -A "${T}/dest/d")" = new ] || { echo "FAIL: merged or not replaced: $(ls -A "${T}/dest/d")"; exit 1; }
+          [ ! -s "${T}/err" ] || { echo "FAIL: warned about the old copy"; cat "${T}/err"; exit 1; }
+          echo "REPLACE_DIR_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REPLACE_DIR_OK"
+
+  - name: replace_entry returns 1 when the old entry cannot be removed and 2 when the rename fails
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
+          mkdir -p "${T}/shim-rm" "${T}/shim-mv" "${T}/dest/f"
+          printf '#!/bin/sh\necho "rm: simulated failure" >&2\nexit 1\n' > "${T}/shim-rm/rm"
+          printf '#!/bin/sh\necho "mv: simulated failure" >&2\nexit 1\n' > "${T}/shim-mv/mv"
+          chmod +x "${T}/shim-rm/rm" "${T}/shim-mv/mv"
+          echo new > "${T}/staged"
+          rc=0
+          PATH="${T}/shim-rm:${PATH}" replace_entry "${T}/staged" "${T}/dest/f" 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "FAIL: removal failure returned ${rc}, want 1"; exit 1; }
+          [ -d "${T}/dest/f" ] && [ -f "${T}/staged" ] || { echo "FAIL: renamed after a failed removal"; exit 1; }
+          rm -rf "${T}/dest/f"
+          rc=0
+          PATH="${T}/shim-mv:${PATH}" replace_entry "${T}/staged" "${T}/dest/f" 2>"${T}/err" || rc=$?
+          [ "${rc}" -eq 2 ] || { echo "FAIL: rename failure returned ${rc}, want 2"; exit 1; }
+          [ -f "${T}/staged" ] || { echo "FAIL: staged copy removed on a failed rename"; exit 1; }
+          echo "REPLACE_FAIL_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "REPLACE_FAIL_OK"
+
   # ── migrate_legacy_state ────────────────────────────────────────────────
 
   - name: migrate_legacy_state does nothing, and creates nothing, when no legacy entry exists

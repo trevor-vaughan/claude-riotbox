@@ -42,6 +42,10 @@ SESSION_DIR="$2"
 	exit 1
 }
 
+RIOTBOX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=scripts/lib/session-state.sh
+source "${RIOTBOX_ROOT}/scripts/lib/session-state.sh"
+
 # Container home — must match the image's user home (see detect-mounts.sh)
 CONTAINER_HOME="/home/llm"
 
@@ -56,25 +60,13 @@ CONTAINER_HOME="/home/llm"
 STAGE_DIR="$(mktemp -d "$(dirname -- "${SESSION_DIR}")/.claude-sync.XXXXXX")"
 trap 'rm -rf -- "${STAGE_DIR}"' EXIT
 
-# _install_staged <name> — rename ${STAGE_DIR}/<name> onto ${SESSION_DIR}/<name>.
-# rename(2) replaces a link or other non-directory instead of following it, but
-# cannot replace a directory with a file or a non-empty directory with a
-# directory. So the old copy of a directory is removed first, and so is a
-# directory at a file's destination. A link or FIFO there would be replaced
-# anyway; it is removed first only so the warning names it (only the
-# container puts one there). If an entry is re-planted after that removal,
-# the rename fails (EISDIR, ENOTDIR or ENOTEMPTY) rather than following a
-# link or merging into a directory; abort then, as on a failed removal.
+# _install_staged <name> — rename ${STAGE_DIR}/<name> onto ${SESSION_DIR}/<name>
+# with replace_entry (scripts/lib/session-state.sh), which never follows a link
+# there. Abort when the removal or the rename fails: something was re-planted.
 _install_staged() {
 	local name="$1"
-	local staged="${STAGE_DIR}/${name}" dest="${SESSION_DIR}/${name}"
-	# shellcheck disable=SC2015  # abort when either the removal or the rename fails
-	if [[ -d "${staged}" ]]; then
-		rm -rf -- "${dest}"
-	elif [[ -L "${dest}" ]] || { [[ -e "${dest}" ]] && [[ ! -f "${dest}" ]]; }; then
-		echo "Warning: ${dest} is not a regular file; removing it." >&2
-		rm -rf -- "${dest}"
-	fi && mv -T -- "${staged}" "${dest}" || {
+	# shellcheck disable=SC2310  # either failure aborts the same way
+	replace_entry "${STAGE_DIR}/${name}" "${SESSION_DIR}/${name}" || {
 		echo "Error: ${name} in ${SESSION_DIR} changed during sync (another process, possibly a running session of this project, modified it); aborting." >&2
 		exit 1
 	}

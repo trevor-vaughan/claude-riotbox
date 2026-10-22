@@ -830,36 +830,31 @@ setup_projects() {
 		# the key. The container can replace .projects with a link at any
 		# moment, and a redirect would write through it, so the list is
 		# staged in the data dir (never mounted; dot-named, so the session
-		# enumerators skip it) and renamed into place: rename(2) replaces a
-		# link instead of following it. It cannot replace a directory, so
-		# anything other than a regular file is removed first (the entry,
-		# never what it points at; only the container puts one there), as
-		# agents/claude/sync-settings.sh does. If one is re-planted after
-		# that, the rename fails and the launch aborts.
-		local _projects_tmp _projects="${riotbox_session_dir}/.projects" _previous_projects=""
+		# enumerators skip it) and renamed into place by replace_entry
+		# (scripts/lib/session-state.sh), which never follows a link there.
+		# If something is re-planted mid-install, the launch aborts.
+		local _projects_tmp _projects="${riotbox_session_dir}/.projects" _previous_projects="" _replace_rc=0
 		# What .projects named before this launch, for record_projects'
 		# warning about a session an older RiotBox left without a record.
 		# shellcheck disable=SC2310 # an unreadable .projects names nothing
 		_previous_projects="$(session_projects "${riotbox_session_dir}")" || _previous_projects=""
 		_projects_tmp="$(mktemp "${RIOTBOX_DATA_DIR}/.projects.XXXXXX")" || return 1
-		if [[ -L "${_projects}" ]] || { [[ -e "${_projects}" ]] && [[ ! -f "${_projects}" ]]; }; then
-			echo "Warning: ${_projects} is not a regular file; removing it." >&2
-			rm -rf -- "${_projects}" || {
-				rm -f -- "${_projects_tmp}"
-				echo "Error: could not remove ${_projects}; aborting." >&2
-				return 1
-			}
-		fi
 		printf '%s\n' "${PROJECT_DIRS[@]}" >"${_projects_tmp}" || {
 			rm -f -- "${_projects_tmp}"
 			echo "Error: could not write the project list to ${_projects_tmp} (is the disk full?); aborting." >&2
 			return 1
 		}
-		mv -T -- "${_projects_tmp}" "${_projects}" || {
+		# shellcheck disable=SC2310 # the status picks the error message
+		replace_entry "${_projects_tmp}" "${_projects}" || _replace_rc=$?
+		if [[ "${_replace_rc}" -ne 0 ]]; then
 			rm -f -- "${_projects_tmp}"
-			echo "Error: could not rename the project list onto ${_projects} (was something planted there again?); aborting." >&2
+			if [[ "${_replace_rc}" -eq 1 ]]; then
+				echo "Error: could not remove ${_projects}; aborting." >&2
+			else
+				echo "Error: could not rename the project list onto ${_projects} (was something planted there again?); aborting." >&2
+			fi
 			return 1
-		}
+		fi
 	fi
 
 	# ── Session state dir ─────────────────────────────────────────────

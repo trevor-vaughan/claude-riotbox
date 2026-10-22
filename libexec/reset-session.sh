@@ -53,7 +53,8 @@ if [[ "${all}" = true ]]; then
 	}
 	for d in "${dirs[@]}"; do
 		key="$(basename "${d}")"
-		if [[ -z "${key}" || "${key}" = "." || "${key}" = ".." ]]; then
+		# shellcheck disable=SC2310 # a predicate designed for conditions
+		if ! valid_session_key "${key}"; then
 			echo "ERROR: refusing to remove state for invalid session key '${key}'." >&2
 			exit 1
 		fi
@@ -84,7 +85,8 @@ else
 	}
 	# Defence in depth: a bad key would aim rm at the state root.
 	key="$(basename "${RIOTBOX_SESSION_DIR}")"
-	if [[ -z "${key}" || "${key}" = "." || "${key}" = ".." ]]; then
+	# shellcheck disable=SC2310 # a predicate designed for conditions
+	if ! valid_session_key "${key}"; then
 		echo "ERROR: refusing to remove state for invalid session key '${key}'." >&2
 		exit 1
 	fi
