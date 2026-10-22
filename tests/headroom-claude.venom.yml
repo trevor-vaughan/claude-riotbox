@@ -29,7 +29,7 @@ testcases:
           source "{{.shared_helpers}}"
           source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
           claude_case_setup
-          claude -p "do work" 2>&1 | port_names
+          claude -p "do work" 2>&1 | argv_line
           calls="${HOME}/headroom-calls.log"
           port_names <"${calls}"
           [ "$(grep -c '^HR=proxy' "${calls}")" = 1 ] || { echo "FAIL: proxy not spawned once" >&2; exit 1; }
@@ -44,7 +44,7 @@ testcases:
           - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=http://127.0.0.1:PORT"
           - result.systemout ShouldContainSubstring "CLAUDE_ENV ENABLE_TOOL_SEARCH=true"
           - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_VERTEX_BASE_URL=unset"
-          - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions"
+          - result.systemout ShouldContainSubstring "arg=--dangerously-skip-permissions|arg=--settings|arg={'env':{'ANTHROPIC_BASE_URL':'http://127.0.0.1:PORT','ENABLE_TOOL_SEARCH':'true'}}|arg=-p"
           - result.systemout ShouldContainSubstring "arg=do work"
           - result.systemout ShouldNotContainSubstring "FAKE_HEADROOM_UNEXPECTED"
 
@@ -56,12 +56,81 @@ testcases:
           source "{{.shared_helpers}}"
           source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
           claude_case_setup
-          ENABLE_TOOL_SEARCH=auto claude -p x 2>&1 | grep -F 'CLAUDE_ENV ENABLE_TOOL_SEARCH'
+          ENABLE_TOOL_SEARCH=auto claude -p x 2>&1 | grep -F -e 'CLAUDE_ENV ENABLE_TOOL_SEARCH' -e '"ENABLE_TOOL_SEARCH"' | argv_line
           ENABLE_TOOL_SEARCH=' ' claude -p x 2>&1 | grep -F 'CLAUDE_ENV ENABLE_TOOL_SEARCH'
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "CLAUDE_ENV ENABLE_TOOL_SEARCH=auto"
+          - result.systemout ShouldContainSubstring "'ENABLE_TOOL_SEARCH':'auto'}}"
           - result.systemout ShouldContainSubstring "CLAUDE_ENV ENABLE_TOOL_SEARCH=true"
+
+  # Claude Code's daemon hands a /bg or --bg session to a pre-started
+  # worker that does not inherit the launch's environment; it applies the
+  # client's --settings instead. A later --settings replaces an earlier one
+  # whole, so a user's own --settings must carry the routing env as well.
+  - name: a user's --settings gets the routing env merged in, and their own keys win
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          printf '{"model":"m","env":{"ENABLE_TOOL_SEARCH":"off","FOO":"1"}}' >"${HOME}/user.json"
+          claude -p --settings ' {"env":{"A":"1"}} ' --settings="${HOME}/user.json" x 2>&1 | argv_line
+          echo "STANDALONE=$(claude -p --settings ' {"env":{"A":"1"}} ' --settings="${HOME}/user.json" x 2>&1 | grep -c '^arg=--settings$')"
+          claude --settings '{"env":{"ANTHROPIC_BASE_URL":"https://gw.example"}}' x 2>&1 | grep -F 'arg={' | sed 's/^/INLINE /' | argv_line
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "arg= {'env':{'A':'1'}} "
+          - result.systemout ShouldContainSubstring "arg=--settings={'model':'m','env':{'ANTHROPIC_BASE_URL':'http://127.0.0.1:PORT','ENABLE_TOOL_SEARCH':'off','FOO':'1'}}"
+          - result.systemout ShouldContainSubstring "STANDALONE=1"
+          - result.systemout ShouldContainSubstring "INLINE arg={'env':{'ANTHROPIC_BASE_URL':'https://gw.example','ENABLE_TOOL_SEARCH':'true'}}"
+          - result.systemout ShouldNotContainSubstring "NOTICE"
+
+  - name: a --settings the helper cannot merge reaches claude unchanged, with a notice
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          printf '{"env":"not an object"}' >"${HOME}/bad-env.json"
+          for s in missing.json '{not json}' '[1]' "${HOME}/bad-env.json"; do
+            echo "== ${s}"
+            claude -p --settings "${s}" x 2>&1 | argv_line
+          done
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "arg=--settings|arg=missing.json|arg=x"
+          - result.systemout ShouldContainSubstring "arg=--settings|arg={not json}|arg=x"
+          - result.systemout ShouldContainSubstring "arg=--settings|arg=[1]|arg=x"
+          - result.systemout ShouldContainSubstring "/bad-env.json|arg=x"
+          - result.systemout ShouldContainSubstring "could not add headroom's routing to --settings missing.json"
+          - result.systemout ShouldContainSubstring "/bad-env.json; background sessions"
+          - result.systemout ShouldContainSubstring "could not add headroom's routing to --settings (inline JSON)"
+          - result.systemout ShouldNotContainSubstring "routing to --settings {not json}"
+          - result.systemout ShouldContainSubstring "background sessions (/bg, --bg) of this launch reach the API directly"
+          - result.systemout ShouldNotContainSubstring "ANTHROPIC_BASE_URL':'http://127.0.0.1:PORT"
+          - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=http://127.0.0.1:PORT"
+
+  - name: a --settings after -- or without a value is not a settings option
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          claude -p -- --settings 2>&1 | grep -e '^arg=' -e NOTICE | sed 's/^/AFTER /' | argv_line
+          claude -p --settings 2>&1 | grep -e '^arg=' -e NOTICE | sed 's/^/DANGLING /' | argv_line
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "AFTER arg=--dangerously-skip-permissions|AFTER arg=--settings|AFTER arg={'env':{'ANTHROPIC_BASE_URL':'http://127.0.0.1:PORT','ENABLE_TOOL_SEARCH':'true'}}|AFTER arg=-p|AFTER arg=--|AFTER arg=--settings|"
+          - result.systemout ShouldContainSubstring "DANGLING arg=--dangerously-skip-permissions|DANGLING arg=-p|DANGLING arg=--settings|"
+          - result.systemout ShouldNotContainSubstring "DANGLING arg={"
+          - result.systemout ShouldNotContainSubstring "NOTICE"
 
   - name: a proxy the helper started with the same launch config is reused
     steps:
@@ -215,7 +284,7 @@ testcases:
           source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
           claude_case_setup
           export CLAUDE_CODE_USE_VERTEX=1
-          claude -p x 2>&1 | port_names
+          claude -p x 2>&1 | argv_line
           grep -F 'HRENV' "${HOME}/headroom-calls.log" | head -1
           # A custom Vertex gateway becomes the proxy's upstream
           # (cli/wrap.py:1161-1180). A second free port, so a fresh proxy
@@ -226,6 +295,7 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_VERTEX_BASE_URL=http://127.0.0.1:PORT"
+          - result.systemout ShouldContainSubstring "arg={'env':{'ANTHROPIC_VERTEX_BASE_URL':'http://127.0.0.1:PORT','ENABLE_TOOL_SEARCH':'true'}}"
           - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=unset"
           - result.systemout ShouldContainSubstring "http2=false vtarget=unset"
           - result.systemout ShouldContainSubstring "CUSTOM HRENV"
@@ -240,11 +310,12 @@ testcases:
           source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
           claude_case_setup
           export CLAUDE_CODE_USE_FOUNDRY=1 ANTHROPIC_FOUNDRY_RESOURCE=myres
-          { claude -p x 2>&1; grep '^HR=proxy' "${HOME}/headroom-calls.log"; } | port_names
+          { claude -p x 2>&1; grep '^HR=proxy' "${HOME}/headroom-calls.log"; } | argv_line
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "HR=proxy --port PORT --memory --no-learn --anthropic-api-url https://myres.services.ai.azure.com/anthropic"
           - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_FOUNDRY_BASE_URL=http://127.0.0.1:PORT/anthropic"
+          - result.systemout ShouldContainSubstring "arg={'env':{'ANTHROPIC_FOUNDRY_BASE_URL':'http://127.0.0.1:PORT/anthropic','ENABLE_TOOL_SEARCH':'false'}}"
           - result.systemout ShouldContainSubstring "CLAUDE_ENV ANTHROPIC_BASE_URL=unset"
           - result.systemout ShouldContainSubstring "CLAUDE_ENV ENABLE_TOOL_SEARCH=false"
 

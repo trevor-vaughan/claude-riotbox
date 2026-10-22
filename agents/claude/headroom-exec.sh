@@ -30,12 +30,13 @@
 #           which the proxy's "[Retrieve more: hash=…]" markers point at
 #           nothing; the routing env for the launch (below); ENABLE_TOOL_SEARCH
 #           (cli/wrap.py:388): Claude Code turns on-demand tool loading off
-#           behind a custom base URL unless it is set, inflating the context.
-#   dropped the settings.local.json writes, which exist for daemon-spawned
-#           conversation workers that read settings fresh (issue #951) — a
-#           claude run in a session inherits this env, and writing the
-#           session dir's user settings instead would route every session of
-#           the project through a port only this container serves; the
+#           behind a custom base URL unless it is set, inflating the context;
+#           the same two keys as settings env (cli/wrap.py:1781, 1815) for
+#           the daemon's background sessions (below), passed as --settings.
+#   dropped the settings.local.json writes, which wrap makes for those
+#           sessions (issues #951, #2492): writing the session dir's user
+#           settings instead would route every session of the project through
+#           a port only this container serves; the
 #           selfheal hook, which only exists to undo those writes; the
 #           X-Headroom-Project header (cli/wrap.py:2975), a savings label from
 #           the CWD's name, which in a session is always "workspace"; the
@@ -60,9 +61,22 @@
 #           --anthropic-api-url. ENABLE_TOOL_SEARCH defaults to false here.
 #   else    ANTHROPIC_BASE_URL=<proxy>.
 #
+# Background sessions (Claude Code 2.1.304): /bg in a session and `claude
+# --bg` hand the session to the on-demand `claude daemon`, which often runs it
+# in a worker it started before the session existed. That worker does not get
+# this launch's environment, only its --settings, so the routing env goes in
+# as --settings '{"env":{<routing key>: <proxy>, "ENABLE_TOOL_SEARCH": …}}'
+# too. A later --settings replaces an earlier one whole, and only the last
+# counts, so a user's own last --settings (inline JSON when, trimmed, it is
+# {…}; a file path otherwise, as Claude Code reads it) gets the routing env
+# merged into its env instead, the user's keys winning. Settings env outranks
+# the process env, so these values also win over a user or project
+# settings.json env for this launch, as wrap's settings.local.json does.
+#
 # Degraded mode (spawn failure, readiness timeout): warn on stderr and exec
 # claude unrouted — headroom is an optimization layer, never a reason to lose
-# a session. A failed MCP registration only warns.
+# a session. A failed MCP registration only warns, and so does a user's
+# --settings the routing cannot be merged into: claude gets it unchanged.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -164,12 +178,13 @@ fi
 
 # ── 3. Route and launch ──────────────────────────────────────────────────────
 if [[ -n "${use_vertex}" ]]; then
-	export ANTHROPIC_VERTEX_BASE_URL="${proxy_url}"
+	route_key=ANTHROPIC_VERTEX_BASE_URL route_url="${proxy_url}"
 elif [[ -n "${foundry_upstream}" ]]; then
-	export ANTHROPIC_FOUNDRY_BASE_URL="${proxy_url}/anthropic"
+	route_key=ANTHROPIC_FOUNDRY_BASE_URL route_url="${proxy_url}/anthropic"
 else
-	export ANTHROPIC_BASE_URL="${proxy_url}"
+	route_key=ANTHROPIC_BASE_URL route_url="${proxy_url}"
 fi
+export "${route_key}=${route_url}"
 # An empty or blank value counts as unset, as Claude Code treats it.
 tool_search="$(_trim "${ENABLE_TOOL_SEARCH:-}")"
 if [[ -z "${tool_search}" ]]; then
@@ -179,4 +194,57 @@ if [[ -z "${tool_search}" ]]; then
 		export ENABLE_TOOL_SEARCH=true
 	fi
 fi
-exec claude "${USER_ARGS[@]}"
+
+# ── 4. The same routing for background sessions, as --settings ───────────────
+route_settings="$(jq -cn --arg k "${route_key}" --arg v "${route_url}" --arg t "${ENABLE_TOOL_SEARCH}" \
+	'{env: {($k): $v, ENABLE_TOOL_SEARCH: $t}}')"
+
+# Find the value of the user's last --settings, the one Claude Code reads:
+# its index in USER_ARGS, and whether it is joined (--settings=<value>).
+# Arguments after -- are not options.
+settings_at="" settings_joined=""
+for ((i = 0; i < ${#USER_ARGS[@]}; i++)); do
+	case "${USER_ARGS[i]}" in
+	--) break ;;
+	--settings)
+		settings_at=$((i + 1)) settings_joined=""
+		i=$((i + 1))
+		;;
+	--settings=*) settings_at="${i}" settings_joined=1 ;;
+	*) ;;
+	esac
+done
+
+launch_args=("${USER_ARGS[@]}")
+if [[ -z "${settings_at}" ]]; then
+	launch_args=(--settings "${route_settings}" "${USER_ARGS[@]}")
+elif [[ "${settings_at}" -lt "${#USER_ARGS[@]}" ]]; then
+	# (A --settings without a value is left for claude to reject.)
+	value="${USER_ARGS[settings_at]}"
+	if [[ -n "${settings_joined}" ]]; then
+		value="${value#--settings=}"
+	fi
+	# The user's settings with the routing env merged into their env, their
+	# keys winning, as one line of JSON; empty when the file cannot be read or
+	# is not one settings object, which Claude Code would reject too. Inline
+	# JSON can hold secrets (apiKeyHelper, env), so the notice names only a path.
+	# shellcheck disable=SC2016 # $route is a jq variable
+	merge='if length == 1 and (.[0] | type) == "object" and ((.[0].env // {}) | type) == "object"
+		then .[0] | .env = $route.env + (.env // {}) else error("not one settings object") end'
+	trimmed="$(_trim "${value}")"
+	if [[ "${trimmed}" == "{"*"}" ]]; then
+		label="(inline JSON)"
+		merged="$(jq -cs --argjson route "${route_settings}" "${merge}" 2>/dev/null <<<"${trimmed}")" || merged=""
+	else
+		label="${value}"
+		merged="$(jq -cs --argjson route "${route_settings}" "${merge}" 2>/dev/null <"${value}")" || merged=""
+	fi
+	if [[ -z "${merged}" ]]; then
+		echo "NOTICE: could not add headroom's routing to --settings ${label}; background sessions (/bg, --bg) of this launch reach the API directly." >&2
+	elif [[ -n "${settings_joined}" ]]; then
+		launch_args[settings_at]="--settings=${merged}"
+	else
+		launch_args[settings_at]="${merged}"
+	fi
+fi
+exec claude "${launch_args[@]}"

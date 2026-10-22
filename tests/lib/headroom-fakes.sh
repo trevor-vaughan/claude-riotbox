@@ -81,6 +81,15 @@ port_names() {
 	sed -E -e "s/(:|--port )${p1}([^0-9]|$)/\\1PORT1\\2/g" -e "s/(:|--port )${PORT}([^0-9]|$)/\\1PORT\\2/g"
 }
 
+# argv_line: port_names, then as one line with each input line ended by "|"
+# and double quotes shown as single quotes. Venom assertions cannot hold a
+# newline or a double quote, so this is how they pin argv order and JSON.
+argv_line() {
+	# shellcheck disable=SC2312 # port_names is a sed over stdin; tr ends the pipe
+	port_names | tr '"\n' "'|"
+	echo
+}
+
 # install_claude_headroom_fakes
 #   Replace ${TEST_DIR}/realbin/headroom and ${TEST_DIR}/realbin/claude.
 #
