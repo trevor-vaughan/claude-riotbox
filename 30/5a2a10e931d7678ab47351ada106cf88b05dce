@@ -1,0 +1,25 @@
+go.mod
+  s_b958b4a741cca7::t_011e3bfe5cbe08 1-232
+internal/sessionkey/testdata/gen-keys.sh
+  s_b958b4a741cca7::t_46f4d8cca06a86 1-85
+internal/sessionkey/testdata/keys.tsv
+  s_b958b4a741cca7::t_46f4d8cca06a86 1-21
+go.sum
+  s_b958b4a741cca7::t_0787cc618b385f 1-1013
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "305a2a10e931d7678ab47351ada106cf88b05dce",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
