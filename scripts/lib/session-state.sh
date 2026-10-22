@@ -22,12 +22,14 @@
 # session_projects never reads .projects through a link, and terminal_clean
 # makes what it read safe to print.
 #
-# Sourced on the host by scripts/mount-projects.sh,
-# agents/opencode/sync-settings.sh and agents/pi/sync-settings.sh.
+# Sourced on the host by scripts/mount-projects.sh and
+# agents/{claude,opencode,pi}/sync-settings.sh.
 #
 # Public:
 #   ensure_real_dir <dir>
 #   require_real_dir <dir>
+#   valid_session_key <key>
+#   replace_entry <staged> <dest>
 #   migrate_legacy_state <session-dir> <state-dir> <legacy>:<new> ...
 #   migrate_overlay_state <session-dir> <state-dir>
 #   migrate_session_state <session-dir> <state-dir>  (list: SESSION_STATE_MIGRATIONS)
@@ -76,6 +78,42 @@ require_real_dir() {
 	[[ -d "$1" ]] && [[ ! -L "$1" ]] && return 0
 	echo "ERROR: $1 is a symlink or not a directory (or could not be created); refusing to use it." >&2
 	return 1
+}
+
+# valid_session_key <key>
+#   True when <key> can name a session: one path component, so that
+#   <root>/<key> stays inside <root>. Non-empty, not "." or "..", and no "/".
+#   Session commands check this before building a path they will rm -rf.
+valid_session_key() {
+	[[ -n "$1" && "$1" != "." && "$1" != ".." && "$1" != */* ]]
+}
+
+# replace_entry <staged> <dest>
+#   Rename <staged> onto <dest> without following a link at <dest>, for
+#   entries a running container can replace at any moment. rename(2)
+#   replaces a link or other non-directory instead of following it, but
+#   cannot replace a directory with a file or a non-empty directory with a
+#   directory. So the old copy of a staged directory is removed first, and
+#   so is anything but a regular file at a staged file's destination: the
+#   entry itself, never what it points at, with a warning on stderr. A link
+#   or FIFO there would be replaced anyway; it is removed first only so the
+#   warning names it. If an entry is re-planted after that removal, the
+#   rename fails (EISDIR, ENOTDIR or ENOTEMPTY) rather than following a link
+#   or merging into a directory.
+#
+#   Returns 1 when <dest> could not be removed (nothing is renamed), and 2
+#   when the rename failed (<staged> is left for the caller to clean up).
+#   Prints no error of its own beyond rm's or mv's: the caller knows what
+#   the entry is.
+replace_entry() {
+	local staged="$1" dest="$2"
+	if [[ -d "${staged}" ]]; then
+		rm -rf -- "${dest}" || return 1
+	elif [[ -L "${dest}" ]] || { [[ -e "${dest}" ]] && [[ ! -f "${dest}" ]]; }; then
+		echo "Warning: ${dest} is not a regular file; removing it." >&2
+		rm -rf -- "${dest}" || return 1
+	fi
+	mv -T -- "${staged}" "${dest}" || return 2
 }
 
 # migrate_legacy_state [--replace-empty] <session-dir> <state-dir> <legacy>:<new> ...

@@ -54,9 +54,8 @@ else
 			exit 1
 		fi
 		# An exact session key is one path component naming a session.
-		# Keys never contain "/", and "." or ".." would leave the data dir.
-		# shellcheck disable=SC2310 # a predicate designed for conditions
-		if [[ "${arg}" != */* && "${arg}" != "." && "${arg}" != ".." ]] &&
+		# shellcheck disable=SC2310 # predicates designed for conditions
+		if valid_session_key "${arg}" &&
 			is_session "${session_root}/${arg}" "${state_root}/${arg}"; then
 			to_remove+=("${session_root}/${arg}")
 			continue
@@ -92,7 +91,8 @@ for d in "${to_remove[@]}"; do
 	fi
 	# The state path is <state root>/<key>; a bad key would aim rm at the root.
 	key="$(basename "${d}")"
-	if [[ -z "${key}" || "${key}" = "." || "${key}" = ".." ]]; then
+	# shellcheck disable=SC2310 # a predicate designed for conditions
+	if ! valid_session_key "${key}"; then
 		echo "ERROR: refusing to remove state for invalid session key '${key}'." >&2
 		exit 1
 	fi
