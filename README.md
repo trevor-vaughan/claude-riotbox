@@ -941,10 +941,18 @@ What changes when enabled:
   Foundry, `ANTHROPIC_VERTEX_BASE_URL` / `ANTHROPIC_FOUNDRY_BASE_URL`) for the
   launch, keeps on-demand tool loading on with `ENABLE_TOOL_SEARCH=true`
   unless you set it, and registers headroom's MCP retrieve tool at user
-  scope in the session's `~/.claude.json`. One gap remains: Claude Code
-  conversation workers that read settings files rather than inheriting the
-  environment (daemon mode) talk to the API directly, uncompressed.
-  `headroom wrap` covered them by writing the project's settings file.
+  scope in the session's `~/.claude.json`. The same two values go in as
+  `--settings` for background sessions (`/bg`, `claude --bg`): Claude Code's
+  daemon often runs those in a worker that does not inherit the launch's
+  environment. If you pass your own `--settings`, RiotBox merges the routing
+  into its `env` (your keys win) and hands claude the result as a private
+  file in the container's `/tmp`, so the settings' secrets stay out of the
+  process list. If it cannot read that file or JSON, claude
+  gets it unchanged and a notice says background sessions of that launch
+  reach the API directly. A value your user, project or local
+  `settings.json` sets in `env` is left to that file, as it was before:
+  with `ANTHROPIC_BASE_URL` there, for example, the launch goes to your
+  gateway rather than through headroom.
 - For opencode, RiotBox starts the proxy and then hands off to
   `headroom wrap opencode --no-proxy`, which routes the providers through it
   via `OPENCODE_CONFIG_CONTENT` and writes nothing into the project.

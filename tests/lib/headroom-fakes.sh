@@ -81,6 +81,38 @@ port_names() {
 	sed -E -e "s/(:|--port )${p1}([^0-9]|$)/\\1PORT1\\2/g" -e "s/(:|--port )${PORT}([^0-9]|$)/\\1PORT\\2/g"
 }
 
+# argv_line: port_names, then as one line with each input line ended by "|"
+# and double quotes shown as single quotes. Venom assertions cannot hold a
+# newline or a double quote, so this is how they pin argv order and JSON.
+argv_line() {
+	# shellcheck disable=SC2312 # port_names is a sed over stdin; tr ends the pipe
+	port_names | tr '"\n' "'|"
+	echo
+}
+
+# settings_shown: read the fake claude's output on stdin and print the file
+# its last --settings names as "SETTINGS <where> <mode> <contents>", <where>
+# being RUNDIR for a file directly in ${RIOTBOX_HEADROOM_RUN_DIR}, with
+# quotes and ports shown as argv_line shows them.
+settings_shown() {
+	local line prev="" path="" where mode contents
+	while IFS= read -r line; do
+		case "${line}" in
+		arg=--settings=*) path="${line#arg=--settings=}" ;;
+		arg=*) if [[ "${prev}" == "arg=--settings" ]]; then path="${line#arg=}"; fi ;;
+		*) ;;
+		esac
+		prev="${line}"
+	done
+	where="${path}"
+	if [[ "${path%/*}" == "${RIOTBOX_HEADROOM_RUN_DIR}" ]]; then
+		where=RUNDIR
+	fi
+	mode="$(stat -c %a -- "${path}")"
+	contents="$(tr '"' "'" <"${path}")"
+	printf 'SETTINGS %s %s %s\n' "${where}" "${mode}" "${contents}" | port_names
+}
+
 # install_claude_headroom_fakes
 #   Replace ${TEST_DIR}/realbin/headroom and ${TEST_DIR}/realbin/claude.
 #
@@ -179,7 +211,7 @@ claude_case_setup() {
 	unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
 	unset ANTHROPIC_BASE_URL ANTHROPIC_VERTEX_BASE_URL ANTHROPIC_FOUNDRY_BASE_URL ANTHROPIC_FOUNDRY_RESOURCE \
 		ENABLE_TOOL_SEARCH CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY HEADROOM_MODE HEADROOM_HTTP2 \
-		VERTEX_TARGET_API_URL HEADROOM_MEMORY_DB_PATH RIOTBOX_HEADROOM_ACTIVE
+		VERTEX_TARGET_API_URL HEADROOM_MEMORY_DB_PATH RIOTBOX_HEADROOM_ACTIVE CLAUDE_CONFIG_DIR
 	install_generic_wrapper_for claude
 	install_claude_headroom_fakes
 	headroom_fakes_init
