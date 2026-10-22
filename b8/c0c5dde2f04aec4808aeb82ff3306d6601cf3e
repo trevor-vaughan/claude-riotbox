@@ -1,0 +1,34 @@
+libexec/reset-session.sh
+  s_74bdd7fc012222::t_a0d0089bf28bcf 56-57
+  s_74bdd7fc012222::t_098f88e00597a7 88-89
+agents/claude/sync-settings.sh
+  s_74bdd7fc012222::t_750710e339d7a9 45-48
+  s_74bdd7fc012222::t_9d2bd416239c75 63-65,68-69
+tests/session-state.venom.yml
+  s_74bdd7fc012222::t_fdcaddf9b76b2f 105-230
+libexec/remove-session.sh
+  s_74bdd7fc012222::t_672b663c2fcec0 57-58
+  s_74bdd7fc012222::t_87ebc4194aa387 94-95
+scripts/mount-projects.sh
+  s_74bdd7fc012222::t_0825c51785ce74 833-836,847-849,851-855,857
+scripts/lib/session-state.sh
+  s_74bdd7fc012222::t_aaa22208f034c6 31-32
+  s_74bdd7fc012222::t_8aa6cae43a1cb1 83-118
+  s_74bdd7fc012222::t_18dcb4d40e9e10 25-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6311cc5fb05ed4b0dc0e50920e2157cc0c7b13ea",
+  "prompts": {},
+  "sessions": {
+    "s_74bdd7fc012222": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "706533fb-dbfc-4d09-8e52-8c95f277f485",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
