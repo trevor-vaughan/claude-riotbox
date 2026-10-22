@@ -226,10 +226,11 @@ elif [[ "${settings_at}" -lt "${#USER_ARGS[@]}" ]]; then
 	fi
 	# The user's settings with the routing env merged into their env, their
 	# keys winning, as one line of JSON; empty when the file cannot be read or
-	# is not one settings object, which Claude Code would reject too. Inline
-	# JSON can hold secrets (apiKeyHelper, env), so the notice names only a path.
+	# is not one settings object with an object env or none, which Claude
+	# Code would reject too. Inline JSON can hold secrets (apiKeyHelper, env),
+	# so the notice names only a path.
 	# shellcheck disable=SC2016 # $route is a jq variable
-	merge='if length == 1 and (.[0] | type) == "object" and ((.[0].env // {}) | type) == "object"
+	merge='if length == 1 and (.[0] | type) == "object" and ((.[0] | has("env") | not) or (.[0].env | type) == "object")
 		then .[0] | .env = $route.env + (.env // {}) else error("not one settings object") end'
 	trimmed="$(_trim "${value}")"
 	if [[ "${trimmed}" == "{"*"}" ]]; then
@@ -239,12 +240,24 @@ elif [[ "${settings_at}" -lt "${#USER_ARGS[@]}" ]]; then
 		label="${value}"
 		merged="$(jq -cs --argjson route "${route_settings}" "${merge}" 2>/dev/null <"${value}")" || merged=""
 	fi
-	if [[ -z "${merged}" ]]; then
+	# The merged settings go to claude as a file: a settings file's secrets
+	# would show in argv to anyone who can list processes, and one argument
+	# is capped at 128 KiB, beyond which the exec fails. The run dir is
+	# private to this user and lives as long as the container, as do the
+	# background sessions that read the file. mktemp creates it 0600.
+	merged_file=""
+	if [[ -n "${merged}" ]] &&
+		merged_file="$(mktemp --suffix=.json "${HEADROOM_PROXY_RUN_DIR}/settings.XXXXXX" 2>/dev/null)" &&
+		! printf '%s\n' "${merged}" 2>/dev/null >"${merged_file}"; then
+		rm -f -- "${merged_file}"
+		merged_file=""
+	fi
+	if [[ -z "${merged_file}" ]]; then
 		echo "NOTICE: could not add headroom's routing to --settings ${label}; background sessions (/bg, --bg) of this launch reach the API directly." >&2
 	elif [[ -n "${settings_joined}" ]]; then
-		launch_args[settings_at]="--settings=${merged}"
+		launch_args[settings_at]="--settings=${merged_file}"
 	else
-		launch_args[settings_at]="${merged}"
+		launch_args[settings_at]="${merged_file}"
 	fi
 fi
 exec claude "${launch_args[@]}"

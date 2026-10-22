@@ -76,16 +76,24 @@ testcases:
           source "{{.shared_helpers}}"
           source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
           claude_case_setup
-          printf '{"model":"m","env":{"ENABLE_TOOL_SEARCH":"off","FOO":"1"}}' >"${HOME}/user.json"
-          claude -p --settings ' {"env":{"A":"1"}} ' --settings="${HOME}/user.json" x 2>&1 | argv_line
-          echo "STANDALONE=$(claude -p --settings ' {"env":{"A":"1"}} ' --settings="${HOME}/user.json" x 2>&1 | grep -c '^arg=--settings$')"
-          claude --settings '{"env":{"ANTHROPIC_BASE_URL":"https://gw.example"}}' x 2>&1 | grep -F 'arg={' | sed 's/^/INLINE /' | argv_line
+          printf '{"model":"m","env":{"ENABLE_TOOL_SEARCH":"off","FOO":"1","SECRET":"s3cr3t"}}' >"${HOME}/user.json"
+          out="$(claude -p --settings ' {"env":{"A":"1"}} ' --settings="${HOME}/user.json" x 2>&1)"
+          argv_line <<<"${out}"
+          settings_shown <<<"${out}"
+          echo "STANDALONE=$(grep -c '^arg=--settings$' <<<"${out}")"
+          echo "SECRET_IN_ARGV=$(grep '^arg=' <<<"${out}" | grep -c s3cr3t)"
+          # The separate form, a path relative to the CWD, and settings without env.
+          printf '{"model":"m"}' >"${HOME}/noenv.json"
+          claude --settings "$(realpath --relative-to=. "${HOME}/noenv.json")" x 2>&1 | settings_shown | sed 's/^/NOENV /'
+          claude --settings '{"env":{"ANTHROPIC_BASE_URL":"https://gw.example"}}' x 2>&1 | settings_shown | sed 's/^/INLINE /'
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "arg= {'env':{'A':'1'}} "
-          - result.systemout ShouldContainSubstring "arg=--settings={'model':'m','env':{'ANTHROPIC_BASE_URL':'http://127.0.0.1:PORT','ENABLE_TOOL_SEARCH':'off','FOO':'1'}}"
+          - result.systemout ShouldContainSubstring "SETTINGS RUNDIR 600 {'model':'m','env':{'ANTHROPIC_BASE_URL':'http://127.0.0.1:PORT','ENABLE_TOOL_SEARCH':'off','FOO':'1','SECRET':'s3cr3t'}}"
           - result.systemout ShouldContainSubstring "STANDALONE=1"
-          - result.systemout ShouldContainSubstring "INLINE arg={'env':{'ANTHROPIC_BASE_URL':'https://gw.example','ENABLE_TOOL_SEARCH':'true'}}"
+          - result.systemout ShouldContainSubstring "SECRET_IN_ARGV=0"
+          - result.systemout ShouldContainSubstring "NOENV SETTINGS RUNDIR 600 {'model':'m','env':{'ANTHROPIC_BASE_URL':'http://127.0.0.1:PORT','ENABLE_TOOL_SEARCH':'true'}}"
+          - result.systemout ShouldContainSubstring "INLINE SETTINGS RUNDIR 600 {'env':{'ANTHROPIC_BASE_URL':'https://gw.example','ENABLE_TOOL_SEARCH':'true'}}"
           - result.systemout ShouldNotContainSubstring "NOTICE"
 
   - name: a --settings the helper cannot merge reaches claude unchanged, with a notice
@@ -97,7 +105,7 @@ testcases:
           source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
           claude_case_setup
           printf '{"env":"not an object"}' >"${HOME}/bad-env.json"
-          for s in missing.json '{not json}' '[1]' "${HOME}/bad-env.json"; do
+          for s in missing.json '{not json}' '[1]' "${HOME}/bad-env.json" '{"env":false}' '{"env":null}'; do
             echo "== ${s}"
             claude -p --settings "${s}" x 2>&1 | argv_line
           done
@@ -106,6 +114,8 @@ testcases:
           - result.systemout ShouldContainSubstring "arg=--settings|arg=missing.json|arg=x"
           - result.systemout ShouldContainSubstring "arg=--settings|arg={not json}|arg=x"
           - result.systemout ShouldContainSubstring "arg=--settings|arg=[1]|arg=x"
+          - result.systemout ShouldContainSubstring "arg=--settings|arg={'env':false}|arg=x"
+          - result.systemout ShouldContainSubstring "arg=--settings|arg={'env':null}|arg=x"
           - result.systemout ShouldContainSubstring "/bad-env.json|arg=x"
           - result.systemout ShouldContainSubstring "could not add headroom's routing to --settings missing.json"
           - result.systemout ShouldContainSubstring "/bad-env.json; background sessions"

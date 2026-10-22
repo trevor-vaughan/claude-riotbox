@@ -90,6 +90,29 @@ argv_line() {
 	echo
 }
 
+# settings_shown: read the fake claude's output on stdin and print the file
+# its last --settings names as "SETTINGS <where> <mode> <contents>", <where>
+# being RUNDIR for a file directly in ${RIOTBOX_HEADROOM_RUN_DIR}, with
+# quotes and ports shown as argv_line shows them.
+settings_shown() {
+	local line prev="" path="" where mode contents
+	while IFS= read -r line; do
+		case "${line}" in
+		arg=--settings=*) path="${line#arg=--settings=}" ;;
+		arg=*) if [[ "${prev}" == "arg=--settings" ]]; then path="${line#arg=}"; fi ;;
+		*) ;;
+		esac
+		prev="${line}"
+	done
+	where="${path}"
+	if [[ "${path%/*}" == "${RIOTBOX_HEADROOM_RUN_DIR}" ]]; then
+		where=RUNDIR
+	fi
+	mode="$(stat -c %a -- "${path}")"
+	contents="$(tr '"' "'" <"${path}")"
+	printf 'SETTINGS %s %s %s\n' "${where}" "${mode}" "${contents}" | port_names
+}
+
 # install_claude_headroom_fakes
 #   Replace ${TEST_DIR}/realbin/headroom and ${TEST_DIR}/realbin/claude.
 #

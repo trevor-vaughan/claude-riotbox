@@ -945,7 +945,9 @@ What changes when enabled:
   `--settings` for background sessions (`/bg`, `claude --bg`): Claude Code's
   daemon often runs those in a worker that does not inherit the launch's
   environment. If you pass your own `--settings`, RiotBox merges the routing
-  into its `env` (your keys win). If it cannot read that file or JSON, claude
+  into its `env` (your keys win) and hands claude the result as a private
+  file in the container's `/tmp`, so the settings' secrets stay out of the
+  process list. If it cannot read that file or JSON, claude
   gets it unchanged and a notice says background sessions of that launch
   reach the API directly. These values also take precedence over `env`
   entries in your `settings.json` for the launch, as `headroom wrap`'s
