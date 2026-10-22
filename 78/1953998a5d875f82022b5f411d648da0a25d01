@@ -1,0 +1,35 @@
+Taskfile.yml
+  s_b958b4a741cca7::t_02eab738972f38 14-15,38,40-41
+.taskfiles/scripts/go-test.sh
+  s_b958b4a741cca7::t_02eab738972f38 1-43
+.taskfiles/test.yml
+  s_b958b4a741cca7::t_02eab738972f38 36,60
+.gitignore
+  s_b958b4a741cca7::t_26873815638442 19-21
+  s_b958b4a741cca7::t_02eab738972f38 16-18
+.taskfiles/go.yml
+  s_b958b4a741cca7::t_02eab738972f38 1-26
+.taskfiles/lint.yml
+  s_b958b4a741cca7::t_02eab738972f38 28-29,44,48
+.golangci.yml
+  s_b958b4a741cca7::t_02eab738972f38 1-38
+scripts/build-core.sh
+  s_b958b4a741cca7::t_02eab738972f38 1-24,27-34
+  s_b958b4a741cca7::t_26873815638442 25-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "781953998a5d875f82022b5f411d648da0a25d01",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
