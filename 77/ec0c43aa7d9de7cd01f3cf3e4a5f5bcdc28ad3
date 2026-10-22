@@ -1,18 +1,18 @@
+README.md
+  s_cecf23d6c2cd2e::t_772e6d79e55ee3 952-955
 tests/lib/headroom-fakes.sh
   s_cecf23d6c2cd2e::t_800e8ab32266c3 214
 tests/headroom-claude.venom.yml
   s_cecf23d6c2cd2e::t_b5a6fa997c9de3 128
   s_cecf23d6c2cd2e::t_800e8ab32266c3 99-127,129
 agents/claude/headroom-exec.sh
-  s_cecf23d6c2cd2e::t_772e6d79e55ee3 72-74
   s_cecf23d6c2cd2e::t_b5a6fa997c9de3 201-214,233-236
-README.md
-  s_cecf23d6c2cd2e::t_772e6d79e55ee3 952-955
+  s_cecf23d6c2cd2e::t_772e6d79e55ee3 72-74
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.5",
-  "base_commit_sha": "229caf23a5605423f99b1172ab9f95d2576b1d45",
+  "base_commit_sha": "77ec0c43aa7d9de7cd01f3cf3e4a5f5bcdc28ad3",
   "prompts": {},
   "sessions": {
     "s_cecf23d6c2cd2e": {
