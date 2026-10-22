@@ -69,9 +69,9 @@
 # too. A later --settings replaces an earlier one whole, and only the last
 # counts, so a user's own last --settings (inline JSON when, trimmed, it is
 # {…}; a file path otherwise, as Claude Code reads it) gets the routing env
-# merged into its env instead, the user's keys winning. Settings env outranks
-# the process env, so these values also win over a user or project
-# settings.json env for this launch, as wrap's settings.local.json does.
+# merged into its env instead, the user's keys winning. A key a settings.json
+# env sets is left out (step 4), unlike wrap, whose settings.local.json
+# outranks the user's and project's settings.json.
 #
 # Degraded mode (spawn failure, readiness timeout): warn on stderr and exec
 # claude unrouted — headroom is an optimization layer, never a reason to lose
@@ -198,6 +198,20 @@ fi
 # ── 4. The same routing for background sessions, as --settings ───────────────
 route_settings="$(jq -cn --arg k "${route_key}" --arg v "${route_url}" --arg t "${ENABLE_TOOL_SEARCH}" \
 	'{env: {($k): $v, ENABLE_TOOL_SEARCH: $t}}')"
+# A key a user, project or local settings.json env sets is left out. That
+# file outranks the process env, so before background sessions were routed
+# it decided where a launch went (a gateway, say), and a --settings value
+# would outrank it. Managed settings outrank --settings anyway. A file jq
+# cannot read as one settings object sets nothing.
+for f in "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/settings.json" .claude/settings.json .claude/settings.local.json; do
+	# shellcheck disable=SC2016 # $s and $k are jq variables
+	if [[ -f "${f}" ]] && pruned="$(jq -c --slurpfile s "${f}" \
+		'if ($s | length) == 1 and ($s[0].env | type) == "object"
+			then .env |= with_entries(select(.key as $k | $s[0].env | has($k) | not)) else . end' \
+		<<<"${route_settings}" 2>/dev/null)"; then
+		route_settings="${pruned}"
+	fi
+done
 
 # Find the value of the user's last --settings, the one Claude Code reads:
 # its index in USER_ARGS, and whether it is joined (--settings=<value>).
@@ -216,7 +230,10 @@ for ((i = 0; i < ${#USER_ARGS[@]}; i++)); do
 done
 
 launch_args=("${USER_ARGS[@]}")
-if [[ -z "${settings_at}" ]]; then
+if [[ "${route_settings}" == '{"env":{}}' ]]; then
+	# Every routing key is left to a settings.json: nothing to add.
+	:
+elif [[ -z "${settings_at}" ]]; then
 	launch_args=(--settings "${route_settings}" "${USER_ARGS[@]}")
 elif [[ "${settings_at}" -lt "${#USER_ARGS[@]}" ]]; then
 	# (A --settings without a value is left for claude to reject.)

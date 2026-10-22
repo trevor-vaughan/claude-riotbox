@@ -949,9 +949,10 @@ What changes when enabled:
   file in the container's `/tmp`, so the settings' secrets stay out of the
   process list. If it cannot read that file or JSON, claude
   gets it unchanged and a notice says background sessions of that launch
-  reach the API directly. These values also take precedence over `env`
-  entries in your `settings.json` for the launch, as `headroom wrap`'s
-  settings file did.
+  reach the API directly. A value your user, project or local
+  `settings.json` sets in `env` is left to that file, as it was before:
+  with `ANTHROPIC_BASE_URL` there, for example, the launch goes to your
+  gateway rather than through headroom.
 - For opencode, RiotBox starts the proxy and then hands off to
   `headroom wrap opencode --no-proxy`, which routes the providers through it
   via `OPENCODE_CONFIG_CONTENT` and writes nothing into the project.

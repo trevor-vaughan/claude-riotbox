@@ -96,6 +96,37 @@ testcases:
           - result.systemout ShouldContainSubstring "INLINE SETTINGS RUNDIR 600 {'env':{'ANTHROPIC_BASE_URL':'https://gw.example','ENABLE_TOOL_SEARCH':'true'}}"
           - result.systemout ShouldNotContainSubstring "NOTICE"
 
+  # Before background sessions were routed, a settings.json env outranked
+  # the exported routing and so decided where a launch went (a gateway, say);
+  # a --settings value would outrank that file, so its keys are left to it.
+  - name: a routing key a settings.json env sets is left to that file
+    steps:
+      - type: exec
+        script: |
+          export RIOTBOX_DIR="$(cd "{{.riotbox_dir}}" && pwd)"
+          source "{{.shared_helpers}}"
+          source "{{.riotbox_dir}}/tests/lib/headroom-fakes.sh"
+          claude_case_setup
+          mkdir -p "${HOME}/.claude" "${HOME}/proj/.claude" "${HOME}/cfg"
+          printf '{"env":{"ENABLE_TOOL_SEARCH":"auto"}}' >"${HOME}/.claude/settings.json"
+          claude x 2>&1 | grep '^arg=' | sed 's/^/USER /' | argv_line
+          cd "${HOME}/proj"
+          printf '{"env":{"ANTHROPIC_BASE_URL":"https://gw.example"}}' >.claude/settings.local.json
+          claude x 2>&1 | grep '^arg=' | sed 's/^/BOTH /' | argv_line
+          printf '{"model":"m"}' >user.json
+          claude --settings user.json x 2>&1 | grep '^arg=' | sed 's/^/BOTHUSER /' | argv_line
+          mv .claude/settings.local.json .claude/settings.json
+          CLAUDE_CONFIG_DIR="${HOME}/cfg" claude x 2>&1 | grep '^arg=' | sed 's/^/PROJECT /' | argv_line
+          printf '{not json' >.claude/settings.json
+          claude x 2>&1 | grep -e '^arg=' -e NOTICE | sed 's/^/INVALID /' | argv_line
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "USER arg=--dangerously-skip-permissions|USER arg=--settings|USER arg={'env':{'ANTHROPIC_BASE_URL':'http://127.0.0.1:PORT'}}|USER arg=x|"
+          - result.systemout ShouldContainSubstring "BOTH arg=--dangerously-skip-permissions|BOTH arg=x|"
+          - result.systemout ShouldContainSubstring "BOTHUSER arg=--dangerously-skip-permissions|BOTHUSER arg=--settings|BOTHUSER arg=user.json|BOTHUSER arg=x|"
+          - result.systemout ShouldContainSubstring "PROJECT arg=--dangerously-skip-permissions|PROJECT arg=--settings|PROJECT arg={'env':{'ENABLE_TOOL_SEARCH':'true'}}|PROJECT arg=x|"
+          - result.systemout ShouldContainSubstring "INVALID arg=--dangerously-skip-permissions|INVALID arg=--settings|INVALID arg={'env':{'ANTHROPIC_BASE_URL':'http://127.0.0.1:PORT'}}|INVALID arg=x|"
+
   - name: a --settings the helper cannot merge reaches claude unchanged, with a notice
     steps:
       - type: exec
