@@ -1,0 +1,21 @@
+docs/dev/decisions/session-core-language.md
+  s_b958b4a741cca7::t_01454093e47144 3-9,13-16,30-41,53-55,57-59,63-71,76-93,97-109,113-115,117-159,163-164,166-169,171,175-190,194-209,213-218,222-225
+docs/dev/decisions/README.md
+  s_b958b4a741cca7::t_98094b9ad70a10 23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6d06c411ea823be0cb7f578e089f2bf26c4c1fcb",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
