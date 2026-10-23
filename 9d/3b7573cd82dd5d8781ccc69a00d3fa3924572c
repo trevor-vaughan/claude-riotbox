@@ -1,0 +1,47 @@
+install.sh
+  s_b958b4a741cca7::t_8610e875e7372e 8-13,17-24,28-66,105-204,218-219
+scripts/build-core.sh
+  s_b958b4a741cca7::t_450f86ba81504d 30
+scripts/lib/riotbox-core.sh
+  s_b958b4a741cca7::t_42a7784a88cc54 1-44
+scripts/mount-projects.sh
+  s_b958b4a741cca7::t_33acff14b95bce 40-41,43-46,48-50,54-57,59-61,73-74,109-111,127-129,134,228-229,1062-1063
+scripts/preflight.sh
+  s_b958b4a741cca7::t_66828786d5ba84 58,72-73,206-216,576
+setup.sh
+  s_b958b4a741cca7::t_e7b1bd801e983f 8-11,17-18,23-38,42-46,73,363-368,371-386,389-391,395-410,412,422-423,449-456,468
+tests/container-name.venom.yml
+  s_b958b4a741cca7::t_273dd576f64c95 129,199
+tests/install-rootless.venom.yml
+  s_b958b4a741cca7::t_0943e684295812 17-18,20,27-29,53-54,56,72-73,75,92-93,98,121-122,125,136,169-170,173,179,201-202,210,234-235,238,254-255,262,291-292,294-295,309-310,312-313,336-338,352-353,356,370-371,377,400-401,403,415,440-441,447,469-470,473,487,497-500,504-956,959-1023
+tests/lib/answer-prompts.sh
+  s_b958b4a741cca7::t_f977688d96b904 1-67
+tests/lib/fake-release.sh
+  s_b958b4a741cca7::t_4a0ebac9b0f81c 1-89
+tests/lib/git-test-helpers.sh
+  s_b958b4a741cca7::t_64ed641eceb575 136-137
+tests/lib/go-stub.sh
+  s_b958b4a741cca7::t_c2380a825ed08a 1-38
+tests/lib/session-commands-helpers.sh
+  s_b958b4a741cca7::t_76599d36329975 14-15,21-22,33-34
+tests/riotbox-core.venom.yml
+  s_b958b4a741cca7::t_a743917ddc1461 1-151
+tests/setup.venom.yml
+  s_b958b4a741cca7::t_061c1d56b3c887 15-16,19,30-31,34,45-46,49,60-61,64,75-76,78,89-90,94,107-108,111,123-124,127,142-143,146,158-159,170,181-182,189,202-203,207,218-219,223,236-237,241,243,256-257,260,263,272,278-279,281,284,294-295,298,309-310,313,331-332,334,345-346,349,353-529
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9d3b7573cd82dd5d8781ccc69a00d3fa3924572c",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
