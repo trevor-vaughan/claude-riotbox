@@ -13,6 +13,7 @@ docs/dev/mount-projects.md
   s_b958b4a741cca7::t_e51edb23ddd054 73,182
 docs/dev/riotbox-core.md
   s_b958b4a741cca7::t_30d62a9c891615 56-76,88-92
+  s_b958b4a741cca7::t_3bfa83cfd5e0c9 70,88-92
 internal/engine/engine.go
   s_b958b4a741cca7::t_fff078d8c911e0 1-378
 internal/engine/engine_suite_test.go
@@ -27,14 +28,18 @@ scripts/lib/session-state.sh
   s_b958b4a741cca7::t_a1d423581d1629 345,608-618,620-622
 scripts/mount-projects.sh
   s_b958b4a741cca7::t_6794dd642a9669 98,356
+  s_b958b4a741cca7::t_3daf840149f128 98
 scripts/overlay.sh
   s_b958b4a741cca7::t_08786cb60e53ba 32,316-317,319-322,325-328,330-331,333-334,337-351,357
+  s_b958b4a741cca7::t_6446a40cb73c49 333,339-344
 tests/lib/engine-stub.sh
   s_b958b4a741cca7::t_f76ed0b45bb3a4 7-9,11-12,26,39
 tests/lib/engine-stub/podman
   s_b958b4a741cca7::t_b52e063b47a967 1-74
+  s_b958b4a741cca7::t_5887c474a19977 10-12,14
 tests/overlay.venom.yml
   s_b958b4a741cca7::t_ba5abff12a4ce8 3201-3252
+  s_b958b4a741cca7::t_a2966d0a8b727b 3201-3252
 ---
 {
   "schema_version": "authorship/3.0.0",
