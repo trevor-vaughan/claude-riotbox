@@ -448,6 +448,13 @@ testcases:
           trap '"${BIN}" bg shutdown --hard >/dev/null 2>&1 || true; rm -rf "${FAKE}"' EXIT
 
           export HOME="${FAKE}"
+          # install-hooks writes trace2.eventTarget to the global config, and
+          # the case reads it back from ${FAKE}/.gitconfig. Point the global
+          # config there explicitly rather than inheriting the caller's
+          # GIT_CONFIG_GLOBAL (task sets /dev/null). See the "git isolation,
+          # with a deliberate exception" note further down.
+          export GIT_CONFIG_GLOBAL="${FAKE}/.gitconfig"
+          export GIT_CONFIG_SYSTEM=/dev/null
           export CLAUDE_CONFIG_DIR="${FAKE}/.claude"
           export RIOTBOX_GIT_AI_BIN="${BIN}"
           export GIT_AI_ALLOW_SUPERUSER=1
@@ -1267,6 +1274,13 @@ testcases:
           trap '"${BIN}" bg shutdown --hard >/dev/null 2>&1 || true; rm -rf "${FAKE}"' EXIT
 
           export HOME="${FAKE}"
+          # install-hooks writes trace2.eventTarget to the global config, and
+          # the case reads it back from ${FAKE}/.gitconfig. Point the global
+          # config there explicitly rather than inheriting the caller's
+          # GIT_CONFIG_GLOBAL (task sets /dev/null). See the "git isolation,
+          # with a deliberate exception" note further down.
+          export GIT_CONFIG_GLOBAL="${FAKE}/.gitconfig"
+          export GIT_CONFIG_SYSTEM=/dev/null
           export CLAUDE_CONFIG_DIR="${FAKE}/.claude"
           export GIT_AI_ALLOW_SUPERUSER=1
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${FAKE}/.config/opencode"

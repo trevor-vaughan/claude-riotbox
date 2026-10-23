@@ -108,9 +108,11 @@ a later member of a set, still produces v0.7.0's key.
 | `task go:build` | Runs `scripts/build-core.sh` to write `libexec/riotbox-core`. Skipped when none of its inputs changed: non-test Go sources, `go.mod`, `go.sum`, `VERSION`, the build script |
 | `task go:test` | Runs every Ginkgo suite and renders the report with ginkgoleaf: `tree` by default, `text` with `MODE=llm`. Output lands in `.test-output/go/` |
 | `task go:lint` | `go tool golangci-lint run ./...` |
-| `task test` | `go:build`, then `go:test`, then the Venom suites. The suites run against the host-built `libexec/riotbox-core`, because the test image has no Go |
+| `task fmt` | Alias for `task go:fmt`: `go tool golangci-lint fmt ./...`, applying the formatters `.golangci.yml` enables (gofmt, goimports) |
+| `task test` | `go:build`, then `go:test`, then the Venom suites. The suites run against the host-built `libexec/riotbox-core`, because the test image has no Go. `MODE=llm` applies to both halves: ginkgoleaf `text` for Go, and `.taskfiles/scripts/venom-output.sh`'s errors-only summary for Venom |
 | `task lint` | Includes `go:lint` alongside shellcheck and hadolint |
 | `task release:package` | Local release dry run; see [Releasing](#releasing) |
+| `task clean` | Removes everything the build produces, `libexec/riotbox-core` and `dist/` included, plus Task's `.task/` checksum cache so the next `go:build` rebuilds |
 
 `scripts/build-core.sh` builds with `GOTOOLCHAIN=local`, `-trimpath` and
 `-ldflags "-s -w -X main.version=<VERSION>"`, the same flags as the release.

@@ -11,6 +11,7 @@ tasks:
     cmd: task test --list
 
   build:
+    desc: Build the riotbox-test image from tests/Containerfile.test
     internal: true
     cmds:
       - |
@@ -31,13 +32,22 @@ tasks:
     cmd: bash "{{.ROOT_DIR}}/scripts/lint-venom.sh" "{{.ROOT_DIR}}/tests"
 
   run:
-    desc: Run tests (venom integration suites)
+    desc: "Run tests (venom integration suites; MODE=human|llm)"
     deps: [build, ":go:build"]
     vars:
       ARGS: "{{.ARGS | default .CLI_ARGS}}"
     env:
       TEST_DIR: "{{.ROOT_DIR}}/{{.TEST_DIR}}"
       TEST_AS_ROOT: '{{.TEST_AS_ROOT | default ""}}'
+      TEST_MODE: '{{.MODE | default "human"}}'
+      # Git isolation: the suites run git, so they must not see the caller's
+      # git config or identity. run-tests.sh passes these into the container.
+      GIT_CONFIG_GLOBAL: /dev/null
+      GIT_CONFIG_SYSTEM: /dev/null
+      GIT_AUTHOR_NAME: RiotBox Tests
+      GIT_AUTHOR_EMAIL: riotbox-tests@invalid
+      GIT_COMMITTER_NAME: RiotBox Tests
+      GIT_COMMITTER_EMAIL: riotbox-tests@invalid
     cmds:
       - mkdir -p "{{.ROOT_DIR}}/{{.TEST_DIR}}"
       - "{{.ROOT_DIR}}/.taskfiles/scripts/run-tests.sh {{.ARGS}}"
@@ -55,9 +65,18 @@ tasks:
           TEST_AS_ROOT: "1"
 
   direct:
-    desc: "Run venom tests directly without the test container (artifacts to .test-output/)"
+    desc: "Run venom tests directly without the test container (artifacts to .test-output/; MODE=human|llm)"
     deps: [":go:build"]
     vars:
       ARGS: "{{.ARGS | default .CLI_ARGS}}"
+    env:
+      TEST_MODE: '{{.MODE | default "human"}}'
+      # Git isolation, as in `run`.
+      GIT_CONFIG_GLOBAL: /dev/null
+      GIT_CONFIG_SYSTEM: /dev/null
+      GIT_AUTHOR_NAME: RiotBox Tests
+      GIT_AUTHOR_EMAIL: riotbox-tests@invalid
+      GIT_COMMITTER_NAME: RiotBox Tests
+      GIT_COMMITTER_EMAIL: riotbox-tests@invalid
     cmds:
       - "{{.ROOT_DIR}}/scripts/venom-run.sh {{.ARGS}}"

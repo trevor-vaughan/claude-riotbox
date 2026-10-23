@@ -24,6 +24,11 @@ tasks:
     silent: true
     cmd: |
       task --list 2>/dev/null
+  build:
+    desc: "Alias for build:image"
+    cmds:
+      - task: build:image
+
   rebuild:
     desc: "Rebuild from scratch (alias for container:rebuild)"
     cmds:
@@ -48,9 +53,14 @@ tasks:
     cmds:
       - task: lint:run
 
+  fmt:
+    desc: "Alias for go:fmt"
+    cmds:
+      - task: go:fmt
+
   clean:
-    desc: Remove build artifacts and test output
-    cmd: rm -rf {{.TEST_DIR}}
+    desc: "Remove build output: test output, dist/, configs/, libexec/riotbox-core and Task's .task/ cache"
+    cmd: rm -rf "{{.TEST_DIR}}" dist configs libexec/riotbox-core .task
 
   check:
     desc: Run all quality gates

@@ -2064,6 +2064,7 @@ The following are only needed if you want to run the linters or tests locally (o
 - [shellcheck](https://www.shellcheck.net/) — shell script linter (`dnf install ShellCheck` or `brew install shellcheck`)
 - [hadolint](https://github.com/hadolint/hadolint) — Dockerfile linter (`brew install hadolint` or download from [releases](https://github.com/hadolint/hadolint/releases))
 - [venom](https://github.com/ovh/venom) — integration test runner (downloaded automatically inside the test container)
+- python3 — renders the errors-only Venom summary for `MODE=llm` (standard library only)
 - `setpriv` (util-linux) — **only when running the suites as root.** One case in `tests/doctor-context-mode.venom.yml` extracts the `riotbox doctor` probe body and runs it, and that body tests `[ -w ]` against a 0555 directory — a test root passes whatever the mode, so as uid 0 the case drops to uid 65534 with `setpriv` rather than skipping and reporting coverage it did not get. It fails loudly if `setpriv` is missing. Run the suites as an unprivileged user and this is not needed at all; `dnf install util-linux` (or `apk add util-linux` on Alpine) if you must run them as root. CI covers that path rather than leaving it to whoever happens to be root: the `test` job re-runs this one suite as uid 0 (`task test:as-root`), and `tests/Containerfile.test` installs `util-linux` for it.
 
 ### Tasks
@@ -2071,20 +2072,26 @@ The following are only needed if you want to run the linters or tests locally (o
 ```sh
 task check          # run all quality gates (lint + test + venom lint)
 task lint           # shellcheck + hadolint + golangci-lint
-task test           # build riotbox-core, run the Go suites, then the venom suites in the test container
+task test           # build riotbox-core, run the Go suites, then the venom suites in the test container; MODE=llm for errors-only output
 task go:build       # build libexec/riotbox-core from the Go sources
 task go:test        # Go (Ginkgo) suites only; MODE=llm for errors-only output
 task go:lint        # golangci-lint only
+task fmt            # format Go code (alias for go:fmt: golangci-lint's gofmt + goimports)
 task test:direct    # run venom directly on host (skip container build)
 task test:as-root   # re-run a suite as uid 0 in the container (see below)
 task test:lint      # structural lint of .venom.yml test suites
 task test:list      # list available test suites
+task clean          # remove build output: .test-output/, dist/, configs/, libexec/riotbox-core, .task/
 ```
 
 The `check` target executes all three gates in parallel: `lint` (shellcheck and hadolint), `test` (venom integration suites in a container), and `test:lint` (structural validation of venom test files).
 
 For quick iteration on a single suite — or when working in an agent sandbox without the test image built — use `task test:direct -- tests/<suite>.venom.yml` (or `scripts/venom-run.sh tests/<suite>.venom.yml` if you prefer to skip task). The wrapper runs venom directly on the host and routes all output (logs and result files) into `.test-output/`. Do **not** run `venom run` from the repo root
 yourself: venom writes `venom.log` to CWD on every invocation (and rotates earlier runs to `venom.N.log`) with no flag to redirect it, so a bare invocation litters the working tree.
+
+`MODE=llm` (on `task test`, `task test:run` and `task test:direct`) replaces the Venom console output with an errors-only summary: each failing test case with its suite file, case name and the failure text from the XML results, then one totals line. Passing cases print nothing. `MODE=human`, the default, prints Venom's own output. Both modes save the full console output to `.test-output/venom-output.log` and keep Venom's exit code.
+
+The test tasks (`go:test`, `test:run`, `test:as-root`, `test:direct`) isolate git from your own configuration: they set `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_SYSTEM=/dev/null` and a fixed `RiotBox Tests <riotbox-tests@invalid>` author and committer, and `run-tests.sh` passes the same variables into the test container. A case that needs its own global config or identity sets it explicitly.
 
 `task test:as-root -- tests/<suite>.venom.yml` runs a suite as uid 0 inside the test container instead of as `testuser` (equivalently, `TEST_AS_ROOT=1 task test -- tests/<suite>.venom.yml`). It exists for the one case in `tests/doctor-context-mode.venom.yml` whose `setpriv` privilege drop is only reached when the runner is already root — see the `setpriv` prerequisite above. Pass a single suite; it is coverage for that branch, not a second full test pass. It reuses the same image, dropping `--userns=keep-id` so that container uid 0 maps to your own host uid: `.test-output/` artifacts stay yours and a later ordinary `task test` is unaffected. That mapping is a podman property — under docker the run would leave `.test-output/` owned by real root.
 

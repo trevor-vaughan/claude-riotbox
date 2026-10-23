@@ -3,12 +3,12 @@ vars:
   root: "."
 
 # Pins the container task surface after the docker→container rename:
-#   - container:{build,rebuild,update} and the root rebuild/update aliases all
-#     resolve via `task --list`. The root `build` alias is no longer defined in
-#     Taskfile.yml — it now comes from the build: include namespace. Grepping
-#     .taskfiles/build.yml for `aliases` finds nothing: Task exposes a
-#     namespace's `default` task under the bare namespace name, so build:default
-#     is listed as `(aliases: build)` and build:gh-glab is the flavor.
+#   - container:{build,rebuild,update} and the root build/rebuild/update aliases
+#     all resolve via `task --list`. The root `build` alias points at
+#     build:image (the base image) and build:gh-glab is the flavor; the build
+#     namespace's `default` only lists tasks, like every other include's.
+#     `task --dry build` must still reach container:build, so a bare
+#     `task build` keeps building the base image.
 #   - the old docker namespace no longer resolves.
 #   - the LLM_TOOL_UPDATE cache-bust boundary is wired: build.sh passes the
 #     arg with a default of 0, and the Containerfile declares the ARG above
@@ -24,6 +24,7 @@ testcases:
           set -euo pipefail
           cd "{{.root}}"
           task --list
+          task --dry build 2>&1 | sed 's/^/dry=/'
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "container:build"
@@ -31,7 +32,9 @@ testcases:
           - result.systemout ShouldContainSubstring "container:update"
           - result.systemout ShouldContainSubstring "alias for container:update"
           - result.systemout ShouldContainSubstring "build:gh-glab"
-          - 'result.systemout ShouldContainSubstring "(aliases: build)"'
+          - 'result.systemout ShouldContainSubstring "* build:image:"'
+          - result.systemout ShouldContainSubstring "Alias for build:image"
+          - 'result.systemout ShouldContainSubstring "dry=task: [container:build]"'
 
   - name: the old docker task namespace no longer resolves
     steps:
