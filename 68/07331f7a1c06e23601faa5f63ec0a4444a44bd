@@ -1,7 +1,12 @@
 docs/dev/decisions/README.md
   s_b958b4a741cca7::t_750dcfcb9222af 23
+  s_b958b4a741cca7::t_be73fe45b80c62 23
 docs/dev/decisions/session-core-language.md
   s_b958b4a741cca7::t_09f5afdedf026a 1-233
+  s_b958b4a741cca7::t_ef91726a9fe9d7 1-233
+  s_b958b4a741cca7::t_cbb88d6183dfac 156-162
+  s_b958b4a741cca7::t_8b1ac4f141ffe6 139
+  s_b958b4a741cca7::t_271a3f50bdd57b 225,227-233
 ---
 {
   "schema_version": "authorship/3.0.0",
