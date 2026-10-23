@@ -1,0 +1,31 @@
+tests/riotbox-core.venom.yml
+  s_b958b4a741cca7::t_4f55a36597a84a 35-49
+cmd/riotbox-core/main.go
+  s_b958b4a741cca7::t_1239207a5e03f8 10,23-27,42,49,59,64-138,150-175,177-178,180-191,194-203,219,228-229,240-241,244-251,255-261,263,266-267
+cmd/riotbox-core/main_test.go
+  s_b958b4a741cca7::t_a61400be121eda 38-44,152,160,197,208,316,324,365-368,372-379,382-384,392
+docs/dev/riotbox-core.md
+  s_b958b4a741cca7::t_b2396ffa3d8496 56-82,89,130,133,137,140,157,167-171
+scripts/lib/session-state.sh
+  s_b958b4a741cca7::t_a95a8dfdc85c91 133,149-150,164,198,216,245
+scripts/mount-projects.sh
+  s_b958b4a741cca7::t_f160174f435636 50,61,309
+scripts/overlay.sh
+  s_b958b4a741cca7::t_9a7d53a7704264 342,428
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b5b5f4f82dc4a43c3fd9e8106bcfe17d6c4c3a5f",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
