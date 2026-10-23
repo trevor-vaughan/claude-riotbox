@@ -1,0 +1,19 @@
+tests/setup.venom.yml
+  s_f4539e444c2ee2::t_b33142fa312e0b 525-531,535
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cdb9fc6ba667a6cc146a99944fa372f4a2699a36",
+  "prompts": {},
+  "sessions": {
+    "s_f4539e444c2ee2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "16964791-79ca-4996-a6b6-a98912baf6c7",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
