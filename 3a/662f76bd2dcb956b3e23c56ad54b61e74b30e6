@@ -1,25 +1,39 @@
 cmd/riotbox-core/main.go
   s_b958b4a741cca7::t_4daa583c7c5009 11,24-27,35-36,51-62,73-87
+  s_b958b4a741cca7::t_685bb7129e0719 11,24-27,35-36,51-62,73-87
 cmd/riotbox-core/main_test.go
   s_b958b4a741cca7::t_c059cc66fe501f 5,7,47-121,134-137
+  s_b958b4a741cca7::t_a0e2efba6045d7 5,7,47-121,134-137
 internal/display/display.go
   s_b958b4a741cca7::t_a6ee5638811a88 1-124
+  s_b958b4a741cca7::t_c93cf66726d43c 1-19,21-124
+  s_b958b4a741cca7::t_db0f3c406bd19e 20
 internal/display/display_suite_test.go
   s_b958b4a741cca7::t_a015c533d9b826 1-25
+  s_b958b4a741cca7::t_aea26937bcb262 1-25
 internal/display/display_test.go
   s_b958b4a741cca7::t_0ea6878a0688e3 1-142
+  s_b958b4a741cca7::t_6359b56f3b0a87 1-142
 internal/records/export_test.go
   s_b958b4a741cca7::t_3ccdf978f2e0a3 1-5
+  s_b958b4a741cca7::t_51fe2046b3c2f8 1-5
 internal/records/records.go
   s_b958b4a741cca7::t_399697c1755dd6 1-114
+  s_b958b4a741cca7::t_1c6e4c224c5a2f 1-114
 internal/records/records_suite_test.go
   s_b958b4a741cca7::t_0cc4016422bb5a 1-13
+  s_b958b4a741cca7::t_12ef171f2ab064 1-13
 internal/records/records_test.go
   s_b958b4a741cca7::t_77c305fe038d57 1-192
+  s_b958b4a741cca7::t_c33bb01b392087 168,170,172-173,175
+  s_b958b4a741cca7::t_ba4646439a4bca 1-111,115-117,119-167,169,171,174,176-192
+  s_b958b4a741cca7::t_8f8e89c2666e89 112-114,118
 scripts/lib/riotbox-core.sh
   s_b958b4a741cca7::t_18535503acb7a9 5-7
+  s_b958b4a741cca7::t_47a8a16fad51ca 5-7
 scripts/lib/session-state.sh
   s_b958b4a741cca7::t_d5a3e4fd7571af 47-48,664-666,668-670,706-708,710-713
+  s_b958b4a741cca7::t_eb8434a1040aef 47-48,664-666,668-670,706-708,710-713
 ---
 {
   "schema_version": "authorship/3.0.0",
