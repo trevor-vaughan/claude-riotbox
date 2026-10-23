@@ -1,15 +1,19 @@
 cmd/riotbox-core/main.go
   s_b958b4a741cca7::t_ea30d578021533 12,37-45,95-100,148-155
+  s_b958b4a741cca7::t_153023cdc5d67d 43,99-100
 cmd/riotbox-core/main_test.go
   s_b958b4a741cca7::t_74e92dc2823ca6 185-248,269-277
+  s_b958b4a741cca7::t_7caee6d2b81294 236,243,275-277
 internal/migrate/export_test.go
   s_b958b4a741cca7::t_3e3de2b71fc799 1-35
 internal/migrate/failed_test.go
   s_b958b4a741cca7::t_c2bdfb2c51106b 1-127
 internal/migrate/headroom.go
   s_b958b4a741cca7::t_6bf2c672a52365 1-115
+  s_b958b4a741cca7::t_d253e79843af22 24-26,28,30,34,53-58
 internal/migrate/headroom_test.go
   s_b958b4a741cca7::t_5d4052399fd28a 1-142
+  s_b958b4a741cca7::t_fbb51093a02fee 25,40,53,64,72,93,101,107-123,127,138
 internal/migrate/marker.go
   s_b958b4a741cca7::t_c8df4735f46a3f 1-154
 internal/migrate/migrate.go
@@ -20,6 +24,7 @@ internal/migrate/migrate_test.go
   s_b958b4a741cca7::t_1378ae8285171e 1-598
 scripts/lib/session-state.sh
   s_b958b4a741cca7::t_402f7970b92e0e 33,35,120-127,131-133,137-143,147-149,153-159,161-163
+  s_b958b4a741cca7::t_d47834321cca56 163
 scripts/mount-projects.sh
   s_b958b4a741cca7::t_19653162d9674f 949-950,952
 tests/lib/session-state-helpers.sh
