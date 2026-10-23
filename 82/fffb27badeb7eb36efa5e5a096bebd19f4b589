@@ -16,6 +16,7 @@ tests/lib/copy-manifest-coverage.sh
   s_b958b4a741cca7::t_282c857ea9caf8 16,37,49,56-59,179
 tests/lib/libexec-glob-coverage.sh
   s_b958b4a741cca7::t_d96c275b9af29c 1-60
+  s_b958b4a741cca7::t_9353be2701403b 52
 tests/package-install.venom.yml
   s_b958b4a741cca7::t_e92b1f779ef9ef 12-16,37,40,65,91,93
 tests/riotbox-core.venom.yml
