@@ -1,0 +1,27 @@
+setup.sh
+  s_b958b4a741cca7::t_9c9f4182f0c354 73,372
+tests/setup.venom.yml
+  s_b958b4a741cca7::t_3f91717cb33c17 272,364,430-440
+tests/lib/answer-prompts.sh
+  s_b958b4a741cca7::t_657be8c6cad392 57-58
+  s_b958b4a741cca7::t_47e5f258373d43 63
+  s_b958b4a741cca7::t_918454bc911ba6 7-17,43
+  s_b958b4a741cca7::t_9c9f4182f0c354 25-26,37-42,44-45,47-49
+  s_b958b4a741cca7::t_8c3924d393775e 27-28,46,65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c14d70bce6fef9d907e6ac64f4256346bfc23388",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
