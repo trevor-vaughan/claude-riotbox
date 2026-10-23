@@ -1,0 +1,30 @@
+.taskfiles/test.yml
+  s_b958b4a741cca7::t_7839608c88d8c6 42-49,73-79
+.taskfiles/go.yml
+  s_b958b4a741cca7::t_51cc88f895b43f 29
+  s_b958b4a741cca7::t_7839608c88d8c6 28,30-35
+.taskfiles/scripts/run-tests.sh
+  s_b958b4a741cca7::t_7839608c88d8c6 4-5,61-66
+tests/git-ai.venom.yml
+  s_b958b4a741cca7::t_3b62bfa843c4e5 451-457,1277-1283
+tests/lib/git-test-helpers.sh
+  s_b958b4a741cca7::t_3b62bfa843c4e5 31-34,36,39
+README.md
+  s_b958b4a741cca7::t_53dff51556d71f 2094-2095
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5540502e86bece46b7a49210c5e1b40542acb683",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
