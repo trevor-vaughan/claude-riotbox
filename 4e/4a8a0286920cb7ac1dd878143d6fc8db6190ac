@@ -1,11 +1,15 @@
 cmd/riotbox-core/main.go
   s_b958b4a741cca7::t_7abc019a67b0fe 1-58
+  s_b958b4a741cca7::t_231881a82e5366 30
 cmd/riotbox-core/main_suite_test.go
   s_b958b4a741cca7::t_40dabc1dac8d7f 1-29
+  s_b958b4a741cca7::t_231881a82e5366 5,20
 cmd/riotbox-core/main_test.go
   s_b958b4a741cca7::t_59311afb5c9395 1-58
+  s_b958b4a741cca7::t_231881a82e5366 4,33,40-42
 cmd/riotbox-core/run_internal_test.go
   s_b958b4a741cca7::t_dd12f57d86bb18 1-26
+  s_b958b4a741cca7::t_231881a82e5366 1-26
 ---
 {
   "schema_version": "authorship/3.0.0",
