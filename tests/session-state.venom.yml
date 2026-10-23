@@ -228,196 +228,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "REPLACE_FAIL_OK"
 
-  # ── migrate_legacy_state ────────────────────────────────────────────────
-
-  - name: migrate_legacy_state does nothing, and creates nothing, when no legacy entry exists
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
-          setup_state_test
-          trap 'rm -rf "${T}"' EXIT
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          mkdir -p "${SESSION}"
-          migrate_legacy_state "${SESSION}" "${STATE}" headroom:headroom git-ai:git-ai 2>"${T}/err"
-          [ ! -s "${T}/err" ] || { echo "FAIL: spoke with nothing to do"; cat "${T}/err"; exit 1; }
-          [ ! -e "${STATE}" ] || { echo "FAIL: created the state dir with nothing to move"; exit 1; }
-          echo "MIGRATE_ABSENT_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_ABSENT_OK"
-
-  - name: migrate_legacy_state moves a real legacy dir once, and a second run is a no-op
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
-          setup_state_test
-          trap 'rm -rf "${T}"' EXIT
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          mkdir -p "${SESSION}/.pi-agent/sessions"
-          echo history > "${SESSION}/.pi-agent/sessions/one.jsonl"
-          migrate_legacy_state "${SESSION}" "${STATE}" .pi-agent:pi-agent 2>"${T}/err1"
-          [ "$(cat "${STATE}/pi-agent/sessions/one.jsonl")" = history ] || { echo "FAIL: not moved"; exit 1; }
-          [ ! -e "${SESSION}/.pi-agent" ] || { echo "FAIL: legacy dir left behind"; exit 1; }
-          [ "$(grep -c '^Notice: moved' "${T}/err1")" -eq 1 ] || { echo "FAIL: want exactly one notice"; cat "${T}/err1"; exit 1; }
-          [ "$(stat -c '%a' "${STATE}")" = 700 ] || { echo "FAIL: state dir not 0700"; exit 1; }
-          [ "$(stat -c '%a' "${STATE%/*}")" = 700 ] || { echo "FAIL: state root not 0700"; exit 1; }
-          migrate_legacy_state "${SESSION}" "${STATE}" .pi-agent:pi-agent 2>"${T}/err2"
-          [ ! -s "${T}/err2" ] || { echo "FAIL: second run was not silent"; cat "${T}/err2"; exit 1; }
-          [ "$(cat "${STATE}/pi-agent/sessions/one.jsonl")" = history ] || { echo "FAIL: second run changed data"; exit 1; }
-          echo "MIGRATE_MOVE_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_MOVE_OK"
-
-  - name: migrate_legacy_state removes legacy symlinks and files without following them
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
-          setup_state_test
-          trap 'rm -rf "${T}"' EXIT
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          mkdir -p "${SESSION}"
-          # SESSION is ${T}/data/riotbox/<key>, so ../../../victim is ${VICTIM}.
-          ln -s ../../../victim "${SESSION}/headroom"
-          ln -s "${VICTIM}" "${SESSION}/git-ai"
-          ln -s ../nowhere "${SESSION}/overlay"
-          echo junk > "${SESSION}/.pi-agent"
-          [ "$(readlink -f "${SESSION}/headroom")" = "${VICTIM}" ] || { echo "FAIL: fixture link is wrong"; exit 1; }
-          migrate_legacy_state "${SESSION}" "${STATE}" \
-            headroom:headroom git-ai:git-ai overlay:overlay .pi-agent:pi-agent 2>"${T}/err"
-          for legacy in headroom git-ai overlay .pi-agent; do
-            [ ! -e "${SESSION}/${legacy}" ] && [ ! -L "${SESSION}/${legacy}" ] || { echo "FAIL: ${legacy} not removed"; exit 1; }
-          done
-          [ "$(grep -c 'not a real directory' "${T}/err")" -eq 4 ] || { echo "FAIL: want one warning per entry"; cat "${T}/err"; exit 1; }
-          [ ! -e "${STATE}" ] || { echo "FAIL: a planted entry was migrated"; exit 1; }
-          assert_victim_intact
-          echo "MIGRATE_LINKS_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_LINKS_OK"
-
-  - name: migrate_legacy_state never merges when both the legacy and the new dir exist
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
-          setup_state_test
-          trap 'rm -rf "${T}"' EXIT
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          mkdir -p "${SESSION}/headroom" "${STATE}/headroom" "${SESSION}/git-ai" "${STATE}"
-          echo old > "${SESSION}/headroom/mem"
-          echo new > "${STATE}/headroom/mem"
-          echo old > "${SESSION}/git-ai/config.json"
-          # A symlink at the new path counts as present, and is not followed.
-          ln -s "${VICTIM}" "${STATE}/git-ai"
-          rc=0
-          migrate_legacy_state "${SESSION}" "${STATE}" headroom:headroom git-ai:git-ai 2>"${T}/err" || rc=$?
-          [ "${rc}" -eq 2 ] || { echo "FAIL: exit ${rc}, want 2 (left stranded)"; exit 1; }
-          [ "$(cat "${SESSION}/headroom/mem")" = old ] || { echo "FAIL: legacy changed"; exit 1; }
-          [ "$(cat "${STATE}/headroom/mem")" = new ] || { echo "FAIL: new changed"; exit 1; }
-          [ ! -e "${STATE}/headroom/headroom" ] || { echo "FAIL: legacy was moved into new"; exit 1; }
-          [ "$(cat "${SESSION}/git-ai/config.json")" = old ] || { echo "FAIL: git-ai legacy changed"; exit 1; }
-          [ -L "${STATE}/git-ai" ] || { echo "FAIL: the new-path link was replaced"; exit 1; }
-          grep -qF "both ${SESSION}/headroom and ${STATE}/headroom exist" "${T}/err" || { echo "FAIL: warning does not name both"; cat "${T}/err"; exit 1; }
-          [ "$(grep -c '^Warning: both' "${T}/err")" -eq 2 ] || { echo "FAIL: want one warning per conflict"; cat "${T}/err"; exit 1; }
-          assert_victim_intact
-          echo "MIGRATE_CONFLICT_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_CONFLICT_OK"
-
-  - name: migrate_legacy_state leaves the legacy dir in place when the move fails
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
-          setup_state_test
-          trap 'rm -rf "${T}"' EXIT
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          mkdir -p "${SESSION}/headroom" "${T}/shim"
-          echo keep > "${SESSION}/headroom/mem"
-          printf '#!/bin/sh\necho "mv: simulated failure" >&2\nexit 1\n' > "${T}/shim/mv"
-          chmod +x "${T}/shim/mv"
-          rc=0
-          PATH="${T}/shim:${PATH}" migrate_legacy_state "${SESSION}" "${STATE}" headroom:headroom 2>"${T}/err" || rc=$?
-          [ "${rc}" -eq 2 ] || { echo "FAIL: exit ${rc}, want 2 (left stranded)"; exit 1; }
-          [ "$(cat "${SESSION}/headroom/mem")" = keep ] || { echo "FAIL: legacy data lost"; exit 1; }
-          [ -d "${SESSION}/headroom" ] && [ ! -L "${SESSION}/headroom" ] || { echo "FAIL: legacy dir is no longer a real dir"; exit 1; }
-          grep -qF "could not move ${SESSION}/headroom" "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
-          grep -qF 'simulated failure' "${T}/err" || { echo "FAIL: mv's own error was dropped"; exit 1; }
-          grep -qF 'will not retry this move on its own' "${T}/err" || { echo "FAIL: no word that the move is not retried"; cat "${T}/err"; exit 1; }
-          grep -qF 'riotbox session-migrate' "${T}/err" || { echo "FAIL: no word of session-migrate"; cat "${T}/err"; exit 1; }
-          grep -qF "mv -T -- ${SESSION}/headroom ${STATE}/headroom" "${T}/err" || { echo "FAIL: no recovery command"; cat "${T}/err"; exit 1; }
-          grep -qF "If ${STATE}/headroom exists by then" "${T}/err" || { echo "FAIL: no advice for an existing new dir"; cat "${T}/err"; exit 1; }
-          echo "MIGRATE_MVFAIL_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_MVFAIL_OK"
-
-  - name: migrate_legacy_state discards a legacy dir swapped for a symlink during the move
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
-          setup_state_test
-          trap 'rm -rf "${T}"' EXIT
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          export VICTIM
-          mkdir -p "${SESSION}/headroom" "${T}/shim"
-          echo mem > "${SESSION}/headroom/mem"
-          # The shim stands for a container swapping the entry between the
-          # type check and the rename: it plants a link, then really moves it.
-          printf '#!/bin/sh\nrm -rf "$2"\nln -s "$VICTIM" "$2"\nexec /usr/bin/mv "$@"\n' > "${T}/shim/mv"
-          chmod +x "${T}/shim/mv"
-          PATH="${T}/shim:${PATH}" migrate_legacy_state "${SESSION}" "${STATE}" headroom:headroom 2>"${T}/err"
-          [ ! -e "${STATE}/headroom" ] && [ ! -L "${STATE}/headroom" ] || { echo "FAIL: the swapped-in link reached the state dir"; exit 1; }
-          [ ! -e "${SESSION}/headroom" ] && [ ! -L "${SESSION}/headroom" ] || { echo "FAIL: legacy entry left behind"; exit 1; }
-          grep -qF "${SESSION}/headroom changed during the move" "${T}/err" || { echo "FAIL: no warning"; cat "${T}/err"; exit 1; }
-          assert_victim_intact
-          echo "MIGRATE_SWAP_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_SWAP_OK"
-
-  - name: migrate_legacy_state removes FIFO and socket legacy entries
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
-          setup_state_test
-          trap 'rm -rf "${T}"' EXIT
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          mkdir -p "${SESSION}"
-          mkfifo "${SESSION}/headroom"
-          python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "${SESSION}/git-ai"
-          [ -p "${SESSION}/headroom" ] && [ -S "${SESSION}/git-ai" ] || { echo "FAIL: fixtures not created"; exit 1; }
-          migrate_legacy_state "${SESSION}" "${STATE}" headroom:headroom git-ai:git-ai 2>"${T}/err"
-          for legacy in headroom git-ai; do
-            [ ! -e "${SESSION}/${legacy}" ] && [ ! -L "${SESSION}/${legacy}" ] || { echo "FAIL: ${legacy} not removed"; exit 1; }
-          done
-          [ "$(grep -c 'not a real directory' "${T}/err")" -eq 2 ] || { echo "FAIL: want one warning per entry"; cat "${T}/err"; exit 1; }
-          [ ! -e "${STATE}" ] || { echo "FAIL: a special file was migrated"; exit 1; }
-          echo "MIGRATE_SPECIAL_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_SPECIAL_OK"
+  # migrate_legacy_state's own cases are Ginkgo specs in internal/migrate.
 
   # ── setup_projects ──────────────────────────────────────────────────────
 
@@ -890,7 +701,7 @@ testcases:
           setup_state_test
           trap 'rm -rf "${T}"' EXIT
           mkdir -p "${SESSION}/overlay"
-          # A real overlay/ passes migrate_legacy_state; the link one level
+          # A real overlay/ passes the legacy-dir check; the link one level
           # down is what the container could have planted.
           ln -s "${VICTIM}" "${SESSION}/overlay/project"
           ln -s ../../../../victim "${SESSION}/overlay/other"
@@ -1226,95 +1037,6 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "NO_REIMPORT_OK"
 
-  - name: migrate_session_state does not record a pair that failed hard, so the next run retries it
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
-          setup_state_test
-          trap 'rm -rf "${T}"' EXIT
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          mkdir -p "${SESSION}" "${STATE}" "${T}/shim"
-          ln -s "${VICTIM}" "${SESSION}/headroom"
-          printf '#!/bin/sh\necho "rm: simulated failure" >&2\nexit 1\n' > "${T}/shim/rm"
-          chmod +x "${T}/shim/rm"
-          rc=0
-          PATH="${T}/shim:${PATH}" migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err" || rc=$?
-          [ "${rc}" -ne 0 ] || { echo "FAIL: a failed removal returned 0"; exit 1; }
-          if grep -qxF headroom "${STATE}/.migrated" 2>/dev/null; then echo "FAIL: the failed pair was recorded"; exit 1; fi
-          migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err"
-          [ ! -e "${SESSION}/headroom" ] && [ ! -L "${SESSION}/headroom" ] || { echo "FAIL: the retry did not remove the link"; exit 1; }
-          grep -qxF headroom "${STATE}/.migrated" || { echo "FAIL: the retry did not record the pair"; exit 1; }
-          assert_victim_intact
-          echo "MARKER_RETRY_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MARKER_RETRY_OK"
-
-  - name: a pair added after a session was marked migrates once, and the old pairs are not re-imported
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
-          setup_state_test
-          trap 'rm -rf "${T}"' EXIT
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          mkdir -p "${SESSION}" "${STATE}"
-          migrate_session_state "${SESSION}" "${STATE}" 2>/dev/null
-          # Planted after marking: an old pair, and the legacy path of a pair
-          # a later release adds.
-          mkdir -p "${SESSION}/headroom" "${SESSION}/.newlegacy"
-          echo planted > "${SESSION}/headroom/mem.db"
-          echo legacy > "${SESSION}/.newlegacy/data"
-          SESSION_STATE_MIGRATIONS+=(.newlegacy:newstate)
-          migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err"
-          [ "$(cat "${STATE}/newstate/data" 2>/dev/null)" = legacy ] || { echo "FAIL: the new pair was not migrated"; cat "${T}/err"; exit 1; }
-          [ ! -e "${STATE}/headroom" ] || { echo "FAIL: an old pair was re-imported"; exit 1; }
-          [ -f "${SESSION}/headroom/mem.db" ] || { echo "FAIL: the planted old entry was touched"; exit 1; }
-          grep -qxF .newlegacy "${STATE}/.migrated" || { echo "FAIL: the new pair was not recorded"; cat "${STATE}/.migrated"; exit 1; }
-          [ "$(grep -c '^Notice: moved' "${T}/err")" -eq 1 ] || { echo "FAIL: want exactly one move"; cat "${T}/err"; exit 1; }
-          mkdir -p "${SESSION}/.newlegacy"
-          echo again > "${SESSION}/.newlegacy/again"
-          migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err2"
-          [ ! -e "${STATE}/newstate/again" ] || { echo "FAIL: the new pair was imported twice"; exit 1; }
-          [ ! -s "${T}/err2" ] || { echo "FAIL: a recorded pair ran again"; cat "${T}/err2"; exit 1; }
-          echo "MARKER_NEW_PAIR_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MARKER_NEW_PAIR_OK"
-
-  - name: a marker whose last line has no newline still counts that entry, and the append keeps one name per line
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
-          setup_state_test
-          trap 'rm -rf "${T}"' EXIT
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          mkdir -p "${SESSION}/headroom" "${SESSION}/overlay/project/upper" "${SESSION}/.newlegacy" "${STATE}"
-          echo planted > "${SESSION}/headroom/mem.db"
-          echo planted > "${SESSION}/overlay/project/upper/injected.sh"
-          echo legacy > "${SESSION}/.newlegacy/data"
-          printf '%s\n' "${SESSION_STATE_MIGRATIONS[@]%%:*}" | head -c -1 > "${STATE}/.migrated"
-          [ -n "$(tail -c 1 "${STATE}/.migrated")" ] || { echo "FAIL: fixture ends in a newline"; exit 1; }
-          SESSION_STATE_MIGRATIONS+=(.newlegacy:newstate)
-          migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err"
-          [ ! -e "${STATE}/overlay" ] || { echo "FAIL: the unterminated last entry ran again"; exit 1; }
-          [ ! -e "${STATE}/headroom" ] || { echo "FAIL: a recorded pair was re-imported"; exit 1; }
-          [ "$(cat "${STATE}/newstate/data")" = legacy ] || { echo "FAIL: the new pair was not migrated"; exit 1; }
-          want="$(printf '%s\n' "${SESSION_STATE_MIGRATIONS[@]%%:*}")"
-          [ "$(cat "${STATE}/.migrated")" = "${want}" ] || { echo "FAIL: marker is not one name per line"; od -c "${STATE}/.migrated" | tail -5; exit 1; }
-          echo "MARKER_NO_NEWLINE_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MARKER_NO_NEWLINE_OK"
-
   - name: setup_projects names the step that failed when .projects cannot be installed, and leaves no temp file
     steps:
       - type: exec
@@ -1350,8 +1072,7 @@ testcases:
           source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
           setup_state_test
           trap 'rm -rf "${T}"' EXIT
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          want="$(printf '%s\n' "${SESSION_STATE_MIGRATIONS[@]%%:*}" | sort)"
+          want="$(printf '%s\n' "${MIGRATED_NAMES[@]}" | sort)"
           failed=0
           for i in $(seq 1 20); do
               rm -rf "${SESSION}" "${STATE}"
@@ -1375,31 +1096,6 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "CONCURRENT_MIGRATE_OK"
-
-  - name: migrate_session_state records a run that left both dirs in place and warns only once, then notices
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
-          setup_state_test
-          trap 'rm -rf "${T}"' EXIT
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          mkdir -p "${SESSION}/git-ai" "${STATE}/git-ai"
-          echo old > "${SESSION}/git-ai/config.json"
-          migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err1"
-          grep -qF "both ${SESSION}/git-ai and ${STATE}/git-ai exist" "${T}/err1" || { echo "FAIL: no warning"; cat "${T}/err1"; exit 1; }
-          [ -f "${STATE}/.migrated" ] || { echo "FAIL: a warning blocked the marker"; exit 1; }
-          if grep -qF 'Notice:' "${T}/err1"; then echo "FAIL: the first run also printed a notice"; cat "${T}/err1"; exit 1; fi
-          migrate_session_state "${SESSION}" "${STATE}" 2>"${T}/err2"
-          if grep -qF 'Warning:' "${T}/err2"; then echo "FAIL: the second run warned again"; cat "${T}/err2"; exit 1; fi
-          [ "$(wc -l < "${T}/err2")" -eq 1 ] || { echo "FAIL: want one notice line"; cat "${T}/err2"; exit 1; }
-          [ -d "${SESSION}/git-ai" ] && [ -d "${STATE}/git-ai" ] || { echo "FAIL: a dir was touched"; exit 1; }
-          echo "MARKER_WARN_ONCE_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MARKER_WARN_ONCE_OK"
 
   - name: the marker works when the user links the state key dir to another disk
     steps:
@@ -1721,7 +1417,7 @@ testcases:
           printf '%s\n' "${PROJ}" > "${SESSION}/.projects"
           echo planted > "${SESSION}/headroom/mem.db"
           echo planted > "${SESSION}/overlay/project/upper/x"
-          printf '%s\n' "${SESSION_STATE_MIGRATIONS[@]%%:*}" > "${STATE}/.migrated"
+          printf '%s\n' "${MIGRATED_NAMES[@]}" > "${STATE}/.migrated"
           cp "${STATE}/.migrated" "${T}/marker.before"
           source "{{.riotbox_dir}}/scripts/mount-projects.sh"
           setup_projects "${PROJ}" 2>"${T}/err"
@@ -1770,7 +1466,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "MIGRATE_REPLACES_EMPTY_OK"
 
-  - name: session-migrate leaves a non-empty new dir alone, and a first launch never replaces an empty one
+  - name: session-migrate leaves a non-empty new dir alone
     steps:
       - type: exec
         script: |
@@ -1792,43 +1488,10 @@ testcases:
           grep -qF "both ${SESSION}/git-ai and ${STATE}/git-ai exist" "${T}/err" || { echo "FAIL: no both-exist warning"; cat "${T}/err"; exit 1; }
           grep -qF "diff -rq ${SESSION}/git-ai ${STATE}/git-ai" "${T}/err" || { echo "FAIL: no compare command"; cat "${T}/err"; exit 1; }
           [ "$(cat "${SESSION}/git-ai/config.json")" = keep ] && [ "$(cat "${STATE}/git-ai/written-by-a-session")" = session ] || { echo "FAIL: a side changed"; exit 1; }
-          # A first launch keeps its rule: an existing new dir, even empty, is never replaced.
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          mkdir -p "${T}/s2/headroom" "${T}/st2/headroom"
-          echo old > "${T}/s2/headroom/mem.db"
-          migrate_session_state "${T}/s2" "${T}/st2" 2>"${T}/err2"
-          grep -qF "both ${T}/s2/headroom and ${T}/st2/headroom exist" "${T}/err2" || { echo "FAIL: a first launch replaced an empty new dir"; cat "${T}/err2"; exit 1; }
-          [ -f "${T}/s2/headroom/mem.db" ] || { echo "FAIL: legacy moved"; exit 1; }
           echo "MIGRATE_KEEPS_NONEMPTY_OK"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "MIGRATE_KEEPS_NONEMPTY_OK"
-
-  - name: a mount whose path a link replaced after the container started still reaches the session dir
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
-          setup_state_test
-          trap 'rm -rf "${T}"' EXIT
-          mkdir -p "${STATE}/git-ai" "${T}/elsewhere"
-          # The container was given ${STATE}/git-ai; then git-ai became a
-          # link out of the state dir. The container still writes the old dir.
-          echo "old1 ${STATE}/git-ai true running unlabelled" > "${STUB_RUNNING}"
-          mv -T "${STATE}/git-ai" "${T}/moved"
-          ln -s "${T}/elsewhere" "${STATE}/git-ai"
-          running_session_mounts
-          [ "${#RUNNING_MOUNT_IDS[@]}" -eq 1 ] || { echo "FAIL: no mount listed"; exit 1; }
-          running_mount_reaches 0 "$(realpath -m -- "${STATE}")" "$(realpath -ms -- "${STATE}")" \
-            || { echo "FAIL: the resolved source ${RUNNING_MOUNT_SOURCES[0]} hid the mount"; exit 1; }
-          running_mount_reaches 0 "$(realpath -m -- "${T}/unrelated")" "$(realpath -ms -- "${T}/unrelated")" \
-            && { echo "FAIL: an unrelated dir counts"; exit 1; }
-          echo "LEXICAL_MOUNT_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "LEXICAL_MOUNT_OK"
 
   - name: session-migrate refuses while a running RiotBox container mounts the session, and fails closed
     steps:
@@ -1922,13 +1585,6 @@ testcases:
           rc=0
           (cd "${T}" && bash "{{.riotbox_dir}}/libexec/migrate-session.sh" "${P2}" "${P1}") >"${T}/out2" 2>"${T}/err2" || rc=$?
           [ "${rc}" -eq 0 ] && [ "$(cat "${MST}/headroom/mem.db")" = keep ] || { echo "FAIL: the whole set did not migrate (exit ${rc})"; cat "${T}/out2" "${T}/err2"; exit 1; }
-          # Without the host-only record the notice falls back to generic advice.
-          source "{{.riotbox_dir}}/scripts/lib/session-state.sh"
-          mkdir -p "${T}/s3/headroom" "${T}/st3"
-          echo keep > "${T}/s3/headroom/mem.db"
-          printf '%s\n' headroom failed:headroom > "${T}/st3/.migrated"
-          migrate_session_state "${T}/s3" "${T}/st3" 2>"${T}/err3"
-          grep -F "${T}/s3/headroom" "${T}/err3" | grep -qF "riotbox session-migrate from the project's directory" || { echo "FAIL: no fallback advice"; cat "${T}/err3"; exit 1; }
           echo "MIGRATE_MEMBER_HINT_OK"
         assertions:
           - result.code ShouldEqual 0

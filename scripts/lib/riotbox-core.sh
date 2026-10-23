@@ -2,8 +2,9 @@
 # scripts/lib/riotbox-core.sh — find the riotbox-core binary and refuse a
 # missing or mismatched one.
 #
-# Sourced by scripts/mount-projects.sh (the key adapters) and
-# scripts/preflight.sh (`riotbox doctor`). The binary lives at
+# Sourced by scripts/mount-projects.sh (the key adapters),
+# scripts/lib/session-state.sh (the record adapters) and scripts/preflight.sh
+# (`riotbox doctor`). The binary lives at
 # libexec/riotbox-core in the app tree this file belongs to. It must print
 # exactly the tree's VERSION: a binary from another release would compute
 # with another release's rules, and `install.sh --binary` from a checkout

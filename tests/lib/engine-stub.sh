@@ -2,12 +2,14 @@
 # Stub container engine for tests of host commands that ask the engine which
 # RiotBox containers are running and what they mount (overlay-accept,
 # overlay-reject, session-migrate).
-# shellcheck disable=SC2317 # the podman stub below runs as CONTAINER_CMD in the scripts under test
 set -euo pipefail
 
+# Resolved now: a test may change directory before the engine runs.
+_ENGINE_STUB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # install_stub_engine <dir>
-#   Define and export the function podman, set CONTAINER_CMD to it, and keep
-#   the stub's files in <dir>.
+#   Set CONTAINER_CMD to the stub engine, the executable
+#   tests/lib/engine-stub/podman, and keep the stub's files in <dir>.
 #   Exports: CONTAINER_CMD, STUB_RUNNING, STUB_PS_CALLS, STUB_INSPECT_CALLS
 #
 #   ${STUB_RUNNING} (absent by default: nothing runs) describes the
@@ -21,7 +23,7 @@ set -euo pipefail
 # with `--filter label=riotbox.session`, only labelled ones. Any other `ps`
 # (the container-name probe) prints nothing.
 # `container inspect <id>...` prints each ID's mounts in the NUL-separated
-# form running_session_mounts (scripts/lib/running-sessions.sh) asks for,
+# form riotbox-core asks for (internal/engine),
 # naming each container after its ID, and counts its calls in
 # ${STUB_INSPECT_CALLS}.
 # With STUB_ENGINE_FAIL set, every call fails as an unreachable engine would;
@@ -34,71 +36,7 @@ set -euo pipefail
 # through a command.
 install_stub_engine() {
 	local dir="$1"
-	# An exported function rather than a file on PATH: /dev/shm, which the
-	# whiteout cases use, is mounted noexec.
-	podman() {
-		if [[ -n "${STUB_ENGINE_FAIL:-}" ]]; then
-			echo "stub engine: cannot connect" >&2
-			return 125
-		fi
-		local id src rw state calls arg prev="" states=" "
-		case "${1:-}" in
-		ps)
-			calls=$(($(cat "${STUB_PS_CALLS}" 2>/dev/null || echo 0) + 1))
-			echo "${calls}" >"${STUB_PS_CALLS}"
-			[[ "${calls}" -ge "${STUB_RUNNING_FROM_CALL:-1}" ]] || return 0
-			[[ " $* " == *" --format {{.ID}} "* ]] || return 0
-			local labelled_only=""
-			[[ " $* " != *" --filter label=riotbox.session "* ]] || labelled_only=1
-			for arg in "$@"; do
-				if [[ "${prev}" == --filter && "${arg}" == status=* ]]; then
-					states+="${arg#status=} "
-				fi
-				prev="${arg}"
-			done
-			[[ "${states}" != " " ]] || states=" running "
-			[[ -f "${STUB_RUNNING}" ]] || return 0
-			while read -r id src rw state label; do
-				[[ -z "${labelled_only}" || "${label:-}" != unlabelled ]] || continue
-				if [[ "${states}" == *" ${state:-running} "* ]]; then
-					printf '%s\n' "${id}"
-				fi
-			done <"${STUB_RUNNING}" | sort -u
-			;;
-		container)
-			[[ "${2:-}" == inspect ]] || return 0
-			calls=$(($(cat "${STUB_INSPECT_CALLS}" 2>/dev/null || echo 0) + 1))
-			echo "${calls}" >"${STUB_INSPECT_CALLS}"
-			if [[ -n "${STUB_INSPECT_FAIL:-}" ]]; then
-				echo "stub engine: permission denied" >&2
-				return 125
-			fi
-			shift 2
-			[[ "${1:-}" != --format ]] || shift 2
-			local want
-			for want in "$@"; do
-				[[ " ${STUB_GONE_IDS:-} " == *" ${want} "* ]] || continue
-				if [[ "${STUB_GONE_STYLE:-podman}" == docker ]]; then
-					echo "Error: No such container: ${want}" >&2
-					return 1
-				fi
-				echo "Error: no such object: \"${want}\"" >&2
-				return 125
-			done
-			for want in "$@"; do
-				while read -r id src rw state; do
-					if [[ "${id}" == "${want}" ]]; then
-						printf '%s\0%s\0%s\0%s\0' "${id}" "${id}" "${src}" "${rw}"
-					fi
-				done <"${STUB_RUNNING}"
-				printf '\n'
-			done
-			;;
-		*) ;;
-		esac
-	}
-	export -f podman
-	export CONTAINER_CMD=podman
+	export CONTAINER_CMD="${_ENGINE_STUB_DIR}/engine-stub/podman"
 	export STUB_RUNNING="${dir}/running"
 	export STUB_PS_CALLS="${dir}/ps-calls"
 	export STUB_INSPECT_CALLS="${dir}/inspect-calls"

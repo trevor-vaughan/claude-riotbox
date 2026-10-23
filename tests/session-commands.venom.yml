@@ -529,3 +529,46 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "HIDDEN_SESSION_FOUND"
+
+  # is_session asks riotbox-core. Without a usable binary every dir would
+  # read as "not a session", so each command checks the binary once up front
+  # and fails loudly instead of reporting no sessions or a wrong reason.
+  - name: session commands fail once, loudly, without a usable riotbox-core
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          key="$(make_session alpha)"
+          tree="${T}/tree"
+          mkdir -p "${tree}"
+          cp -a "{{.riotbox_dir}}"/{bin,libexec,scripts,agents,VERSION} "${tree}/"
+          rm -f "${tree}/libexec/riotbox-core"
+          export ROOT_DIR="${tree}"
+          check() { # <label> <command>...
+            local label="$1" rc=0 n
+            shift
+            "$@" >"${T}/out" 2>"${T}/err" </dev/null || rc=$?
+            [ "${rc}" -ne 0 ] || { echo "FAIL: ${label} exit 0"; cat "${T}/out" "${T}/err"; exit 1; }
+            n="$(grep -c 'riotbox-core missing or does not match VERSION' "${T}/err" || true)"
+            [ "${n}" -eq 1 ] || { echo "FAIL: ${label} said the binary error ${n} times"; cat "${T}/err"; exit 1; }
+            if grep -qiE 'No session(s| dir)? found|is not a session|no session found' "${T}/out" "${T}/err"; then
+              echo "FAIL: ${label} blamed the sessions"; cat "${T}/out" "${T}/err"; exit 1
+            fi
+            [ -f "${DATA}/${key}/payload" ] || { echo "FAIL: ${label} removed the session"; exit 1; }
+          }
+          check session-list bash "${tree}/libexec/list-sessions.sh"
+          check "session-remove --all" bash "${tree}/libexec/remove-session.sh" --all
+          check "session-remove <key>" bash "${tree}/libexec/remove-session.sh" "${key}"
+          check "session-remove <path>" bash "${tree}/libexec/remove-session.sh" "${T}/projects/alpha"
+          check "session-reset all" bash "${tree}/libexec/reset-session.sh" all force
+          cd "${T}/projects/alpha"
+          check session-reset bash "${tree}/libexec/reset-session.sh" force
+          check session-migrate bash "${tree}/libexec/migrate-session.sh"
+          echo "BINARY_REQUIRED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "BINARY_REQUIRED"

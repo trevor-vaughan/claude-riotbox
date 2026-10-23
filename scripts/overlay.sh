@@ -29,7 +29,7 @@
 # The upper directory is container-controlled: it is the session container's
 # /mnt/overlay, so every name, file type and link in it is chosen by the
 # session. accept and reject therefore refuse while any live container,
-# labelled riotbox.session or not (running_session_mounts, running_mount_reaches), has this overlay
+# labelled riotbox.session or not (_overlay_scan_sessions), has this overlay
 # mounted read-write; other sessions on the same project do not
 # block, and accept names them. accept applies a private snapshot of the
 # upper, never follows a link in it or in the project, and validates every
@@ -313,49 +313,49 @@ _overlay_entry_kind() {
 }
 
 # _overlay_scan_sessions
-#   Classify the read-write mounts of every live container
-#   (running_session_mounts). Sets
+#   Classify the read-write mounts of every live container (riotbox-core
+#   overlay-scan, with the engine in CONTAINER_CMD, default podman). Sets
 #     _OVERLAY_HOLDERS  names of containers with a read-write mount reaching
-#                       OVERLAY_DIR (running_mount_reaches): they run on
-#                       this overlay, and block accept and reject
+#                       OVERLAY_DIR: at or below it for any container, and
+#                       also above it for a riotbox.session-labelled one.
+#                       They run on this overlay, and block accept and
+#                       reject
 #     _OVERLAY_SHARERS  "<name> <source>" per other read-write mount
 #                       overlapping OVERLAY_PROJECT_DIR either way, labelled
-#                       or not (running_mount_overlaps): other sessions on
-#                       the project, which RiotBox supports running side by
-#                       side, or a toolbox with $HOME mounted, any of which
-#                       can change the project during the apply; they only
-#                       warn
+#                       or not: other sessions on the project, which RiotBox
+#                       supports running side by side, or a toolbox with
+#                       $HOME mounted, any of which can change the project
+#                       during the apply; they only warn
 #   Returns non-zero when the engine cannot list or inspect them.
-#   Needs OVERLAY_DIR and OVERLAY_PROJECT_DIR (resolve_overlay).
+#   Needs OVERLAY_DIR and OVERLAY_PROJECT_DIR (resolve_overlay). See
+#   docs/dev/riotbox-core.md for the verb's records.
 _overlay_scan_sessions() {
-	local overlay project overlay_lexical project_lexical id src i
-	local -A held=()
+	local i
+	local -a fields=()
 	_OVERLAY_HOLDERS=()
 	_OVERLAY_SHARERS=()
-	overlay="$(realpath -m -- "${OVERLAY_DIR}")" || return 1
-	project="$(realpath -m -- "${OVERLAY_PROJECT_DIR}")" || return 1
-	overlay_lexical="$(realpath -ms -- "${OVERLAY_DIR}")" || return 1
-	project_lexical="$(realpath -ms -- "${OVERLAY_PROJECT_DIR}")" || return 1
-	# shellcheck disable=SC2310 # the engine's status is the point of the call
-	running_session_mounts || return 1
-	for i in "${!RUNNING_MOUNT_IDS[@]}"; do
-		id="${RUNNING_MOUNT_IDS[i]}"
-		src="${RUNNING_MOUNT_SOURCES[i]}"
-		# shellcheck disable=SC2310 # designed to be tested in conditions
-		if running_mount_reaches "${i}" "${overlay}" "${overlay_lexical}"; then
-			if [[ -z "${held["${id}"]:-}" ]]; then
-				held["${id}"]=1
-				_OVERLAY_HOLDERS+=("$(running_mount_label "${i}")")
-			fi
-		elif running_mount_overlaps "${i}" "${project}" "${project_lexical}"; then
-			_OVERLAY_SHARERS+=("$(running_mount_label "${i}") ${src}")
-		fi
+	# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+	riotbox_core_require || return 1
+	# The records hold NULs, which a command substitution drops, so they are
+	# read through a process substitution, and its exit status through wait.
+	# shellcheck disable=SC2312 # the status is checked through wait below
+	mapfile -d '' -t fields < <("${RIOTBOX_CORE}" overlay-scan --lib-dir "${_RIOTBOX_CORE_ROOT}/scripts/lib" \
+		--engine "${CONTAINER_CMD:-podman}" -- "${OVERLAY_DIR}" "${OVERLAY_PROJECT_DIR}")
+	# shellcheck disable=SC2154 # $! is the process substitution's PID
+	wait "$!" || return 1
+	[[ $((${#fields[@]} % 2)) -eq 0 ]] || return 1
+	for ((i = 0; i < ${#fields[@]}; i += 2)); do
+		case "${fields[i]}" in
+		holder) _OVERLAY_HOLDERS+=("${fields[i + 1]}") ;;
+		sharer) _OVERLAY_SHARERS+=("${fields[i + 1]}") ;;
+		*) return 1 ;;
+		esac
 	done
 }
 
 # _overlay_refuse_if_running <verb> [warn]
 #   Return non-zero, saying why, unless the engine confirms that no live
-#   container can write this overlay (running_mount_reaches). Fails closed: an
+#   container can write this overlay (_overlay_scan_sessions). Fails closed: an
 #   engine that cannot answer is a refusal, because such a container can
 #   still change the overlay. Other sessions on the project do not block;
 #   with "warn" they are named, since they can change the project.
@@ -409,45 +409,24 @@ _overlay_check_dest() {
 	return 1
 }
 
-# _overlay_migrate_sessions
-#   overlay_list's migrate_session_state pass over every session dir;
-#   the caller holds the state root's lock. Returns 1 when one failed.
-_overlay_migrate_sessions() {
-	local session_dir
-	for session_dir in "${RIOTBOX_DATA_DIR}"/*/; do
-		# shellcheck disable=SC2310 # a predicate designed for conditions
-		is_session "${session_dir%/}" "${RIOTBOX_STATE_ROOT}/$(basename "${session_dir}")" || continue
-		session_dir="${session_dir%/}"
-		# shellcheck disable=SC2310 # a failed migration has already said why
-		migrate_session_state "${session_dir}" "${RIOTBOX_STATE_ROOT}/${session_dir##*/}" || return 1
-	done
-}
-
 # ─── overlay list ──────────────────────────────────────────────────────────
 # List sessions with pending overlay data.
-# Exit 0 if overlays exist, 1 if none, 2 if adopting legacy overlay data failed.
+# Exit 0 if overlays exist, 1 if none, 2 if adopting legacy overlay data failed
+# or riotbox-core is missing or does not match VERSION (checked even when
+# there is no session).
 overlay_list() {
 	resolve_data_roots
 
 	# Run each session's one-time migration (migrate_session_state), which
 	# adopts the overlay data and other state an older RiotBox left inside a
 	# session dir, so an upgrade does not hide pending changes until that
-	# project's next launch. Under the state root's lock, which the key move
-	# (migrate_session_key) holds while it renames a session: an old-key
-	# session is then either not moved yet or gone, never half moved. Root
-	# lock first, then each session's, the order every caller takes them in.
-	local session_dir found=""
-	for session_dir in "${RIOTBOX_DATA_DIR}"/*/; do
-		# shellcheck disable=SC2310 # a predicate designed for conditions
-		is_session "${session_dir%/}" "${RIOTBOX_STATE_ROOT}/$(basename "${session_dir}")" || continue
-		found=1
-		break
-	done
-	if [[ -n "${found}" ]]; then
-		mkdir -p "${RIOTBOX_STATE_ROOT}" && chmod 700 "${RIOTBOX_STATE_ROOT}" || return 2
-		# shellcheck disable=SC2310 # a failed migration has already said why
-		_with_migrate_lock "${RIOTBOX_STATE_ROOT}" _overlay_migrate_sessions || return 2
-	fi
+	# project's next launch. riotbox-core migrate-all does it under the state
+	# root's lock, which the key move (migrate_session_key) holds while it
+	# renames a session: an old-key session is then either not moved yet or
+	# gone, never half moved. See internal/migrate (AllSessions).
+	# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+	riotbox_core_require || return 2
+	"${RIOTBOX_CORE}" migrate-all --lib-dir "${_RIOTBOX_CORE_ROOT}/scripts/lib" -- "${RIOTBOX_DATA_DIR}" "${RIOTBOX_STATE_ROOT}" || return 2
 
 	if [[ ! -d "${RIOTBOX_STATE_ROOT}" ]]; then
 		echo "No pending overlays."

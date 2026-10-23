@@ -26,6 +26,7 @@ tasks:
         {{.ROOT_DIR}}/agents/*.sh \
         {{.ROOT_DIR}}/agents/*/*.sh \
         {{.ROOT_DIR}}/tests/lib/*.sh \
+        {{.ROOT_DIR}}/tests/lib/engine-stub/podman \
         {{.ROOT_DIR}}/internal/sessionkey/testdata/*.sh
 
   hadolint:

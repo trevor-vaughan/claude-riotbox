@@ -32,6 +32,34 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldEqual OK
 
+  - name: the adapters pass a dash-led argument as a positional, not an option
+    steps:
+      - type: exec
+        script: |
+          set -e
+          cd "{{.riotbox_dir}}"
+          want="$(libexec/riotbox-core session-key -- -a)"
+          got="$(bash -c 'source scripts/mount-projects.sh && session_key -a')"
+          test "${got}" = "${want}"
+          bash -c 'source scripts/mount-projects.sh && same_project_set -a -a'
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual OK
+
+  - name: notice_project_headroom refuses a missing argument before running the binary
+    steps:
+      - type: exec
+        script: |
+          cd "{{.riotbox_dir}}"
+          rc=0
+          bash -c 'source scripts/mount-projects.sh && notice_project_headroom /p' 2>&1 || rc=$?
+          echo "rc=${rc}"
+        assertions:
+          - result.systemout ShouldContainSubstring "notice_project_headroom requires a state dir"
+          - result.systemout ShouldNotContainSubstring "riotbox-core"
+          - result.systemout ShouldNotContainSubstring "rc=0"
+
   - name: a missing binary fails the key with a fix hint
     steps:
       - type: exec

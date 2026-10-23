@@ -249,3 +249,26 @@ No subsystem ships with both a bash and a Go implementation live.
 - **`setup.sh --no-build` is renamed `--no-image`**, so that `--build`/`--binary`
   can name how riotbox-core is obtained. The old flag, and its
   `RIOTBOX_SETUP_NO_BUILD` variable, remain as deprecated aliases.
+
+During the 1b work (2026-10-23):
+
+- **The running-container scan moved forward from subsystem 3.** The
+  `session-migrate` retry and the key move, both in subsystem 1, refuse while
+  a live container can write what they would move. Once they were Go, they
+  needed the scan, and "no subsystem ships with both a bash and a Go
+  implementation live" ruled out a second copy. The scan, its `realpath -m`
+  and `-ms` comparisons and the refusal built on it are now in
+  `internal/engine` and `internal/realpath`. `scripts/lib/running-sessions.sh`
+  is deleted, and `scripts/overlay.sh` asks through the `overlay-scan` verb.
+  The other half of subsystem 3, the rest of `mount-projects.sh`, is still
+  bash.
+- **The port fixed three bugs that the bash already had.** After moving a
+  legacy `overlay/`, a cleanup that could not list the tree was ignored and
+  the entry recorded as done, so planted links stayed in trusted state; it is
+  now an error and the entry stays unrecorded. Overlay names, which the
+  container chose, were printed raw in the migration's warnings and in the
+  headroom notice; they now go through `terminal-clean.jq`. A link that grows
+  the path it expands to made `realpath -m` loop forever and hang every
+  command that runs the running check; resolution now stops after 40 links
+  and fails closed. [riotbox-core.md](../riotbox-core.md#differences-from-the-bash-it-replaced)
+  lists these with the port's other deliberate differences.

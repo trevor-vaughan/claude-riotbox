@@ -75,12 +75,12 @@ sudo apt install ./riotbox_<ver>_<arch>.deb        # arch: amd64 or arm64
 
 The `riotbox` dispatcher is self-locating, so it works from either tree without extra configuration.
 
-**Rootless: `--build` or `--binary`.** Session keys are computed by `riotbox-core`, a small compiled helper the launcher calls. The rpm and deb ship it prebuilt; a checkout does not have it, so `install.sh` has to be told how to get it. It will not pick for you, because one way needs a Go toolchain and the other downloads code from the network.
+**Rootless: `--build` or `--binary`.** `riotbox-core`, a small compiled helper the launcher calls, computes session keys, moves data an older release left behind, and checks for running containers. The rpm and deb ship it prebuilt; a checkout does not have it, so `install.sh` has to be told how to get it. It will not pick for you, because one way needs a Go toolchain and the other downloads code from the network.
 
 - `--build` compiles it with the `go` on your PATH, which must be at least the version on the `go` line of `go.mod`. The build runs with `GOTOOLCHAIN=local`, so an older Go fails and names the version it needs instead of downloading a newer toolchain. No network access is needed.
 - `--binary` downloads `riotbox-core_<ver>_linux_<arch>.tar.gz`, `checksums.txt` and `checksums.txt.sigstore.json` from the GitHub release that `VERSION` names (x86_64 and aarch64 only). cosign verifies that `checksums.txt` was signed by this repository's release workflow at tag `v<ver>`; then `sha256sum` checks the archive against its line in that file. The app tree is touched only after both checks pass. `VERSION` only changes in release commits, so a branch ahead of `v<ver>` still says `<ver>`, and the `v<ver>` binary would compute keys by that release's rules. A git checkout therefore must be exactly the commit tagged `v<ver>`, with no changes to tracked files that are installed or that riotbox-core is built from; otherwise `--binary` refuses before downloading anything. A tree that is not a git checkout (an unpacked source tarball) is accepted as is. Use `--build` everywhere else.
 
-Either way, the launcher refuses a `riotbox-core` whose version is not the install's `VERSION`, and `riotbox doctor` reports that as `riotbox-core matches this install` (exit code 25).
+Either way, launches and the session and overlay commands refuse a `riotbox-core` that is missing or whose version is not the install's `VERSION`, saying how to fix it, and `riotbox doctor` reports that as `riotbox-core matches this install` (exit code 25).
 
 **Upgrading a rootless install.** Update the checkout, then run `./install.sh --build` or `./install.sh --binary` again. It replaces the app tree and `riotbox-core` and leaves your config, sessions and backups alone. `./setup.sh` also works: it notices when the installed version differs from the checkout's, or the installed `riotbox-core` does not match, prints `riotbox installed but out of date: <reason>`, and offers to reinstall.
 
@@ -483,7 +483,7 @@ cat > ~/.config/riotbox/mounts.conf << 'EOF'
 EOF
 ```
 
-Each line is a path relative to `$HOME` (or absolute with `/`). Mounts are **read-only by default** — the container can read your live tokens but cannot modify the host files. This is the recommended way to provide private registry credentials at runtime, since auth tokens are [stripped from configs at build time](#build-time-config-collection) and never baked into image layers.
+Each line is a path relative to `$HOME` (or absolute with `/`). Mounts are **read-only by default** — the container can read your live tokens but cannot modify the host files. This is the recommended way to provide private registry credentials at runtime, since auth tokens are [stripped from configs at build time](#other-design-choices) and never baked into image layers.
 
 An entry can end in `:rw` to mount that one path read-write, or `:ro` to be explicit about the default:
 
@@ -2036,7 +2036,7 @@ Non-interactive callers (`riotbox run`, CI, scripts) never block on the prompt: 
 
 - **SELinux**: project and session bind mounts use `:z`. Package caches use named volumes to avoid relabeling overhead. `.claude.json` is copied rather than mounted to avoid `:z` relabeling issues on 600-permission files; `.credentials.json` is bind-mounted RW inside the session directory (a nested mount that avoids the relabeling problem).
 
-- <a id="build-time-config-collection"></a>**Tool configs** (`.npmrc`, `.editorconfig`, etc.) are copied at build time — not mounted — so edits inside the container don't affect the host. Auth tokens are stripped from `.npmrc`, `pip.conf`, and `cargo/config.toml` before baking into the image. Use `mounts.conf` to supply live credentials at runtime. Your `~/.gitignore_global` is copied the same way, and the image's git config sets `core.excludesFile` to it, so your global ignores apply inside the container. If you have none, the image gets [`container/gitignore_global`](container/gitignore_global) instead: OS and editor junk, `.env`, and per-user agent state. Your `~/.gitconfig` is never copied; the container's `~/.gitconfig` is baked by the Containerfile and commits as `LLM (riotbox)` so `reown` and the pre-push guard can recognise them.
+- **Tool configs** (`.npmrc`, `.editorconfig`, etc.) are copied at build time — not mounted — so edits inside the container don't affect the host. Auth tokens are stripped from `.npmrc`, `pip.conf`, and `cargo/config.toml` before baking into the image. Use `mounts.conf` to supply live credentials at runtime. Your `~/.gitignore_global` is copied the same way, and the image's git config sets `core.excludesFile` to it, so your global ignores apply inside the container. If you have none, the image gets [`container/gitignore_global`](container/gitignore_global) instead: OS and editor junk, `.env`, and per-user agent state. Your `~/.gitconfig` is never copied; the container's `~/.gitconfig` is baked by the Containerfile and commits as `LLM (riotbox)` so `reown` and the pre-push guard can recognise them.
 
 - **Nested containers**: `RIOTBOX_NESTED=1` is a privileged mode for running podman-in-podman; default mode keeps a tighter profile. The flag set is:
 
