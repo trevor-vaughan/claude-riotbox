@@ -4,7 +4,7 @@ tests/setup.venom.yml
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.5",
-  "base_commit_sha": "cdb9fc6ba667a6cc146a99944fa372f4a2699a36",
+  "base_commit_sha": "050375b339a52b13191e840f60d5506d622415df",
   "prompts": {},
   "sessions": {
     "s_f4539e444c2ee2": {
