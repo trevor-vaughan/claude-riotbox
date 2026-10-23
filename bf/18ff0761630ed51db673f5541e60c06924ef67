@@ -4,16 +4,23 @@
   s_b958b4a741cca7::t_04a2cc18378831 1-38
 .taskfiles/go.yml
   s_b958b4a741cca7::t_464d0c782aedee 1-33
+  s_b958b4a741cca7::t_3fb8760a71d91b 25
+  s_b958b4a741cca7::t_89aec70e617d8a 27
+  s_b958b4a741cca7::t_717ecd060addcc 12-14,18,26
 .taskfiles/lint.yml
   s_b958b4a741cca7::t_f8070a2e835082 28-29,44,48
 .taskfiles/scripts/go-test.sh
   s_b958b4a741cca7::t_459a4786b1728f 1-54
+  s_b958b4a741cca7::t_717ecd060addcc 22-23,32-34,40
+  s_b958b4a741cca7::t_bad67154992c20 24-31
 .taskfiles/test.yml
   s_b958b4a741cca7::t_525c7b3a159106 35,39,42,59
+  s_b958b4a741cca7::t_3fb8760a71d91b 39,42
 Taskfile.yml
   s_b958b4a741cca7::t_2c8acffa737755 14-15,38,40-41
 scripts/build-core.sh
   s_b958b4a741cca7::t_1d153ee955199e 1-38
+  s_b958b4a741cca7::t_717ecd060addcc 31-34
 ---
 {
   "schema_version": "authorship/3.0.0",
