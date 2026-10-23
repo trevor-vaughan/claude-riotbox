@@ -1,0 +1,54 @@
+internal/engine/engine_test.go
+  s_b958b4a741cca7::t_868a08d0781709 7-405
+  s_b958b4a741cca7::t_8d580793a78ff2 1-6,406-416
+.taskfiles/lint.yml
+  s_b958b4a741cca7::t_0d6631aa50659a 29
+THREAT_MODEL.md
+  s_b958b4a741cca7::t_efc5a17f2090fe 262
+cmd/riotbox-core/main.go
+  s_b958b4a741cca7::t_26e1b9bcd2c475 11,29-35,71-84,110-131
+cmd/riotbox-core/main_test.go
+  s_b958b4a741cca7::t_df20c1fdfc3622 122-184,201-204
+docs/dev/mount-projects.md
+  s_b958b4a741cca7::t_e51edb23ddd054 73,182
+docs/dev/riotbox-core.md
+  s_b958b4a741cca7::t_30d62a9c891615 56-76,88-92
+internal/engine/engine.go
+  s_b958b4a741cca7::t_fff078d8c911e0 1-378
+internal/engine/engine_suite_test.go
+  s_b958b4a741cca7::t_76eef7b9d3d2d9 1-13
+internal/realpath/realpath.go
+  s_b958b4a741cca7::t_b25dd0ffd4f77e 1-173
+internal/realpath/realpath_suite_test.go
+  s_b958b4a741cca7::t_8fdede202bbc1f 1-13
+internal/realpath/realpath_test.go
+  s_b958b4a741cca7::t_22b8ad05c610d7 1-159
+scripts/lib/session-state.sh
+  s_b958b4a741cca7::t_a1d423581d1629 345,608-618,620-622
+scripts/mount-projects.sh
+  s_b958b4a741cca7::t_6794dd642a9669 98,356
+scripts/overlay.sh
+  s_b958b4a741cca7::t_08786cb60e53ba 32,316-317,319-322,325-328,330-331,333-334,337-351,357
+tests/lib/engine-stub.sh
+  s_b958b4a741cca7::t_f76ed0b45bb3a4 7-9,11-12,26,39
+tests/lib/engine-stub/podman
+  s_b958b4a741cca7::t_b52e063b47a967 1-74
+tests/overlay.venom.yml
+  s_b958b4a741cca7::t_ba5abff12a4ce8 3201-3252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fd85390261d8dfd23b70524edb7dd18b5d098e2e",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
