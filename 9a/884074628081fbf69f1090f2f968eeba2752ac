@@ -12,16 +12,22 @@ internal/records/records_test.go
   s_b958b4a741cca7::t_e7bfa81a7ad77a 215-266
 libexec/list-sessions.sh
   s_b958b4a741cca7::t_8642323cc8f0e3 21-25
+  s_b958b4a741cca7::t_5b7bada24796da 21-25
 libexec/remove-session.sh
   s_b958b4a741cca7::t_c908ece6ba4186 37-41
+  s_b958b4a741cca7::t_fcadb4a177d6a9 37-41
 libexec/reset-session.sh
   s_b958b4a741cca7::t_fda84365ea3949 32-36
+  s_b958b4a741cca7::t_a1263c5b196be8 32-36
 scripts/lib/session-state.sh
   s_b958b4a741cca7::t_7b664cc49a7b24 167-170,176,209-213,215
+  s_b958b4a741cca7::t_006727f291b09c 210-213
 scripts/overlay.sh
   s_b958b4a741cca7::t_1325a79b2d2532 413-415,422-428
+  s_b958b4a741cca7::t_7537c741e28bc1 413-415
 tests/session-commands.venom.yml
   s_b958b4a741cca7::t_62bbbae940e7a8 532-574
+  s_b958b4a741cca7::t_38b7e68506cf8f 532-574
 ---
 {
   "schema_version": "authorship/3.0.0",
