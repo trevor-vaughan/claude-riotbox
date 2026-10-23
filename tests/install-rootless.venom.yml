@@ -14,14 +14,19 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${HOME}"
-          "{{.riotbox_dir}}/install.sh" >/dev/null
+          "{{.riotbox_dir}}/install.sh" --build >/dev/null
           # app tree present
           test -f "${XDG_DATA_HOME}/riotbox/bin/riotbox"
           test -d "${XDG_DATA_HOME}/riotbox/libexec"
           test -d "${XDG_DATA_HOME}/riotbox/scripts"
           test -d "${XDG_DATA_HOME}/riotbox/agents"
           test -f "${XDG_DATA_HOME}/riotbox/Containerfile"
+          # riotbox-core placed, executable, and matching this checkout
+          test -x "${XDG_DATA_HOME}/riotbox/libexec/riotbox-core"
+          test "$("${XDG_DATA_HOME}/riotbox/libexec/riotbox-core" version)" = "$(cat "{{.riotbox_dir}}/VERSION")"
           # entrypoint symlink resolves into the app tree
           test -L "${HOME}/.local/bin/riotbox"
           real="$(readlink -f "${HOME}/.local/bin/riotbox")"
@@ -45,8 +50,10 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${HOME}"
-          "{{.riotbox_dir}}/install.sh" >/dev/null
+          "{{.riotbox_dir}}/install.sh" --build >/dev/null
           test -f "${XDG_CONFIG_HOME}/riotbox/config"
           test -f "${XDG_CONFIG_HOME}/riotbox/mounts.conf"
           test -f "${XDG_CONFIG_HOME}/riotbox/plugins.conf"
@@ -62,8 +69,10 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${HOME}"
-          "{{.riotbox_dir}}/install.sh" >/dev/null
+          "{{.riotbox_dir}}/install.sh" --build >/dev/null
           grep -q '^# riotbox-config-version:' "${XDG_CONFIG_HOME}/riotbox/config"
           grep -q '^# riotbox-config-version:' "${XDG_CONFIG_HOME}/riotbox/mounts.conf"
           grep -q '^# riotbox-config-version:' "${XDG_CONFIG_HOME}/riotbox/plugins.conf"
@@ -80,11 +89,13 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${HOME}"
           # Permissive umask on purpose: a strict umask would hand us 0600
           # for free and the assertion would prove nothing about install.sh.
           umask 022
-          "{{.riotbox_dir}}/install.sh" >/dev/null
+          "{{.riotbox_dir}}/install.sh" --build >/dev/null
           echo "config=$(stat -c '%a' "${XDG_CONFIG_HOME}/riotbox/config")"
           echo "mounts=$(stat -c '%a' "${XDG_CONFIG_HOME}/riotbox/mounts.conf")"
           echo "plugins=$(stat -c '%a' "${XDG_CONFIG_HOME}/riotbox/plugins.conf")"
@@ -107,9 +118,11 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${HOME}"
           umask 022
-          "{{.riotbox_dir}}/install.sh" >/dev/null
+          "{{.riotbox_dir}}/install.sh" --build >/dev/null
           cfg="${XDG_CONFIG_HOME}/riotbox/config"
           # <starting mode>:<expected mode>. 644 is what a pre-0600 install
           # left behind; 640 is the same exposure to anyone in the user's
@@ -120,7 +133,7 @@ testcases:
               want="${pair#*:}"
               chmod "${m}" "${cfg}"
               before="$(sha256sum < "${cfg}")"
-              out="$("{{.riotbox_dir}}/install.sh" 2>&1)"
+              out="$("{{.riotbox_dir}}/install.sh" --build 2>&1)"
               printf '%s\n' "${out}"
               after="$(sha256sum < "${cfg}")"
               [ "${before}" = "${after}" ] \
@@ -153,15 +166,17 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${HOME}"
           umask 022
-          "{{.riotbox_dir}}/install.sh" >/dev/null
+          "{{.riotbox_dir}}/install.sh" --build >/dev/null
           cfg="${XDG_CONFIG_HOME}/riotbox/config"
           # 600 needs nothing done; 400 is a deliberately read-only config
           # whose owner bits must survive — no group/world access either way.
           for m in 600 400; do
               chmod "${m}" "${cfg}"
-              "{{.riotbox_dir}}/install.sh" 2>&1
+              "{{.riotbox_dir}}/install.sh" --build 2>&1
               echo "from${m}=$(stat -c '%a' "${cfg}")"
           done
         assertions:
@@ -183,6 +198,8 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${XDG_CONFIG_HOME}/riotbox"
           umask 022
           cfg="${XDG_CONFIG_HOME}/riotbox/config"
@@ -190,7 +207,7 @@ testcases:
           # of the version warning's multi-line merge instructions.
           echo "# riotbox-config-version: 0" > "${cfg}"
           chmod 644 "${cfg}"
-          out="$("{{.riotbox_dir}}/install.sh" 2>&1)"
+          out="$("{{.riotbox_dir}}/install.sh" --build 2>&1)"
           printf '%s\n' "${out}"
           tightened="$(printf '%s\n' "${out}" | grep -n "group/world access removed" | cut -d: -f1)"
           warned="$(printf '%s\n' "${out}" | grep -n "available" | cut -d: -f1)"
@@ -214,9 +231,11 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${XDG_CONFIG_HOME}/riotbox"
           echo "# custom config" > "${XDG_CONFIG_HOME}/riotbox/config"
-          "{{.riotbox_dir}}/install.sh" >/dev/null
+          "{{.riotbox_dir}}/install.sh" --build >/dev/null
           content="$(cat "${XDG_CONFIG_HOME}/riotbox/config")"
           [ "${content}" = "# custom config" ]
         assertions:
@@ -232,13 +251,15 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${XDG_CONFIG_HOME}/riotbox"
           umask 022
           cfg="${XDG_CONFIG_HOME}/riotbox/config"
           echo "# riotbox-config-version: 0" > "${cfg}"
           # A stale .new from an earlier upgrade is replaced, not kept.
           echo "stale" > "${cfg}.new"
-          "{{.riotbox_dir}}/install.sh" 2>&1
+          "{{.riotbox_dir}}/install.sh" --build 2>&1
           [ "$(cat "${cfg}")" = "# riotbox-config-version: 0" ]
           cmp -s "${cfg}.new" "{{.riotbox_dir}}/scripts/configs/config"
           echo "new_mode=$(stat -c '%a' "${cfg}.new")"
@@ -267,9 +288,11 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${HOME}"
-          "{{.riotbox_dir}}/install.sh" >/dev/null 2>&1
-          "{{.riotbox_dir}}/install.sh" 2>&1
+          "{{.riotbox_dir}}/install.sh" --build >/dev/null 2>&1
+          "{{.riotbox_dir}}/install.sh" --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "up to date"
@@ -283,9 +306,11 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${HOME}"
-          "{{.riotbox_dir}}/install.sh" >/dev/null 2>&1
-          "{{.riotbox_dir}}/install.sh" >/dev/null 2>&1
+          "{{.riotbox_dir}}/install.sh" --build >/dev/null 2>&1
+          "{{.riotbox_dir}}/install.sh" --build >/dev/null 2>&1
           test -L "${HOME}/.local/bin/riotbox"
           real="$(readlink -f "${HOME}/.local/bin/riotbox")"
           test "${real}" = "${XDG_DATA_HOME}/riotbox/bin/riotbox"
@@ -308,7 +333,9 @@ testcases:
           export XDG_CONFIG_HOME="${HOME}/.config"
           mkdir -p "${HOME}"
           export PATH="/usr/bin:/bin"
-          "{{.riotbox_dir}}/install.sh" 2>&1
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
+          "{{.riotbox_dir}}/install.sh" --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "not in your PATH"
@@ -322,9 +349,11 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${HOME}"
           export PATH="${HOME}/.local/bin:${PATH}"
-          "{{.riotbox_dir}}/install.sh" 2>&1
+          "{{.riotbox_dir}}/install.sh" --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldNotContainSubstring "not in your PATH"
@@ -338,12 +367,14 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${HOME}"
           # Stage a full copy of the repo MINUS scripts/configs.
           SRC="${root}/src"
           cp -a "{{.riotbox_dir}}/." "${SRC}/"
           rm -rf "${SRC}/scripts/configs"
-          "${SRC}/install.sh" >/dev/null
+          "${SRC}/install.sh" --build >/dev/null
           # App tree + entrypoint still installed.
           test -f "${XDG_DATA_HOME}/riotbox/bin/riotbox"
           test -L "${HOME}/.local/bin/riotbox"
@@ -366,8 +397,10 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${HOME}"
-          "{{.riotbox_dir}}/install.sh" >/dev/null
+          "{{.riotbox_dir}}/install.sh" --build >/dev/null
           # Seed a fake session and a fake backup that an upgrade must NOT
           # touch. Sessions are real once they carry a .projects file
           # (mount-projects.sh writes it at launch); backups live under
@@ -379,7 +412,7 @@ testcases:
           echo "ref-data" > "${XDG_DATA_HOME}/riotbox/backups/myproj.git/refs/heads"
           # Reinstall. The app tree gets refreshed but session + backup
           # must remain untouched.
-          "{{.riotbox_dir}}/install.sh" >/dev/null
+          "{{.riotbox_dir}}/install.sh" --build >/dev/null
           test -f "${XDG_DATA_HOME}/riotbox/myproj/.projects" \
               || { echo "BAD: session .projects gone after reinstall" >&2; exit 1; }
           test "$(cat "${XDG_DATA_HOME}/riotbox/myproj/important.txt")" = "session-data" \
@@ -404,12 +437,14 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           # User has populated the riotbox data dir with their own stuff
           # before installing — no marker, no app paths. We must NOT wipe
           # it; we must refuse with an actionable error.
           mkdir -p "${XDG_DATA_HOME}/riotbox/their-data"
           echo "their work" > "${XDG_DATA_HOME}/riotbox/their-data/notes.txt"
-          out="$("{{.riotbox_dir}}/install.sh" 2>&1 || echo "EXIT=$?")"
+          out="$("{{.riotbox_dir}}/install.sh" --build 2>&1 || echo "EXIT=$?")"
           echo "${out}"
           case "${out}" in
               *"is not a RiotBox install tree"*"EXIT=1"*) ;;
@@ -431,9 +466,11 @@ testcases:
           export HOME="${root}/home"
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${HOME}"
           CUSTOM_BIN="${root}/customer-bin"
-          "{{.riotbox_dir}}/install.sh" "${CUSTOM_BIN}" >/dev/null
+          "{{.riotbox_dir}}/install.sh" --build "${CUSTOM_BIN}" >/dev/null
           # Symlink lands in the custom dir, not the default ~/.local/bin.
           test -L "${CUSTOM_BIN}/riotbox" \
               || { echo "BAD: symlink missing from ${CUSTOM_BIN}" >&2; exit 1; }
@@ -447,7 +484,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "bin_dir_arg=pass"
 
-  - name: Falls back to unknown version gracefully when VERSION is absent
+  - name: Refuses an absent VERSION before anything else, with --build and --binary
     steps:
       - type: exec
         script: |
@@ -457,15 +494,778 @@ testcases:
           export XDG_DATA_HOME="${HOME}/.local/share"
           export XDG_CONFIG_HOME="${HOME}/.config"
           mkdir -p "${HOME}"
-          # Stage a full copy of the repo without a VERSION file.
+          # A copy of the tree, so the repo's own VERSION is never touched.
+          # Both sources have what they need (go stub, fake release), so
+          # only the VERSION check can stop them, and neither reaches the
+          # network.
           SRC="${root}/src"
           cp -a "{{.riotbox_dir}}/." "${SRC}/"
           rm -f "${SRC}/VERSION"
-          "${SRC}/install.sh" >/dev/null
-          # Installed entrypoint still runs; dispatcher falls back to "unknown".
-          out="$("${HOME}/.local/bin/riotbox" version)"
-          echo "${out}" | grep -q "riotbox"
-          echo "version_fallback=pass"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          install_fake_release "${root}/rel" "$(cat "{{.riotbox_dir}}/VERSION")" "{{.riotbox_dir}}/libexec/riotbox-core"
+          for mode in build binary; do
+            if out="$("${SRC}/install.sh" "--${mode}" 2>&1)"; then echo "${mode}: UNEXPECTED SUCCESS"; fi
+            case "${out}" in
+            *"VERSION is missing or not a semantic version (got ''); nothing installed."*) echo "${mode}=refused" ;;
+            *) printf '%s: %s\n' "${mode}" "${out}" ;;
+            esac
+          done
+          test ! -e "${XDG_DATA_HOME}/riotbox" && test ! -e "${HOME}/.local/bin/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "build=refused"
+          - result.systemout ShouldContainSubstring "binary=refused"
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+
+  - name: Refuses a VERSION that is not a semantic version, with --build and --binary
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          # A copy of the tree, so the repo's own VERSION is never touched.
+          # Both sources have what they need (go stub, fake release), so
+          # only the VERSION check can stop them, and neither reaches the
+          # network.
+          SRC="${root}/src"
+          cp -a "{{.riotbox_dir}}/." "${SRC}/"
+          echo 1.2 >"${SRC}/VERSION"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          install_fake_release "${root}/rel" "$(cat "{{.riotbox_dir}}/VERSION")" "{{.riotbox_dir}}/libexec/riotbox-core"
+          for mode in build binary; do
+            if out="$("${SRC}/install.sh" "--${mode}" 2>&1)"; then echo "${mode}: UNEXPECTED SUCCESS"; fi
+            case "${out}" in
+            *"VERSION is missing or not a semantic version (got '1.2'); nothing installed."*) echo "${mode}=refused" ;;
+            *) printf '%s: %s\n' "${mode}" "${out}" ;;
+            esac
+          done
+          test ! -e "${XDG_DATA_HOME}/riotbox" && test ! -e "${HOME}/.local/bin/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "build=refused"
+          - result.systemout ShouldContainSubstring "binary=refused"
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+
+  - name: refuses to run without --build or --binary
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          "{{.riotbox_dir}}/install.sh"
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "exactly one of --build or --binary"
+
+  - name: refuses --build together with --binary
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          "{{.riotbox_dir}}/install.sh" --build --binary
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "exactly one of --build or --binary"
+
+  - name: refuses an unknown flag
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          "{{.riotbox_dir}}/install.sh" --frobnicate
+        assertions:
+          - result.code ShouldEqual 1
+          - 'result.systemerr ShouldContainSubstring "unknown option: --frobnicate"'
+
+  - name: --build without go fails before touching the tree
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          # A PATH of symlinks to everything install.sh uses except go, so the
+          # case holds on a host that has Go (task test:direct) as well.
+          mkdir -p "${root}/nogo"
+          for t in bash cat sed mktemp dirname rm mkdir cp install ln chmod grep awk tr stat uname; do
+            p="$(command -v "${t}")" && ln -s "${p}" "${root}/nogo/${t}"
+          done
+          PATH="${root}/nogo" "{{.riotbox_dir}}/install.sh" --build
+          echo "rc=$?"
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "rc=1"
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemerr ShouldContainSubstring "go not found"
+
+  - name: a failed --build leaves an existing install unchanged
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${root}/ok" "{{.riotbox_dir}}/libexec/riotbox-core"
+          "{{.riotbox_dir}}/install.sh" --build >/dev/null
+          before="$(sha256sum "${XDG_DATA_HOME}/riotbox/libexec/riotbox-core")"
+          echo stale >"${XDG_DATA_HOME}/riotbox/marker-kept"
+          install_go_stub "${root}/bad" "{{.riotbox_dir}}/libexec/riotbox-core" fail
+          "{{.riotbox_dir}}/install.sh" --build 2>/dev/null && echo "UNEXPECTED SUCCESS"
+          test "$(sha256sum "${XDG_DATA_HOME}/riotbox/libexec/riotbox-core")" = "${before}"
+          test -f "${XDG_DATA_HOME}/riotbox/marker-kept"
+          echo PRESERVED
+        assertions:
+          - result.systemout ShouldContainSubstring "PRESERVED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+
+  - name: --binary refuses an unsupported architecture
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          mkdir -p "${root}/fakebin"
+          printf '#!/bin/sh\necho riscv64\n' >"${root}/fakebin/uname"
+          chmod +x "${root}/fakebin/uname"
+          PATH="${root}/fakebin:${PATH}" "{{.riotbox_dir}}/install.sh" --binary
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "no release binary for riscv64"
+          - result.systemerr ShouldContainSubstring "--build"
+
+  - name: --binary requires cosign
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          # A PATH of symlinks to everything --binary needs except cosign, so
+          # the case holds on a host that has cosign installed.
+          mkdir -p "${root}/nocosign"
+          for t in bash curl tar sha256sum uname mktemp cat dirname rm mkdir cp install ln chmod grep awk tr stat sed; do
+            p="$(command -v "${t}")" && ln -s "${p}" "${root}/nocosign/${t}"
+          done
+          PATH="${root}/nocosign" "{{.riotbox_dir}}/install.sh" --binary
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "--binary needs cosign"
+
+  - name: --binary reports a missing release and suggests --build
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          # A tree without .git, as a source tarball unpacks: the repo itself
+          # may be a checkout past the release tag, which --binary refuses.
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          copy_source_tree "{{.riotbox_dir}}" "${root}/src"
+          mkdir -p "${root}/fakebin"
+          printf '#!/bin/sh\n[ "$1" = version ] && echo "GitVersion:    v3.0.6"\nexit 0\n' >"${root}/fakebin/cosign"
+          printf '#!/bin/sh\necho "curl: (22) The requested URL returned error: 404" >&2\nexit 22\n' >"${root}/fakebin/curl"
+          chmod +x "${root}/fakebin/cosign" "${root}/fakebin/curl"
+          rc=0
+          PATH="${root}/fakebin:${PATH}" "${root}/src/install.sh" --binary || rc=$?
+          echo "rc=${rc}"
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "rc=1"
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemerr ShouldContainSubstring "is this checkout a release?"
+
+  - name: --binary refuses a release whose signature does not verify
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          # A tree without .git, as a source tarball unpacks: the repo itself
+          # may be a checkout past the release tag, which --binary refuses.
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          copy_source_tree "{{.riotbox_dir}}" "${root}/src"
+          mkdir -p "${root}/fakebin"
+          printf '#!/bin/sh\n[ "$1" = version ] && { echo "GitVersion:    v3.0.6"; exit 0; }\necho "Error: none of the expected identities matched" >&2\nexit 1\n' >"${root}/fakebin/cosign"
+          # curl stub: write a placeholder file at the -o path for every download
+          cat >"${root}/fakebin/curl" <<'EOF'
+          #!/bin/sh
+          while [ $# -gt 0 ]; do [ "$1" = -o ] && { echo payload >"$2"; shift; }; shift; done
+          EOF
+          chmod +x "${root}/fakebin/cosign" "${root}/fakebin/curl"
+          rc=0
+          PATH="${root}/fakebin:${PATH}" "${root}/src/install.sh" --binary || rc=$?
+          echo "rc=${rc}"
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "rc=1"
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemerr ShouldContainSubstring "signature verification failed"
+
+  - name: --binary refuses an archive whose checksum does not match
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          # A tree without .git, as a source tarball unpacks: the repo itself
+          # may be a checkout past the release tag, which --binary refuses.
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          copy_source_tree "{{.riotbox_dir}}" "${root}/src"
+          mkdir -p "${root}/fakebin"
+          printf '#!/bin/sh\n[ "$1" = version ] && echo "GitVersion:    v3.0.6"\nexit 0\n' >"${root}/fakebin/cosign"
+          # curl stub: checksums.txt names the archive with an all-zero hash;
+          # every other download (the archive itself) is arbitrary bytes.
+          cat >"${root}/fakebin/curl" <<'EOF'
+          #!/bin/sh
+          while [ $# -gt 0 ]; do
+            if [ "$1" = -o ]; then
+              case "$2" in
+              *checksums.txt)
+                ver="$(cat "${RIOTBOX_TEST_VERSION_FILE}")"
+                arch=amd64
+                [ "$(uname -m)" = aarch64 ] && arch=arm64
+                printf '%064d  riotbox-core_%s_linux_%s.tar.gz\n' 0 "${ver}" "${arch}" >"$2"
+                ;;
+              *) echo tampered >"$2" ;;
+              esac
+              shift
+            fi
+            shift
+          done
+          EOF
+          chmod +x "${root}/fakebin/cosign" "${root}/fakebin/curl"
+          rc=0
+          RIOTBOX_TEST_VERSION_FILE="{{.riotbox_dir}}/VERSION" PATH="${root}/fakebin:${PATH}" "${root}/src/install.sh" --binary || rc=$?
+          echo "rc=${rc}"
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "rc=1"
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemerr ShouldContainSubstring "checksum verification failed"
+
+  - name: --binary installs the verified release binary
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          ver="$(cat "{{.riotbox_dir}}/VERSION")"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          # A tree without .git, as a source tarball unpacks: the repo itself
+          # may be a checkout past the release tag, which --binary refuses.
+          copy_source_tree "{{.riotbox_dir}}" "${root}/src"
+          install_fake_release "${root}/rel" "${ver}" "{{.riotbox_dir}}/libexec/riotbox-core"
+          "${root}/src/install.sh" --binary
+          core="${XDG_DATA_HOME}/riotbox/libexec/riotbox-core"
+          test -x "${core}" && test "$("${core}" version)" = "${ver}" && echo CORE_VERSION_OK
+          # cosign was asked to verify checksums.txt against this repo's
+          # release workflow at this exact tag, using the downloaded bundle.
+          args="${root}/rel/cosign-args"
+          after() { awk -v f="$1" 'p { print; exit } $0 == f { p = 1 }' "${args}"; }
+          test "$(head -1 "${args}")" = verify-blob && echo VERB_OK
+          bundle="$(after --bundle)"
+          checksums="$(tail -1 "${args}")"
+          case "${bundle}" in */checksums.txt.sigstore.json) echo BUNDLE_OK ;; *) ;; esac
+          test "${checksums}" = "$(dirname "${bundle}")/checksums.txt" && echo CHECKSUMS_OK
+          test "$(after --certificate-identity)" = "https://github.com/trevor-vaughan/claude-riotbox/.github/workflows/release.yml@refs/tags/v${ver}" && echo IDENTITY_OK
+          test "$(after --certificate-oidc-issuer)" = "https://token.actions.githubusercontent.com" && echo ISSUER_OK
+          grep -qxF "https://github.com/trevor-vaughan/claude-riotbox/releases/download/v${ver}/checksums.txt" "${root}/rel/curl-urls" && echo URL_OK
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "version_fallback=pass"
+          - result.systemout ShouldContainSubstring "Fetching riotbox-core v"
+          - result.systemout ShouldContainSubstring "(binary)"
+          - result.systemout ShouldContainSubstring "CORE_VERSION_OK"
+          - result.systemout ShouldContainSubstring "VERB_OK"
+          - result.systemout ShouldContainSubstring "BUNDLE_OK"
+          - result.systemout ShouldContainSubstring "CHECKSUMS_OK"
+          - result.systemout ShouldContainSubstring "IDENTITY_OK"
+          - result.systemout ShouldContainSubstring "ISSUER_OK"
+          - result.systemout ShouldContainSubstring "URL_OK"
+
+  - name: --binary refuses a checksums.txt that names the archive twice
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          # A tree without .git, as a source tarball unpacks: the repo itself
+          # may be a checkout past the release tag, which --binary refuses.
+          copy_source_tree "{{.riotbox_dir}}" "${root}/src"
+          install_fake_release "${root}/rel" "$(cat "{{.riotbox_dir}}/VERSION")" "{{.riotbox_dir}}/libexec/riotbox-core" dup-line
+          "${root}/src/install.sh" --binary && echo "UNEXPECTED SUCCESS"
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+          - result.systemerr ShouldContainSubstring "checksum verification failed"
+
+  - name: --binary refuses a release archive without riotbox-core
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          # A tree without .git, as a source tarball unpacks: the repo itself
+          # may be a checkout past the release tag, which --binary refuses.
+          copy_source_tree "{{.riotbox_dir}}" "${root}/src"
+          install_fake_release "${root}/rel" "$(cat "{{.riotbox_dir}}/VERSION")" "{{.riotbox_dir}}/libexec/riotbox-core" no-member
+          "${root}/src/install.sh" --binary && echo "UNEXPECTED SUCCESS"
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+          - result.systemerr ShouldContainSubstring "has no riotbox-core; nothing installed."
+
+  - name: --binary refuses a riotbox-core that is not a regular file
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          # A tree without .git, as a source tarball unpacks: the repo itself
+          # may be a checkout past the release tag, which --binary refuses.
+          copy_source_tree "{{.riotbox_dir}}" "${root}/src"
+          install_fake_release "${root}/rel" "$(cat "{{.riotbox_dir}}/VERSION")" "{{.riotbox_dir}}/libexec/riotbox-core" symlink-member
+          "${root}/src/install.sh" --binary && echo "UNEXPECTED SUCCESS"
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+          - result.systemerr ShouldContainSubstring "is not a regular file; nothing installed."
+
+  - name: refuses a non-RiotBox data dir before obtaining riotbox-core
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${XDG_DATA_HOME}/riotbox/their-data"
+          # No go on PATH: if the build ran first, it would fail with "go not
+          # found" and the refusal would never be reached.
+          mkdir -p "${root}/nogo"
+          for t in bash cat sed mktemp dirname rm mkdir cp install ln chmod grep awk tr stat uname; do
+            p="$(command -v "${t}")" && ln -s "${p}" "${root}/nogo/${t}"
+          done
+          PATH="${root}/nogo" "{{.riotbox_dir}}/install.sh" --build
+          echo "rc=$?"
+        assertions:
+          - result.systemout ShouldContainSubstring "rc=1"
+          - result.systemerr ShouldContainSubstring "is not a RiotBox install tree"
+          - result.systemerr ShouldNotContainSubstring "go not found"
+
+  - name: --binary refuses cosign v2.4.1 (cannot read the release bundle format)
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          install_fake_release "${root}/rel" "$(cat "{{.riotbox_dir}}/VERSION")" "{{.riotbox_dir}}/libexec/riotbox-core" ok v2.4.1
+          "{{.riotbox_dir}}/install.sh" --binary && echo "UNEXPECTED SUCCESS"
+          test ! -e "${root}/rel/curl-urls" && echo NOTHING_DOWNLOADED
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemout ShouldContainSubstring "NOTHING_DOWNLOADED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+          - result.systemerr ShouldContainSubstring "--binary needs cosign 2.6.2+ or 3.0.4+ (found v2.4.1); upgrade cosign or use --build."
+
+  - name: --binary refuses cosign v2.6.1 (before the GHSA-whqx-f9j3-ch6m fix on 2.x)
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          install_fake_release "${root}/rel" "$(cat "{{.riotbox_dir}}/VERSION")" "{{.riotbox_dir}}/libexec/riotbox-core" ok v2.6.1
+          "{{.riotbox_dir}}/install.sh" --binary && echo "UNEXPECTED SUCCESS"
+          test ! -e "${root}/rel/curl-urls" && echo NOTHING_DOWNLOADED
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemout ShouldContainSubstring "NOTHING_DOWNLOADED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+          - result.systemerr ShouldContainSubstring "--binary needs cosign 2.6.2+ or 3.0.4+ (found v2.6.1); upgrade cosign or use --build."
+
+  - name: --binary accepts cosign v2.6.2
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          ver="$(cat "{{.riotbox_dir}}/VERSION")"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          # A tree without .git, as a source tarball unpacks: the repo itself
+          # may be a checkout past the release tag, which --binary refuses.
+          copy_source_tree "{{.riotbox_dir}}" "${root}/src"
+          install_fake_release "${root}/rel" "${ver}" "{{.riotbox_dir}}/libexec/riotbox-core" ok v2.6.2
+          "${root}/src/install.sh" --binary >/dev/null
+          test "$(head -1 "${root}/rel/cosign-args")" = verify-blob && echo VERIFIED
+          test "$("${XDG_DATA_HOME}/riotbox/libexec/riotbox-core" version)" = "${ver}" && echo INSTALLED
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "VERIFIED"
+          - result.systemout ShouldContainSubstring "INSTALLED"
+
+  - name: --binary refuses cosign v3.0.3 (before the GHSA-whqx-f9j3-ch6m fix on 3.x)
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          install_fake_release "${root}/rel" "$(cat "{{.riotbox_dir}}/VERSION")" "{{.riotbox_dir}}/libexec/riotbox-core" ok v3.0.3
+          "{{.riotbox_dir}}/install.sh" --binary && echo "UNEXPECTED SUCCESS"
+          test ! -e "${root}/rel/curl-urls" && echo NOTHING_DOWNLOADED
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemout ShouldContainSubstring "NOTHING_DOWNLOADED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+          - result.systemerr ShouldContainSubstring "--binary needs cosign 2.6.2+ or 3.0.4+ (found v3.0.3); upgrade cosign or use --build."
+
+  - name: --binary accepts cosign v3.0.4
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          ver="$(cat "{{.riotbox_dir}}/VERSION")"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          # A tree without .git, as a source tarball unpacks: the repo itself
+          # may be a checkout past the release tag, which --binary refuses.
+          copy_source_tree "{{.riotbox_dir}}" "${root}/src"
+          install_fake_release "${root}/rel" "${ver}" "{{.riotbox_dir}}/libexec/riotbox-core" ok v3.0.4
+          "${root}/src/install.sh" --binary >/dev/null
+          test "$(head -1 "${root}/rel/cosign-args")" = verify-blob && echo VERIFIED
+          test "$("${XDG_DATA_HOME}/riotbox/libexec/riotbox-core" version)" = "${ver}" && echo INSTALLED
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "VERIFIED"
+          - result.systemout ShouldContainSubstring "INSTALLED"
+
+  - name: --binary refuses cosign devel (an unparseable version)
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          install_fake_release "${root}/rel" "$(cat "{{.riotbox_dir}}/VERSION")" "{{.riotbox_dir}}/libexec/riotbox-core" ok devel
+          "{{.riotbox_dir}}/install.sh" --binary && echo "UNEXPECTED SUCCESS"
+          test ! -e "${root}/rel/curl-urls" && echo NOTHING_DOWNLOADED
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemout ShouldContainSubstring "NOTHING_DOWNLOADED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+          - result.systemerr ShouldContainSubstring "--binary needs cosign 2.6.2+ or 3.0.4+ (found devel); upgrade cosign or use --build."
+
+  - name: --binary installs from a clean checkout exactly at the release tag
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          ver="$(cat "{{.riotbox_dir}}/VERSION")"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          git_test_env
+          install_fake_release "${root}/rel" "${ver}" "{{.riotbox_dir}}/libexec/riotbox-core"
+          make_tagged_checkout "{{.riotbox_dir}}" "${root}/src" "${ver}"
+          "${root}/src/install.sh" --binary >/dev/null
+          test -s "${root}/rel/curl-urls" && echo DOWNLOADED
+          test "$("${XDG_DATA_HOME}/riotbox/libexec/riotbox-core" version)" = "${ver}" && echo INSTALLED
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DOWNLOADED"
+          - result.systemout ShouldContainSubstring "INSTALLED"
+
+  - name: --binary refuses a checkout one commit past the release tag
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          ver="$(cat "{{.riotbox_dir}}/VERSION")"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          git_test_env
+          install_fake_release "${root}/rel" "${ver}" "{{.riotbox_dir}}/libexec/riotbox-core"
+          make_tagged_checkout "{{.riotbox_dir}}" "${root}/src" "${ver}"
+          # The branch changed the key rules after the release: the release
+          # binary would still report the same VERSION and be accepted.
+          echo '// changed after the release' >>"${root}/src/internal/sessionkey/sessionkey.go"
+          git -C "${root}/src" commit -q -am "change key rules"
+          "${root}/src/install.sh" --binary && echo "UNEXPECTED SUCCESS"
+          test ! -e "${root}/rel/curl-urls" && echo NOTHING_DOWNLOADED
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "NOTHING_DOWNLOADED"
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+          - result.systemerr ShouldContainSubstring "release binary, but this checkout is not exactly v"
+          - result.systemerr ShouldContainSubstring "HEAD is not the commit tagged v"
+          - result.systemerr ShouldContainSubstring "use --build."
+
+  - name: --binary refuses a checkout with no tag for its VERSION
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          ver="$(cat "{{.riotbox_dir}}/VERSION")"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          git_test_env
+          install_fake_release "${root}/rel" "${ver}" "{{.riotbox_dir}}/libexec/riotbox-core"
+          copy_source_tree "{{.riotbox_dir}}" "${root}/src"
+          (cd "${root}/src" && git init -q && git add . && git commit -q -m untagged)
+          "${root}/src/install.sh" --binary && echo "UNEXPECTED SUCCESS"
+          test ! -e "${root}/rel/curl-urls" && echo NOTHING_DOWNLOADED
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "NOTHING_DOWNLOADED"
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+          - result.systemerr ShouldContainSubstring "release binary, but this checkout is not exactly v"
+          - result.systemerr ShouldContainSubstring "there is no tag v"
+          - result.systemerr ShouldContainSubstring "use --build."
+
+  - name: --binary refuses a tagged checkout with a modified Go source
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          ver="$(cat "{{.riotbox_dir}}/VERSION")"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          git_test_env
+          install_fake_release "${root}/rel" "${ver}" "{{.riotbox_dir}}/libexec/riotbox-core"
+          make_tagged_checkout "{{.riotbox_dir}}" "${root}/src" "${ver}"
+          echo '// local edit' >>"${root}/src/internal/sessionkey/sessionkey.go"
+          "${root}/src/install.sh" --binary && echo "UNEXPECTED SUCCESS"
+          test ! -e "${root}/rel/curl-urls" && echo NOTHING_DOWNLOADED
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "NOTHING_DOWNLOADED"
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+          - result.systemerr ShouldContainSubstring "release binary, but this checkout is not exactly v"
+          - result.systemerr ShouldContainSubstring "tracked files are modified"
+          - result.systemerr ShouldContainSubstring "use --build."
+
+  - name: --binary refuses a tagged checkout with a modified shipped file
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          ver="$(cat "{{.riotbox_dir}}/VERSION")"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          git_test_env
+          install_fake_release "${root}/rel" "${ver}" "{{.riotbox_dir}}/libexec/riotbox-core"
+          make_tagged_checkout "{{.riotbox_dir}}" "${root}/src" "${ver}"
+          # Containerfile ships in the app tree like bin/ and scripts/.
+          echo '# local edit' >>"${root}/src/Containerfile"
+          "${root}/src/install.sh" --binary && echo "UNEXPECTED SUCCESS"
+          test ! -e "${root}/rel/curl-urls" && echo NOTHING_DOWNLOADED
+          test ! -e "${XDG_DATA_HOME}/riotbox" && echo UNTOUCHED
+        assertions:
+          - result.systemout ShouldContainSubstring "NOTHING_DOWNLOADED"
+          - result.systemout ShouldContainSubstring "UNTOUCHED"
+          - result.systemout ShouldNotContainSubstring "UNEXPECTED SUCCESS"
+          - result.systemerr ShouldContainSubstring "release binary, but this checkout is not exactly v"
+          - result.systemerr ShouldContainSubstring "tracked files are modified"
+          - result.systemerr ShouldContainSubstring "use --build."
+
+  - name: --binary installs from a tree without .git
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          ver="$(cat "{{.riotbox_dir}}/VERSION")"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          git_test_env
+          install_fake_release "${root}/rel" "${ver}" "{{.riotbox_dir}}/libexec/riotbox-core"
+          copy_source_tree "{{.riotbox_dir}}" "${root}/src"
+          "${root}/src/install.sh" --binary >/dev/null
+          test -s "${root}/rel/curl-urls" && echo DOWNLOADED
+          test "$("${XDG_DATA_HOME}/riotbox/libexec/riotbox-core" version)" = "${ver}" && echo INSTALLED
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DOWNLOADED"
+          - result.systemout ShouldContainSubstring "INSTALLED"
+
+  - name: --binary installs from a release tree unpacked inside an unrelated git repo
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          ver="$(cat "{{.riotbox_dir}}/VERSION")"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          git_test_env
+          install_fake_release "${root}/rel" "${ver}" "{{.riotbox_dir}}/libexec/riotbox-core"
+          # e.g. a tarball unpacked under a dotfiles repo: that repo is not
+          # this checkout, so its tags and state say nothing about it.
+          mkdir -p "${root}/outer"
+          (cd "${root}/outer" && git init -q && git commit -q --allow-empty -m dotfiles)
+          copy_source_tree "{{.riotbox_dir}}" "${root}/outer/src"
+          ln -s "${root}/outer/src" "${root}/src"
+          "${root}/src/install.sh" --binary >/dev/null
+          test -s "${root}/rel/curl-urls" && echo DOWNLOADED
+          test "$("${XDG_DATA_HOME}/riotbox/libexec/riotbox-core" version)" = "${ver}" && echo INSTALLED
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DOWNLOADED"
+          - result.systemout ShouldContainSubstring "INSTALLED"
+
+  - name: --binary without git on PATH treats the checkout as a source tree
+    steps:
+      - type: exec
+        script: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "${root}"' EXIT
+          export HOME="${root}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share"
+          export XDG_CONFIG_HOME="${HOME}/.config"
+          mkdir -p "${HOME}"
+          ver="$(cat "{{.riotbox_dir}}/VERSION")"
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          git_test_env
+          install_fake_release "${root}/rel" "${ver}" "{{.riotbox_dir}}/libexec/riotbox-core"
+          make_tagged_checkout "{{.riotbox_dir}}" "${root}/src" "${ver}"
+          git -C "${root}/src" commit -q --allow-empty -m "past the tag"
+          # Every tool --binary uses except git; the fake release first.
+          mkdir -p "${root}/nogit"
+          for t in bash cat sed mktemp dirname rm mkdir cp install ln chmod grep awk tr stat uname tar gzip sha256sum sort head; do
+            p="$(command -v "${t}")" && ln -s "${p}" "${root}/nogit/${t}"
+          done
+          PATH="${root}/rel/bin:${root}/nogit" "${root}/src/install.sh" --binary >/dev/null
+          test -s "${root}/rel/curl-urls" && echo DOWNLOADED
+          test "$("${XDG_DATA_HOME}/riotbox/libexec/riotbox-core" version)" = "${ver}" && echo INSTALLED
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DOWNLOADED"
+          - result.systemout ShouldContainSubstring "INSTALLED"

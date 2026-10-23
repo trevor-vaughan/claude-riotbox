@@ -11,6 +11,8 @@ includes:
     taskfile: .taskfiles/test.yml
   release:
     taskfile: .taskfiles/release.yml
+  go:
+    taskfile: .taskfiles/go.yml
 
 vars:
   TEST_DIR: '{{.TEST_DIR | default ".test-output"}}'
@@ -33,8 +35,10 @@ tasks:
       - task: container:update
 
   test:
-    desc: "Run integration tests (alias for test:run)"
+    desc: "Run Go suites, then the venom integration suites (MODE=human|llm; venom suite filter via --)"
     cmds:
+      - task: go:build
+      - task: go:test
       - task: test:run
         vars:
           ARGS: "{{.CLI_ARGS}}"

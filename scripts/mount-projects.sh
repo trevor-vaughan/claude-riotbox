@@ -37,83 +37,28 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib/session-state.sh"
 # shellcheck source=scripts/lib/overlay-ignore.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/overlay-ignore.sh"
+# shellcheck source=scripts/lib/riotbox-core.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/riotbox-core.sh"
 
-# session_set_hash <dir>...
-#   Print the first 16 hex characters of the SHA-256 of the canonical form of
-#   a project set: its resolved real paths, sorted bytewise with duplicates
-#   dropped (the set, not the argument list), each followed by a NUL byte. A path cannot hold a NUL, so two different sets never hash
-#   the same input; the session key and a set's container name both carry
-#   this hash, so a set has one identity on disk and at runtime.
-session_set_hash() {
-	# shellcheck disable=SC2312 # sort and cut cannot fail on in-memory input
-	printf '%s\0' "$@" | LC_ALL=C sort -zu | sha256sum | cut -c1-16
-}
-
-# Compute the canonical multi-project identity components.
-#
-# Emits three lines on stdout:
-#   1. first_seg  — basename of the bytewise-first path, every byte outside
-#                   [a-zA-Z0-9_.-] mapped to "-", runs of "-" squeezed and
-#                   leading/trailing "-" stripped (in the C locale, so the
-#                   result does not depend on the user's)
-#   2. n_more     — count of remaining distinct paths after the first
-#   3. hash       — session_set_hash of the paths
-#
-# The container name and session directory basename are both derived from
-# this output. Callers consume the three lines with a grouped `read` block.
+# compute_multi_project_identity <dir>...
+#   Print a set's first_seg, n_more and hash, one per line, for the container
+#   name and the session key. Computed by riotbox-core set-identity; see
+#   docs/dev/riotbox-core.md.
 compute_multi_project_identity() {
-	local -a sorted=()
-	# shellcheck disable=SC2312 # sort failure is impossible on in-memory input
-	mapfile -d '' -t sorted < <(printf '%s\0' "$@" | LC_ALL=C sort -zu)
-
-	local first_seg
-	first_seg="$(basename -- "${sorted[0]}" | LC_ALL=C sed 's/[^a-zA-Z0-9_.-]/-/g; s/--*/-/g; s/^-//; s/-$//')"
-
-	# shellcheck disable=SC2312 # session_set_hash cannot fail on in-memory input
-	printf '%s\n%s\n%s\n' "${first_seg}" "$((${#sorted[@]} - 1))" "$(session_set_hash "$@")"
+	# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+	riotbox_core_require || return 1
+	"${RIOTBOX_CORE}" set-identity "$@"
 }
 
 # session_key <dir>...
-#   Print the session key of a resolved project set: a readable prefix, "-",
-#   and session_set_hash. The prefix is the path with "/" mapped to "-" and
-#   the leading "-" dropped for one project ("home-me-src-app"), and
-#   "<first_seg>-<n_more>more" (compute_multi_project_identity) for a set
-#   ("app-2more"); it is only for people reading `riotbox session-list`.
-#   The hash is what makes the key unique per set. The key is capped at 255
-#   bytes (NAME_MAX): a longer single-project prefix loses its front, then
-#   any leading bytes up to the first letter or digit, keeping the leaf; a
-#   set's first_seg loses its end. A path given twice counts once, so the
-#   key depends on the set alone. resolve_projects derives the session dir,
-#   the state dir and (by basename) the container label from this one key.
+#   Print the session key of a resolved project set: one key per set, at most
+#   255 bytes, readable prefix then hash. resolve_projects derives the session
+#   dir, the state dir and the container label from it. Computed by
+#   riotbox-core session-key; see docs/dev/riotbox-core.md.
 session_key() {
-	local LC_ALL=C
-	local hash prefix first_seg n_more suffix max=$((255 - 17))
-	local -a dirs=()
-	# A path named twice is one project: "/a /a" keys as "/a".
-	# shellcheck disable=SC2312 # sort failure is impossible on in-memory input
-	mapfile -d '' -t dirs < <(printf '%s\0' "$@" | sort -zu)
-	set -- "${dirs[@]}"
-	if [[ $# -eq 1 ]]; then
-		prefix="$(printf '%s\n' "$1" | sed 's|/|-|g; s|^-||')"
-		hash="$(session_set_hash "$1")"
-		if [[ "${#prefix}" -gt "${max}" ]]; then
-			prefix="${prefix: -${max}}"
-			prefix="${prefix#"${prefix%%[a-zA-Z0-9]*}"}"
-		fi
-	else
-		# shellcheck disable=SC2312 # compute_multi_project_identity always succeeds for non-empty input
-		{
-			read -r first_seg
-			read -r n_more
-			read -r hash
-		} < <(compute_multi_project_identity "$@")
-		suffix="-${n_more}more"
-		if [[ "$((${#first_seg} + ${#suffix}))" -gt "${max}" ]]; then
-			first_seg="${first_seg:0:$((max - ${#suffix}))}"
-		fi
-		prefix="${first_seg}${suffix}"
-	fi
-	printf '%s\n' "${prefix:+${prefix}-}${hash}"
+	# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+	riotbox_core_require || return 1
+	"${RIOTBOX_CORE}" session-key "$@"
 }
 
 # legacy_session_key <dir>...
@@ -125,6 +70,8 @@ session_key() {
 #   "<first_seg>-<n_more>more-<hash8>", hash8 being the first 8 hex of the
 #   SHA-256 of the sorted paths so mangled, joined by "+". Duplicates are
 #   kept, as they were (tests pin v0.5.3's own output).
+#   Stays in bash: its output depends on the user's locale (GNU sed ranges),
+#   which Go cannot reproduce.
 legacy_session_key() {
 	if [[ $# -eq 1 ]]; then
 		printf '%s\n' "$1" | sed 's|/|-|g; s|^-||'
@@ -159,9 +106,9 @@ legacy_session_key() {
 # part distinct per set — naive basename concatenation overflowed the
 # 64-char cap and the left-truncation that followed silently collapsed
 # distinct project sets that happened to share a trailing run of basenames
-# into one name. It is the session key's hash (session_set_hash): the 8-hex
-# hash of mangled paths it replaced gave sets whose paths differ only by "-"
-# for "/" one name. first_basename is trimmed to fit the cap.
+# into one name. It is the session key's hash (riotbox-core set-identity):
+# the 8-hex hash of mangled paths it replaced gave sets whose paths differ
+# only by "-" for "/" one name. first_basename is trimmed to fit the cap.
 generate_container_name() {
 	local -a dirs=("$@")
 	local max_len=64
@@ -177,12 +124,14 @@ generate_container_name() {
 	local readable suffix="${random}"
 	if [[ ${#dirs[@]} -gt 1 ]]; then
 		local n_more hash
-		# shellcheck disable=SC2312 # compute_multi_project_identity always succeeds for non-empty input
+		local identity
+		# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+		identity="$(compute_multi_project_identity "${dirs[@]}")" || return 1
 		{
 			read -r readable
 			read -r n_more
 			read -r hash
-		} < <(compute_multi_project_identity "${dirs[@]}")
+		} <<<"${identity}"
 		suffix="-${n_more}more-${hash}${random}"
 	else
 		readable="$(basename -- "${dirs[0]}" | sed 's/[^a-zA-Z0-9_.-]/-/g; s/--*/-/g')"
@@ -276,7 +225,8 @@ resolve_projects() {
 	# and the container label all derive from it.
 	local session_key
 	resolve_data_roots
-	session_key="$(session_key "${PROJECT_DIRS[@]}")"
+	# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+	session_key="$(session_key "${PROJECT_DIRS[@]}")" || return 1
 	RIOTBOX_SESSION_DIR="${RIOTBOX_DATA_DIR}/${session_key}"
 	RIOTBOX_STATE_DIR="${RIOTBOX_STATE_ROOT}/${session_key}"
 }
@@ -1109,7 +1059,8 @@ setup_projects() {
 	fi
 
 	# ── Container name ────────────────────────────────────────────────
-	generate_container_name "${PROJECT_DIRS[@]}"
+	# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+	generate_container_name "${PROJECT_DIRS[@]}" || return 1
 }
 
 # Print the resolved mount table in `host:container:mode` form (one per

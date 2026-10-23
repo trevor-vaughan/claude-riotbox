@@ -1073,6 +1073,81 @@ when it removed an entry, and re-emits every other entry unchanged.
 **Supply chain.** `gh` and `glab` come from EPEL and carry the distribution's
 signatures, checked by `dnf`, at the cost of trailing upstream by a few releases.
 
+## riotbox-core binary and release signing
+
+`riotbox-core` (`libexec/riotbox-core`) computes session keys, and a key decides
+which session directory, state directory and `riotbox.session` container label a
+launch uses. A substituted binary could point a launch at another project's
+session. How the binary arrives depends on the install path.
+
+**Package installs** ship the binary inside the rpm or deb, under the same trust
+as the rest of the package. The packages are not GPG-signed, and installing a
+downloaded file (`dnf install ./riotbox-….rpm`, `apt install ./riotbox_….deb`)
+checks no signature. Their authenticity rests on the user verifying
+`checksums.txt` against `checksums.txt.sigstore.json` with `cosign verify-blob`
+and then the package against `checksums.txt`, as described in
+[docs/dev/riotbox-core.md § Verifying a release by hand](docs/dev/riotbox-core.md#verifying-a-release-by-hand).
+Nothing enforces that step.
+
+**`./install.sh --build`** compiles it from the checkout with the user's own Go
+and `GOTOOLCHAIN=local`, so no toolchain is downloaded. The binary's provenance
+is the checkout's.
+
+**`./install.sh --binary`** downloads the release archive, `checksums.txt` and
+`checksums.txt.sigstore.json` over HTTPS (`curl --proto '=https' --tlsv1.2`).
+Authenticity comes from `cosign verify-blob`, pinned to the identity
+`https://github.com/trevor-vaughan/claude-riotbox/.github/workflows/release.yml@refs/tags/v<VERSION>`
+and GitHub's OIDC issuer. Integrity of the archive comes from its single line in
+the signed `checksums.txt`; a list that names the archive twice is refused.
+Only a regular file named `riotbox-core` is taken from the archive. All of this
+happens in a temporary directory before the app tree is touched, so a failed
+check leaves an existing install as it was. The installer refuses a cosign older
+than 2.6.2 (2.x) or 3.0.4 (3.x): older releases cannot read the bundle format,
+or lack the fix for GHSA-whqx-f9j3-ch6m. `VERSION` must be a semantic version
+before it is put into a URL or an identity. Because `VERSION` changes only in
+release commits, a git checkout must also be exactly the commit tagged
+`v<VERSION>`, with no changes to tracked installed paths or Go sources;
+otherwise a branch past the release would receive that release's binary and
+compute keys by its rules. A tree that is not a git checkout is accepted.
+
+**At run time** the bash refuses a binary whose `version` output is not the
+install's `VERSION` (`scripts/lib/riotbox-core.sh`). That check catches a
+mismatch, not tampering: a local attacker who can replace files in the app tree
+can also replace the bash that does the checking.
+
+**Running riotbox on its own checkout.** A developer who runs `bin/riotbox` from
+a RiotBox checkout and points a read-write session at that same checkout gives
+the container write access to `libexec/riotbox-core`. The file is gitignored, so
+a replacement shows up in no `git status`, and the next host-side command runs
+it. This is the same boundary the bash already has: that container can rewrite
+`bin/riotbox`, `libexec/*.sh` and `scripts/`, which the host also runs. Installed
+trees are out of the container's reach: nothing under `/opt/riotbox` is
+mounted, and of the rootless tree at `$XDG_DATA_HOME/riotbox` only each
+session's own subdirectory is. Use an installed `riotbox`, or
+`RIOTBOX_READONLY=1`, when working on RiotBox itself. `RIOTBOX_OVERLAY=1` only
+defers the write: `overlay-accept` applies the overlay unfiltered, so a replaced
+`libexec/riotbox-core` reaches the checkout on accept unless it is spotted in
+`overlay-diff` first.
+
+**The release workflow is split so the signing identity stays narrow.** The
+OIDC token is available to every step of a job with `id-token: write`, and
+cosign keyless signing accepts it. `.github/workflows/release.yml` therefore
+keeps the `publish` job, which signs, to a short fixed list: the SHA-pinned
+actions `checkout`, `setup-go`, `cosign-installer` and
+`attest-build-provenance`; a syft tarball checked against a sha256 hard-coded in
+the workflow; `.taskfiles/scripts/changelog-section.sh` from this repository;
+and `go tool goreleaser`, pinned in `go.mod` and verified by `go.sum`. It
+releases exactly the pushed tag (`GORELEASER_CURRENT_TAG`). Everything else runs
+in a `gate` job with a read-only token and no OIDC access: the unpinned `task`
+install script, and the lint (golangci-lint, pinned in `go.mod`) and test runs,
+which are there because `publish` does not need them. The `SECURITY` comment
+above `publish` is the authoritative list.
+
+**Residual risk.** Whoever can run this repository's release workflow at a tag
+can publish a validly signed bad binary. The build provenance attestation
+(`gh attestation verify`) records which workflow run built each artifact; it
+does not prevent this.
+
 ## Findings
 
 ---

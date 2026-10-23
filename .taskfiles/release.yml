@@ -21,22 +21,15 @@ tasks:
     cmd: cat "{{.ROOT_DIR}}/VERSION"
 
   package:
-    desc: "Build rpm + deb into dist/ (requires nfpm)"
-    vars:
-      DIST: "{{.ROOT_DIR}}/dist"
+    desc: "Dry-run the release into dist/: binaries, archives, rpm + deb per arch, checksums (unsigned)"
+    dir: "{{.ROOT_DIR}}"
+    env:
+      # A snapshot never publishes, so the token is unused; forcing one only
+      # stops GoReleaser refusing to start when several forge tokens are set.
+      GORELEASER_FORCE_TOKEN: github
     cmds:
-      - rm -rf "{{.DIST}}"
-      - mkdir -p "{{.DIST}}"
-      - cmd: |
-          command -v nfpm >/dev/null 2>&1 || {
-            echo "nfpm not found. Install nfpm v2.46.3:" >&2
-            echo "  go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.46.3" >&2
-            exit 1
-          }
-      - cmd: |
-          export RB_VERSION="$(cat '{{.ROOT_DIR}}/VERSION')"
-          nfpm package -f '{{.ROOT_DIR}}/nfpm.yaml' -p rpm -t '{{.DIST}}'
-          nfpm package -f '{{.ROOT_DIR}}/nfpm.yaml' -p deb -t '{{.DIST}}'
-      - cmd: |
-          cd '{{.DIST}}' && sha256sum ./*.rpm ./*.deb > SHA256SUMS
-      - cmd: ls -1 '{{.DIST}}'
+      - go tool goreleaser check
+      # --skip=sign,sbom: signing needs the release workflow's OIDC identity
+      # and SBOMs need syft; both run only in .github/workflows/release.yml.
+      - go tool goreleaser release --snapshot --clean --skip=sign,sbom
+      - ls -1 dist

@@ -11,12 +11,15 @@ set -euo pipefail
 # scripts/mount-projects.sh, never a re-derivation here.
 # shellcheck source=scripts/mount-projects.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../../scripts/mount-projects.sh"
+# shellcheck source=tests/lib/go-stub.sh
+source "$(dirname "${BASH_SOURCE[0]}")/go-stub.sh"
 
 # setup_session_install
 #   Install RiotBox rootless into a fresh fake HOME and seed a backup store.
 #   Sets: T (canonical temp root), DATA (the rootless RIOTBOX_DATA_DIR),
 #         STATE (RIOTBOX_STATE_ROOT)
-#   Exports: HOME, XDG_DATA_HOME, XDG_CONFIG_HOME, ROOT_DIR
+#   Exports: HOME, XDG_DATA_HOME, XDG_CONFIG_HOME, ROOT_DIR, and PATH with a
+#            go stub (tests/lib/go-stub.sh) in front for install.sh --build
 setup_session_install() {
 	: "${RIOTBOX_DIR:?RIOTBOX_DIR must be set by the caller}"
 	T="$(mktemp -d)"
@@ -27,7 +30,8 @@ setup_session_install() {
 	export XDG_CONFIG_HOME="${HOME}/.config"
 	export ROOT_DIR="${RIOTBOX_DIR}"
 	mkdir -p "${HOME}" "${T}/projects"
-	"${RIOTBOX_DIR}/install.sh" "${T}/bin" >/dev/null 2>&1
+	install_go_stub "${T}/go-stub" "${RIOTBOX_DIR}/libexec/riotbox-core"
+	"${RIOTBOX_DIR}/install.sh" --build "${T}/bin" >/dev/null 2>&1
 	DATA="${XDG_DATA_HOME}/riotbox"
 	STATE="${XDG_DATA_HOME}/riotbox-state"
 	mkdir -p "${DATA}/backups/proj.git"

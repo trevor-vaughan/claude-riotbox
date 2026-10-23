@@ -1,0 +1,189 @@
+name: riotbox-core — the bash adapters, the preflight check and the package glob
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+testcases:
+  - name: session_key delegates to the binary
+    steps:
+      - type: exec
+        script: |
+          set -e
+          cd "{{.riotbox_dir}}"
+          want="$(libexec/riotbox-core session-key /home/me/b /home/me/a)"
+          got="$(bash -c 'source scripts/mount-projects.sh && session_key /home/me/b /home/me/a')"
+          test "${got}" = "${want}"
+          echo "SAME ${got}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SAME a-1more-"
+
+  - name: compute_multi_project_identity delegates to the binary
+    steps:
+      - type: exec
+        script: |
+          set -e
+          cd "{{.riotbox_dir}}"
+          want="$(libexec/riotbox-core set-identity /x/app /y/lib)"
+          got="$(bash -c 'source scripts/mount-projects.sh && compute_multi_project_identity /x/app /y/lib')"
+          test "${got}" = "${want}"
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldEqual OK
+
+  - name: a missing binary fails the key with a fix hint
+    steps:
+      - type: exec
+        script: |
+          tree="$(mktemp -d)"
+          trap 'rm -rf "${tree}"' EXIT
+          cp -a "{{.riotbox_dir}}"/{bin,libexec,scripts,agents,VERSION} "${tree}/"
+          rm -f "${tree}/libexec/riotbox-core"
+          bash -c 'source "$1/scripts/mount-projects.sh" && session_key /a' _ "${tree}"
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "riotbox-core missing or does not match VERSION"
+          - result.systemerr ShouldContainSubstring "run 'task go:build' (checkout), reinstall with ./install.sh --build|--binary (rootless), or reinstall the riotbox package (rpm/deb)"
+          - result.systemout ShouldBeEmpty
+
+  - name: a binary from another version is refused
+    steps:
+      - type: exec
+        script: |
+          tree="$(mktemp -d)"
+          trap 'rm -rf "${tree}"' EXIT
+          cp -a "{{.riotbox_dir}}"/{bin,libexec,scripts,agents,VERSION} "${tree}/"
+          printf '#!/bin/sh\necho 0.0.1\n' >"${tree}/libexec/riotbox-core"
+          chmod +x "${tree}/libexec/riotbox-core"
+          bash -c 'source "$1/scripts/mount-projects.sh" && session_key /a' _ "${tree}"
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "(found 0.0.1)"
+
+  - name: a non-executable binary is refused
+    steps:
+      - type: exec
+        script: |
+          tree="$(mktemp -d)"
+          trap 'rm -rf "${tree}"' EXIT
+          cp -a "{{.riotbox_dir}}"/{bin,libexec,scripts,agents,VERSION} "${tree}/"
+          chmod -x "${tree}/libexec/riotbox-core"
+          bash -c 'source "$1/scripts/mount-projects.sh" && session_key /a' _ "${tree}"
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "riotbox-core missing or does not match VERSION"
+          - result.systemerr ShouldContainSubstring "(found not executable)"
+
+  - name: a binary that exits non-zero is refused
+    steps:
+      - type: exec
+        script: |
+          tree="$(mktemp -d)"
+          trap 'rm -rf "${tree}"' EXIT
+          cp -a "{{.riotbox_dir}}"/{bin,libexec,scripts,agents,VERSION} "${tree}/"
+          printf '#!/bin/sh\nexit 3\n' >"${tree}/libexec/riotbox-core"
+          chmod +x "${tree}/libexec/riotbox-core"
+          bash -c 'source "$1/scripts/mount-projects.sh" && session_key /a' _ "${tree}"
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "(found unrunnable)"
+          - result.systemout ShouldBeEmpty
+
+  - name: resolve_projects stops instead of using an empty key
+    steps:
+      - type: exec
+        script: |
+          tree="$(mktemp -d)"
+          trap 'rm -rf "${tree}"' EXIT
+          cp -a "{{.riotbox_dir}}"/{bin,libexec,scripts,agents,VERSION} "${tree}/"
+          rm -f "${tree}/libexec/riotbox-core"
+          mkdir -p "${tree}/proj" "${tree}/home"
+          export HOME="${tree}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share" XDG_CONFIG_HOME="${HOME}/.config"
+          bash -c 'source "$1/scripts/mount-projects.sh" && resolve_projects "$1/proj" && echo "DIR=${RIOTBOX_SESSION_DIR}"' _ "${tree}"
+        assertions:
+          - result.code ShouldNotEqual 0
+          - result.systemout ShouldNotContainSubstring "DIR="
+          - result.systemerr ShouldContainSubstring "riotbox-core missing or does not match VERSION"
+
+  - name: riotbox mounts prints no mount flags without the binary
+    steps:
+      - type: exec
+        script: |
+          tree="$(mktemp -d)"
+          trap 'rm -rf "${tree}"' EXIT
+          cp -a "{{.riotbox_dir}}"/{bin,libexec,scripts,agents,VERSION} "${tree}/"
+          rm -f "${tree}/libexec/riotbox-core"
+          mkdir -p "${tree}/proj" "${tree}/home"
+          export HOME="${tree}/home"
+          export XDG_DATA_HOME="${HOME}/.local/share" XDG_CONFIG_HOME="${HOME}/.config"
+          unset RIOTBOX_PROJECTS
+          "${tree}/scripts/mount-projects.sh" "${tree}/proj"
+        assertions:
+          - result.code ShouldNotEqual 0
+          - result.systemout ShouldBeEmpty
+          - result.systemerr ShouldContainSubstring "riotbox-core missing or does not match VERSION"
+
+  - name: preflight passes with a matching binary
+    steps:
+      - type: exec
+        script: |
+          cd "{{.riotbox_dir}}"
+          env -u RIOTBOX_DOCTOR_QUIET -u RIOTBOX_DOCTOR_JSON \
+            bash -c 'source scripts/preflight.sh && preflight_check_riotbox_core'
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "[ok] riotbox-core matches this install"
+
+  - name: preflight exits 25 without the binary
+    steps:
+      - type: exec
+        script: |
+          tree="$(mktemp -d)"
+          trap 'rm -rf "${tree}"' EXIT
+          cp -a "{{.riotbox_dir}}"/{bin,libexec,scripts,agents,VERSION} "${tree}/"
+          rm -f "${tree}/libexec/riotbox-core"
+          env -u RIOTBOX_DOCTOR_QUIET -u RIOTBOX_DOCTOR_JSON \
+            bash -c 'source "$1/scripts/preflight.sh" && preflight_check_riotbox_core' _ "${tree}"
+        assertions:
+          - result.code ShouldEqual 25
+          - result.systemout ShouldContainSubstring "install.sh --build"
+
+  # The packages take libexec/ through the ./libexec/*.sh glob in
+  # .goreleaser.yaml, not the directory, so a local riotbox-core cannot ride
+  # along beside the release build. The glob drops anything else silently;
+  # tests/lib/libexec-glob-coverage.sh turns that into a failure.
+  - name: every libexec file is shipped by the package glob
+    steps:
+      - type: exec
+        script: bash "{{.riotbox_dir}}/tests/lib/libexec-glob-coverage.sh" "{{.riotbox_dir}}"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "libexec_glob_coverage=pass"
+
+  # The control for the case above: the scratch repo is asserted to pass first,
+  # so the red is the added helper.py and not the fixture.
+  - name: the libexec glob check reddens on a file the glob does not match
+    steps:
+      - type: exec
+        script: |
+          set -e
+          tree="$(mktemp -d)"
+          trap 'rm -rf "${tree}"' EXIT
+          checker="$(cd "{{.riotbox_dir}}" && pwd)/tests/lib/libexec-glob-coverage.sh"
+          cp "{{.riotbox_dir}}/.goreleaser.yaml" "${tree}/"
+          mkdir "${tree}/libexec"
+          touch "${tree}/libexec/run.sh" "${tree}/libexec/riotbox-core"
+          bash "${checker}" "${tree}" >"${tree}/control" 2>&1 \
+            || { echo "FAIL: the unmutated fixture does not pass:"; cat "${tree}/control"; exit 1; }
+          touch "${tree}/libexec/helper.py"
+          if bash "${checker}" "${tree}" >"${tree}/mutated" 2>&1; then
+            echo "FAIL: the check passed a libexec/helper.py the glob does not ship"; cat "${tree}/mutated"; exit 1
+          fi
+          grep -q 'UNSHIPPED libexec/helper.py' "${tree}/mutated" \
+            || { echo "FAIL: the check failed without naming the file:"; cat "${tree}/mutated"; exit 1; }
+          echo "libexec_glob_control=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "libexec_glob_control=pass"

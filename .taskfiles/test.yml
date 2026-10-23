@@ -2,7 +2,6 @@ version: "3"
 
 vars:
   TEST_IMAGE: riotbox-test
-  TEST_DIR: '{{.ROOT_DIR}}/{{.TEST_DIR | default ".test-output"}}'
   CONTAINER_CMD:
     sh: command -v podman 2>/dev/null || echo docker
 
@@ -33,14 +32,14 @@ tasks:
 
   run:
     desc: Run tests (venom integration suites)
-    deps: [build]
+    deps: [build, ":go:build"]
     vars:
       ARGS: "{{.ARGS | default .CLI_ARGS}}"
     env:
-      TEST_DIR: "{{.TEST_DIR}}"
+      TEST_DIR: "{{.ROOT_DIR}}/{{.TEST_DIR}}"
       TEST_AS_ROOT: '{{.TEST_AS_ROOT | default ""}}'
     cmds:
-      - mkdir -p "{{.TEST_DIR}}"
+      - mkdir -p "{{.ROOT_DIR}}/{{.TEST_DIR}}"
       - "{{.ROOT_DIR}}/.taskfiles/scripts/run-tests.sh {{.ARGS}}"
 
   # Delegates to `run` so the image build and the venom invocation stay defined
@@ -57,6 +56,7 @@ tasks:
 
   direct:
     desc: "Run venom tests directly without the test container (artifacts to .test-output/)"
+    deps: [":go:build"]
     vars:
       ARGS: "{{.ARGS | default .CLI_ARGS}}"
     cmds:

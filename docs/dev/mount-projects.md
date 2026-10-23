@@ -152,8 +152,8 @@ rounds of two parallel runs, which failed 16 of 40 runs without the lock.
 `session_key` is the only derivation of a session's key; `resolve_projects`
 builds `RIOTBOX_SESSION_DIR` and `RIOTBOX_STATE_DIR` from it, and
 `libexec/launch.sh` labels containers `riotbox.session=<basename of the session
-dir>`. The key is a readable prefix plus `-` and `session_set_hash`: the first
-16 hex of the SHA-256 of the real paths, sorted bytewise with duplicates dropped (`LC_ALL=C sort -zu`),
+dir>`. The key is a readable prefix plus `-` and a set hash: the first
+16 hex of the SHA-256 of the real paths, sorted bytewise with duplicates dropped,
 each NUL-terminated. The prefix is the path with `/` mapped to `-` for one
 project and `<first_seg>-<n_more>more` for a set
 (`compute_multi_project_identity`, which a set's container name also uses), and
@@ -162,6 +162,14 @@ never decode a key back into paths, and never re-derive one in a test (call
 `session_key`). The keys before this mapped `/` to `-` and nothing more, so
 `/t/a-b/app` and `/t-a/b/app` shared a session; a set's 8-hex hash was taken
 over those mangled paths and collided the same way.
+
+The computation was bash (`session_set_hash`) until v0.7.0. It now lives in
+`riotbox-core`: `Key`, `Identity` and `SetHash` in `internal/sessionkey`.
+`session_key` and `compute_multi_project_identity` are adapters that check the
+binary matches `VERSION` and call its `session-key` and `set-identity` verbs,
+and they fail rather than print an empty key when it does not. The contract,
+and the one place the Go output differs from v0.7.0's, are in
+[riotbox-core.md](riotbox-core.md).
 
 Container names are not keys. `generate_container_name` gives each launch
 `riotbox-<basename>-<rand8>` (one project) or

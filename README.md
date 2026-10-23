@@ -44,6 +44,8 @@ Finally...it was fun!
 
 - `flock` (from util-linux; installed on most Linux systems, and a dependency of the rpm and deb packages) — serializes the host-side config sync of concurrent launches of one project
 
+- For a rootless install from a checkout: Go 1.26.4 or newer for `./install.sh --build`, or curl, tar, sha256sum and [cosign](https://github.com/sigstore/cosign) 2.6.2+ (or 3.0.4+) for `./install.sh --binary`. The rpm and deb packages need neither.
+
 - [git-filter-repo](https://github.com/newren/git-filter-repo) (required for `reown` — `pip install git-filter-repo`)
 
 - (Optional) nvm, uv, Go, rustup, RVM installed locally — the build mirrors whatever it finds
@@ -54,13 +56,14 @@ RiotBox installs as a normal application that puts a `riotbox` command on your P
 
 ```sh
 # System package (rpm — Fedora/RHEL/CentOS)
-sudo dnf install ./riotbox-<ver>-1.noarch.rpm
+sudo dnf install ./riotbox-<ver>-1.<arch>.rpm      # arch: x86_64 or aarch64
 
 # System package (deb — Debian/Ubuntu)
-sudo apt install ./riotbox_<ver>_all.deb
+sudo apt install ./riotbox_<ver>_<arch>.deb        # arch: amd64 or arm64
 
 # Rootless (no sudo) — see ./setup.sh below for the guided variant
-./install.sh
+./install.sh --build     # compile riotbox-core with your Go toolchain
+./install.sh --binary    # or download the signed release binary
 ```
 
 **Layouts.** The two install models differ only in where files land:
@@ -71,6 +74,17 @@ sudo apt install ./riotbox_<ver>_all.deb
 | **rootless** (`./install.sh`) | `$XDG_DATA_HOME/riotbox` (default `~/.local/share/riotbox`) | `~/.local/bin/riotbox` | `$XDG_CONFIG_HOME/riotbox` (default `~/.config/riotbox`) |
 
 The `riotbox` dispatcher is self-locating, so it works from either tree without extra configuration.
+
+**Rootless: `--build` or `--binary`.** Session keys are computed by `riotbox-core`, a small compiled helper the launcher calls. The rpm and deb ship it prebuilt; a checkout does not have it, so `install.sh` has to be told how to get it. It will not pick for you, because one way needs a Go toolchain and the other downloads code from the network.
+
+- `--build` compiles it with the `go` on your PATH, which must be at least the version on the `go` line of `go.mod`. The build runs with `GOTOOLCHAIN=local`, so an older Go fails and names the version it needs instead of downloading a newer toolchain. No network access is needed.
+- `--binary` downloads `riotbox-core_<ver>_linux_<arch>.tar.gz`, `checksums.txt` and `checksums.txt.sigstore.json` from the GitHub release that `VERSION` names (x86_64 and aarch64 only). cosign verifies that `checksums.txt` was signed by this repository's release workflow at tag `v<ver>`; then `sha256sum` checks the archive against its line in that file. The app tree is touched only after both checks pass. `VERSION` only changes in release commits, so a branch ahead of `v<ver>` still says `<ver>`, and the `v<ver>` binary would compute keys by that release's rules. A git checkout therefore must be exactly the commit tagged `v<ver>`, with no changes to tracked files that are installed or that riotbox-core is built from; otherwise `--binary` refuses before downloading anything. A tree that is not a git checkout (an unpacked source tarball) is accepted as is. Use `--build` everywhere else.
+
+Either way, the launcher refuses a `riotbox-core` whose version is not the install's `VERSION`, and `riotbox doctor` reports that as `riotbox-core matches this install` (exit code 25).
+
+**Upgrading a rootless install.** Update the checkout, then run `./install.sh --build` or `./install.sh --binary` again. It replaces the app tree and `riotbox-core` and leaves your config, sessions and backups alone. `./setup.sh` also works: it notices when the installed version differs from the checkout's, or the installed `riotbox-core` does not match, prints `riotbox installed but out of date: <reason>`, and offers to reinstall.
+
+**Checking a downloaded package.** The rpm and deb are not GPG-signed, so `dnf`/`apt` check no signature when you install the file. To confirm a package came from this repository's release workflow, verify `checksums.txt` with cosign and then the package against it, as described in [Verifying a release by hand](docs/dev/riotbox-core.md#verifying-a-release-by-hand).
 
 **Config precedence** (highest to lowest):
 
@@ -100,6 +114,17 @@ The quickest way to get started is the guided setup script:
 
 This checks prerequisites, configures podman, installs the CLI, and builds the image. It's idempotent — safe to re-run if you need to fix something.
 
+At the install step it asks whether to build `riotbox-core` here or download the signed release binary (`[b/r]`). Pass the answer up front to skip that question:
+
+```sh
+./setup.sh --build              # compile riotbox-core (needs Go)
+./setup.sh --binary             # download the signed release binary
+./setup.sh --yes --build        # accept every default, no prompts
+./setup.sh --build --no-image   # skip building the container image
+```
+
+`--yes` needs `--build` or `--binary`, and an unknown option is an error. `--no-image` was called `--no-build`, which still works but is deprecated. `RIOTBOX_SETUP_YES=1` in the environment does the same as `--yes`, and `RIOTBOX_SETUP_NO_IMAGE=1` the same as `--no-image`. The old `RIOTBOX_SETUP_NO_BUILD` is still read.
+
 ### Manual setup
 
 If you prefer to set things up yourself:
@@ -107,9 +132,13 @@ If you prefer to set things up yourself:
 1. Install the `riotbox` command:
 
    ```sh
-   ./install.sh                 # symlink → ~/.local/bin/riotbox (default)
-   ./install.sh ~/bin           # pick a different directory for the symlink
+   ./install.sh --build         # symlink → ~/.local/bin/riotbox (default)
+   ./install.sh --build ~/bin   # pick a different directory for the symlink
    ```
+
+   Use `--binary` instead of `--build` to download the signed release
+   binary; exactly one of the two is required (see
+   [Rootless: `--build` or `--binary`](#install)).
 
    The app tree always lands in `$XDG_DATA_HOME/riotbox` (default
    `~/.local/share/riotbox`); only the entrypoint symlink's directory is
@@ -2031,6 +2060,7 @@ Non-interactive callers (`riotbox run`, CI, scripts) never block on the prompt: 
 The following are only needed if you want to run the linters or tests locally (outside the container):
 
 - [task](https://taskfile.dev) — drives the maintainer build/test/lint/release targets
+- [Go](https://go.dev/dl/) 1.26.4 or newer (the `go` line of `go.mod`) — builds `riotbox-core` and runs its tests and linter. The Go dev tools (Ginkgo, ginkgoleaf, golangci-lint, GoReleaser) are pinned in `go.mod` and run through `go tool`, so they need no separate install
 - [shellcheck](https://www.shellcheck.net/) — shell script linter (`dnf install ShellCheck` or `brew install shellcheck`)
 - [hadolint](https://github.com/hadolint/hadolint) — Dockerfile linter (`brew install hadolint` or download from [releases](https://github.com/hadolint/hadolint/releases))
 - [venom](https://github.com/ovh/venom) — integration test runner (downloaded automatically inside the test container)
@@ -2040,8 +2070,11 @@ The following are only needed if you want to run the linters or tests locally (o
 
 ```sh
 task check          # run all quality gates (lint + test + venom lint)
-task lint           # shellcheck + hadolint
-task test           # integration tests (builds test container, runs venom suites)
+task lint           # shellcheck + hadolint + golangci-lint
+task test           # build riotbox-core, run the Go suites, then the venom suites in the test container
+task go:build       # build libexec/riotbox-core from the Go sources
+task go:test        # Go (Ginkgo) suites only; MODE=llm for errors-only output
+task go:lint        # golangci-lint only
 task test:direct    # run venom directly on host (skip container build)
 task test:as-root   # re-run a suite as uid 0 in the container (see below)
 task test:lint      # structural lint of .venom.yml test suites
@@ -2087,7 +2120,11 @@ cargo install git-cliff --version 2.13.1
 
 Each run regenerates `CHANGELOG.md` in full rather than prepending to it. The release commit itself is skipped by a `cliff.toml` commit parser, so regenerating later reproduces the same file.
 
-Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds the rpm and deb with a pinned [`nfpm`](https://nfpm.goreleaser.com/) (v2.46.3) and publishes them alongside a `SHA256SUMS` checksum file via `gh`. The three artifacts (`riotbox-<ver>-1.noarch.rpm`, `riotbox_<ver>_all.deb`, `SHA256SUMS`) attach to the GitHub release for the tag. The release notes are that version's section of the committed `CHANGELOG.md`, extracted by [`.taskfiles/scripts/changelog-section.sh`](.taskfiles/scripts/changelog-section.sh), so the published notes and the file in the repository cannot disagree.
+Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml). A `gate` job checks that the tag equals `VERSION` and runs `task go:lint` and `task go:test`; the venom suites need podman and have already run on `main` in `test.yml`. A `publish` job then runs [GoReleaser](https://goreleaser.com/) (v2.17.0, pinned in `go.mod`'s `tool` block) as configured in [`.goreleaser.yaml`](.goreleaser.yaml). The GitHub release for the tag gets the per-arch `riotbox-core` archives, the rpm and deb packages, an SBOM for each, and `checksums.txt` with its keyless cosign signature. [docs/dev/riotbox-core.md § Releasing](docs/dev/riotbox-core.md#releasing) lists every file name.
+
+Every archive, package, SBOM and `checksums.txt` also gets a GitHub build-provenance attestation. The release notes are that version's section of the committed `CHANGELOG.md`, extracted by [`.taskfiles/scripts/changelog-section.sh`](.taskfiles/scripts/changelog-section.sh), so the published notes and the file in the repository cannot disagree.
+
+`task release:package` runs the same GoReleaser configuration as a local snapshot into `dist/`, without signing or SBOMs, to check the packaging before you tag. How to verify a published release by hand is in [docs/dev/riotbox-core.md](docs/dev/riotbox-core.md#releasing).
 
 ## Podman setup
 
@@ -2184,7 +2221,7 @@ echo "options overlay metacopy=on" | sudo tee /etc/modprobe.d/overlay.conf
 
 ## Troubleshooting
 
-When something breaks, the first thing to try is `riotbox doctor` — it walks every host prerequisite (podman, fuse-overlayfs, `flock`, image build, credentials, plugin/skill dirs) and prints a fix hint per failure. By default every check runs even if earlier ones failed, so a single invocation surfaces every problem at once; set `RIOTBOX_DOCTOR_FIRST_FAIL=1` to short-circuit at the first failure. The exit code is the FIRST failure encountered (0 on full pass). The same checks run at the end of `./setup.sh`, so a fresh install is self-verifying.
+When something breaks, the first thing to try is `riotbox doctor` — it walks every host prerequisite (podman, fuse-overlayfs, `flock`, a `riotbox-core` matching this install, image build, credentials, plugin/skill dirs) and prints a fix hint per failure. By default every check runs even if earlier ones failed, so a single invocation surfaces every problem at once; set `RIOTBOX_DOCTOR_FIRST_FAIL=1` to short-circuit at the first failure. The exit code is the FIRST failure encountered (0 on full pass). The same checks run at the end of `./setup.sh`, so a fresh install is self-verifying.
 
 Other knobs:
 

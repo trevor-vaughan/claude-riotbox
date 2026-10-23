@@ -1,0 +1,33 @@
+version: "3"
+
+tasks:
+  default:
+    silent: true
+    cmd: task go --list
+
+  build:
+    desc: Build libexec/riotbox-core from the Go sources
+    sources:
+      - "{{.ROOT_DIR}}/**/*.go"
+      - exclude: "{{.ROOT_DIR}}/**/*_test.go"
+      - exclude: "{{.ROOT_DIR}}/**/testdata/**"
+      - exclude: "{{.ROOT_DIR}}/.worktrees/**"
+      - "{{.ROOT_DIR}}/go.mod"
+      - "{{.ROOT_DIR}}/go.sum"
+      - "{{.ROOT_DIR}}/VERSION"
+      - "{{.ROOT_DIR}}/scripts/build-core.sh"
+    generates:
+      - "{{.ROOT_DIR}}/libexec/riotbox-core"
+    cmd: '"{{.ROOT_DIR}}/scripts/build-core.sh" "{{.ROOT_DIR}}/libexec/riotbox-core"'
+
+  test:
+    desc: "Run the Go (Ginkgo) suites (MODE=human|llm)"
+    # The root's TEST_DIR is repo-root-relative; go-test.sh resolves it.
+    env:
+      TEST_DIR: '{{.TEST_DIR}}'
+    cmd: '"{{.ROOT_DIR}}/.taskfiles/scripts/go-test.sh" "{{.MODE | default "human"}}"'
+
+  lint:
+    desc: Lint Go code with golangci-lint
+    dir: "{{.ROOT_DIR}}"
+    cmd: go tool golangci-lint run ./...

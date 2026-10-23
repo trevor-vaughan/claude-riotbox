@@ -231,3 +231,21 @@ No subsystem ships with both a bash and a Go implementation live.
   is never coloured, and it ends in a one-line verdict and a Failures block
   with that detail. This was read from ginkgoleaf's README examples at v0.1.1,
   not run.
+
+## Corrections (2026-10-22 to 2026-10-23, during the 1a work)
+
+- **`legacy_session_key` stays in bash.** "v0.5.3 key compatibility" was listed
+  as part of the core to port. The legacy key's output depends on the user's
+  locale: under `en_US.UTF-8`, GNU sed's `[a-zA-Z]` matches `é`, so the same set
+  keys as `café-1more-…` there and `caf-1more-…` under `C`. Go cannot reproduce
+  glibc's locale ranges, and the function is frozen and used only by the
+  one-time key move, so it is not ported.
+- **The release uses GoReleaser, not hand-run nfpm.** The Distribution section's
+  `nfpm.yaml` and `SHA256SUMS` are superseded. `.goreleaser.yaml` builds the
+  per-arch binaries and packages, and signs `checksums.txt` keylessly with
+  cosign, following `trevor-vaughan/ginkgoleaf`. GoReleaser is pinned at
+  v2.17.0 in the `go.mod` `tool` block, because later v2 releases need a newer
+  Go than the module's 1.26.4 floor. See [riotbox-core.md](../riotbox-core.md).
+- **`setup.sh --no-build` is renamed `--no-image`**, so that `--build`/`--binary`
+  can name how riotbox-core is obtained. The old flag, and its
+  `RIOTBOX_SETUP_NO_BUILD` variable, remain as deprecated aliases.

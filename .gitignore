@@ -13,6 +13,12 @@ docs/superpowers/
 # runs `git add -A`, which would otherwise sweep an entire worktree into a snapshot.
 /.worktrees/
 
+# Built by `task go:build` / install.sh --build; never committed.
+/libexec/riotbox-core
+
+# Task's `sources:` checksum cache.
+.task/
+
 # Test output
 .test-output/
 venom.log

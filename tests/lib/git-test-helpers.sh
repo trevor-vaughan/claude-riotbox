@@ -133,6 +133,8 @@ make_fake_root() {
 	ln -s "${real}/agents" "${root}/agents"
 	ln -s "${real}/libexec/run.sh" "${root}/libexec/run.sh"
 	ln -s "${real}/libexec/checkpoint.sh" "${root}/libexec/checkpoint.sh"
+	ln -s "${real}/libexec/riotbox-core" "${root}/libexec/riotbox-core"
+	ln -s "${real}/VERSION" "${root}/VERSION"
 	cat >"${root}/libexec/launch.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "STUB-LAUNCH reached: $*"

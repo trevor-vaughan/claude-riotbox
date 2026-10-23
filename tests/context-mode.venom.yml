@@ -1384,7 +1384,7 @@ testcases:
   # `riotbox build` runs the Containerfile from the INSTALLED app tree, not from
   # the dev repo, so a COPY source that no install manifest ships resolves for
   # the developer who added it and for nobody else. That is not hypothetical:
-  # the plugin lockfile landed in packaging/ first, which neither nfpm.yaml nor
+  # the plugin lockfile landed in packaging/ first, which neither the packages nor
   # install.sh APP_PATHS installs, and it built green here. With no image build
   # available the packaged tree has to be reconstructed from the manifests and
   # compared against the Containerfile as text — tests/lib/copy-manifest-coverage.sh

@@ -1,0 +1,38 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - copyloopvar
+    - errcheck
+    - ginkgolinter
+    - govet
+    - ineffassign
+    - misspell
+    - revive
+    - staticcheck
+    - unused
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          arguments: ["disableStutteringCheck"]
+        - name: var-naming
+        - name: indent-error-flow
+        - name: errorf
+
+  exclusions:
+    rules:
+      # Ginkgo and Gomega are designed for dot-imports (staticcheck ST1001).
+      - path: _test\.go
+        linters: [staticcheck]
+        text: "ST1001"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

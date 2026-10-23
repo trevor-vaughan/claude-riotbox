@@ -1574,7 +1574,7 @@ ARG CONTEXT_MODE_PLUGIN_SHA=589d8214d56740a28b5f7bf63167743d586b0b40
 ENV RIOTBOX_CM_PLUGIN_DIR=/home/llm/.riotbox/context-mode-plugin
 
 # In container/ rather than packaging/: packaging/ holds nfpm maintainer
-# scripts and is deliberately NOT installed to /opt/riotbox (nfpm.yaml
+# scripts and is deliberately NOT installed to /opt/riotbox (.goreleaser.yaml
 # contents, install.sh APP_PATHS), while `riotbox build` runs from that
 # install tree — so a COPY source there resolves in the dev repo and nowhere
 # else.
