@@ -1,0 +1,41 @@
+cmd/riotbox-core/main.go
+  s_b958b4a741cca7::t_9d5d4d483fac29 32-33,47-49,92-96,108-109
+cmd/riotbox-core/main_test.go
+  s_b958b4a741cca7::t_95d4549ebf2317 241-266,283-306,376-380
+internal/migrate/all.go
+  s_b958b4a741cca7::t_f14ec457121cfe 1-71
+internal/migrate/all_test.go
+  s_b958b4a741cca7::t_ad080525ec7e6f 1-192
+internal/records/records.go
+  s_b958b4a741cca7::t_8a8974c9c6357b 7,100-119
+internal/records/records_test.go
+  s_b958b4a741cca7::t_e7bfa81a7ad77a 215-266
+libexec/list-sessions.sh
+  s_b958b4a741cca7::t_8642323cc8f0e3 21-25
+libexec/remove-session.sh
+  s_b958b4a741cca7::t_c908ece6ba4186 37-41
+libexec/reset-session.sh
+  s_b958b4a741cca7::t_fda84365ea3949 32-36
+scripts/lib/session-state.sh
+  s_b958b4a741cca7::t_7b664cc49a7b24 167-170,176,209-213,215
+scripts/overlay.sh
+  s_b958b4a741cca7::t_1325a79b2d2532 413-415,422-428
+tests/session-commands.venom.yml
+  s_b958b4a741cca7::t_62bbbae940e7a8 532-574
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9a884074628081fbf69f1090f2f968eeba2752ac",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
