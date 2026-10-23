@@ -1,0 +1,62 @@
+internal/migrate/headroom_test.go
+  s_b958b4a741cca7::t_f8104d10b0776d 1-106
+internal/migrate/migrate_test.go
+  s_b958b4a741cca7::t_370675f188c6fc 1-466,468-495
+  s_b958b4a741cca7::t_b8ee84d7195f37 467
+  s_b958b4a741cca7::t_0ef558fbe153bb 496-508
+internal/migrate/migrate_suite_test.go
+  s_b958b4a741cca7::t_dd78aa68660489 1-13
+internal/migrate/headroom.go
+  s_b958b4a741cca7::t_9bc504840c314f 1-108
+internal/migrate/marker.go
+  s_b958b4a741cca7::t_1e760b9ce2ccd6 1-135
+internal/migrate/export_test.go
+  s_b958b4a741cca7::t_07800748d40e6d 1-31
+internal/migrate/migrate.go
+  s_b958b4a741cca7::t_4fcf59ce8b3bc6 1-47,49,51-59,61-104,110-167,169-227,229-279,281-284,286,289-356,360,362-366,368-369,371-372,374-405
+  s_b958b4a741cca7::t_ec62ff486fc321 48
+  s_b958b4a741cca7::t_8146745b8436ef 50
+  s_b958b4a741cca7::t_669f2ea2257f12 60
+  s_b958b4a741cca7::t_6885ba1e55b9fb 105-109
+  s_b958b4a741cca7::t_9e2e06fb83a400 168
+  s_b958b4a741cca7::t_74aebdd6fb8abf 228
+  s_b958b4a741cca7::t_b6ac3e4a8f5254 280
+  s_b958b4a741cca7::t_353b12cb71733d 285
+  s_b958b4a741cca7::t_0976026ffe3461 287-288
+  s_b958b4a741cca7::t_fcb1d69968330a 357-359
+  s_b958b4a741cca7::t_3857152014bd16 361
+  s_b958b4a741cca7::t_125d4341b721e9 367
+  s_b958b4a741cca7::t_477f5670af6e8c 370
+  s_b958b4a741cca7::t_58b154d5691096 373
+internal/migrate/failed_test.go
+  s_b958b4a741cca7::t_f09320a2750b1c 1-126
+  s_b958b4a741cca7::t_5a17b610257238 127
+cmd/riotbox-core/main.go
+  s_b958b4a741cca7::t_410e67264b075e 12,37-45,95-100,148-155
+cmd/riotbox-core/main_test.go
+  s_b958b4a741cca7::t_cb57ff2cf17e5c 185-246,267-272
+scripts/lib/session-state.sh
+  s_b958b4a741cca7::t_92e8da93b8de1b 33,35,120-127,131-133,137-143,147-149,153-159,161-163
+scripts/mount-projects.sh
+  s_b958b4a741cca7::t_cc4e4587fa058c 949-950,952
+tests/lib/session-state-helpers.sh
+  s_b958b4a741cca7::t_fe0a2d313594b0 17-20,127
+tests/session-state.venom.yml
+  s_b958b4a741cca7::t_b278b5ff69bf0f 231,704,1075,1420,1469
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bd9ccdf2efbd37e510be271b4a35cd72541b3366",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
