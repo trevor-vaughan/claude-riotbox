@@ -1,0 +1,22 @@
+tests/lib/libexec-glob-coverage.sh
+  s_b958b4a741cca7::t_baf9f0c372a75e 3-4,15-16,33-37,39-40,42,52
+  s_b958b4a741cca7::t_a67a68af3046e6 38,41,47,60
+tests/riotbox-core.venom.yml
+  s_b958b4a741cca7::t_baf9f0c372a75e 157,177
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fd8c8bde16d0746b7d32b0289e9cfff88b968fff",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
