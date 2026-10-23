@@ -1,0 +1,32 @@
+docs/dev/riotbox-core.md
+  s_b958b4a741cca7::t_7e579115bd6cad 64-66
+tests/lib/fake-release.sh
+  s_b958b4a741cca7::t_cf79dfa0883984 7-11,14-45
+  s_b958b4a741cca7::t_414b160a3d7d3b 46
+tests/install-rootless.venom.yml
+  s_b958b4a741cca7::t_8476dd6a228d52 701,728,759,807,849,871,893,981,1026
+  s_b958b4a741cca7::t_b571cf3171d099 700,702-703,708-710,727,729-730,739-741,758,760-761,785-787,806,808,810,848,850,852,870,872,874,892,894,896,980,982,984,1025,1027,1029
+  s_b958b4a741cca7::t_7e9f846748a3ec 1057-1271
+install.sh
+  s_b958b4a741cca7::t_86d3053604bb09 159-195
+README.md
+  s_b958b4a741cca7::t_688f330c61dd57 81
+THREAT_MODEL.md
+  s_b958b4a741cca7::t_7e579115bd6cad 1101-1105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cc9737be252ac0be91a3fd4f8716e9fb7461a3a1",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
