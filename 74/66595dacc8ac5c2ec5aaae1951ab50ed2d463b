@@ -1,0 +1,57 @@
+.taskfiles/build.yml
+  s_b958b4a741cca7::t_54effac41d84b4 3-5,17-20
+  s_b958b4a741cca7::t_dfe90f055d7a1b 3-5,17-20
+.taskfiles/go.yml
+  s_b958b4a741cca7::t_46971e776612ab 28-35,38-42
+  s_b958b4a741cca7::t_17bec1f30c3be0 28-35,38-42
+.taskfiles/scripts/run-tests.sh
+  s_b958b4a741cca7::t_a5313e1415493b 4-6,54-55,62-68
+  s_b958b4a741cca7::t_2230c5d9e5133f 4-6,54-55,62-68
+  s_b958b4a741cca7::t_88cf467ade7c26 5-6
+  s_b958b4a741cca7::t_edfa29bf184605 68
+.taskfiles/scripts/venom-output.sh
+  s_b958b4a741cca7::t_d15da53aa905d7 1-159
+  s_b958b4a741cca7::t_1a18cc96ab257f 1-159
+  s_b958b4a741cca7::t_edfa29bf184605 21-24,36-40,62-65,100,103,105-111,135-139,144-148,150,153
+.taskfiles/test.yml
+  s_b958b4a741cca7::t_23c2b1b33fa482 14,35,42-50,68,72-80
+  s_b958b4a741cca7::t_b8cf909f2b72d4 14,35,42-50,68,72-80
+README.md
+  s_b958b4a741cca7::t_20216380b8a21d 2067,2075,2079,2084,2092-2095
+  s_b958b4a741cca7::t_94e0f56b163dbd 2067,2075,2079,2084,2092-2095
+Taskfile.yml
+  s_b958b4a741cca7::t_a65336ca1f461b 27-31,56-60,62-63
+  s_b958b4a741cca7::t_e59d80c4464b90 27-31,56-60,62-63
+docs/dev/riotbox-core.md
+  s_b958b4a741cca7::t_421365d2479913 111-112,115
+  s_b958b4a741cca7::t_b841801b8a0bc6 111-112,115
+scripts/venom-run.sh
+  s_b958b4a741cca7::t_8cac9e74900b47 28-30,64
+  s_b958b4a741cca7::t_0c03c29e5f2b94 28-30,64
+tests/container-tasks.venom.yml
+  s_b958b4a741cca7::t_37782645378219 6-11,27,35-37
+  s_b958b4a741cca7::t_0771a1010bca41 6-11,27,35-37
+  s_b958b4a741cca7::t_edfa29bf184605 35
+tests/git-ai.venom.yml
+  s_b958b4a741cca7::t_06c4491110c0a5 451-457,1277-1283
+  s_b958b4a741cca7::t_00035df926d1f9 451-457,1277-1283
+tests/lib/git-test-helpers.sh
+  s_b958b4a741cca7::t_d16df40bb9968c 31-34,36,39
+  s_b958b4a741cca7::t_3f00af87500281 31-34,36,39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "67b42c7aa423a7cdf1e1865c7ef77e759fb15c6d",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
