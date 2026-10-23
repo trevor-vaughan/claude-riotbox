@@ -1,0 +1,21 @@
+internal/lock/lock.go
+  s_b958b4a741cca7::t_2e37b015145651 19-26,35-36
+internal/lock/lock_test.go
+  s_b958b4a741cca7::t_ec76472e4d7836 5,41-44,71-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b420310f882cfaa22f990ea90eac2b5fc27194e8",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
