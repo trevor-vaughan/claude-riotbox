@@ -1,0 +1,21 @@
+internal/egress/pod/sessions_test.go
+  s_d84cf9fa980aeb::t_73bb713eb369b9 1-175
+internal/egress/pod/sessions.go
+  s_d84cf9fa980aeb::t_73bb713eb369b9 1-164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7f03c659b012cd4792eb1d434efcfe7fea050121",
+  "prompts": {},
+  "sessions": {
+    "s_d84cf9fa980aeb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3965b457-f1f1-4e57-95e5-63799cb0a165",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
