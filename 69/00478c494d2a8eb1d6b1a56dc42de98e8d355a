@@ -1,0 +1,39 @@
+cmd/riotbox-core/main.go
+  s_b958b4a741cca7::t_eb80ac272337aa 42,118,229
+cmd/riotbox-core/main_test.go
+  s_b958b4a741cca7::t_eb87e0f73aec8d 130,146-147,154,160-167,170,375-379
+docs/dev/riotbox-core.md
+  s_b958b4a741cca7::t_3a54d87be1baa7 40,76,157,245-249
+internal/display/display.go
+  s_b958b4a741cca7::t_2effa82b65d9c1 3,8,126-139
+internal/display/display_test.go
+  s_b958b4a741cca7::t_e5156a258f8c28 143-157
+internal/engine/engine.go
+  s_b958b4a741cca7::t_51e9ae98ff0bd6 278-282,322,336-338,341,360
+internal/engine/engine_test.go
+  s_b958b4a741cca7::t_75704693105796 64-72,353,363,373,382,389-404,408,414,429,435-447,451
+internal/migrate/headroom.go
+  s_b958b4a741cca7::t_4d341791c04298 25,56
+internal/migrate/key.go
+  s_b958b4a741cca7::t_5fc9e6c368ebd6 173
+internal/migrate/migrate.go
+  s_b958b4a741cca7::t_1ae53c85197073 202,321,346
+scripts/overlay.sh
+  s_b958b4a741cca7::t_893276627e709f 342-343
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6900478c494d2a8eb1d6b1a56dc42de98e8d355a",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
