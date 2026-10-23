@@ -522,8 +522,16 @@ testcases:
           copy_source_tree "{{.riotbox_dir}}" "${FAKE_HOME}/checkout"
           rm -f "${FAKE_HOME}/checkout/libexec/riotbox-core"
           install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
+          # Any earlier warning skips preflight, and whether the host podman
+          # can report its storage driver under a fresh HOME varies by runner.
+          # Report "overlay" so the run always reaches the riotbox-core check.
+          REAL_PODMAN="$(command -v podman)"
+          printf '#!/usr/bin/env bash\n[[ "${1:-}" == info ]] && { echo overlay; exit 0; }\nexec %q "$@"\n' \
+            "${REAL_PODMAN}" >"${FAKE_HOME}/stub/podman"
+          chmod +x "${FAKE_HOME}/stub/podman"
           ANTHROPIC_API_KEY="sk-test-fake-key" HOME="${FAKE_HOME}" "${FAKE_HOME}/checkout/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.systemout ShouldContainSubstring "Final verification"
+          - result.systemout ShouldNotContainSubstring "Skipping preflight"
           - result.systemout ShouldContainSubstring "riotbox-core matches this install"
           - result.systemout ShouldNotContainSubstring "riotbox-core missing or does not match"
