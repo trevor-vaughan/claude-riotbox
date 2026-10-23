@@ -3,8 +3,10 @@ internal/migrate/key_test.go
   s_b958b4a741cca7::t_db036222f57fe0 1-6,447
 cmd/riotbox-core/main.go
   s_b958b4a741cca7::t_b00ca8e8a44799 10,12,32-34,48-51,87-89,91,100-101,149-186
+  s_b958b4a741cca7::t_0a888a5330d2d1 10,12,165-170
 cmd/riotbox-core/main_test.go
   s_b958b4a741cca7::t_573b9105a2f7b4 208-240,257-290,315-325
+  s_b958b4a741cca7::t_6f0a89ee3511b3 269-290
 docs/dev/mount-projects.md
   s_b958b4a741cca7::t_354c40509f87f7 71,73-74
 docs/dev/riotbox-core.md
