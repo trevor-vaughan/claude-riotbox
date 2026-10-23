@@ -1,0 +1,31 @@
+go.mod
+  s_b958b4a741cca7::t_d9784dd44fd55f 1-237
+go.sum
+  s_b958b4a741cca7::t_777c2b23b29a18 1-1013
+internal/sessionkey/sessionkey.go
+  s_b958b4a741cca7::t_e6c0439006d9b0 1-134
+internal/sessionkey/sessionkey_suite_test.go
+  s_b958b4a741cca7::t_ade6d1116d0bf1 1-13
+internal/sessionkey/sessionkey_test.go
+  s_b958b4a741cca7::t_a37196757888d9 1-121
+internal/sessionkey/testdata/gen-keys.sh
+  s_b958b4a741cca7::t_3576c74f421ef7 1-91
+internal/sessionkey/testdata/keys.tsv
+  s_b958b4a741cca7::t_896b862350feb9 1-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "43e91d5e51a66553d7b3ffe9edd859848ea2d70c",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
