@@ -1,0 +1,22 @@
+internal/egress/state/state.go
+  s_d84cf9fa980aeb::t_02afaec98220eb 16,27,90-95,97,104-112,120-123,166,221-224,244-245,257,261,267-278,294,301,309,315-341,343-347,349,356-357,359-362,364-365,367-377,379-380,383-402,409-412,422,429-432,434,440-441,447
+internal/egress/state/state_test.go
+  s_d84cf9fa980aeb::t_9b32eaf8cbaa81 4,9,107-125,235-290,302,304-309,388-389,393-435,464-489
+  s_d84cf9fa980aeb::t_668644a49ddc03 490-492
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e38bed8c9f601b9d407a8214e39684acea605f94",
+  "prompts": {},
+  "sessions": {
+    "s_d84cf9fa980aeb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3965b457-f1f1-4e57-95e5-63799cb0a165",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
