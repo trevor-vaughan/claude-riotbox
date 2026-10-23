@@ -1,0 +1,28 @@
+internal/egress/pod/pod_suite_test.go
+  s_d84cf9fa980aeb::t_75db19ad4bc8c0 1-13
+internal/egress/pod/fake_test.go
+  s_d84cf9fa980aeb::t_75db19ad4bc8c0 1-69
+internal/egress/pod/export_test.go
+  s_d84cf9fa980aeb::t_75db19ad4bc8c0 1-5
+internal/egress/pod/pod.go
+  s_d84cf9fa980aeb::t_c78de0ab587a9f 1-320
+internal/egress/pod/pod_test.go
+  s_d84cf9fa980aeb::t_2aef2d65f69b7f 152-153,160
+  s_d84cf9fa980aeb::t_29e55bdd3692d6 1-151,154-159,161-240
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9e9ab9f238969a0b53890fa0a340542673b09ccb",
+  "prompts": {},
+  "sessions": {
+    "s_d84cf9fa980aeb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3965b457-f1f1-4e57-95e5-63799cb0a165",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
