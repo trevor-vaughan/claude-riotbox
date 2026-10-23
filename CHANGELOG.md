@@ -5,6 +5,25 @@ generated from [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org); do not edit it by hand — run
 `task release:bump` instead.
 
+## [0.7.1] - 2026-10-23
+
+### 🚀 Features
+
+- *(core)* Compute session keys in riotbox-core; build and ship it
+- *(core)* Move session-state migration, locks and key moves to Go
+
+### 💼 Other
+
+- *(task)* Llm venom summary, fmt, full clean and git isolation
+
+### 📚 Documentation
+
+- *(decisions)* Record moving the session core to Go
+
+### 🧪 Testing
+
+- *(setup)* Stub podman info so final verification always runs
+
 ## [0.7.0] - 2026-10-22
 
 ### 🚀 Features
