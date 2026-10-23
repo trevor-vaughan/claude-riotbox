@@ -1,0 +1,27 @@
+docs/dev/riotbox-core.md
+  s_b958b4a741cca7::t_3bfa83cfd5e0c9 70,88-92
+scripts/mount-projects.sh
+  s_b958b4a741cca7::t_3daf840149f128 98
+scripts/overlay.sh
+  s_b958b4a741cca7::t_6446a40cb73c49 333,339-344
+tests/lib/engine-stub/podman
+  s_b958b4a741cca7::t_5887c474a19977 10-12,14
+tests/overlay.venom.yml
+  s_b958b4a741cca7::t_a2966d0a8b727b 3201-3252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "667271fa6fa3987905024f6f355fc29106e55578",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
