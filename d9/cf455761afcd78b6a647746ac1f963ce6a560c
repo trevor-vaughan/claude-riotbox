@@ -1,0 +1,29 @@
+libexec/list-sessions.sh
+  s_b958b4a741cca7::t_5b7bada24796da 21-25
+libexec/remove-session.sh
+  s_b958b4a741cca7::t_fcadb4a177d6a9 37-41
+libexec/reset-session.sh
+  s_b958b4a741cca7::t_a1263c5b196be8 32-36
+scripts/lib/session-state.sh
+  s_b958b4a741cca7::t_006727f291b09c 210-213
+scripts/overlay.sh
+  s_b958b4a741cca7::t_7537c741e28bc1 413-415
+tests/session-commands.venom.yml
+  s_b958b4a741cca7::t_38b7e68506cf8f 532-574
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d9cf455761afcd78b6a647746ac1f963ce6a560c",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
