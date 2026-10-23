@@ -1,0 +1,19 @@
+docs/dev/riotbox-core.md
+  s_b958b4a741cca7::t_124231054156d4 267-278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9a97237bd1b36ea3ab9e17ba0a0c11e63a270e3c",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
