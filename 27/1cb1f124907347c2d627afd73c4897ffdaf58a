@@ -1,0 +1,21 @@
+.github/workflows/release.yml
+  s_b958b4a741cca7::t_e3f0a88debce8a 92-93
+.github/workflows/test.yml
+  s_b958b4a741cca7::t_6d42a3385e633b 72,87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "271cb1f124907347c2d627afd73c4897ffdaf58a",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
