@@ -25,7 +25,9 @@ tasks:
         {{.ROOT_DIR}}/.taskfiles/scripts/*.sh \
         {{.ROOT_DIR}}/agents/*.sh \
         {{.ROOT_DIR}}/agents/*/*.sh \
-        {{.ROOT_DIR}}/tests/lib/*.sh
+        {{.ROOT_DIR}}/tests/lib/*.sh \
+        {{.ROOT_DIR}}/tests/lib/engine-stub/podman \
+        {{.ROOT_DIR}}/internal/sessionkey/testdata/*.sh
 
   hadolint:
     desc: Lint Containerfiles with hadolint
@@ -40,7 +42,8 @@ tasks:
         {{.ROOT_DIR}}/tests/Containerfile.test
 
   run:
-    desc: Run all linters (shellcheck, hadolint)
+    desc: Run all linters (shellcheck, hadolint, golangci-lint)
     cmds:
       - task: shellcheck
       - task: hadolint
+      - task: :go:lint

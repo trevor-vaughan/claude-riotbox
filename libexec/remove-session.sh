@@ -34,6 +34,11 @@ EOF
 	exit 1
 fi
 
+# is_session asks riotbox-core; without a usable binary every dir would read
+# as "not a session". Fail once, saying why, before anything is decided.
+# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+riotbox_core_require || exit 1
+
 # Collect session dirs to remove
 to_remove=()
 

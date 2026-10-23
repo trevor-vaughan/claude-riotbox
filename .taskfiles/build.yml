@@ -1,7 +1,8 @@
 version: "3"
 
-# Image builds, one task per flavor. `task build` is the base image; each
-# other task here is a flavor of it.
+# Image builds, one task per flavor. `build:image` is the base image (the root
+# `build` alias points at it, so `task build` builds it); each other task here
+# is a flavor of it.
 #
 # These are thin on purpose: container.yml owns image operations (build,
 # rebuild, update, clean) and these delegate to it, the same way the root
@@ -13,6 +14,10 @@ version: "3"
 
 tasks:
   default:
+    silent: true
+    cmd: task build --list
+
+  image:
     desc: "Build the RiotBox image (detects your local toolchains)"
     cmds:
       - task: :container:build

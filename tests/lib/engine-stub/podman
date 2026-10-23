@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Stub container engine, run as CONTAINER_CMD by the scripts under test and
+# by riotbox-core. install_stub_engine (tests/lib/engine-stub.sh) points
+# CONTAINER_CMD here and documents the STUB_* variables that drive it. It is
+# named podman because overlay mode refuses any other engine.
+#
+# It lives in the tree rather than in the test's stub dir: /dev/shm, which
+# the whiteout cases use, is mounted noexec. Its call counters are files, so
+# they outlive each call.
+# STUB_RUNNING and the two counter paths are required (install_stub_engine
+# sets them), so -u stops a misconfigured test loudly; every optional
+# STUB_* input is read with a default.
+# shellcheck disable=SC2154 # STUB_RUNNING and the counter paths come from install_stub_engine
+set -euo pipefail
+
+if [[ -n "${STUB_ENGINE_FAIL:-}" ]]; then
+	echo "stub engine: cannot connect" >&2
+	exit 125
+fi
+case "${1:-}" in
+ps)
+	calls=$(($(cat "${STUB_PS_CALLS}" 2>/dev/null || echo 0) + 1))
+	echo "${calls}" >"${STUB_PS_CALLS}"
+	[[ "${calls}" -ge "${STUB_RUNNING_FROM_CALL:-1}" ]] || exit 0
+	[[ " $* " == *" --format {{.ID}} "* ]] || exit 0
+	labelled_only=""
+	[[ " $* " != *" --filter label=riotbox.session "* ]] || labelled_only=1
+	prev="" states=" "
+	for arg in "$@"; do
+		if [[ "${prev}" == --filter && "${arg}" == status=* ]]; then
+			states+="${arg#status=} "
+		fi
+		prev="${arg}"
+	done
+	[[ "${states}" != " " ]] || states=" running "
+	[[ -f "${STUB_RUNNING}" ]] || exit 0
+	# shellcheck disable=SC2312 # sort's status is the stub's, as before
+	while read -r id src rw state label; do
+		[[ -z "${labelled_only}" || "${label:-}" != unlabelled ]] || continue
+		if [[ "${states}" == *" ${state:-running} "* ]]; then
+			printf '%s\n' "${id}"
+		fi
+	done <"${STUB_RUNNING}" | sort -u
+	;;
+container)
+	[[ "${2:-}" == inspect ]] || exit 0
+	calls=$(($(cat "${STUB_INSPECT_CALLS}" 2>/dev/null || echo 0) + 1))
+	echo "${calls}" >"${STUB_INSPECT_CALLS}"
+	if [[ -n "${STUB_INSPECT_FAIL:-}" ]]; then
+		echo "stub engine: permission denied" >&2
+		exit 125
+	fi
+	shift 2
+	[[ "${1:-}" != --format ]] || shift 2
+	for want in "$@"; do
+		[[ " ${STUB_GONE_IDS:-} " == *" ${want} "* ]] || continue
+		if [[ "${STUB_GONE_STYLE:-podman}" == docker ]]; then
+			echo "Error: No such container: ${want}" >&2
+			exit 1
+		fi
+		echo "Error: no such object: \"${want}\"" >&2
+		exit 125
+	done
+	for want in "$@"; do
+		while read -r id src rw state; do
+			if [[ "${id}" == "${want}" ]]; then
+				printf '%s\0%s\0%s\0%s\0' "${id}" "${id}" "${src}" "${rw}"
+			fi
+		done <"${STUB_RUNNING}"
+		printf '\n'
+	done
+	;;
+*) ;;
+esac

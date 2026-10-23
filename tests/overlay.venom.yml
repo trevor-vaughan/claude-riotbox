@@ -3198,3 +3198,55 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "MV_QUOTED_OK"
+
+  # ── the overlay-scan adapter fails closed ───────────────────────────────
+
+  - name: _overlay_scan_sessions fails closed on a failed scan or malformed records
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.overlay_helpers}}"
+          setup_overlay_test
+          tree="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}" "${tree}"' EXIT
+          # A copied tree whose riotbox-core answers overlay-scan with
+          # FAKE_SCAN (a printf format) and exit FAKE_SCAN_RC, and passes
+          # every other verb to the real binary.
+          cp -a "{{.riotbox_dir}}"/{bin,libexec,scripts,agents,VERSION} "${tree}/"
+          mv "${tree}/libexec/riotbox-core" "${tree}/libexec/riotbox-core.real"
+          cat >"${tree}/libexec/riotbox-core" <<'FAKE'
+          #!/usr/bin/env bash
+          if [[ "${1:-}" == overlay-scan ]]; then
+          	# shellcheck disable=SC2059 # the format is the fake's input
+          	printf "${FAKE_SCAN}"
+          	exit "${FAKE_SCAN_RC}"
+          fi
+          exec "$(dirname "$0")/riotbox-core.real" "$@"
+          FAKE
+          chmod +x "${tree}/libexec/riotbox-core"
+          diff_with() {
+              local rc=0
+              FAKE_SCAN="$1" FAKE_SCAN_RC="$2" "${tree}/scripts/overlay.sh" diff "${PROJECT}" >/dev/null 2>"${TEST_DIR}/err" || rc=$?
+              [ "${rc}" -eq 0 ] || { echo "FAIL: $3: diff exited ${rc}"; cat "${TEST_DIR}/err"; exit 1; }
+          }
+          refused() {
+              grep -qF "Note: could not ask" "${TEST_DIR}/err" || { echo "FAIL: $1: the scan was trusted"; cat "${TEST_DIR}/err"; exit 1; }
+              if grep -qF "Note: container" "${TEST_DIR}/err"; then echo "FAIL: $1: a holder was read"; exit 1; fi
+          }
+          # Controls: well-formed records are read, and none means no note.
+          diff_with 'holder\0web\0sharer\0web /x\0' 0 "well-formed"
+          grep -qF "Note: container web mounts the overlay" "${TEST_DIR}/err" || { echo "FAIL: the holder was not read"; cat "${TEST_DIR}/err"; exit 1; }
+          diff_with '' 0 "nothing running"
+          if grep -qF "Note:" "${TEST_DIR}/err"; then echo "FAIL: a note with nothing running"; cat "${TEST_DIR}/err"; exit 1; fi
+          diff_with 'holder\0web\0sharer\0' 0 "odd field count"
+          refused "odd field count"
+          diff_with 'bogus\0web\0' 0 "unknown kind"
+          refused "unknown kind"
+          diff_with 'holder\0web\0' 1 "failed scan"
+          refused "failed scan"
+          echo "SCAN_ADAPTER_FAILS_CLOSED_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SCAN_ADAPTER_FAILS_CLOSED_OK"

@@ -37,83 +37,28 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib/session-state.sh"
 # shellcheck source=scripts/lib/overlay-ignore.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/overlay-ignore.sh"
+# shellcheck source=scripts/lib/riotbox-core.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/riotbox-core.sh"
 
-# session_set_hash <dir>...
-#   Print the first 16 hex characters of the SHA-256 of the canonical form of
-#   a project set: its resolved real paths, sorted bytewise with duplicates
-#   dropped (the set, not the argument list), each followed by a NUL byte. A path cannot hold a NUL, so two different sets never hash
-#   the same input; the session key and a set's container name both carry
-#   this hash, so a set has one identity on disk and at runtime.
-session_set_hash() {
-	# shellcheck disable=SC2312 # sort and cut cannot fail on in-memory input
-	printf '%s\0' "$@" | LC_ALL=C sort -zu | sha256sum | cut -c1-16
-}
-
-# Compute the canonical multi-project identity components.
-#
-# Emits three lines on stdout:
-#   1. first_seg  — basename of the bytewise-first path, every byte outside
-#                   [a-zA-Z0-9_.-] mapped to "-", runs of "-" squeezed and
-#                   leading/trailing "-" stripped (in the C locale, so the
-#                   result does not depend on the user's)
-#   2. n_more     — count of remaining distinct paths after the first
-#   3. hash       — session_set_hash of the paths
-#
-# The container name and session directory basename are both derived from
-# this output. Callers consume the three lines with a grouped `read` block.
+# compute_multi_project_identity <dir>...
+#   Print a set's first_seg, n_more and hash, one per line, for the container
+#   name and the session key. Computed by riotbox-core set-identity; see
+#   docs/dev/riotbox-core.md.
 compute_multi_project_identity() {
-	local -a sorted=()
-	# shellcheck disable=SC2312 # sort failure is impossible on in-memory input
-	mapfile -d '' -t sorted < <(printf '%s\0' "$@" | LC_ALL=C sort -zu)
-
-	local first_seg
-	first_seg="$(basename -- "${sorted[0]}" | LC_ALL=C sed 's/[^a-zA-Z0-9_.-]/-/g; s/--*/-/g; s/^-//; s/-$//')"
-
-	# shellcheck disable=SC2312 # session_set_hash cannot fail on in-memory input
-	printf '%s\n%s\n%s\n' "${first_seg}" "$((${#sorted[@]} - 1))" "$(session_set_hash "$@")"
+	# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+	riotbox_core_require || return 1
+	"${RIOTBOX_CORE}" set-identity -- "$@"
 }
 
 # session_key <dir>...
-#   Print the session key of a resolved project set: a readable prefix, "-",
-#   and session_set_hash. The prefix is the path with "/" mapped to "-" and
-#   the leading "-" dropped for one project ("home-me-src-app"), and
-#   "<first_seg>-<n_more>more" (compute_multi_project_identity) for a set
-#   ("app-2more"); it is only for people reading `riotbox session-list`.
-#   The hash is what makes the key unique per set. The key is capped at 255
-#   bytes (NAME_MAX): a longer single-project prefix loses its front, then
-#   any leading bytes up to the first letter or digit, keeping the leaf; a
-#   set's first_seg loses its end. A path given twice counts once, so the
-#   key depends on the set alone. resolve_projects derives the session dir,
-#   the state dir and (by basename) the container label from this one key.
+#   Print the session key of a resolved project set: one key per set, at most
+#   255 bytes, readable prefix then hash. resolve_projects derives the session
+#   dir, the state dir and the container label from it. Computed by
+#   riotbox-core session-key; see docs/dev/riotbox-core.md.
 session_key() {
-	local LC_ALL=C
-	local hash prefix first_seg n_more suffix max=$((255 - 17))
-	local -a dirs=()
-	# A path named twice is one project: "/a /a" keys as "/a".
-	# shellcheck disable=SC2312 # sort failure is impossible on in-memory input
-	mapfile -d '' -t dirs < <(printf '%s\0' "$@" | sort -zu)
-	set -- "${dirs[@]}"
-	if [[ $# -eq 1 ]]; then
-		prefix="$(printf '%s\n' "$1" | sed 's|/|-|g; s|^-||')"
-		hash="$(session_set_hash "$1")"
-		if [[ "${#prefix}" -gt "${max}" ]]; then
-			prefix="${prefix: -${max}}"
-			prefix="${prefix#"${prefix%%[a-zA-Z0-9]*}"}"
-		fi
-	else
-		# shellcheck disable=SC2312 # compute_multi_project_identity always succeeds for non-empty input
-		{
-			read -r first_seg
-			read -r n_more
-			read -r hash
-		} < <(compute_multi_project_identity "$@")
-		suffix="-${n_more}more"
-		if [[ "$((${#first_seg} + ${#suffix}))" -gt "${max}" ]]; then
-			first_seg="${first_seg:0:$((max - ${#suffix}))}"
-		fi
-		prefix="${first_seg}${suffix}"
-	fi
-	printf '%s\n' "${prefix:+${prefix}-}${hash}"
+	# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+	riotbox_core_require || return 1
+	"${RIOTBOX_CORE}" session-key -- "$@"
 }
 
 # legacy_session_key <dir>...
@@ -125,6 +70,8 @@ session_key() {
 #   "<first_seg>-<n_more>more-<hash8>", hash8 being the first 8 hex of the
 #   SHA-256 of the sorted paths so mangled, joined by "+". Duplicates are
 #   kept, as they were (tests pin v0.5.3's own output).
+#   Stays in bash: its output depends on the user's locale (GNU sed ranges),
+#   which Go cannot reproduce.
 legacy_session_key() {
 	if [[ $# -eq 1 ]]; then
 		printf '%s\n' "$1" | sed 's|/|-|g; s|^-||'
@@ -148,7 +95,7 @@ legacy_session_key() {
 # taken: two launches could both find a name free and then clash on --name,
 # and the window between naming and `run` includes the launch's TTY prompts.
 # Nothing keys off the name — sessions are found by the riotbox.session
-# label and by their mounts (scripts/lib/running-sessions.sh) — so names are
+# label and by their mounts (internal/engine, through riotbox-core) — so names are
 # not deterministic, and two launches of one project or set never share one.
 #
 # Single-project: `riotbox-<basename>-<suffix>`, the basename sanitized to
@@ -159,9 +106,9 @@ legacy_session_key() {
 # part distinct per set — naive basename concatenation overflowed the
 # 64-char cap and the left-truncation that followed silently collapsed
 # distinct project sets that happened to share a trailing run of basenames
-# into one name. It is the session key's hash (session_set_hash): the 8-hex
-# hash of mangled paths it replaced gave sets whose paths differ only by "-"
-# for "/" one name. first_basename is trimmed to fit the cap.
+# into one name. It is the session key's hash (riotbox-core set-identity):
+# the 8-hex hash of mangled paths it replaced gave sets whose paths differ
+# only by "-" for "/" one name. first_basename is trimmed to fit the cap.
 generate_container_name() {
 	local -a dirs=("$@")
 	local max_len=64
@@ -177,12 +124,14 @@ generate_container_name() {
 	local readable suffix="${random}"
 	if [[ ${#dirs[@]} -gt 1 ]]; then
 		local n_more hash
-		# shellcheck disable=SC2312 # compute_multi_project_identity always succeeds for non-empty input
+		local identity
+		# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+		identity="$(compute_multi_project_identity "${dirs[@]}")" || return 1
 		{
 			read -r readable
 			read -r n_more
 			read -r hash
-		} < <(compute_multi_project_identity "${dirs[@]}")
+		} <<<"${identity}"
 		suffix="-${n_more}more-${hash}${random}"
 	else
 		readable="$(basename -- "${dirs[0]}" | sed 's/[^a-zA-Z0-9_.-]/-/g; s/--*/-/g')"
@@ -276,7 +225,8 @@ resolve_projects() {
 	# and the container label all derive from it.
 	local session_key
 	resolve_data_roots
-	session_key="$(session_key "${PROJECT_DIRS[@]}")"
+	# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+	session_key="$(session_key "${PROJECT_DIRS[@]}")" || return 1
 	RIOTBOX_SESSION_DIR="${RIOTBOX_DATA_DIR}/${session_key}"
 	RIOTBOX_STATE_DIR="${RIOTBOX_STATE_ROOT}/${session_key}"
 }
@@ -350,222 +300,38 @@ _record_indent() {
 }
 
 # same_project_set <list> <list>
-#   Exit 0 when two newline-separated path lists name the same set.
+#   Exit 0 when two newline-separated path lists name the same set. Run by
+#   riotbox-core same-project-set (records.SameSet), the one implementation
+#   the key move shares.
 same_project_set() {
-	# shellcheck disable=SC2312 # sort cannot fail on in-memory input
-	[[ "$(printf '%s\n' "$1" | LC_ALL=C sort -u)" == "$(printf '%s\n' "$2" | LC_ALL=C sort -u)" ]]
+	# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+	riotbox_core_require || return 1
+	"${RIOTBOX_CORE}" same-project-set -- "$1" "$2"
 }
 
 # migrate_session_key
 #   The one-time move of PROJECT_DIRS' session from the key an older release
-#   gave it to its own (session_key). Two old keys are tried, in order: the
-#   projects as given (legacy_session_key of PROJECT_DIRS_GIVEN, which keeps
-#   a project named twice twice, as those releases did), then, when that
-#   list had repeats, each project once, so `riotbox /a /a` also finds the
-#   session `riotbox /a` made. Each goes through every rule below on its
-#   own. Once the first has moved both dirs, the second finds the set's own
-#   dirs taken and is left where it is, as any old dir is once they exist;
-#   if the first moved one dir only, the second is held to the "both exist"
-#   rule for it. When the first moved the session in this run and the second
-#   old session's evidence names this set too, one "both exist" warning
-#   names the one left behind. Nothing is ever merged. The move keeps an upgraded
-#   session's Claude copy, state and overlays. Call after resolve_projects,
-#   before anything touches RIOTBOX_SESSION_DIR or RIOTBOX_STATE_DIR. Old
-#   keys were shared by every set whose paths differ only by "-" for "/", so
-#   the old session moves only when it provably belongs to this set:
-#     - the old state dir's record (recorded_projects; host-only) names this
-#       set; or
-#     - it has no record (an older release left it), and the old session
-#       dir's .projects (session_projects) names this set. .projects is
-#       container-written, but it is the only evidence such a session has,
-#       and only a set that shared the old key can reach it, so this binds
-#       nothing the old key did not. A one-line notice says so.
-#   Old and new keys share one namespace: a project whose path ends in
-#   "-<16 hex>" has an old key that can equal another set's current key. So
-#   the .projects fallback is refused, with a warning, when the old key has
-#   that shape: a session under it may be a current one, which a session of
-#   its own could make name this set. A record that exists but cannot be
-#   read is a refusal too, never taken for no record. A session whose
-#   evidence names another set stays where it is, with a warning; one whose
-#   .projects names no readable set is left alone with a one-line notice. No
-#   record is written here: a record lets overlay-accept apply the
-#   session's overlays, and only a launch of the set may grant that
-#   (record_projects).
-#
-#   Each dir moves by one rename (mv -T), only while the new path does not
-#   exist, and the one holding the evidence moves last (the session dir
-#   when it was .projects, else the state dir), so a run that stops between
-#   the two leaves the next run the same evidence to finish the move by.
-#   When both the old and the new path exist, both are left as they are,
-#   with a warning (never merged). Nothing inside a dir is read except
-#   .projects, which session_projects never follows, and an entry that is a
-#   link moves as the link: a planted one inside the session dir is never
-#   followed, and a state dir the user linked to another disk stays linked.
-#   Refuses, failing closed, while a live container can write the old dirs,
-#   labelled or not, since v0.5.3 set no riotbox.session label
-#   (_refuse_if_session_running, running_mount_reaches): it would keep
-#   writing there, and
-#   the overlay commands' running check would no longer see it.
-#
-#   Runs again only while an old dir is left to move and the set's own dir
-#   is missing: once a launch has created the set's session, nothing about
-#   the old key is said again. Commands that create nothing (overlay-diff,
-#   overlay-reject, session-remove by path) repeat their warning until then.
-#   Concurrent calls serialise on the state root's .migrate.lock and
-#   re-check under it. Messages go to stderr. Returns non-zero when a move
-#   or the refusal check fails; the caller must then stop.
+#   gave it to its own (session_key), only when the old session's evidence
+#   shows it is this set's, and never while a container can write it. The
+#   old keys are legacy_session_key of PROJECT_DIRS_GIVEN, which keeps a
+#   project named twice twice, as those releases did, then, when that list
+#   had repeats, of PROJECT_DIRS, so `riotbox /a /a` also finds the session
+#   `riotbox /a` made. Call after resolve_projects, before anything touches
+#   RIOTBOX_SESSION_DIR or RIOTBOX_STATE_DIR. Messages go to stderr. Returns
+#   non-zero when a move or the refusal check fails; the caller must then
+#   stop. Run by riotbox-core migrate-key, under the state root's
+#   .migrate.lock; the rules are in internal/migrate (SessionKey).
 migrate_session_key() {
-	local old_key old_session old_state
-	local -a old_keys=()
-	old_keys+=("$(legacy_session_key "${PROJECT_DIRS_GIVEN[@]}")")
+	local -a legacy=()
+	legacy+=(--legacy-key "$(legacy_session_key "${PROJECT_DIRS_GIVEN[@]}")")
 	if [[ "${#PROJECT_DIRS_GIVEN[@]}" -ne "${#PROJECT_DIRS[@]}" ]]; then
-		old_keys+=("$(legacy_session_key "${PROJECT_DIRS[@]}")")
+		legacy+=(--legacy-key "$(legacy_session_key "${PROJECT_DIRS[@]}")")
 	fi
-	local moved="" owner rc
-	for old_key in "${old_keys[@]}"; do
-		old_session="${RIOTBOX_DATA_DIR}/${old_key}"
-		old_state="${RIOTBOX_STATE_ROOT}/${old_key}"
-		# shellcheck disable=SC2310 # a predicate designed for conditions
-		if ! _key_move_pending "${old_session}" "${RIOTBOX_SESSION_DIR}" &&
-			! _key_move_pending "${old_state}" "${RIOTBOX_STATE_DIR}"; then
-			# An earlier key's session took the set's dirs in this run. One
-			# this set's evidence also names is left behind; say so once.
-			if [[ -n "${moved}" ]] && [[ -d "${old_session}" || -d "${old_state}" ]]; then
-				rc=0
-				# shellcheck disable=SC2310 # its status says which evidence it found
-				owner="$(_old_session_owner "${old_session}" "${old_state}")" || rc=$?
-				# shellcheck disable=SC2312 # printf cannot fail
-				if [[ "${rc}" -le 1 ]] && same_project_set "${owner}" "$(printf '%s\n' "${PROJECT_DIRS[@]}")"; then
-					echo "Warning: both ${old_session} and ${RIOTBOX_SESSION_DIR} hold a session of this project set; left ${old_session} untouched." >&2
-					if [[ -d "${old_state}" ]]; then
-						echo "         RiotBox now uses ${RIOTBOX_SESSION_DIR}. Move anything you need out of ${old_session} and ${old_state}, then delete them." >&2
-					else
-						echo "         RiotBox now uses ${RIOTBOX_SESSION_DIR}. Move anything you need out of ${old_session}, then delete it." >&2
-					fi
-				fi
-			fi
-			continue
-		fi
-		mkdir -p "${RIOTBOX_STATE_ROOT}" || return 1
-		chmod 700 "${RIOTBOX_STATE_ROOT}" || return 1
-		# shellcheck disable=SC2310 # it has already said why it failed
-		_with_migrate_lock "${RIOTBOX_STATE_ROOT}" _migrate_session_key_locked "${old_session}" "${old_state}" || return 1
-		[[ -e "${old_session}" || -L "${old_session}" || -e "${old_state}" || -L "${old_state}" ]] || moved=1
-	done
-}
-
-# _key_move_pending <old> <new>
-#   True when <old> is a directory (or a link to one) and nothing is at <new>.
-_key_move_pending() {
-	[[ -d "$1" ]] && [[ ! -e "$2" && ! -L "$2" ]]
-}
-
-# _old_session_owner <old-session> <old-state>
-#   Print the project set the evidence names for an old-key session, as
-#   migrate_session_key trusts it, and say by the status which evidence:
-#     0  the old state dir's record
-#     1  the old session dir's .projects (no record exists)
-#     2  a record exists but cannot be read (refused)
-#     3  no record and no session dir
-#     4  no record, and the old key has a current key's shape (refused)
-#     5  no record, and .projects names no readable set
-_old_session_owner() {
-	local old_session="$1" old_state="$2"
-	if [[ -e "${old_state}/projects" || -L "${old_state}/projects" ]]; then
-		# shellcheck disable=SC2310 # an unreadable record is a refusal
-		recorded_projects "${old_state}" || return 2
-		return 0
-	fi
-	[[ -d "${old_session}" ]] || return 3
-	[[ ! "${old_session##*/}" =~ -[0-9a-f]{16}$ ]] || return 4
-	# shellcheck disable=SC2310 # an unreadable .projects names no set
-	session_projects "${old_session}" || return 5
-	return 1
-}
-
-# _migrate_session_key_locked <old-session> <old-state>
-#   migrate_session_key's decision and moves; the caller holds the lock.
-_migrate_session_key_locked() {
-	local old_session="$1" old_state="$2" owner how=""
-	# shellcheck disable=SC2310 # a predicate designed for conditions
-	_key_move_pending "${old_session}" "${RIOTBOX_SESSION_DIR}" ||
-		_key_move_pending "${old_state}" "${RIOTBOX_STATE_DIR}" || return 0
-	local rc=0
-	# shellcheck disable=SC2310 # its status says which evidence it found
-	owner="$(_old_session_owner "${old_session}" "${old_state}")" || rc=$?
-	case "${rc}" in
-	0) ;;
-	1) how=" (matched by its .projects: an older RiotBox left no record)" ;;
-	2)
-		echo "Warning: ${old_state}/projects is not a readable project record, so ${old_session} cannot be shown to be this set's; left it in place. This set uses ${RIOTBOX_SESSION_DIR}." >&2
-		return 0
-		;;
-	3)
-		echo "Notice: ${old_state} is under this project set's old key, with no record and no session dir to show whose it is; left it in place. This set uses ${RIOTBOX_STATE_DIR}." >&2
-		return 0
-		;;
-	4)
-		# shellcheck disable=SC2312 # quoting cannot fail
-		{
-			echo "Warning: ${old_session} has no record and a name a current session key can have, so its .projects is not trusted; left it in place. This set uses ${RIOTBOX_SESSION_DIR}."
-			echo "         If it is this set's session (check what ${old_session}/.projects names first), exit every session using it and move it by hand:"
-			printf '           mv -T -- %s\n' "$(quote_words "${old_session}" "${RIOTBOX_SESSION_DIR}")"
-			if [[ -d "${old_state}" ]]; then
-				printf '           mv -T -- %s\n' "$(quote_words "${old_state}" "${RIOTBOX_STATE_DIR}")"
-			fi
-		} >&2
-		return 0
-		;;
-	*)
-		echo "Notice: ${old_session} is under this project set's old key, but its .projects names no readable set; left it in place. This set uses ${RIOTBOX_SESSION_DIR}." >&2
-		return 0
-		;;
-	esac
-	# shellcheck disable=SC2310,SC2312 # a predicate designed for conditions; printf cannot fail
-	if ! same_project_set "${owner}" "$(printf '%s\n' "${PROJECT_DIRS[@]}")"; then
-		{
-			echo "Warning: ${old_session} is the session an older RiotBox kept under this project"
-			echo "         set's old key, but it belongs to another project set; left it in place."
-			echo "         This set uses ${RIOTBOX_SESSION_DIR}. The old session's set:"
-			printf '%s\n' "${owner}" | terminal_clean line | _record_indent
-		} >&2
-		return 0
-	fi
-	# shellcheck disable=SC2310 # it has already said why it refused
-	_refuse_if_session_running "${old_session}" "${old_state}" "RiotBox's move to the new session key" "launch again" || {
-		echo "       Nothing was moved: ${RIOTBOX_SESSION_DIR} gets the session once nothing runs on ${old_session}." >&2
-		return 1
-	}
-	# shellcheck disable=SC2310 # it has already said why it failed
-	if [[ -n "${how}" ]]; then
-		_move_key_dir "${old_state}" "${RIOTBOX_STATE_DIR}" "" || return 1
-		_move_key_dir "${old_session}" "${RIOTBOX_SESSION_DIR}" "${how}"
-	else
-		_move_key_dir "${old_session}" "${RIOTBOX_SESSION_DIR}" "" || return 1
-		_move_key_dir "${old_state}" "${RIOTBOX_STATE_DIR}" ""
-	fi
-}
-
-# _move_key_dir <old> <new> <note>
-#   Rename <old> to <new> for _migrate_session_key_locked, printing a notice
-#   (with <note> appended) when it moved. Nothing to do when <old> is not a
-#   directory; both left, with a warning, when <new> exists. Returns 1, with
-#   the reason, when the rename fails.
-_move_key_dir() {
-	local old="$1" new="$2" note="$3" err
-	[[ -d "${old}" ]] || return 0
-	if [[ -e "${new}" || -L "${new}" ]]; then
-		echo "Warning: both ${old} and ${new} exist; left both untouched." >&2
-		echo "         RiotBox now uses ${new}. Move anything you need out of ${old}, then delete it." >&2
-		return 0
-	fi
-	if ! err="$(mv -T -- "${old}" "${new}" 2>&1)"; then
-		echo "Error: could not move ${old} to ${new}:" >&2
-		printf '%s\n' "${err}" >&2
-		echo "       Fix the cause and run the command again; the next run finishes the move." >&2
-		return 1
-	fi
-	echo "Notice: moved ${old} to ${new}${note}" >&2
+	# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+	riotbox_core_require || return 1
+	"${RIOTBOX_CORE}" migrate-key --lib-dir "${_RIOTBOX_CORE_ROOT}/scripts/lib" \
+		--engine "${CONTAINER_CMD:-podman}" --data-dir "${RIOTBOX_DATA_DIR}" \
+		--state-root "${RIOTBOX_STATE_ROOT}" "${legacy[@]}" -- "${PROJECT_DIRS[@]}"
 }
 
 # overlay_project_names <dir>...
@@ -996,9 +762,10 @@ setup_projects() {
 			# single-project session can have memory left in its checkout.
 			if [[ ${#PROJECT_DIRS[@]} -eq 1 ]]; then
 				# Advisory: a failure to check or record costs the notice
-				# (it may show again), never the launch.
+				# (it may show again), never the launch. It takes the
+				# session's migrate lock itself.
 				# shellcheck disable=SC2310 # its status only picks the warning
-				if ! _with_migrate_lock "${RIOTBOX_STATE_DIR}" notice_project_headroom "${PROJECT_DIRS[0]}" "${RIOTBOX_STATE_DIR}"; then
+				if ! notice_project_headroom "${PROJECT_DIRS[0]}" "${RIOTBOX_STATE_DIR}"; then
 					echo "Warning: could not record that the headroom memory notice was checked; it may show again." >&2
 				fi
 			fi
@@ -1109,7 +876,8 @@ setup_projects() {
 	fi
 
 	# ── Container name ────────────────────────────────────────────────
-	generate_container_name "${PROJECT_DIRS[@]}"
+	# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+	generate_container_name "${PROJECT_DIRS[@]}" || return 1
 }
 
 # Print the resolved mount table in `host:container:mode` form (one per

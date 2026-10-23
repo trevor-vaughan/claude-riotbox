@@ -225,14 +225,19 @@ only the subdirectories that are, and cannot replace a mount source it cannot
 reach. On the host, `scripts/lib/session-state.sh` adds defence in depth:
 `ensure_real_dir` replaces a symlink or non-directory at each source before use.
 
-**Migration is one-time per entry.** `migrate_session_state` moves each legacy
-in-session entry listed in `SESSION_STATE_MIGRATIONS` across with `mv -T`,
+**Migration is one-time per entry.** The state migration (`riotbox-core
+migrate-state`, `internal/migrate`) moves each legacy in-session entry it lists
+across with `mv -T`,
 removing — never following — anything at a legacy path that is not a real
 directory, discarding a moved entry that turns out to be a link (the container
 swapped it after the check), and never merging when both copies exist; for
 `overlay/` it also drops non-directory entries one level down, because each
 `overlay/<name>` is a mount source of its own and `riotbox overlay-reject` would
-otherwise `rm -rf` through a planted link. Each entry is recorded in
+otherwise `rm -rf` through a planted link. If that level cannot be listed (the
+container made it mode 0300, say), the migration fails and leaves the entry
+unrecorded, so a later run cleans it once it can be listed. The bash version
+ignored the failed listing and recorded the entry as done, planted links and
+all. Each entry is recorded in
 `<state>/.migrated` once it has run — moved, or left stranded by a failed move
 or by two existing copies — and no launch or overlay command runs it again, and
 the read-migrate-record pass holds a `flock` on `<state>/.migrate.lock` so
@@ -248,9 +253,9 @@ session could not write.
 recorded as `failed:<name>`; launches and overlay commands only print a notice
 for it while its legacy dir holds anything, and forget it once that dir is
 gone, empty or not a real directory. Only `riotbox session-migrate`, which the
-user runs, retries it, once per run, through the same link-refusing
-`migrate_legacy_state` / `migrate_overlay_state` path, under the same lock; it
-never re-runs an entry recorded as done. Were failed moves retried
+user runs, retries it, once per run, through the same link-refusing move and
+overlay cleanup (`riotbox-core migrate-failed`), under the same lock; it never
+re-runs an entry recorded as done. Were failed moves retried
 automatically, a container could keep an entry's import window open at will:
 making the move fail (for example by making its legacy dir non-writable, which
 `rename(2)` of a directory needs) keeps every later launch retrying, and the
@@ -259,7 +264,7 @@ retry imports is still container-writable content, so the README tells them to
 exit the project's sessions and look at the legacy dir first. The retry also
 refuses while the engine reports a created, running or paused RiotBox container
 with a read-write mount overlapping the session's session or state dir, and when
-the engine cannot answer (the `running_session_mounts` inspection overlay-accept
+the engine cannot answer (the riotbox-core inspection, `internal/engine`, overlay-accept
 uses): it may move the legacy dir and replace an empty new dir, and a running
 session would keep writing into a dir RiotBox no longer uses. The check and the
 `.migrate.lock` it runs under narrow the race with a launch but do not close it:
@@ -292,9 +297,9 @@ which no container can reach.
 
 **Host reads of `.projects` are bounded.** `.projects` is untrusted display
 data: the session can rewrite it to name any directory. `riotbox session-list`
-and the removal summaries read it through `session_projects`: a single
-`dd iflag=nofollow,nonblock` open refuses a link and never blocks on a FIFO, the
-read is capped at 64 KiB, a refused or empty list shows as `(unknown)` (the
+and the removal summaries read it through `session_projects`
+(`riotbox-core session-projects`): a single `O_NOFOLLOW|O_NONBLOCK` open refuses
+a link and never blocks on a FIFO, one read takes at most 64 KiB, a refused or empty list shows as `(unknown)` (the
 removal summary shows the session key instead), and every path is
 printed through `scripts/lib/terminal-clean.jq` (the sanitiser the git-ai report
 uses), which replaces C0 and C1 controls, DEL, the bidi controls (U+061C,
@@ -342,7 +347,8 @@ its paths with `/` mapped to `-`, so `/t/a-b/app` and `/t-a/b/app`, and the
 matching sets, shared one session dir and state dir, mixing their Claude copies,
 Pi history, headroom, git-ai stores and overlays.
 
-Such a session moves to its new key once (`migrate_session_key`), at the first
+Such a session moves to its new key once (`migrate_session_key`, which runs
+`riotbox-core migrate-key`), at the first
 launch, overlay command, `session-remove` or `session-reset` by path, or
 `session-migrate` that resolves its set, and only when it provably belongs to that
 set: the old state dir's host-only record names it, or, when it has no record
@@ -377,12 +383,56 @@ exact key only as one path component, and `resolve_projects` refuses a project
 that resolves to `/`, so `--all` no longer removes a rootless install's app tree
 and no key resolves outside the data dir.
 
+**The migration, the key move and the running check run in `riotbox-core`.**
+The defences above are the bash's, ported with the same messages, return codes
+and resulting trees. Where a mechanism changed, or the port added a check, it
+is listed here with what it does and does not cover
+([docs/dev/riotbox-core.md § Differences from the bash it replaced](docs/dev/riotbox-core.md#differences-from-the-bash-it-replaced)).
+
+- Moves still run `mv -T --`, not `rename(2)` from Go, so the window between
+  the check and the move is the bash's. A legacy dir swapped for a link after
+  the check is moved as the link, and the check after the move discards it.
+  An entry that must go is removed with `unlink(2)`, which removes a link
+  itself and fails, as `rm -f` did, when a directory has been swapped in.
+- Whether a legacy dir holds anything is decided by opening it with
+  `O_DIRECTORY|O_NOFOLLOW`. A FIFO or link swapped in after the `lstat` makes
+  that open fail at once and counts as no data, so it can neither hang every
+  later launch of the session behind `.migrate.lock` nor have a link's target
+  listed. As before, a container can make RiotBox forget a failed entry by
+  emptying or replacing its legacy dir; nothing is imported when it does.
+- A path whose `lstat` fails with anything but "does not exist" (`EACCES` on a
+  parent, say) counts as present, so a move that needs an absent destination
+  refuses. The bash's `[[ -e || -L ]]` took such a path as absent. This only
+  turns some moves into refusals.
+- Names a container chose, the entries under a migrated `overlay/`, are printed
+  through `scripts/lib/terminal-clean.jq` in the migration's warnings and the
+  headroom notice, or as `(name not shown)` when `jq` is missing or fails. The
+  bash printed them raw, so a planted name could send escape sequences to the
+  user's terminal. Paths in paste-ready commands are quoted as
+  `LC_ALL=C printf %q` quotes them.
+- Resolving a path for the running check follows at most 40 links, Linux's
+  `MAXSYMLINKS`, then fails, and the check fails closed. A link that grows the
+  path it expands to (`q -> q/../q`) made GNU `realpath -m` loop forever, so a
+  container with a read-write mount could plant one under a mount source or a
+  session path and hang `session-migrate`, the key move and the overlay
+  commands. They now refuse instead, until the link is removed. No path the
+  kernel can open needs more than 40 links.
+- `riotbox-core migrate-key` refuses a `--legacy-key` that is empty, `.`, `..`
+  or contains `/`, before touching anything. The bash never passes one; the
+  check stops a direct caller of the binary from pointing the move at the data
+  dir itself or outside it.
+- The `.migrate.lock` descriptors Go holds are close-on-exec, so no child
+  process keeps a lock after `riotbox-core` exits, and a `flock` error other
+  than contention fails the command instead of waiting.
+
 `tests/session-state.venom.yml` plants relative, absolute and dangling links at
 every legacy and new path and at `.projects`, and covers the migration record;
 `tests/agents.venom.yml` fails any agent whose `host_sync` mounts from inside
 the session dir; `tests/sync-claude-settings.venom.yml` covers links re-planted
 at Claude's targets; `tests/session-commands.venom.yml` runs the session
 commands against a real rootless install, including planted `.projects` entries.
+The Ginkgo specs in `internal/migrate` give each symlink and race defence of the
+migration and the key move a spec that fails when the defence is removed.
 
 A separate, container-side fix on the same branch: `json_write_atomic`
 (`scripts/lib/json-write.sh`), which the in-container setup scripts use to
@@ -421,7 +471,7 @@ What remains:
   their running sessions see the new copies instead. This is a data-loss and
   availability issue, not a path to the host.
 - **A future migration entry gets one import window.** When a release appends a
-  pair to `SESSION_STATE_MIGRATIONS`, the first launch or overlay command of
+  pair to `entries` in `internal/migrate/migrate.go`, the first launch or overlay command of
   each session after the upgrade imports whatever is at that legacy path — which
   a container may have planted. The same holds for every entry of a session not
   launched since before this release, at its first launch or overlay command
@@ -440,6 +490,11 @@ What remains:
   while deleting leaves the old copy partial); the next run warns once, records
   the entry as done and leaves both, and the session runs on the new copy,
   possibly incomplete, until the user repairs it ([README § Upgrading](README.md#upgrading-from-a-release-that-kept-state-in-the-session-directory)).
+  `riotbox session-migrate` may move over an empty new dir. On one filesystem
+  `rename(2)` refuses if that dir has filled since the check. Across
+  filesystems `mv` removes the empty dir and copies the legacy tree into a new
+  one at that path, so anything written there during the copy ends up mixed
+  with the legacy data. The bash had the same window.
 - **A project that is an ancestor of the data dir exposes all of it.** Choosing
   `$HOME`, `~/.local` or `~/.local/share` as a project bind-mounts
   `riotbox/` and `riotbox-state/` read-write at `/workspace`: every session's
@@ -463,7 +518,8 @@ What remains:
 The overlay upper is the session container's `/mnt/overlay`, so every name, file
 type and link in it is chosen by the session. `riotbox overlay-accept` and
 `riotbox overlay-reject` (`scripts/overlay.sh`) refuse while any created,
-running or paused container can write this overlay dir (releases up to v0.5.3
+running or paused container can write this overlay dir (asked through
+`riotbox-core overlay-scan`) (releases up to v0.5.3
 set no label; a container with the `riotbox.session` label counts when a read-write mount overlaps it either way; any other container only when a read-write mount source is that directory or inside it, so a toolbox or distrobox container mounting `/` does not count), and
 when the engine cannot list or inspect them; any other container with a
 read-write mount overlapping the project, labelled or not (a toolbox mounting
@@ -1072,6 +1128,84 @@ when it removed an entry, and re-emits every other entry unchanged.
 
 **Supply chain.** `gh` and `glab` come from EPEL and carry the distribution's
 signatures, checked by `dnf`, at the cost of trailing upstream by a few releases.
+
+## riotbox-core binary and release signing
+
+`riotbox-core` (`libexec/riotbox-core`) computes session keys, and a key decides
+which session directory, state directory and `riotbox.session` container label a
+launch uses. It also moves and deletes session data (the state migration and
+the key move) and decides whether a running container blocks a host command. A
+substituted binary could point a launch at another project's session, import
+container-written data as trusted state, or let a command change data a running
+container still writes. How the binary arrives depends on the install path.
+
+**Package installs** ship the binary inside the rpm or deb, under the same trust
+as the rest of the package. The packages are not GPG-signed, and installing a
+downloaded file (`dnf install ./riotbox-….rpm`, `apt install ./riotbox_….deb`)
+checks no signature. Their authenticity rests on the user verifying
+`checksums.txt` against `checksums.txt.sigstore.json` with `cosign verify-blob`
+and then the package against `checksums.txt`, as described in
+[docs/dev/riotbox-core.md § Verifying a release by hand](docs/dev/riotbox-core.md#verifying-a-release-by-hand).
+Nothing enforces that step.
+
+**`./install.sh --build`** compiles it from the checkout with the user's own Go
+and `GOTOOLCHAIN=local`, so no toolchain is downloaded. The binary's provenance
+is the checkout's.
+
+**`./install.sh --binary`** downloads the release archive, `checksums.txt` and
+`checksums.txt.sigstore.json` over HTTPS (`curl --proto '=https' --tlsv1.2`).
+Authenticity comes from `cosign verify-blob`, pinned to the identity
+`https://github.com/trevor-vaughan/claude-riotbox/.github/workflows/release.yml@refs/tags/v<VERSION>`
+and GitHub's OIDC issuer. Integrity of the archive comes from its single line in
+the signed `checksums.txt`; a list that names the archive twice is refused.
+Only a regular file named `riotbox-core` is taken from the archive. All of this
+happens in a temporary directory before the app tree is touched, so a failed
+check leaves an existing install as it was. The installer refuses a cosign older
+than 2.6.2 (2.x) or 3.0.4 (3.x): older releases cannot read the bundle format,
+or lack the fix for GHSA-whqx-f9j3-ch6m. `VERSION` must be a semantic version
+before it is put into a URL or an identity. Because `VERSION` changes only in
+release commits, a git checkout must also be exactly the commit tagged
+`v<VERSION>`, with no changes to tracked installed paths or Go sources;
+otherwise a branch past the release would receive that release's binary and
+compute keys by its rules. A tree that is not a git checkout is accepted.
+
+**At run time** the bash refuses a binary whose `version` output is not the
+install's `VERSION` (`scripts/lib/riotbox-core.sh`). That check catches a
+mismatch, not tampering: a local attacker who can replace files in the app tree
+can also replace the bash that does the checking.
+
+**Running riotbox on its own checkout.** A developer who runs `bin/riotbox` from
+a RiotBox checkout and points a read-write session at that same checkout gives
+the container write access to `libexec/riotbox-core`. The file is gitignored, so
+a replacement shows up in no `git status`, and the next host-side command runs
+it. This is the same boundary the bash already has: that container can rewrite
+`bin/riotbox`, `libexec/*.sh` and `scripts/`, which the host also runs. Installed
+trees are out of the container's reach: nothing under `/opt/riotbox` is
+mounted, and of the rootless tree at `$XDG_DATA_HOME/riotbox` only each
+session's own subdirectory is. Use an installed `riotbox`, or
+`RIOTBOX_READONLY=1`, when working on RiotBox itself. `RIOTBOX_OVERLAY=1` only
+defers the write: `overlay-accept` applies the overlay unfiltered, so a replaced
+`libexec/riotbox-core` reaches the checkout on accept unless it is spotted in
+`overlay-diff` first.
+
+**The release workflow is split so the signing identity stays narrow.** The
+OIDC token is available to every step of a job with `id-token: write`, and
+cosign keyless signing accepts it. `.github/workflows/release.yml` therefore
+keeps the `publish` job, which signs, to a short fixed list: the SHA-pinned
+actions `checkout`, `setup-go`, `cosign-installer` and
+`attest-build-provenance`; a syft tarball checked against a sha256 hard-coded in
+the workflow; `.taskfiles/scripts/changelog-section.sh` from this repository;
+and `go tool goreleaser`, pinned in `go.mod` and verified by `go.sum`. It
+releases exactly the pushed tag (`GORELEASER_CURRENT_TAG`). Everything else runs
+in a `gate` job with a read-only token and no OIDC access: the unpinned `task`
+install script, and the lint (golangci-lint, pinned in `go.mod`) and test runs,
+which are there because `publish` does not need them. The `SECURITY` comment
+above `publish` is the authoritative list.
+
+**Residual risk.** Whoever can run this repository's release workflow at a tag
+can publish a validly signed bad binary. The build provenance attestation
+(`gh attestation verify`) records which workflow run built each artifact; it
+does not prevent this.
 
 ## Findings
 

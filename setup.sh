@@ -5,22 +5,44 @@
 # image. Idempotent — safe to re-run; skips what's already done.
 #
 # Options:
-#   --yes       Accept all defaults non-interactively
-#   --no-build  Skip the image build step
+#   --yes       Accept all defaults non-interactively (needs --build or --binary)
+#   --no-image  Skip the image build step (--no-build: deprecated alias)
+#   --build     Get riotbox-core by compiling it here (needs Go)
+#   --binary    Get riotbox-core by downloading the signed release binary
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_YES="${RIOTBOX_SETUP_YES:-}"
-SKIP_BUILD="${RIOTBOX_SETUP_NO_BUILD:-}"
+SKIP_IMAGE="${RIOTBOX_SETUP_NO_IMAGE:-${RIOTBOX_SETUP_NO_BUILD:-}}"
+CORE_FLAG=""
 
 for arg in "$@"; do
 	case "${arg}" in
 	--yes) AUTO_YES=1 ;;
-	--no-build) SKIP_BUILD=1 ;;
-	*) ;;
+	--no-image) SKIP_IMAGE=1 ;;
+	--no-build)
+		SKIP_IMAGE=1
+		echo "Note: --no-build is deprecated; use --no-image."
+		;;
+	--build | --binary)
+		if [[ -n "${CORE_FLAG}" ]]; then
+			echo "ERROR: give exactly one of --build or --binary." >&2
+			exit 1
+		fi
+		CORE_FLAG="${arg}"
+		;;
+	*)
+		echo "ERROR: unknown option: ${arg}" >&2
+		exit 1
+		;;
 	esac
 done
+
+if [[ -n "${AUTO_YES}" ]] && [[ -z "${CORE_FLAG}" ]]; then
+	echo "ERROR: --yes needs --build or --binary: setup will not choose how to get riotbox-core for you." >&2
+	exit 1
+fi
 
 # ── Colors and symbols ───────────────────────────────────────────────────────
 if [[ -t 1 ]] && [[ -z "${AUTO_YES}" ]]; then
@@ -48,7 +70,7 @@ ask_yn() {
 	else
 		printf "  %s [y/N] " "${prompt}"
 	fi
-	read -r answer
+	read -r answer || answer=""
 	answer="${answer:-${default}}"
 	[[ "${answer}" =~ ^[Yy] ]]
 }
@@ -338,17 +360,56 @@ BIN_DIR="${HOME}/.local/bin"
 ENTRYPOINT="${BIN_DIR}/riotbox"
 DATA_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/riotbox"
 
+# An install is current only when the installed tree is this checkout's version
+# and carries a riotbox-core that matches it. The core check runs the installed
+# tree's own library (it resolves paths relative to itself). A tree without that
+# library predates riotbox-core and cannot have a usable binary.
+INSTALL_STALE=""
+INSTALL_LINKED=""
 # shellcheck disable=SC2312 # readlink failure means the symlink is missing; handled by the else branch
 if [[ -L "${ENTRYPOINT}" ]] && [[ "$(readlink -f "${ENTRYPOINT}")" = "${DATA_DIR}/bin/riotbox" ]]; then
+	INSTALL_LINKED=1
+	INSTALLED_VERSION="$(cat "${DATA_DIR}/VERSION" 2>/dev/null)" || INSTALLED_VERSION="unknown"
+	CHECKOUT_VERSION="$(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null)" || CHECKOUT_VERSION="unknown"
+	if [[ ! -f "${DATA_DIR}/scripts/lib/riotbox-core.sh" ]]; then
+		INSTALL_STALE="the installed tree has no riotbox-core support"
+	elif [[ "${INSTALLED_VERSION}" != "${CHECKOUT_VERSION}" ]]; then
+		INSTALL_STALE="installed version ${INSTALLED_VERSION} differs from this checkout's ${CHECKOUT_VERSION}"
+	else
+		# shellcheck source=scripts/lib/riotbox-core.sh
+		# shellcheck disable=SC2310 # riotbox_core_problem prints a reason; its status is not the signal
+		INSTALL_STALE="$(source "${DATA_DIR}/scripts/lib/riotbox-core.sh" && riotbox_core_problem)" ||
+			INSTALL_STALE="could not check the installed riotbox-core"
+	fi
+fi
+
+if [[ -n "${INSTALL_LINKED}" ]] && [[ -z "${INSTALL_STALE}" ]]; then
 	ok "riotbox already installed (${ENTRYPOINT} -> ${DATA_DIR}/bin/riotbox)"
 else
+	if [[ -n "${INSTALL_STALE}" ]]; then
+		warn "riotbox installed but out of date: ${INSTALL_STALE}"
+	fi
 	echo "  This installs the app tree to ${DATA_DIR} and the 'riotbox' command to ${BIN_DIR}/."
 	# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
 	if ask_yn "Install?" "y"; then
-		"${SCRIPT_DIR}/install.sh"
-		ok "riotbox installed (${ENTRYPOINT} -> ${DATA_DIR}/bin/riotbox)"
+		if [[ -z "${CORE_FLAG}" ]]; then
+			printf "  Get riotbox-core by [b]uilding it here (needs Go) or downloading the signed [r]elease binary? [b/r] "
+			read -r core_answer || core_answer=""
+			case "${core_answer}" in
+			b | B) CORE_FLAG=--build ;;
+			r | R) CORE_FLAG=--binary ;;
+			*)
+				fail "No choice made; run ./install.sh --build or --binary when ready."
+				ERRORS=$((ERRORS + 1))
+				;;
+			esac
+		fi
+		if [[ -n "${CORE_FLAG}" ]]; then
+			"${SCRIPT_DIR}/install.sh" "${CORE_FLAG}"
+			ok "riotbox installed (${ENTRYPOINT} -> ${DATA_DIR}/bin/riotbox)"
+		fi
 	else
-		warn "Skipped. Run ./install.sh manually when ready."
+		warn "Skipped. Run ./install.sh --build or --binary when ready."
 		WARNINGS=$((WARNINGS + 1))
 	fi
 fi
@@ -358,8 +419,8 @@ step "6. Build container image"
 
 IMAGE_NAME="${IMAGE_NAME:-riotbox}"
 
-if [[ -n "${SKIP_BUILD}" ]]; then
-	ok "Skipped (--no-build)"
+if [[ -n "${SKIP_IMAGE}" ]]; then
+	ok "Skipped (--no-image)"
 elif [[ -n "${CONTAINER_CMD}" ]] && ${CONTAINER_CMD} inspect "${IMAGE_NAME}" &>/dev/null; then
 	ok "Image '${IMAGE_NAME}' already exists"
 	# shellcheck disable=SC2310 # ask_yn is designed to be tested in if-conditions
@@ -385,10 +446,14 @@ fi
 # ── 7. Final verification ───────────────────────────────────────────────────
 step "7. Final verification"
 
-# Run the same preflight the user gets via `riotbox doctor`. This
-# catches mismatches between the per-step prompts above and the runtime
-# environment (e.g. podman installed but storage.conf still wrong, image
-# build skipped, creds removed mid-setup).
+# Run the same preflight the user gets via `riotbox doctor`, from the INSTALLED
+# tree: the riotbox-core check resolves libexec/ relative to the preflight
+# script, and install.sh puts the binary only in ${DATA_DIR}. Reaching this
+# branch means step 5 left DATA_DIR installed and current (a skipped or failed
+# install raises WARNINGS or ERRORS above). The check catches mismatches
+# between the per-step prompts above and the runtime environment (e.g. podman
+# installed but storage.conf still wrong, image build skipped, creds removed
+# mid-setup).
 #
 # Preflight is skipped when earlier steps already raised ERRORS (the user
 # has unfinished prerequisite work) or WARNINGS (e.g. podman queryable
@@ -400,7 +465,7 @@ if [[ "${ERRORS}" -gt 0 ]]; then
 	warn "Skipping preflight: ${ERRORS} error(s) above must be resolved first."
 elif [[ "${WARNINGS}" -gt 0 ]]; then
 	warn "Skipping preflight: ${WARNINGS} warning(s) above. Re-run setup.sh or \`riotbox doctor\` after addressing them."
-elif "${SCRIPT_DIR}/scripts/preflight.sh"; then
+elif "${DATA_DIR}/scripts/preflight.sh"; then
 	ok "All checks pass — riotbox is ready"
 else
 	rc=$?

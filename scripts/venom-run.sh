@@ -25,7 +25,9 @@
 #   scripts/venom-run.sh --stop-on-failure tests/wrapper.venom.yml
 #   scripts/venom-run.sh --format=json tests/
 #
-# Any additional `venom run` flags pass through unchanged.
+# Any additional `venom run` flags pass through unchanged. TEST_MODE=llm
+# (set by `task test:direct MODE=llm`) swaps the console output for an
+# errors-only summary; see .taskfiles/scripts/venom-output.sh.
 
 set -euo pipefail
 
@@ -59,7 +61,7 @@ done
 cd "${OUTPUT_DIR}"
 
 # shellcheck disable=SC2312  # var assembly — command -v/cat fallbacks are intentional
-venom run \
+"${ROOT_DIR}/.taskfiles/scripts/venom-output.sh" "${OUTPUT_DIR}" venom run \
 	--output-dir=. \
 	--var root="${ROOT_DIR}" \
 	--var riotbox_dir="${ROOT_DIR}" \

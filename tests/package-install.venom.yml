@@ -9,9 +9,11 @@ vars:
 
 # These tests build nothing themselves: they install the already-built
 # packages from dist/ (via `task release:package`) into clean OS containers
-# and assert the install contract. They need a real container runtime, so
-# they run under `task test:direct` (host podman) and skip under `task test`
-# (the test container has no nested runtime).
+# and assert the install contract. dist/ holds one rpm and one deb per
+# architecture, so each install picks the one matching the container's. They
+# need a real container runtime, so they run under `task test:direct` (host
+# podman) and skip under `task test` (the test container has no nested
+# runtime).
 #
 # Each testcase emits a shared, greppable token on BOTH paths — a success
 # token (RPM_OK / CONFIG_NOREPLACE_OK / DEB_OK) when it really runs, or
@@ -32,9 +34,10 @@ testcases:
           "${cc}" run --rm -v "{{.riotbox_dir}}/dist:/dist:ro,Z" \
             quay.io/centos/centos:stream10 bash -c '
               set -e
-              dnf -y install /dist/*.rpm >/dev/null 2>&1
+              dnf -y install /dist/*."$(uname -m)".rpm >/dev/null 2>&1
               test -d /opt/riotbox/libexec
               test -d /opt/riotbox/scripts
+              /opt/riotbox/libexec/riotbox-core version >/dev/null
               test -f /opt/riotbox/Containerfile
               test -L /usr/bin/riotbox
               test -f /etc/riotbox/config
@@ -59,7 +62,7 @@ testcases:
           "${cc}" run --rm -v "{{.riotbox_dir}}/dist:/dist:ro,Z" \
             quay.io/centos/centos:stream10 bash -c '
               set -e
-              dnf -y install /dist/*.rpm >/dev/null 2>&1
+              dnf -y install /dist/*."$(uname -m)".rpm >/dev/null 2>&1
               # %config registration (deterministic — proves config handling):
               rpm -q --configfiles riotbox | grep -qx /etc/riotbox/config
               # noreplace flag present (fflags renders config=c, noreplace=n):
@@ -85,8 +88,9 @@ testcases:
             docker.io/library/debian:stable-slim bash -c '
               set -e
               apt-get update >/dev/null 2>&1
-              apt-get install -y /dist/*.deb >/dev/null 2>&1
+              apt-get install -y /dist/*_"$(dpkg --print-architecture)".deb >/dev/null 2>&1
               test -d /opt/riotbox/libexec
+              /opt/riotbox/libexec/riotbox-core version >/dev/null
               test -L /usr/bin/riotbox
               test -f /etc/riotbox/config
               riotbox version | grep -q riotbox

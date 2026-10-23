@@ -11,6 +11,8 @@ includes:
     taskfile: .taskfiles/test.yml
   release:
     taskfile: .taskfiles/release.yml
+  go:
+    taskfile: .taskfiles/go.yml
 
 vars:
   TEST_DIR: '{{.TEST_DIR | default ".test-output"}}'
@@ -22,6 +24,11 @@ tasks:
     silent: true
     cmd: |
       task --list 2>/dev/null
+  build:
+    desc: "Alias for build:image"
+    cmds:
+      - task: build:image
+
   rebuild:
     desc: "Rebuild from scratch (alias for container:rebuild)"
     cmds:
@@ -33,8 +40,10 @@ tasks:
       - task: container:update
 
   test:
-    desc: "Run integration tests (alias for test:run)"
+    desc: "Run Go suites, then the venom integration suites (MODE=human|llm; venom suite filter via --)"
     cmds:
+      - task: go:build
+      - task: go:test
       - task: test:run
         vars:
           ARGS: "{{.CLI_ARGS}}"
@@ -44,9 +53,14 @@ tasks:
     cmds:
       - task: lint:run
 
+  fmt:
+    desc: "Alias for go:fmt"
+    cmds:
+      - task: go:fmt
+
   clean:
-    desc: Remove build artifacts and test output
-    cmd: rm -rf {{.TEST_DIR}}
+    desc: "Remove build output: test output, dist/, configs/, libexec/riotbox-core and Task's .task/ cache"
+    cmd: rm -rf "{{.TEST_DIR}}" dist configs libexec/riotbox-core .task
 
   check:
     desc: Run all quality gates

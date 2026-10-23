@@ -12,9 +12,11 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "podman"
@@ -25,9 +27,11 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "task"
@@ -38,9 +42,11 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "fuse-overlayfs"
@@ -51,9 +57,11 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "No authentication found"
@@ -64,8 +72,10 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
-          ANTHROPIC_API_KEY="sk-test-fake-key" HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          ANTHROPIC_API_KEY="sk-test-fake-key" HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "ANTHROPIC_API_KEY"
@@ -76,10 +86,12 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
           echo '{"token": "fake"}' > "${FAKE_HOME}/.claude.json"
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OAuth tokens"
@@ -92,9 +104,11 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
           test -f "${FAKE_HOME}/.config/containers/storage.conf"
           grep -q 'fuse-overlayfs' "${FAKE_HOME}/.config/containers/storage.conf"
         assertions:
@@ -106,9 +120,11 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
           conf="${FAKE_HOME}/.config/containers/storage.conf"
           grep -q '^\[storage\]' "${conf}"
           grep -q 'driver = "overlay"' "${conf}"
@@ -123,9 +139,11 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
           test -f "${FAKE_HOME}/.config/containers/containers.conf"
           grep -q 'init = false' "${FAKE_HOME}/.config/containers/containers.conf"
         assertions:
@@ -137,6 +155,8 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/.config/containers"
           cat > "${FAKE_HOME}/.config/containers/storage.conf" <<'TOML'
           [storage]
@@ -147,7 +167,7 @@ testcases:
           mountopt = "metacopy=on"
           TOML
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "storage.conf already configured"
@@ -158,13 +178,15 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/.config/containers"
           cat > "${FAKE_HOME}/.config/containers/containers.conf" <<'TOML'
           [containers]
           init = false
           TOML
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "containers.conf already disables catatonit"
@@ -177,10 +199,12 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           export XDG_DATA_HOME="${FAKE_HOME}/.local/share"
           export XDG_CONFIG_HOME="${FAKE_HOME}/.config"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
           test -L "${FAKE_HOME}/.local/bin/riotbox"
         assertions:
           - result.code ShouldEqual 0
@@ -191,10 +215,12 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           export XDG_DATA_HOME="${FAKE_HOME}/.local/share"
           export XDG_CONFIG_HOME="${FAKE_HOME}/.config"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
           real="$(readlink -f "${FAKE_HOME}/.local/bin/riotbox")"
           test "${real}" = "${XDG_DATA_HOME}/riotbox/bin/riotbox"
           "${FAKE_HOME}/.local/bin/riotbox" version | grep -q "riotbox"
@@ -207,12 +233,14 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           export XDG_DATA_HOME="${FAKE_HOME}/.local/share"
           export XDG_CONFIG_HOME="${FAKE_HOME}/.config"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build >/dev/null 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build >/dev/null 2>&1
           test -L "${FAKE_HOME}/.local/bin/riotbox"
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "riotbox already installed"
@@ -225,12 +253,14 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build >/dev/null 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build >/dev/null 2>&1
           s1="$(sha256sum "${FAKE_HOME}/.config/containers/storage.conf" | awk '{print $1}')"
           c1="$(sha256sum "${FAKE_HOME}/.config/containers/containers.conf" | awk '{print $1}')"
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build >/dev/null 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build >/dev/null 2>&1
           s2="$(sha256sum "${FAKE_HOME}/.config/containers/storage.conf" | awk '{print $1}')"
           c2="$(sha256sum "${FAKE_HOME}/.config/containers/containers.conf" | awk '{print $1}')"
           [ "${s1}" = "${s2}" ] && [ "${c1}" = "${c2}" ]
@@ -239,17 +269,19 @@ testcases:
 
   # -- Build skip tests --
 
-  - name: Exits cleanly with --no-build
+  - name: Exits cleanly with --no-image
     steps:
       - type: exec
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
-          ANTHROPIC_API_KEY="sk-test-fake-key" HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          ANTHROPIC_API_KEY="sk-test-fake-key" HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "Skipped (--no-build)"
+          - result.systemout ShouldContainSubstring "Skipped (--no-image)"
 
   # -- --yes mode tests --
 
@@ -259,9 +291,11 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldNotContainSubstring "Podman storage reset complete"
@@ -272,9 +306,11 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
-          output="$(HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1)"
+          output="$(HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1)"
           if echo "${output}" | grep -qP '\033\['; then
             echo "FAIL output contains ANSI escape sequences"
             exit 1
@@ -292,8 +328,10 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
-          ANTHROPIC_API_KEY="sk-test-fake-key" HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          ANTHROPIC_API_KEY="sk-test-fake-key" HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "Setup complete"
@@ -304,9 +342,196 @@ testcases:
         script: |
           FAKE_HOME="$(mktemp -d)"
           trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
           mkdir -p "${FAKE_HOME}/bin"
           unset ANTHROPIC_API_KEY
-          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "warning(s)"
+
+  - name: --no-build still works and says it is deprecated
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-build --build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "--no-build is deprecated; use --no-image"
+          - result.systemout ShouldContainSubstring "Skipped (--no-image)"
+
+  - name: --yes without --build or --binary is a usage error
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "--yes needs --build or --binary"
+
+  - name: --build and --binary together are refused
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build --binary
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring "exactly one of --build or --binary"
+
+  - name: unknown options are refused instead of ignored
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --frobnicate
+        assertions:
+          - result.code ShouldEqual 1
+          - 'result.systemerr ShouldContainSubstring "unknown option: --frobnicate"'
+
+  - name: interactive install asks how to get riotbox-core
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
+          source "{{.riotbox_dir}}/tests/lib/answer-prompts.sh"
+          # Prompt-driven: the number of y/n questions before the core prompt
+          # depends on host state (fuse-overlayfs, metacopy, podman driver).
+          HOME="${FAKE_HOME}" answer_prompts b "{{.riotbox_dir}}/setup.sh" --no-image
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Get riotbox-core by [b]uilding it here (needs Go) or downloading the signed [r]elease binary?"
+          - result.systemout ShouldContainSubstring "riotbox installed"
+
+  - name: interactive install with an unrecognised core answer fails setup
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/answer-prompts.sh"
+          HOME="${FAKE_HOME}" answer_prompts x "{{.riotbox_dir}}/setup.sh" --no-image
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldContainSubstring "No choice made"
+          - result.systemout ShouldNotContainSubstring "riotbox installed"
+
+  - name: end of input at the core prompt fails setup instead of aborting silently
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --no-image </dev/null 2>&1
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemout ShouldContainSubstring "No choice made"
+
+  # -- Upgrade detection tests --
+
+  - name: re-run on a current install says already installed
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          export XDG_DATA_HOME="${FAKE_HOME}/.local/share"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build >/dev/null 2>&1
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "riotbox already installed"
+          - result.systemout ShouldNotContainSubstring "out of date"
+
+  - name: re-run reinstalls when the installed tree has no riotbox-core
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          export XDG_DATA_HOME="${FAKE_HOME}/.local/share"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build >/dev/null 2>&1
+          rm "${XDG_DATA_HOME}/riotbox/libexec/riotbox-core"
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
+          test -x "${XDG_DATA_HOME}/riotbox/libexec/riotbox-core"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "riotbox installed but out of date"
+          - result.systemout ShouldNotContainSubstring "riotbox already installed"
+
+  - name: re-run reinstalls when the installed VERSION differs from the checkout
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          export XDG_DATA_HOME="${FAKE_HOME}/.local/share"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build >/dev/null 2>&1
+          echo 0.0.1 >"${XDG_DATA_HOME}/riotbox/VERSION"
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
+          cmp "${XDG_DATA_HOME}/riotbox/VERSION" "{{.riotbox_dir}}/VERSION"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "riotbox installed but out of date"
+          - result.systemout ShouldContainSubstring "0.0.1"
+
+  - name: re-run on a pre-core install without the core library reinstalls
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          export XDG_DATA_HOME="${FAKE_HOME}/.local/share"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build >/dev/null 2>&1
+          rm "${XDG_DATA_HOME}/riotbox/scripts/lib/riotbox-core.sh"
+          HOME="${FAKE_HOME}" "{{.riotbox_dir}}/setup.sh" --yes --no-image --build 2>&1
+          test -f "${XDG_DATA_HOME}/riotbox/scripts/lib/riotbox-core.sh"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "riotbox installed but out of date"
+
+  - name: final verification checks the installed riotbox-core, not the checkout
+    steps:
+      - type: exec
+        script: |
+          FAKE_HOME="$(mktemp -d)"
+          trap 'rm -rf "${FAKE_HOME}"' EXIT
+          source "{{.riotbox_dir}}/tests/lib/fake-release.sh"
+          source "{{.riotbox_dir}}/tests/lib/go-stub.sh"
+          # A fresh clone has no libexec/riotbox-core; only the install gets one.
+          copy_source_tree "{{.riotbox_dir}}" "${FAKE_HOME}/checkout"
+          rm -f "${FAKE_HOME}/checkout/libexec/riotbox-core"
+          install_go_stub "${FAKE_HOME}/stub" "{{.riotbox_dir}}/libexec/riotbox-core"
+          # Any earlier warning skips preflight, and whether the host podman
+          # can report its storage driver under a fresh HOME varies by runner.
+          # Report "overlay" so the run always reaches the riotbox-core check.
+          REAL_PODMAN="$(command -v podman)"
+          printf '#!/usr/bin/env bash\n[[ "${1:-}" == info ]] && { echo overlay; exit 0; }\nexec %q "$@"\n' \
+            "${REAL_PODMAN}" >"${FAKE_HOME}/stub/podman"
+          chmod +x "${FAKE_HOME}/stub/podman"
+          ANTHROPIC_API_KEY="sk-test-fake-key" HOME="${FAKE_HOME}" "${FAKE_HOME}/checkout/setup.sh" --yes --no-image --build 2>&1
+        assertions:
+          - result.systemout ShouldContainSubstring "Final verification"
+          - result.systemout ShouldNotContainSubstring "Skipping preflight"
+          - result.systemout ShouldContainSubstring "riotbox-core matches this install"
+          - result.systemout ShouldNotContainSubstring "riotbox-core missing or does not match"

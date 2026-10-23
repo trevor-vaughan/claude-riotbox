@@ -28,9 +28,15 @@ LLM_EMAIL_LEGACY_RIOTBOX="riotbox@local"
 # point GIT_CONFIG_GLOBAL at a throwaway file, ignore system config, and
 # pin signing off so every repo born during the test uses the same safe
 # profile. Call this BEFORE any `git init` so even repo creation is isolated.
+# The profile's identity is the configured user.name/user.email, so the
+# GIT_AUTHOR_*/GIT_COMMITTER_* variables are unset: they outrank config, and
+# the test driver exports them for git isolation. Helpers that need another
+# identity (human_commit, llm_commit, ...) set them per command.
 # Sets/exports: GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM.
+# Unsets: GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME, GIT_COMMITTER_EMAIL.
 setup_git_test_profile() {
 	local base="${1}"
+	unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 	export GIT_CONFIG_GLOBAL="${base}/isolated.gitconfig"
 	export GIT_CONFIG_NOSYSTEM=1
 	# checkpoint.sh derives its backup root from XDG_DATA_HOME (via
@@ -133,6 +139,8 @@ make_fake_root() {
 	ln -s "${real}/agents" "${root}/agents"
 	ln -s "${real}/libexec/run.sh" "${root}/libexec/run.sh"
 	ln -s "${real}/libexec/checkpoint.sh" "${root}/libexec/checkpoint.sh"
+	ln -s "${real}/libexec/riotbox-core" "${root}/libexec/riotbox-core"
+	ln -s "${real}/VERSION" "${root}/VERSION"
 	cat >"${root}/libexec/launch.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "STUB-LAUNCH reached: $*"

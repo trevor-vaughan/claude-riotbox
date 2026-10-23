@@ -14,6 +14,10 @@ source "$(dirname "${BASH_SOURCE[0]}")/engine-stub.sh"
 # shellcheck source=scripts/mount-projects.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../../scripts/mount-projects.sh"
 
+# The legacy names riotbox-core migrates, in order: the plain lines of a
+# fully migrated .migrated (internal/migrate's entries).
+MIGRATED_NAMES=(headroom git-ai .config-opencode .local-share-opencode .pi-agent overlay)
+
 # setup_state_test
 #   Sets: T (canonical temp root), PROJ (a canonical project dir), KEY (its
 #         session key), SESSION (its session dir), STATE (its state dir),
@@ -112,7 +116,6 @@ use_project() {
 #   history, a pending overlay change and a full .migrated in the state dir.
 #   With "record", also the host-only record (record_projects) naming PROJ.
 make_old_session() {
-	local -a names
 	mkdir -p "${OLD_SESSION}/projects" "${OLD_STATE}/git-ai" "${OLD_STATE}/pi-agent/sessions" \
 		"${OLD_STATE}/overlay/project/upper" "${OLD_STATE}/overlay/project/work"
 	printf '%s\n' "${PROJ}" >"${OLD_SESSION}/.projects"
@@ -121,9 +124,7 @@ make_old_session() {
 	echo '{}' >"${OLD_STATE}/git-ai/config.json"
 	echo history >"${OLD_STATE}/pi-agent/sessions/s.jsonl"
 	echo change >"${OLD_STATE}/overlay/project/upper/f.txt"
-	# shellcheck disable=SC2312 # printing a sourced array cannot fail
-	mapfile -t names < <(printf '%s\n' "${SESSION_STATE_MIGRATIONS[@]%%:*}")
-	printf '%s\n' "${names[@]}" >"${OLD_STATE}/.migrated"
+	printf '%s\n' "${MIGRATED_NAMES[@]}" >"${OLD_STATE}/.migrated"
 	if [[ "${1:-}" == record ]]; then
 		printf '%s\n' "${PROJ}" >"${OLD_STATE}/projects"
 	fi

@@ -126,7 +126,7 @@ testcases:
           # Sorted order is alpha < bravo < charlie, so alpha is the first.
           generate_container_name "${BASE}/charlie" "${BASE}/alpha" "${BASE}/bravo"
           echo "NAME=${CONTAINER_NAME}"
-          hash="$(session_set_hash "${BASE}/alpha" "${BASE}/bravo" "${BASE}/charlie")"
+          hash="$(printf '%s\0' "${BASE}/alpha" "${BASE}/bravo" "${BASE}/charlie" | LC_ALL=C sort -zu | sha256sum | cut -c1-16)"
           printf '%s\n' "${CONTAINER_NAME}" | grep -Eqx "riotbox-alpha-2more-${hash}-[0-9a-f]{8}" \
             && echo "SHAPE_OK"
         assertions:
@@ -196,7 +196,7 @@ testcases:
           generate_container_name "${BASE}/${long}" "${BASE}/zulu"
           name="${CONTAINER_NAME}"
           echo "NAME=${name}"
-          hash="$(session_set_hash "${BASE}/${long}" "${BASE}/zulu")"
+          hash="$(printf '%s\0' "${BASE}/${long}" "${BASE}/zulu" | LC_ALL=C sort -zu | sha256sum | cut -c1-16)"
           [ "${#name}" -le 64 ] || { echo "BAD: ${#name} chars" >&2; exit 1; }
           printf '%s\n' "${name}" | grep -Eqx "riotbox-a-very-[a-z-]*-1more-${hash}-[0-9a-f]{8}" \
             || { echo "BAD: prefix, marker, hash or suffix lost" >&2; exit 1; }

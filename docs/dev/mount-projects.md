@@ -52,30 +52,31 @@ the Context Mode ledger are not session-created and stay where they are.
   this file and keep their own `RIOTBOX_STATE_ROOT` default, which is their
   test seam.)
 - A new state subdirectory that replaces something an older release kept in the
-  session dir gets a `<legacy>:<new>` pair appended to `SESSION_STATE_MIGRATIONS`
-  in `scripts/lib/session-state.sh`, in the same commit as the code that reads
-  it. `migrate_session_state` runs each pair once per session and records its
+  session dir gets a pair appended to `entries` in `internal/migrate/migrate.go`
+  (the bash's `SESSION_STATE_MIGRATIONS`), in the same commit as the code that
+  reads it. `migrate_session_state`, an adapter for `riotbox-core
+  migrate-state` (`SessionState`), runs each pair once per session and records its
   legacy name in `<state dir>/.migrated`; a recorded pair never runs again
   automatically, so a new pair's legacy path is imported only at each session's
   first launch or overlay command after the upgrade. The marker is appended one
   line per record: `<name>` when the pair ran, then also `failed:<name>` when it
-  left data stranded (`migrate_legacy_state` returned 2: the move failed, or both
-  copies exist). A pair is failed while its last line is `failed:<name>`; a
-  later `<name>` makes it done. The plain line comes first so a reader that knows
+  left data stranded (the move failed, or both copies exist). A pair is failed
+  while its last line is `failed:<name>`; a later `<name>` makes it done. The plain line comes first so a reader that knows
   only plain names still never retries it. Each call prints a one-line notice
   per already-failed pair whose legacy path is a non-empty real dir, and appends
   `<name>` for one whose legacy path is gone, empty or not a real dir. Only
-  `migrate_failed_state` (`riotbox session-migrate`, `libexec/migrate-session.sh`)
-  retries failed pairs, under the same lock, with `--replace-empty` (an empty
-  real new dir, which the stranding launch went on to create, is moved over)
-  and only after `_refuse_if_session_running` finds no created, running or
+  `migrate_failed_state` (`riotbox session-migrate`, `libexec/migrate-session.sh`,
+  run by `riotbox-core migrate-failed`, `FailedState`) retries failed pairs,
+  under the same lock, and may move over an empty real new dir, which the
+  stranding launch went on to create,
+  and only after `engine.RefuseIfRunning` finds no created, running or
   paused RiotBox container mounting the session or state dir
-  (`running_session_mounts` in `scripts/lib/running-sessions.sh`, shared with
-  overlay-accept/reject; fails closed). That check narrows the race with a
+  (`Scan` in `internal/engine`, shared with overlay-accept/reject and the
+  session-key move; fails closed). That check narrows the race with a
   launch but does not close it: a launch drops `.migrate.lock` after its
   migration pass, well before its container exists. Notices and hints name the projects from the host-only
-  `<state dir>/projects` record (`recorded_projects`, now in
-  `scripts/lib/session-state.sh` with `quote_words`); `member_set_hint` prints
+  `<state dir>/projects` record (`records.Recorded` in Go, `recorded_projects`
+  in bash), quoted as `quote_words` does; `member_set_hint` prints
   the whole-set command for one member of a multi-project set, for the overlay
   commands and session-migrate alike. The pass holds an exclusive flock on `<state dir>/.migrate.lock`
   (separate from the host_sync `.sync.lock`, so the two never nest), because
@@ -84,12 +85,12 @@ the Context Mode ledger are not session-created and stay where they are.
   built and skips it under `RIOTBOX_DRY_RUN=1`.
 - `.migrated` also holds one record that is not a migration:
   `project-headroom-notice`. A single-project launch with `RIOTBOX_HEADROOM=1`
-  writes it, under the same lock, once `notice_project_headroom` has looked
+  writes it, under the same lock, once `notice_project_headroom` (`riotbox-core headroom-notice`) has looked
   for headroom memory an older release left in `<project>/.headroom`. The
   record is written whether or not a notice printed, so the check runs once
   per session. A launch with headroom off writes nothing, so the first
   headroom launch still checks. The migration passes skip the record, since
-  they read only the names in `SESSION_STATE_MIGRATIONS`. The notice is
+  they read only the names in `entries`. The notice is
   advisory: if the check or the record fails, the launch warns and goes on.
 - `resolve_projects` refuses a project that resolves to `/` (compared with
   `-ef`): its key would be empty and its session dir the data dir itself. A
@@ -110,18 +111,30 @@ the session dir itself lies inside the session dir") and the `host_sync` case in
 
 ## Locks, in the order they may be taken
 
-1. `${RIOTBOX_STATE_ROOT}/.migrate.lock`, the state root's: the key move and
-   `riotbox overlays`' session migration.
-2. `<state dir>/.migrate.lock`, the session's: the state migration, the
-   project record, the headroom notice.
-3. `<state dir>/.sync.lock`: a launch's `host_sync`, taken only after 2 is
-   released, so the two never nest.
-4. `<state dir>/.overlay-<name>.lock`: one `overlay-accept` or
+1. `${RIOTBOX_STATE_ROOT}/.migrate.lock`, the state root's. Go only:
+   `riotbox-core migrate-key` holds it for the key move, and
+   `riotbox-core migrate-all` for `riotbox overlays`' session migration,
+   taking 2 for each session inside it.
+2. `<state dir>/.migrate.lock`, the session's. Go holds it for the state
+   migration (`migrate-state`, `migrate-failed`, `migrate-all`) and the
+   headroom notice (`headroom-notice`). Bash holds it for the project record:
+   `setup_projects` wraps `record_projects` in `_with_migrate_lock`
+   (`scripts/lib/session-state.sh`), its only caller.
+3. `<state dir>/.sync.lock`, bash: a launch's `host_sync`, taken only after 2
+   is released, so the two never nest.
+4. `<state dir>/.overlay-<name>.lock`, bash: one `overlay-accept` or
    `overlay-reject` at a time per overlay (`_overlay_locked` in
    `scripts/overlay.sh`). Taken after `resolve_overlay` has released 1 and 2,
    and never held while taking any other; a second command refuses at once
    rather than waiting. Without it, one command could restore or delete the
    other's live `<name>.rejecting.*` dir or accept snapshot.
+
+Go takes the `.migrate.lock` files with `lock.Acquire` (`internal/lock`), an
+exclusive `flock(2)` lock, the kind `flock(1)` takes on the descriptor
+`_with_migrate_lock` opens, so bash and Go holders of one file exclude each
+other. Both try without blocking first and print the same wait message before
+blocking. Go's descriptor is close-on-exec, so a child process such as the `mv`
+it runs cannot keep the lock after `riotbox-core` exits.
 
 Inside a container, the headroom helpers take their own start lock in
 `/tmp/riotbox-headroom-<uid>/proxy.lock`, which is container-local and
@@ -152,8 +165,8 @@ rounds of two parallel runs, which failed 16 of 40 runs without the lock.
 `session_key` is the only derivation of a session's key; `resolve_projects`
 builds `RIOTBOX_SESSION_DIR` and `RIOTBOX_STATE_DIR` from it, and
 `libexec/launch.sh` labels containers `riotbox.session=<basename of the session
-dir>`. The key is a readable prefix plus `-` and `session_set_hash`: the first
-16 hex of the SHA-256 of the real paths, sorted bytewise with duplicates dropped (`LC_ALL=C sort -zu`),
+dir>`. The key is a readable prefix plus `-` and a set hash: the first
+16 hex of the SHA-256 of the real paths, sorted bytewise with duplicates dropped,
 each NUL-terminated. The prefix is the path with `/` mapped to `-` for one
 project and `<first_seg>-<n_more>more` for a set
 (`compute_multi_project_identity`, which a set's container name also uses), and
@@ -163,6 +176,14 @@ never decode a key back into paths, and never re-derive one in a test (call
 `/t/a-b/app` and `/t-a/b/app` shared a session; a set's 8-hex hash was taken
 over those mangled paths and collided the same way.
 
+The computation was bash (`session_set_hash`) until v0.7.0. It now lives in
+`riotbox-core`: `Key`, `Identity` and `SetHash` in `internal/sessionkey`.
+`session_key` and `compute_multi_project_identity` are adapters that check the
+binary matches `VERSION` and call its `session-key` and `set-identity` verbs,
+and they fail rather than print an empty key when it does not. The contract,
+and the one place the Go output differs from v0.7.0's, are in
+[riotbox-core.md](riotbox-core.md).
+
 Container names are not keys. `generate_container_name` gives each launch
 `riotbox-<basename>-<rand8>` (one project) or
 `riotbox-<first_seg>-<n_more>more-<hash>-<rand8>` (a set). The readable part
@@ -171,7 +192,7 @@ digits on every launch. It never asks the engine which names are taken. Two
 concurrent launches could both find a name free and then clash on `--name`,
 since the gap between naming and `run` includes the TTY prompts. So never
 look a session's container up by name: use the `riotbox.session` label, or
-the mounts, as `running_session_mounts` in `scripts/lib/running-sessions.sh`
+the mounts, as `Scan` in `internal/engine` (riotbox-core)
 does. That also catches v0.5.3's unlabelled `riotbox-<dir>` containers.
 
 `legacy_session_key` reproduces those old keys byte for byte, in the user's

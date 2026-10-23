@@ -11,7 +11,8 @@ trigger it again.
 > **Frozen design record.** For how the layout behaves today, read
 > [README § Session state directory](../../../README.md#session-state-directory),
 > [THREAT_MODEL § Session state directory](../../../THREAT_MODEL.md#session-state-directory)
-> and [mount-projects.md](../mount-projects.md).
+> and [mount-projects.md](../mount-projects.md). The migration code this record
+> names in bash now runs in `riotbox-core`: [riotbox-core.md](../riotbox-core.md).
 
 ## The problem
 

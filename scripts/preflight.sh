@@ -55,6 +55,7 @@
 #   23  RIOTBOX_GIT_AI set but invalid, or the image's git-ai does not match
 #       the Containerfile's pinned version
 #   24  flock missing
+#   25  riotbox-core missing, not executable, or not this VERSION
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Strict mode applies only when this file is run as a script. When sourced as
@@ -68,6 +69,8 @@ fi
 PREFLIGHT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/log.sh
 source "${PREFLIGHT_SCRIPT_DIR}/lib/log.sh"
+# shellcheck source=scripts/lib/riotbox-core.sh
+source "${PREFLIGHT_SCRIPT_DIR}/lib/riotbox-core.sh"
 # The registry declares the per-agent verbs; preflight_check_context_mode probes
 # for one of them. Manifests are pure function declarations, so sourcing this is
 # inert for every other check.
@@ -197,6 +200,17 @@ preflight_check_flock() {
 		return 24
 	fi
 	_preflight_report flock ok "${label}"
+	return 0
+}
+
+preflight_check_riotbox_core() {
+	local label="riotbox-core matches this install" problem
+	problem="$(riotbox_core_problem)"
+	if [[ -n "${problem}" ]]; then
+		_preflight_report riotbox_core fail "${label}" 25 "${problem}"
+		return 25
+	fi
+	_preflight_report riotbox_core ok "${label}"
 	return 0
 }
 
@@ -559,6 +573,7 @@ preflight_run() {
 		preflight_check_git
 		preflight_check_jq
 		preflight_check_flock
+		preflight_check_riotbox_core
 		preflight_check_image
 		preflight_check_creds
 		preflight_check_plugins_dir

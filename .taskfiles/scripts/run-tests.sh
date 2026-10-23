@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Run venom tests inside the test container.
-# Required env: from test.yml vars (via task)
+# Required env: from test.yml vars (via task). The GIT_* isolation variables
+# test.yml sets, and venom-output.sh's NO_COLOR, are passed through into the
+# container by name.
 # Arguments: [suite] — specific .venom.yml file (default: all suites)
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
@@ -49,13 +51,21 @@ run_venom() {
 	_container_cmd="$(command -v podman 2>/dev/null || command -v docker 2>/dev/null || echo '')"
 	_expected_version="$(cat "${ROOT_DIR}/VERSION")"
 	# shellcheck disable=SC2086,SC2248  # USERNS_FLAG/INIT_FLAG are empty under docker and USER_FLAG unless TEST_AS_ROOT=1; quoting would pass empty args to `run`
-	${CONTAINER_CMD} run --rm \
+	"${ROOT_DIR}/.taskfiles/scripts/venom-output.sh" "${OUTPUT_DIR}" \
+		${CONTAINER_CMD} run --rm \
 		${USERNS_FLAG} \
 		${INIT_FLAG} \
 		${USER_FLAG} \
 		-v "${ROOT_DIR}:${RIOTBOX_DIR}:ro,z" \
 		-v "${OUTPUT_DIR}:${CONTAINER_OUTPUT_DIR}:rw,z" \
 		-e RIOTBOX_DIR="${RIOTBOX_DIR}" \
+		-e GIT_CONFIG_GLOBAL \
+		-e GIT_CONFIG_SYSTEM \
+		-e GIT_AUTHOR_NAME \
+		-e GIT_AUTHOR_EMAIL \
+		-e GIT_COMMITTER_NAME \
+		-e GIT_COMMITTER_EMAIL \
+		-e NO_COLOR \
 		"${TEST_IMAGE}" \
 		venom run "$@" \
 		--output-dir "${CONTAINER_OUTPUT_DIR}" \

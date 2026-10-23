@@ -20,6 +20,7 @@ they turned out to be wrong.
 | [Should RiotBox author Claude Code's Context Mode wiring, or install upstream's plugin?](context-mode-native-plugin.md) | 2026-08-24 | **Install the plugin** — the authored wiring was inert and nothing could tell |
 | [How should RiotBox add Pi as a third agent?](pi-support.md) | 2026-10-13 | **Natively** — floating core, pinned extensions; memory/QMD deferred |
 | [Where should the state RiotBox mounts into a session live?](session-state-dir.md) | 2026-10-13 | **Beside the session dir**, in a never-mounted `riotbox-state/<key>/` |
+| [Should the session-state and overlay core stay in bash?](session-core-language.md) | 2026-10-22 | **No** — port the core to a Go binary, one subsystem at a time; Ginkgo for its tests |
 
 For how the Context Mode integration actually behaves today, read
 [../context-mode.md](../context-mode.md) instead of any of the four records

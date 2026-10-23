@@ -18,6 +18,11 @@ if [[ -z "${_session_list_check}" ]]; then
 	exit 0
 fi
 
+# is_session asks riotbox-core; without a usable binary every dir would read
+# as "not a session". Fail once, saying why, before anything is decided.
+# shellcheck disable=SC2310 # failure is propagated explicitly; it has already said why
+riotbox_core_require || exit 1
+
 found=0
 for session_dir in "${session_root}"/*/; do
 	[[ -d "${session_dir}" ]] || continue
