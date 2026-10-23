@@ -1,0 +1,25 @@
+Taskfile.yml
+  s_b958b4a741cca7::t_8b95c19f9bea16 51-55
+.taskfiles/go.yml
+  s_b958b4a741cca7::t_8b95c19f9bea16 30-34
+docs/dev/riotbox-core.md
+  s_b958b4a741cca7::t_8b95c19f9bea16 111
+README.md
+  s_b958b4a741cca7::t_8b95c19f9bea16 2079
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8bbb0c67e8a42ee9c4b9e65c6fcbdc6d79770033",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
