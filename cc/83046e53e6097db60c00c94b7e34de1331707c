@@ -1,0 +1,26 @@
+.taskfiles/build.yml
+  s_b958b4a741cca7::t_cbd1b33c6f5d9d 3-5,17-20
+Taskfile.yml
+  s_b958b4a741cca7::t_cbd1b33c6f5d9d 27-31
+tests/container-tasks.venom.yml
+  s_b958b4a741cca7::t_7d6527c4b299ef 37
+  s_b958b4a741cca7::t_af73dfeca99192 6-11,27,35-36
+.taskfiles/test.yml
+  s_b958b4a741cca7::t_cbd1b33c6f5d9d 14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cc83046e53e6097db60c00c94b7e34de1331707c",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
