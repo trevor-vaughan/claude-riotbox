@@ -1,0 +1,116 @@
+.taskfiles/lint.yml
+  h_4db53f42b9be42 29
+README.md
+  h_4db53f42b9be42 78,83,486,2039
+THREAT_MODEL.md
+  h_4db53f42b9be42 228-230,236-240,256-258,267,300-302,350-351,386-427,434-435,474,493-497,521-522,1136-1140
+cmd/riotbox-core/main.go
+  h_4db53f42b9be42 10-11,13-16,23-27,33-61,64-138,144-145,150-151,154-203,211-275
+cmd/riotbox-core/main_test.go
+  h_4db53f42b9be42 5,7,38-44,54-366,379-420
+docs/dev/decisions/session-core-language.md
+  h_4db53f42b9be42 252-274
+docs/dev/decisions/session-state-dir.md
+  h_4db53f42b9be42 14-15
+docs/dev/mount-projects.md
+  h_4db53f42b9be42 55-58,63-64,68-72,74-75,78-79,88,93,114-125,132-138,195
+docs/dev/riotbox-core.md
+  h_4db53f42b9be42 14-31,39-44,52-91,99-103,105-110,112-158,160-163,168-172,179-183,186-197,206-207,221,231-301,351-365,371-374,382
+internal/display/display.go
+  h_4db53f42b9be42 1-139
+internal/display/display_suite_test.go
+  h_4db53f42b9be42 1-25
+internal/display/display_test.go
+  h_4db53f42b9be42 1-157
+internal/engine/engine.go
+  h_4db53f42b9be42 1-390
+internal/engine/engine_suite_test.go
+  h_4db53f42b9be42 1-13
+internal/engine/engine_test.go
+  h_4db53f42b9be42 1-467
+internal/lock/lock.go
+  h_4db53f42b9be42 1-54
+internal/lock/lock_suite_test.go
+  h_4db53f42b9be42 1-13
+internal/lock/lock_test.go
+  h_4db53f42b9be42 1-173
+internal/migrate/all.go
+  h_4db53f42b9be42 1-71
+internal/migrate/all_test.go
+  h_4db53f42b9be42 1-192
+internal/migrate/export_test.go
+  h_4db53f42b9be42 1-35
+internal/migrate/failed_test.go
+  h_4db53f42b9be42 1-127
+internal/migrate/fs.go
+  h_4db53f42b9be42 1-86
+internal/migrate/headroom.go
+  h_4db53f42b9be42 1-103
+internal/migrate/headroom_test.go
+  h_4db53f42b9be42 1-142
+internal/migrate/key.go
+  h_4db53f42b9be42 1-267
+internal/migrate/key_test.go
+  h_4db53f42b9be42 1-447
+internal/migrate/marker.go
+  h_4db53f42b9be42 1-107
+internal/migrate/migrate.go
+  h_4db53f42b9be42 1-413
+internal/migrate/migrate_suite_test.go
+  h_4db53f42b9be42 1-13
+internal/migrate/migrate_test.go
+  h_4db53f42b9be42 1-598
+internal/realpath/realpath.go
+  h_4db53f42b9be42 1-173
+internal/realpath/realpath_suite_test.go
+  h_4db53f42b9be42 1-13
+internal/realpath/realpath_test.go
+  h_4db53f42b9be42 1-159
+internal/records/export_test.go
+  h_4db53f42b9be42 1-5
+internal/records/records.go
+  h_4db53f42b9be42 1-155
+internal/records/records_suite_test.go
+  h_4db53f42b9be42 1-13
+internal/records/records_test.go
+  h_4db53f42b9be42 1-266
+libexec/list-sessions.sh
+  h_4db53f42b9be42 21-25
+libexec/remove-session.sh
+  h_4db53f42b9be42 37-41
+libexec/reset-session.sh
+  h_4db53f42b9be42 32-36
+scripts/lib/riotbox-core.sh
+  h_4db53f42b9be42 5-7
+scripts/lib/session-state.sh
+  h_4db53f42b9be42 33,35,44-45,86-87,122-129,133-135,139-145,149-152,156-162,164-168,172-175,181,196-198,200-202,214-218,220,242-244,246-249
+scripts/mount-projects.sh
+  h_4db53f42b9be42 50,61,98,303-305,307-309,314-323,325-326,328,330-334,765-766,768
+scripts/overlay.sh
+  h_4db53f42b9be42 32,316-317,319-322,325-328,330-331,333-334,337-352,358,414-416,423-429
+tests/lib/engine-stub.sh
+  h_4db53f42b9be42 7-9,11-12,26,39
+tests/lib/engine-stub/podman
+  h_4db53f42b9be42 1-74
+tests/lib/session-state-helpers.sh
+  h_4db53f42b9be42 17-20,127
+tests/overlay.venom.yml
+  h_4db53f42b9be42 3201-3252
+tests/riotbox-core.venom.yml
+  h_4db53f42b9be42 35-62
+tests/session-commands.venom.yml
+  h_4db53f42b9be42 532-574
+tests/session-state.venom.yml
+  h_4db53f42b9be42 231,704,1075,1420,1469
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a249e50499d7ec0261c6bf4a8f7931f6e3b1d520",
+  "prompts": {},
+  "humans": {
+    "h_4db53f42b9be42": {
+      "author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
