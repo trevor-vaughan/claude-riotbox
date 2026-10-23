@@ -4,8 +4,11 @@
   s_b958b4a741cca7::t_17bec1f30c3be0 28-35,38-42
 .taskfiles/scripts/run-tests.sh
   s_b958b4a741cca7::t_2230c5d9e5133f 4-6,54-55,62-68
+  s_b958b4a741cca7::t_88cf467ade7c26 5-6
+  s_b958b4a741cca7::t_edfa29bf184605 68
 .taskfiles/scripts/venom-output.sh
   s_b958b4a741cca7::t_1a18cc96ab257f 1-159
+  s_b958b4a741cca7::t_edfa29bf184605 21-24,36-40,62-65,100,103,105-111,135-139,144-148,150,153
 .taskfiles/test.yml
   s_b958b4a741cca7::t_b8cf909f2b72d4 14,35,42-50,68,72-80
 README.md
@@ -18,6 +21,7 @@ scripts/venom-run.sh
   s_b958b4a741cca7::t_0c03c29e5f2b94 28-30,64
 tests/container-tasks.venom.yml
   s_b958b4a741cca7::t_0771a1010bca41 6-11,27,35-37
+  s_b958b4a741cca7::t_edfa29bf184605 35
 tests/git-ai.venom.yml
   s_b958b4a741cca7::t_00035df926d1f9 451-457,1277-1283
 tests/lib/git-test-helpers.sh
