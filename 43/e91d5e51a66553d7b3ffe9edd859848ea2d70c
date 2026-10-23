@@ -4,10 +4,12 @@ go.sum
   s_b958b4a741cca7::t_777c2b23b29a18 1-1013
 internal/sessionkey/sessionkey.go
   s_b958b4a741cca7::t_e6c0439006d9b0 1-134
+  s_b958b4a741cca7::t_972c56b8535714 30,38,47,58-62,65,78,80
 internal/sessionkey/sessionkey_suite_test.go
   s_b958b4a741cca7::t_ade6d1116d0bf1 1-13
 internal/sessionkey/sessionkey_test.go
   s_b958b4a741cca7::t_a37196757888d9 1-121
+  s_b958b4a741cca7::t_1cfe3aa2502a3d 80-84
 internal/sessionkey/testdata/gen-keys.sh
   s_b958b4a741cca7::t_3576c74f421ef7 1-91
 internal/sessionkey/testdata/keys.tsv
