@@ -1,0 +1,23 @@
+internal/migrate/export_test.go
+  s_b958b4a741cca7::t_1c140fc9135ba7 32-35
+internal/migrate/marker.go
+  s_b958b4a741cca7::t_8244cecb0424cf 5,10,95-110,112-115,118
+internal/migrate/migrate_test.go
+  s_b958b4a741cca7::t_2775de7a92c965 509-537
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a0848a009f16642d339d43918d69a3e67d4d64e0",
+  "prompts": {},
+  "sessions": {
+    "s_b958b4a741cca7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c33f63d1-9190-485e-9ff7-141ac9d9b87d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
