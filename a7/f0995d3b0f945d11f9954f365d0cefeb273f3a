@@ -1,0 +1,59 @@
+tests/egress-e2e.venom.yml
+  s_6add4080ebfdca::t_f9d866d40abb36 131-133
+internal/egress/pod/pod_test.go
+  s_6add4080ebfdca::t_aa2fbe56bc34e1 65
+  s_6add4080ebfdca::t_47e7f2bbf400de 105
+internal/egress/state/state.go
+  s_6add4080ebfdca::t_8e94fdd9f5645f 10,91-92,245-270
+  s_6add4080ebfdca::t_d10af13c728a7b 271
+docs/dev/riotbox-core.md
+  s_6add4080ebfdca::t_b3c5134d53c0dc 89,188,191
+internal/egress/state/state_test.go
+  s_6add4080ebfdca::t_479f5acf5524c9 236-264
+cmd/riotbox-core/egress.go
+  s_6add4080ebfdca::t_f1426c35d65712 56,86-89,91,100-105,113-127,129
+cmd/riotbox-core/main.go
+  s_6add4080ebfdca::t_f1426c35d65712 64,66-67,76-77,166-168
+tests/egress-cli.venom.yml
+  s_6add4080ebfdca::t_13ea2eda8826b1 53,82-108
+  s_6add4080ebfdca::t_8c40a28191916b 109-110
+internal/egress/pod/sessions_test.go
+  s_6add4080ebfdca::t_beeeef5e302c80 103-129
+docs/dev/egress.md
+  s_6add4080ebfdca::t_b3c5134d53c0dc 41-44,147,197-199,201-203
+libexec/egress-lib.sh
+  s_6add4080ebfdca::t_d13d8f02bf17e4 27-30,222,233-235,248,255
+tests/lib/egress-test-helpers.sh
+  s_6add4080ebfdca::t_089f2629d71ca6 52,54-56,58-63,69
+README.md
+  s_6add4080ebfdca::t_b3c5134d53c0dc 1130,1145-1165
+libexec/egress.sh
+  s_6add4080ebfdca::t_b3c5134d53c0dc 19-20,27-29
+internal/egress/pod/sessions.go
+  s_6add4080ebfdca::t_c02c2288143ca4 19-32,38-40,45,47-49,51-69,71,132,253-261
+  s_6add4080ebfdca::t_b4f3fa9868cfab 262
+tests/egress-launch.venom.yml
+  s_6add4080ebfdca::t_f47afb60d0e554 64-84,93,96
+cmd/riotbox-core/egress_test.go
+  s_6add4080ebfdca::t_9228f78ed50da8 270,272-307,311-321
+internal/egress/pod/pod.go
+  s_6add4080ebfdca::t_b9620321a8d488 145-146
+  s_6add4080ebfdca::t_c02c2288143ca4 147-148,183
+  s_6add4080ebfdca::t_959f29042d56b4 184-185
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a7f0995d3b0f945d11f9954f365d0cefeb273f3a",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
