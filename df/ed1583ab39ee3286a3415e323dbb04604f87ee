@@ -1,0 +1,26 @@
+tests/egress-launch.venom.yml
+  s_6add4080ebfdca::t_4061c71164c652 177-188
+libexec/egress-lib.sh
+  s_6add4080ebfdca::t_8f87f665f0e9ad 92-93,97,100
+  s_6add4080ebfdca::t_1b0924c7a6e92d 168-169
+  s_6add4080ebfdca::t_ba673244c251a4 38-41,58-63,84-89,94-96,98-99
+  s_6add4080ebfdca::t_f47d49eed6be2b 45,131
+  s_6add4080ebfdca::t_cd8ee2dd5213d6 119-120,166-167
+  s_6add4080ebfdca::t_3ec1bdc5018d20 121-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dfed1583ab39ee3286a3415e323dbb04604f87ee",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
