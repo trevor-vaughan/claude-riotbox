@@ -1,0 +1,34 @@
+internal/egress/policy/resolve.go
+  s_6add4080ebfdca::t_705d34c85c9227 100,105-115
+  s_6add4080ebfdca::t_38868ff334ba54 116
+cmd/riotbox-core/egress_test.go
+  s_6add4080ebfdca::t_f35ecec1a81cf0 429-505,523-532
+  s_6add4080ebfdca::t_0b9a5b249e2927 506-522
+internal/egress/state/state.go
+  s_6add4080ebfdca::t_115a0074088295 140-142,144,148-162,169,172-199
+tests/egress-cli.venom.yml
+  s_6add4080ebfdca::t_d5d1a318c521b0 230-266
+docs/dev/egress.md
+  s_6add4080ebfdca::t_3f173487269081 232-241
+README.md
+  s_6add4080ebfdca::t_3f173487269081 1208-1211
+cmd/riotbox-core/egress.go
+  s_6add4080ebfdca::t_9abf1058c5e0a2 224-238,269-295
+  s_6add4080ebfdca::t_a4149bd91d7ea8 296-297
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a1004e971f02c52bb21327bb65ae0fa5ad6225ca",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
