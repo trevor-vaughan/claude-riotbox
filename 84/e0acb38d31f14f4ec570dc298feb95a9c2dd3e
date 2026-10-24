@@ -1,0 +1,28 @@
+internal/egress/policy/template_test.go
+  s_6add4080ebfdca::t_dc5433f11ccdf0 44-49,55-60,62-67
+  s_6add4080ebfdca::t_b3173623f5f40a 61
+  s_6add4080ebfdca::t_ba766860af749e 68
+scripts/configs/egress.conf
+  s_6add4080ebfdca::t_dc5433f11ccdf0 19-20
+.goreleaser.yaml
+  s_6add4080ebfdca::t_dc5433f11ccdf0 97
+  s_6add4080ebfdca::t_b3173623f5f40a 98-99
+install.sh
+  s_6add4080ebfdca::t_dc5433f11ccdf0 313
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "84e0acb38d31f14f4ec570dc298feb95a9c2dd3e",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
