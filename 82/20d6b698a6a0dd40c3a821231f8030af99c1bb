@@ -1,0 +1,19 @@
+tests/lib/egress-e2e-helpers.sh
+  s_6add4080ebfdca::t_5dce2ebe8e7b32 77-79,81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8220d6b698a6a0dd40c3a821231f8030af99c1bb",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
