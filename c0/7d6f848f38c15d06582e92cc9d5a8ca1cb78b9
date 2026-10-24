@@ -1,0 +1,23 @@
+tests/egress-prompt.venom.yml
+  s_6add4080ebfdca::t_558566adbbb6e4 93,100-137
+docs/dev/egress.md
+  s_6add4080ebfdca::t_e6906712d53ff2 312-315,368
+scripts/lib/egress-prompt.sh
+  s_6add4080ebfdca::t_8fb67bef3cb8d9 45-51,73-74,119-120,128,144-145,148-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c07d6f848f38c15d06582e92cc9d5a8ca1cb78b9",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
