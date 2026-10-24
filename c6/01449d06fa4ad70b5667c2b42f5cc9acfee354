@@ -1,0 +1,26 @@
+docs/dev/egress.md
+  s_6add4080ebfdca::t_3a8729ba7dba96 114-117
+internal/egress/envoyconfig/envoyconfig_test.go
+  s_6add4080ebfdca::t_5dbf0306c603de 148-154
+THREAT_MODEL.md
+  s_6add4080ebfdca::t_e53ee0ffba7efe 1275-1285
+internal/egress/envoyconfig/envoyconfig.go
+  s_6add4080ebfdca::t_a66338fdc97ff0 143-147
+  s_6add4080ebfdca::t_5f0698ffb25f15 141-142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c601449d06fa4ad70b5667c2b42f5cc9acfee354",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
