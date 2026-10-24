@@ -1,0 +1,34 @@
+tests/egress-launch.venom.yml
+  s_d84cf9fa980aeb::t_36c36e10d02262 1-175,180,182-193
+  s_d84cf9fa980aeb::t_260b2395983195 176-179,181
+tests/lib/egress-test-helpers.sh
+  s_d84cf9fa980aeb::t_36c36e10d02262 1-74
+scripts/venom-run.sh
+  s_d84cf9fa980aeb::t_213e02b79e5769 80
+.taskfiles/scripts/run-tests.sh
+  s_d84cf9fa980aeb::t_e3821ea3dc05f2 86
+  s_d84cf9fa980aeb::t_213e02b79e5769 85
+libexec/launch.sh
+  s_d84cf9fa980aeb::t_6cdbc3a0e2e712 6,65-73,313-321,328
+tests/lib/egress-fake-engine/podman
+  s_d84cf9fa980aeb::t_36c36e10d02262 1-62
+libexec/egress-lib.sh
+  s_d84cf9fa980aeb::t_c73579fc4af213 35-97
+  s_d84cf9fa980aeb::t_29241444ea0b9c 1-34,98-99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "25d64738551eee224bfc3c482a5fedb0d55d25e3",
+  "prompts": {},
+  "sessions": {
+    "s_d84cf9fa980aeb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3965b457-f1f1-4e57-95e5-63799cb0a165",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
