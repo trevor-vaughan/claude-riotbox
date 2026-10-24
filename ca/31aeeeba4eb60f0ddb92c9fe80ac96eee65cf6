@@ -1,0 +1,19 @@
+scripts/configs/egress.conf
+  s_6add4080ebfdca::t_09d0e7df07d911 34-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ca31aeeeba4eb60f0ddb92c9fe80ac96eee65cf6",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
