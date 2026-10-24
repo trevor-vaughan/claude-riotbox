@@ -1,0 +1,25 @@
+internal/egress/policy/groups.go
+  s_6add4080ebfdca::t_29e54771fc5f1b 53-58
+internal/egress/policy/resolve_test.go
+  s_6add4080ebfdca::t_4ebf4a249791be 63
+scripts/configs/egress.conf
+  s_6add4080ebfdca::t_9bb78636609b9d 37
+internal/egress/policy/template_test.go
+  s_6add4080ebfdca::t_4ebf4a249791be 47
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a7c73a823c4339b8c94c27688f307531fab992c7",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
