@@ -1,0 +1,25 @@
+internal/egress/envoyconfig/envoyconfig_test.go
+  s_6add4080ebfdca::t_14b3d7d9c698f6 91,95,99,113,121,129,138,150,160,163,194,205-240
+  s_6add4080ebfdca::t_d7649aa60a161a 241
+internal/egress/state/state.go
+  s_6add4080ebfdca::t_087f714729f61b 227
+internal/egress/envoyconfig/envoyconfig.go
+  s_6add4080ebfdca::t_087f714729f61b 39-42,61-64,74,89,93,137-139,147,178-208
+  s_6add4080ebfdca::t_558d297c1c6b39 209-210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d408c869967994a68d6b6f0c24ce24347e45116e",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
