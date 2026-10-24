@@ -1,0 +1,23 @@
+libexec/egress.sh
+  s_6add4080ebfdca::t_fed5a01556757a 11-14,19,22-32,41-42,53,63,89-101,120-124,127-130,148,152,154-155
+tests/egress-cli.venom.yml
+  s_6add4080ebfdca::t_fed5a01556757a 1,21-23,33-38,199-310
+bin/riotbox
+  s_6add4080ebfdca::t_fed5a01556757a 80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "253e297e91d6241e28857a946a7cb48315172357",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
