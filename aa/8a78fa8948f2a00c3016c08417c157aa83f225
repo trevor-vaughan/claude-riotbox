@@ -1,0 +1,27 @@
+agents/opencode/manifest.sh
+  s_6add4080ebfdca::t_667fa3d697e86f 160-162
+agents/pi/manifest.sh
+  s_6add4080ebfdca::t_81ae881c5de6bc 89-91
+scripts/lib/egress-prompt.sh
+  s_6add4080ebfdca::t_62ab4740412219 28-35,38-40,63,112,142-143,148,153
+  s_6add4080ebfdca::t_81ae881c5de6bc 137-139,154
+  s_6add4080ebfdca::t_8d9654b1669fe6 140
+tests/egress-prompt.venom.yml
+  s_6add4080ebfdca::t_491e5404532d55 10-11,136,165-170,201,208-210,212-215,217-284
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aa8a78fa8948f2a00c3016c08417c157aa83f225",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
