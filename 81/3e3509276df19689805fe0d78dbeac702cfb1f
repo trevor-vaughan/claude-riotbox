@@ -1,0 +1,40 @@
+tests/egress-launch.venom.yml
+  s_6add4080ebfdca::t_9ebebdb18e4c4e 25,31
+tests/lib/egress-fake-engine/podman
+  s_6add4080ebfdca::t_8cccb0312b66e3 6-8,33-36
+docs/dev/egress.md
+  s_6add4080ebfdca::t_4ec2d5234bdd38 31-32,35,49-56,105-114
+internal/egress/pod/pod_test.go
+  s_6add4080ebfdca::t_3e8f3246c62467 304
+  s_6add4080ebfdca::t_e6d32cd03c6e01 21-27,29-30,36-37,79,88-89,93,275-303,305-319,321
+  s_6add4080ebfdca::t_c3c51a7f099d65 320,322
+docs/dev/decisions/egress-proxy.md
+  s_6add4080ebfdca::t_4ec2d5234bdd38 61-72,75
+internal/egress/pod/pod.go
+  s_6add4080ebfdca::t_afa88600107161 3-4,160-163
+  s_6add4080ebfdca::t_4b46cbcf363418 2,12-13,18,155-159,215,242-245,252,259-280,282-283
+  s_6add4080ebfdca::t_3e8f3246c62467 281
+  s_6add4080ebfdca::t_922b506faa8875 5-7,284-285
+THREAT_MODEL.md
+  s_6add4080ebfdca::t_4ec2d5234bdd38 1242-1250,1269
+README.md
+  s_6add4080ebfdca::t_923d3fd776497b 1155-1157
+tests/egress-e2e.venom.yml
+  s_6add4080ebfdca::t_9a744025e7d87b 41,49-52,56-105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "813e3509276df19689805fe0d78dbeac702cfb1f",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
