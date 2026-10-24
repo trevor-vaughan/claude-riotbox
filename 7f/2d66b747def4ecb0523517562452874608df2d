@@ -1,0 +1,21 @@
+cmd/riotbox-core/egress_test.go
+  s_6add4080ebfdca::t_db860bd694f1c4 844-854
+cmd/riotbox-core/egress.go
+  s_6add4080ebfdca::t_75f8cae8120950 503-505,541,544-551
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7f2d66b747def4ecb0523517562452874608df2d",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
