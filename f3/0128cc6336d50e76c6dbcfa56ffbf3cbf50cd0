@@ -1,0 +1,36 @@
+tests/egress-prompt.venom.yml
+  s_6add4080ebfdca::t_9e18cf04f63a28 162-245
+  s_6add4080ebfdca::t_587d92ebe0dfa0 1-161
+scripts/lib/egress-prompt.sh
+  s_6add4080ebfdca::t_e87ca0f7cd84f0 1-110
+agents/pi/manifest.sh
+  s_6add4080ebfdca::t_5b33980fba3bef 89-91,96-97
+agents/claude/manifest.sh
+  s_6add4080ebfdca::t_5b33980fba3bef 101-103,108-109
+agents/opencode/manifest.sh
+  s_6add4080ebfdca::t_5b33980fba3bef 160-163,168-169
+container/entrypoint.sh
+  s_6add4080ebfdca::t_5b33980fba3bef 85-89
+tests/lib/opencode-test-helpers.sh
+  s_6add4080ebfdca::t_9c593c2b502497 104-107
+tests/forge-mcp.venom.yml
+  s_6add4080ebfdca::t_6c1f09651d3b56 13-15
+  s_6add4080ebfdca::t_24acc5cd3bdda6 362
+  s_6add4080ebfdca::t_97944a6753ac9d 978
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f30128cc6336d50e76c6dbcfa56ffbf3cbf50cd0",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
