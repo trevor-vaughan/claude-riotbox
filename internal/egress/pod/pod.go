@@ -27,6 +27,7 @@ import (
 	"unicode"
 
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/envoyconfig"
+	"github.com/trevor-vaughan/claude-riotbox/internal/egress/inject"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/state"
 )
 
@@ -44,6 +45,10 @@ const (
 // RDS dependency have all loaded: the proxy then accepts CONNECTs. The E2E
 // suite starts the pinned image, so a release that rewords it fails CI.
 const readyMarker = "all dependencies initialized. starting workers"
+
+// AgentCACert is where the agent finds the session CA's certificate when
+// the proxy injects keys.
+const AgentCACert = "/run/riotbox-egress/ca.crt"
 
 // networkGone matches the engine's message for a network that is already
 // removed, which Down treats as success (a concurrent Down got there first).
@@ -148,6 +153,10 @@ type UpRequest struct {
 	Projects   []string // the launch's project dirs, saved for riotbox egress list
 	SystemConf string
 	UserConf   string
+	// Credentials are the keys the proxy injects (inject.Decide); none
+	// for a session that injects nothing. With any, Dir must have a
+	// runtime base (state.Dir.WithRuntime).
+	Credentials []inject.Credential
 }
 
 // Up starts the session's proxy and returns the flags the agent's engine
@@ -155,24 +164,38 @@ type UpRequest struct {
 // NET_ADMIN/NET_RAW (with NET_ADMIN a process could route around the
 // proxy), no resolver, the proxy's name mapped to its address in
 // /etc/hosts, the proxy env vars and the session's name
-// (RIOTBOX_EGRESS_SESSION). The internal network has no DNS and the agent
-// no resolv.conf, so no name lookup can leave the agent: some aardvark-dns
-// and CNI versions forward an internal network's queries upstream, a
-// channel past the proxy. NO_PROXY keeps headroom's loopback proxy direct.
+// (RIOTBOX_EGRESS_SESSION). With Credentials, Up first writes the
+// session's secrets (on the runtime tmpfs), CA and record
+// (state.Dir.WriteInjection) — a failure there stops it before any engine
+// call, and a Dir without a runtime base stops it before anything is
+// created — mounts the secrets dir into the proxy alone, and adds to the
+// agent's flags the CA certificate at AgentCACert, NODE_EXTRA_CA_CERTS
+// and RIOTBOX_EGRESS_CA naming it, and each injected variable set to
+// inject.Placeholder. No key is ever on an engine command line, and a
+// failed Up leaves no secrets dir. Without Credentials it removes any a
+// reused session dir holds.
+//
+// The internal network has no DNS and the agent no resolv.conf, so no
+// name lookup can leave the agent: some aardvark-dns and CNI versions
+// forward an internal network's queries upstream, a channel past the
+// proxy. NO_PROXY keeps headroom's loopback proxy direct.
 // Once the proxy is up, when strict mode leaves out any of the agent's own
 // hosts, Up warns on m.Stderr and goes on: the user may mean it. When a
 // step fails, Up removes what it created. That rollback is by name: an
 // object that already carries the session's name would be removed too,
 // which the random suffix on session names makes
 // improbable.
-func (m Manager) Up(r UpRequest) ([]string, error) {
+func (m Manager) Up(r UpRequest) (_ []string, err error) {
 	// The image is a positional engine argument and the state paths are
 	// part of a -v src:dst:opts argument, so neither may be able to change
 	// how the engine parses its command line.
 	if r.Image == "" || strings.HasPrefix(r.Image, "-") || strings.ContainsFunc(r.Image, unicode.IsSpace) {
 		return nil, fmt.Errorf("invalid egress proxy image %q", r.Image)
 	}
-	for _, p := range []string{r.Dir.ConfigDir(), r.Dir.LogDir()} {
+	if len(r.Credentials) > 0 && r.Dir.SecretsDir() == "" {
+		return nil, state.ErrNoRuntimeDir
+	}
+	for _, p := range []string{r.Dir.ConfigDir(), r.Dir.LogDir(), r.Dir.SecretsDir(), r.Dir.CACert()} {
 		if strings.ContainsAny(p, ":,") {
 			return nil, fmt.Errorf("the egress state path %q contains ':' or ','", p)
 		}
@@ -186,6 +209,17 @@ func (m Manager) Up(r UpRequest) ([]string, error) {
 	if err := r.Dir.WriteProjects(r.Projects); err != nil {
 		return nil, err
 	}
+	if err := r.Dir.WriteInjection(r.Credentials, time.Now()); err != nil {
+		return nil, err
+	}
+	// The steps from here to the engine objects can fail too; no key may
+	// stay on disk for the sweep's grace period after they do. A failure
+	// after them rolls back through Down, which removes it as well.
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, r.Dir.RemoveSecrets())
+		}
+	}()
 	resolved, err := r.Dir.Policy(r.SystemConf, r.UserConf)
 	if err != nil {
 		return nil, err
@@ -218,6 +252,10 @@ func (m Manager) Up(r UpRequest) ([]string, error) {
 		"--label", LabelOwnerPID + "=" + strconv.Itoa(r.OwnerPID),
 		"--label", LabelOwnerPIDNS + "=" + pidNamespace(),
 	}
+	var secretsMount []string
+	if len(r.Credentials) > 0 {
+		secretsMount = []string{"-v", r.Dir.SecretsDir() + ":" + envoyconfig.SecretsDir + ":ro,z"}
+	}
 	steps := [][]string{
 		slices.Concat([]string{"network", "create", "--internal", "--disable-dns"}, labels, []string{n.internal}),
 		slices.Concat([]string{"network", "create"}, labels, []string{n.external}),
@@ -227,9 +265,13 @@ func (m Manager) Up(r UpRequest) ([]string, error) {
 			"--network", n.internal + "," + n.external,
 			"--userns=keep-id", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 			"--read-only", "--cap-drop=ALL", "--security-opt", "no-new-privileges",
+			// Envoy holds the injected keys in memory: a crash must not
+			// write them to disk in a core file.
+			"--ulimit", "core=0",
 			"--log-driver=none",
 			"-v", r.Dir.ConfigDir() + ":" + envoyconfig.ConfigDir + ":ro,z",
 			"-v", r.Dir.LogDir() + ":" + envoyconfig.LogDir + ":rw,z",
+		}, secretsMount, []string{
 			"--entrypoint", "/usr/local/bin/envoy",
 			r.Image,
 			"-c", envoyconfig.ConfigDir + "/" + envoyconfig.BootstrapFile,
@@ -255,7 +297,7 @@ func (m Manager) Up(r UpRequest) ([]string, error) {
 	if w := resolved.LockoutWarning(); w != "" {
 		_, _ = fmt.Fprintln(m.Stderr, w)
 	}
-	return []string{
+	flags := []string{
 		"--pod", n.pod,
 		"--network", n.internal,
 		"--cap-drop=NET_ADMIN,NET_RAW",
@@ -266,7 +308,23 @@ func (m Manager) Up(r UpRequest) ([]string, error) {
 		// The agent's prompt section names the session in the allow
 		// command it tells the agent to pass on (scripts/lib/egress-prompt.sh).
 		"-e", "RIOTBOX_EGRESS_SESSION=" + r.Dir.Name(),
-	}, nil
+	}
+	if len(r.Credentials) == 0 {
+		return flags, nil
+	}
+	flags = append(flags,
+		"-v", r.Dir.CACert()+":"+AgentCACert+":ro,z",
+		// Node (Pi) and Bun (Claude Code, opencode) add this to their own
+		// roots; scripts/lib/egress-trust.sh builds, from
+		// RIOTBOX_EGRESS_CA, the bundle curl and Python need. headroom
+		// uses that bundle (SSL_CERT_FILE/REQUESTS_CA_BUNDLE first) and
+		// falls back to this when neither is set.
+		"-e", "NODE_EXTRA_CA_CERTS="+AgentCACert,
+		"-e", "RIOTBOX_EGRESS_CA="+AgentCACert)
+	for _, c := range r.Credentials {
+		flags = append(flags, "-e", c.Env+"="+inject.Placeholder)
+	}
+	return flags, nil
 }
 
 // gatewayIP returns the proxy's address on the internal network, as the
@@ -363,12 +421,15 @@ func printable(s string) string {
 }
 
 // Down removes the session's proxy, pod and networks, each only if
-// present, so it is safe to repeat. The proxy is stopped first, with
-// SIGTERM, so Envoy flushes its access log; with report, Down then says
-// how many requests were denied. It carries on past a failed step and
-// returns every failure. Networks are checked with `network exists` before
-// removal because `network rm --ignore` is missing from older podman.
-func (m Manager) Down(dir state.Dir, report bool) error {
+// present, and then its secrets: under each of runtimes (runtime bases,
+// state.RuntimeBases) or, with none given, under dir's own; and any an
+// earlier release kept in the state dir. So it is safe to repeat. The proxy
+// is stopped first, with SIGTERM, so Envoy flushes its access log; with
+// report, Down then says how many requests were denied. It carries on
+// past a failed step and returns every failure. Networks are checked
+// with `network exists` before removal because `network rm --ignore` is
+// missing from older podman.
+func (m Manager) Down(dir state.Dir, report bool, runtimes ...string) error {
 	n := namesFor(dir.Name())
 	var errs []error
 	if _, err := m.Engine.Output("stop", "--ignore", "--time", "10", n.gateway); err != nil {
@@ -386,6 +447,9 @@ func (m Manager) Down(dir state.Dir, report bool) error {
 			errs = append(errs, err)
 		}
 	}
+	if err := removeSecrets(dir, runtimes); err != nil {
+		errs = append(errs, err)
+	}
 	if report {
 		denied, err := state.CountDenied(dir.AccessLog())
 		switch {
@@ -394,6 +458,19 @@ func (m Manager) Down(dir state.Dir, report bool) error {
 		case denied > 0:
 			_, _ = fmt.Fprintf(m.Stderr, "egress: %d denied request(s), see %s\n", denied, dir.AccessLog())
 		}
+	}
+	return errors.Join(errs...)
+}
+
+// removeSecrets removes dir's secrets under each of runtimes or, with none,
+// under dir's own runtime base (state.Dir.RemoveSecrets).
+func removeSecrets(dir state.Dir, runtimes []string) error {
+	if len(runtimes) == 0 {
+		return dir.RemoveSecrets()
+	}
+	var errs []error
+	for _, rt := range runtimes {
+		errs = append(errs, dir.WithRuntime(rt).RemoveSecrets())
 	}
 	return errors.Join(errs...)
 }

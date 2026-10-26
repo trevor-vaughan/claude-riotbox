@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -135,6 +137,13 @@ func (m Manager) sessions() ([]session, error) {
 	return found, nil
 }
 
+// secretsGrace is how long the state dir of a session no live launch owns
+// keeps its secrets dir before a sweep deletes it; the rest of the dir is
+// kept for Sweep's maxAge. It outlasts any launch's time between writing
+// the secrets and creating the session's first engine object, which can
+// include pulling the proxy image.
+const secretsGrace = time.Hour
+
 // Sweep tears down the egress pods and networks whose launch is gone (its
 // owner PID no longer exists in this PID namespace) and whose agent no
 // longer runs, then deletes the state dirs under root that no session uses
@@ -146,11 +155,19 @@ func (m Manager) sessions() ([]session, error) {
 // container still runs in its pod, or whose pod's containers cannot be
 // listed: a launch killed with SIGKILL leaves its agent running.
 //
+// It also deletes the secrets of every state dir no live session uses
+// that saw no use for secretsGrace, so a session whose engine objects are
+// gone does not keep its keys for maxAge: those under each of runtimes
+// (the runtime bases, state.RuntimeBases; none when there is none) and
+// those an earlier release kept in the state dir. A session dir under a
+// runtime base whose state dir is gone is deleted once it is
+// secretsGrace old.
+//
 // A session name reused by a new launch (names end in 32 random bits)
 // whose old state dir is older than maxAge could be removed between
 // Create and Up's log reset. That is accepted: names collide with
 // negligible probability.
-func (m Manager) Sweep(root string, maxAge time.Duration, now time.Time) error {
+func (m Manager) Sweep(root string, runtimes []string, maxAge time.Duration, now time.Time) error {
 	found, err := m.sessions()
 	if err != nil {
 		return err
@@ -183,7 +200,7 @@ func (m Manager) Sweep(root string, maxAge time.Duration, now time.Time) error {
 		}
 		dir, err := state.Open(root, s.name)
 		if err == nil {
-			err = m.Down(dir, false)
+			err = m.Down(dir, false, runtimes...)
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("tearing down the orphaned egress session %s: %w", s.name, err))
@@ -194,14 +211,62 @@ func (m Manager) Sweep(root string, maxAge time.Duration, now time.Time) error {
 	}
 	// Stale reports the names it could judge even when some entry could
 	// not be examined; act on those and report the rest.
-	stale, err := state.Stale(root, live, maxAge, now)
-	if err != nil {
-		errs = append(errs, err)
+	stale, staleErr := state.Stale(root, live, maxAge, now)
+	if staleErr != nil {
+		errs = append(errs, staleErr)
 	}
 	for _, name := range stale {
 		dir, err := state.Open(root, name)
 		if err == nil {
+			err = removeSecrets(dir, runtimes)
+		}
+		if err == nil {
 			err = dir.Remove()
+		}
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	idle, err := state.Stale(root, live, secretsGrace, now)
+	// Both scans fail on the same entries; report them once.
+	if err != nil && staleErr == nil {
+		errs = append(errs, err)
+	}
+	for _, name := range idle {
+		if slices.Contains(stale, name) {
+			continue // removed whole above
+		}
+		dir, err := state.Open(root, name)
+		if err == nil {
+			err = removeSecrets(dir, runtimes)
+		}
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, runtime := range runtimes {
+		errs = append(errs, sweepRuntime(root, runtime, live, now))
+	}
+	return errors.Join(errs...)
+}
+
+// sweepRuntime deletes the secrets under runtime of each session dir there
+// that live does not name, that is secretsGrace old, and whose state dir
+// under root is gone (its launch crashed and a sweep removed the rest).
+// Those whose state dir remains are Sweep's idle check's to judge.
+func sweepRuntime(root, runtime string, live map[string]bool, now time.Time) error {
+	orphans, err := state.Stale(runtime, live, secretsGrace, now)
+	errs := []error{err}
+	for _, name := range orphans {
+		dir, err := state.Open(root, name)
+		if err == nil {
+			_, err = os.Lstat(dir.Path())
+			if err == nil {
+				continue
+			}
+			if errors.Is(err, fs.ErrNotExist) {
+				err = dir.WithRuntime(runtime).RemoveSecrets()
+			}
 		}
 		if err != nil {
 			errs = append(errs, err)

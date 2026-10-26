@@ -12,7 +12,9 @@ EGRESS_REPO_ROOT="$(cd "${_EGRESS_HELPERS_DIR}/../.." && pwd)"
 #   <tmp>, and the fake engine on PATH and in CONTAINER_CMD as <engine-name>
 #   (default podman). Unset the RiotBox and proxy settings a developer's
 #   own session exports (it runs headroom-wrapped with Context Mode env), so
-#   only what a test sets applies.
+#   only what a test sets applies. Unset too: every provider key and base
+#   URL, and the CA variables, so a developer's or CI's own keys never reach
+#   a test.
 #   Exports: HOME XDG_CONFIG_HOME XDG_DATA_HOME RIOTBOX_SYSCONF_DIR PATH
 #            CONTAINER_CMD FAKE_ENGINE_LOG CAPTURE EGRESS_ROOT
 egress_test_env() {
@@ -31,7 +33,20 @@ egress_test_env() {
 		CONTEXT_MODE_DIR _CONTEXT_MODE_WIRED RIOTBOX_AGENT \
 		RIOTBOX_PASSTHROUGH_VARS RIOTBOX_PASSTHROUGH_EXTRA_VARS RIOTBOX_PROJECTS \
 		HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy \
-		ANTHROPIC_BASE_URL
+		ANTHROPIC_BASE_URL \
+		ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY OPENAI_BASE_URL \
+		OPENROUTER_API_KEY GEMINI_API_KEY GROQ_API_KEY MISTRAL_API_KEY \
+		DEEPSEEK_API_KEY XAI_API_KEY NODE_EXTRA_CA_CERTS RIOTBOX_EGRESS_CA \
+		SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE
+}
+
+# egress_test_runtime
+#   Export XDG_RUNTIME_DIR as a new private (0700) dir on /dev/shm, a tmpfs,
+#   where riotbox-core keeps an injected key's secrets off persistent disk.
+#   The caller removes it (trap ... "${XDG_RUNTIME_DIR}").
+egress_test_runtime() {
+	XDG_RUNTIME_DIR="$(mktemp -d -p /dev/shm riotbox-venom-run-XXXXXX)"
+	export XDG_RUNTIME_DIR
 }
 
 # egress_launch [command...]

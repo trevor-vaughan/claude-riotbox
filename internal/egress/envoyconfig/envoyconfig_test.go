@@ -6,11 +6,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/envoyconfig"
+	"github.com/trevor-vaughan/claude-riotbox/internal/egress/inject"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/policy"
 )
 
@@ -46,7 +48,7 @@ var sample = []policy.Entry{
 
 var _ = Describe("RenderRDS", func() {
 	It("lists the allowlist as the allowed virtual host's domains, as host:port", func() {
-		rds := decode(envoyconfig.RenderRDS(sample))
+		rds := decode(envoyconfig.RenderRDS(sample, nil))
 		Expect(dig(rds, "resources", 0, "@type")).To(Equal("type.googleapis.com/envoy.config.route.v3.RouteConfiguration"))
 		Expect(dig(rds, "resources", 0, "name")).To(Equal("egress"))
 		Expect(dig(rds, "resources", 0, "virtual_hosts", 0, "name")).To(Equal("allowed"))
@@ -54,7 +56,7 @@ var _ = Describe("RenderRDS", func() {
 	})
 
 	It("tunnels CONNECT to the forward-proxy cluster and answers anything else on an allowed host 403", func() {
-		routes := dig(decode(envoyconfig.RenderRDS(sample)), "resources", 0, "virtual_hosts", 0, "routes")
+		routes := dig(decode(envoyconfig.RenderRDS(sample, nil)), "resources", 0, "virtual_hosts", 0, "routes")
 		Expect(dig(routes, 0, "match", "connect_matcher")).To(Equal(map[string]any{}))
 		Expect(dig(routes, 0, "route", "cluster")).To(Equal("egress"))
 		Expect(dig(routes, 0, "route", "upgrade_configs", 0, "upgrade_type")).To(Equal("CONNECT"))
@@ -64,7 +66,7 @@ var _ = Describe("RenderRDS", func() {
 	})
 
 	It("answers every other host 403, CONNECT or not", func() {
-		deny := dig(decode(envoyconfig.RenderRDS(sample)), "resources", 0, "virtual_hosts", 1)
+		deny := dig(decode(envoyconfig.RenderRDS(sample, nil)), "resources", 0, "virtual_hosts", 1)
 		Expect(dig(deny, "name")).To(Equal("deny"))
 		Expect(dig(deny, "domains")).To(Equal([]any{"*"}))
 		Expect(dig(deny, "routes", 0, "match", "connect_matcher")).To(Equal(map[string]any{}))
@@ -73,14 +75,14 @@ var _ = Describe("RenderRDS", func() {
 	})
 
 	It("emits only the deny host for an empty allowlist", func() {
-		vhosts := dig(decode(envoyconfig.RenderRDS(nil)), "resources", 0, "virtual_hosts")
+		vhosts := dig(decode(envoyconfig.RenderRDS(nil, nil)), "resources", 0, "virtual_hosts")
 		Expect(vhosts).To(HaveLen(1))
 		Expect(dig(vhosts, 0, "name")).To(Equal("deny"))
 	})
 
 	It("escapes a hostile host that never went through policy.Parse", func() {
 		hostile := `x"},{"name":"evil`
-		out := envoyconfig.RenderRDS([]policy.Entry{{Host: hostile, Port: 443}})
+		out := envoyconfig.RenderRDS([]policy.Entry{{Host: hostile, Port: 443}}, nil)
 		Expect(json.Valid(out)).To(BeTrue())
 		Expect(dig(decode(out), "resources", 0, "virtual_hosts", 0, "domains")).To(Equal([]any{hostile + ":443"}))
 	})
@@ -88,15 +90,15 @@ var _ = Describe("RenderRDS", func() {
 
 var _ = Describe("Render", func() {
 	It("keeps the listener byte-identical whatever the allowlist, so a reload never drains it", func() {
-		Expect(envoyconfig.Render("s1", sample).LDS).To(Equal(envoyconfig.Render("s1", nil).LDS))
+		Expect(envoyconfig.Render("s1", sample, nil).LDS).To(Equal(envoyconfig.Render("s1", nil, nil).LDS))
 	})
 
 	It("puts RenderRDS's output in the RDS file", func() {
-		Expect(envoyconfig.Render("s1", sample).RDS).To(Equal(envoyconfig.RenderRDS(sample)))
+		Expect(envoyconfig.Render("s1", sample, nil).RDS).To(Equal(envoyconfig.RenderRDS(sample, nil)))
 	})
 
 	It("listens on 3128 and loads the routes from rds.json in the watched config dir", func() {
-		l := dig(decode(envoyconfig.Render("s1", sample).LDS), "resources", 0)
+		l := dig(decode(envoyconfig.Render("s1", sample, nil).LDS), "resources", 0)
 		Expect(dig(l, "@type")).To(Equal("type.googleapis.com/envoy.config.listener.v3.Listener"))
 		Expect(dig(l, "address", "socket_address", "address")).To(Equal("0.0.0.0"))
 		Expect(dig(l, "address", "socket_address", "port_value")).To(BeEquivalentTo(3128))
@@ -110,7 +112,7 @@ var _ = Describe("Render", func() {
 	})
 
 	It("logs every request as JSON to the access log, with the non-deprecated log_format", func() {
-		log := dig(decode(envoyconfig.Render("s1", sample).LDS), "resources", 0, "filter_chains", 0, "filters", 0, "typed_config", "access_log", 0, "typed_config")
+		log := dig(decode(envoyconfig.Render("s1", sample, nil).LDS), "resources", 0, "filter_chains", 0, "filters", 0, "typed_config", "access_log", 0, "typed_config")
 		Expect(dig(log, "path")).To(Equal("/var/log/riotbox-egress/access.log"))
 		Expect(dig(log, "log_format", "json_format", "status")).To(Equal("%RESPONSE_CODE%"))
 		Expect(dig(log, "log_format", "json_format", "authority")).To(Equal("%REQ(:AUTHORITY)%"))
@@ -118,7 +120,7 @@ var _ = Describe("Render", func() {
 	})
 
 	It("defines the egress cluster as a dynamic forward proxy", func() {
-		c := dig(decode(envoyconfig.Render("s1", sample).CDS), "resources", 0)
+		c := dig(decode(envoyconfig.Render("s1", sample, nil).CDS), "resources", 0)
 		Expect(dig(c, "@type")).To(Equal("type.googleapis.com/envoy.config.cluster.v3.Cluster"))
 		Expect(dig(c, "name")).To(Equal("egress"))
 		Expect(dig(c, "lb_policy")).To(Equal("CLUSTER_PROVIDED"))
@@ -126,7 +128,7 @@ var _ = Describe("Render", func() {
 	})
 
 	It("bootstraps from the LDS and CDS files with no admin interface", func() {
-		b := decode(envoyconfig.Render("s1", sample).Bootstrap)
+		b := decode(envoyconfig.Render("s1", sample, nil).Bootstrap)
 		Expect(b).NotTo(HaveKey("admin"))
 		Expect(dig(b, "dynamic_resources", "lds_config", "path_config_source", "path")).To(Equal("/etc/riotbox-egress/lds.json"))
 		Expect(dig(b, "dynamic_resources", "cds_config", "path_config_source", "path")).To(Equal("/etc/riotbox-egress/cds.json"))
@@ -135,39 +137,39 @@ var _ = Describe("Render", func() {
 
 var _ = Describe("tunnel timeouts", func() {
 	It("reaps a tunnel only after an hour idle, not Envoy's 300s default", func() {
-		hcm := dig(decode(envoyconfig.Render("s1", sample).LDS), "resources", 0, "filter_chains", 0, "filters", 0, "typed_config")
+		hcm := dig(decode(envoyconfig.Render("s1", sample, nil).LDS), "resources", 0, "filter_chains", 0, "filters", 0, "typed_config")
 		Expect(dig(hcm, "stream_idle_timeout")).To(Equal("3600s"))
 	})
 
 	It("disables the route timeout on CONNECT so a half-closed tunnel is not cut at 15s", func() {
-		routes := dig(decode(envoyconfig.RenderRDS(sample)), "resources", 0, "virtual_hosts", 0, "routes")
+		routes := dig(decode(envoyconfig.RenderRDS(sample, nil)), "resources", 0, "virtual_hosts", 0, "routes")
 		Expect(dig(routes, 0, "route", "timeout")).To(Equal("0s"))
 	})
 })
 
 var _ = Describe("the listener's codec", func() {
 	It("speaks HTTP/1 only, so an HTTP/2 CONNECT cannot carry an authority HTTP/1 would refuse into the denial text", func() {
-		hcm := dig(decode(envoyconfig.Render("s1", sample).LDS), "resources", 0, "filter_chains", 0, "filters", 0, "typed_config")
+		hcm := dig(decode(envoyconfig.Render("s1", sample, nil).LDS), "resources", 0, "filter_chains", 0, "filters", 0, "typed_config")
 		Expect(dig(hcm, "codec_type")).To(Equal("HTTP1"))
 	})
 })
 
 var _ = Describe("host:port matching", func() {
 	It("never lets Envoy strip the port before route matching, which would widen every entry to all ports", func() {
-		hcm := dig(decode(envoyconfig.Render("s1", sample).LDS), "resources", 0, "filter_chains", 0, "filters", 0, "typed_config")
+		hcm := dig(decode(envoyconfig.Render("s1", sample, nil).LDS), "resources", 0, "filter_chains", 0, "filters", 0, "typed_config")
 		Expect(hcm).NotTo(HaveKey("strip_any_host_port"))
 		Expect(hcm).NotTo(HaveKey("strip_matching_host_port"))
 		Expect(hcm).NotTo(HaveKey("strip_port_mode"))
-		Expect(dig(decode(envoyconfig.RenderRDS(sample)), "resources", 0)).NotTo(HaveKey("ignore_port_in_host_matching"))
+		Expect(dig(decode(envoyconfig.RenderRDS(sample, nil)), "resources", 0)).NotTo(HaveKey("ignore_port_in_host_matching"))
 	})
 })
 
 var _ = Describe("RenderStatic", func() {
 	It("inlines the same listener, cluster and routes, without resource @types", func() {
-		s := decode(envoyconfig.RenderStatic("s1", sample))
+		s := decode(envoyconfig.RenderStatic("s1", sample, nil))
 		Expect(s).NotTo(HaveKey("dynamic_resources"))
 		Expect(s).NotTo(HaveKey("admin"))
-		files := envoyconfig.Render("s1", sample)
+		files := envoyconfig.Render("s1", sample, nil)
 
 		staticL := dig(s, "static_resources", "listeners", 0).(map[string]any)
 		Expect(staticL).NotTo(HaveKey("@type"))
@@ -190,29 +192,57 @@ var _ = Describe("RenderStatic", func() {
 })
 
 var _ = Describe("the pinned Envoy image", Label("e2e"), func() {
-	It("accepts the static rendering in validate mode", func() {
+	var image string
+
+	BeforeEach(func() {
 		if os.Getenv("RIOTBOX_EGRESS_E2E") != "1" {
 			Skip("set RIOTBOX_EGRESS_E2E=1 (task test:egress-e2e) to run against real podman")
 		}
-		image := os.Getenv("RIOTBOX_EGRESS_IMAGE")
+		image = os.Getenv("RIOTBOX_EGRESS_IMAGE")
 		Expect(image).NotTo(BeEmpty(), "task test:egress-e2e sets RIOTBOX_EGRESS_IMAGE from libexec/egress-lib.sh")
+	})
+
+	// validate runs Envoy's validate mode on static, with secrets (a dir,
+	// or "" for none) mounted where the proxy reads its secrets.
+	validate := func(static []byte, secrets string) {
 		dir := GinkgoT().TempDir()
-		Expect(os.Mkdir(filepath.Join(dir, "log"), 0o700)).To(Succeed())
-		Expect(os.WriteFile(filepath.Join(dir, "static.json"), envoyconfig.RenderStatic("s1", sample), 0o600)).To(Succeed())
-		cmd := exec.Command("podman", "run", "--rm",
+		ExpectWithOffset(1, os.Mkdir(filepath.Join(dir, "log"), 0o700)).To(Succeed())
+		ExpectWithOffset(1, os.WriteFile(filepath.Join(dir, "static.json"), static, 0o600)).To(Succeed())
+		args := []string{"run", "--rm",
 			"--userns=keep-id", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-			"-v", dir+":/cfg:ro,z", "-v", filepath.Join(dir, "log")+":"+envoyconfig.LogDir+":rw,z",
-			"--entrypoint", "/usr/local/bin/envoy", image,
-			"--mode", "validate", "-c", "/cfg/static.json")
-		out, err := cmd.CombinedOutput()
-		Expect(err).NotTo(HaveOccurred(), string(out))
-		Expect(string(out)).To(ContainSubstring("OK"))
+			"-v", dir + ":/cfg:ro,z", "-v", filepath.Join(dir, "log") + ":" + envoyconfig.LogDir + ":rw,z"}
+		if secrets != "" {
+			args = append(args, "-v", secrets+":"+envoyconfig.SecretsDir+":ro,z")
+		}
+		args = append(args, "--entrypoint", "/usr/local/bin/envoy", image, "--mode", "validate", "-c", "/cfg/static.json")
+		out, err := exec.Command("podman", args...).CombinedOutput()
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), string(out))
+		ExpectWithOffset(1, string(out)).To(ContainSubstring("OK"))
+	}
+
+	It("accepts the static rendering in validate mode", func() {
+		validate(envoyconfig.RenderStatic("s1", sample, nil), "")
+	})
+
+	It("accepts a rendering that intercepts a credential host, with its leaf, key and credential", func() {
+		const host = "api.example.com"
+		secrets := GinkgoT().TempDir()
+		certs, err := inject.NewCerts("s1", []string{host}, time.Now())
+		Expect(err).NotTo(HaveOccurred())
+		for name, data := range map[string][]byte{
+			envoyconfig.CertFile(host):       certs.Leaves[host].Cert,
+			envoyconfig.KeyFile(host):        certs.Leaves[host].Key,
+			envoyconfig.CredentialFile(host): envoyconfig.RenderCredential(host, "test-key"),
+		} {
+			Expect(os.WriteFile(filepath.Join(secrets, name), data, 0o600)).To(Succeed())
+		}
+		validate(envoyconfig.RenderStatic("s1", sample, []envoyconfig.Intercept{{Host: host, Header: "x-api-key"}}), secrets)
 	})
 })
 
 var _ = Describe("denials", func() {
 	hcm := func(session string) any {
-		return dig(decode(envoyconfig.Render(session, sample).LDS), "resources", 0, "filter_chains", 0, "filters", 0, "typed_config")
+		return dig(decode(envoyconfig.Render(session, sample, nil).LDS), "resources", 0, "filter_chains", 0, "filters", 0, "typed_config")
 	}
 
 	It("rewrites a refused CONNECT with a header naming the denied authority and an allowlist body", func() {
@@ -250,7 +280,7 @@ var _ = Describe("denials", func() {
 			m := dig(hcm("s1"), "local_reply_config", "mappers", i)
 			Expect(m).NotTo(HaveKey("status_code"))
 		}
-		Expect(string(envoyconfig.Render("s1", sample).LDS)).NotTo(ContainSubstring("runtime_key"))
+		Expect(string(envoyconfig.Render("s1", sample, nil).LDS)).NotTo(ContainSubstring("runtime_key"))
 	})
 
 	It("names the session it renders for", func() {
@@ -260,6 +290,6 @@ var _ = Describe("denials", func() {
 	})
 
 	It("leaves the allowlist in rds.json, untouched by the denial text", func() {
-		Expect(string(envoyconfig.RenderRDS(sample))).NotTo(ContainSubstring("local_reply_config"))
+		Expect(string(envoyconfig.RenderRDS(sample, nil))).NotTo(ContainSubstring("local_reply_config"))
 	})
 })

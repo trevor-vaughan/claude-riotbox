@@ -5,21 +5,25 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gexec"
 
 	"github.com/trevor-vaughan/claude-riotbox/internal/display"
+	"github.com/trevor-vaughan/claude-riotbox/internal/egress/inject"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/policy"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/state"
 )
 
 // fakeEngineScript answers `ps` with $FAKE_GATEWAYS and `pod ps` with
-// $FAKE_PODS (both default "[]"), succeeds silently at everything else, and
-// logs each call's argv to $FAKE_LOG.
+// $FAKE_PODS (both default "[]"), succeeds silently at everything else,
+// logs each call's argv to $FAKE_LOG and, when $FAKE_ENVIRON is set, its
+// environment to that file.
 const fakeEngineScript = `#!/bin/sh
 printf '%s\n' "$*" >>"$FAKE_LOG"
+if [ -n "$FAKE_ENVIRON" ]; then env >>"$FAKE_ENVIRON"; fi
 case "$1 $2" in
 "pod ps") printf '%s\n' "${FAKE_PODS:-[]}"; exit 0 ;;
 esac
@@ -53,14 +57,16 @@ var _ = Describe("egress verbs", func() {
 	var tmp, engine, root, sys, user, log string
 	var env []string
 
-	runEgress := func(args ...string) *gexec.Session {
+	runEgressIn := func(stdin string, args ...string) *gexec.Session {
 		cmd := exec.Command(binary, args...)
 		cmd.Env = append(os.Environ(), env...)
+		cmd.Stdin = strings.NewReader(stdin)
 		s, err := gexec.Start(cmd, GinkgoWriter, GinkgoWriter)
 		Expect(err).NotTo(HaveOccurred())
 		Eventually(s).Should(gexec.Exit())
 		return s
 	}
+	runEgress := func(args ...string) *gexec.Session { return runEgressIn("", args...) }
 	confArgs := func(verb string) []string {
 		return []string{verb, "--engine", engine, "--state-root", root, "--system-conf", sys, "--user-conf", user}
 	}
@@ -106,6 +112,133 @@ var _ = Describe("egress verbs", func() {
 			Expect(s.ExitCode()).To(Equal(1))
 			Expect(string(s.Err.Contents())).To(ContainSubstring("is not a session name"))
 			Expect(log).NotTo(BeAnExistingFile())
+		})
+
+		DescribeTable("refuses malformed variables on stdin before touching the engine, never echoing them",
+			func(stdin, want string) {
+				s := runEgressIn(stdin, upArgs("1", "s1")...)
+				Expect(s.ExitCode()).To(Equal(1))
+				Expect(string(s.Err.Contents())).To(ContainSubstring(want))
+				Expect(string(s.Err.Contents())).NotTo(ContainSubstring("s3cret"))
+				Expect(log).NotTo(BeAnExistingFile())
+				Expect(filepath.Join(root, "s1")).NotTo(BeAnExistingFile())
+			},
+			Entry("a record without =", "api.example.com\n\x00s3cret\x00", "variable record 1 on stdin is not NAME=VALUE"),
+			Entry("a record without its NUL", "api.example.com\n\x00ANTHROPIC_API_KEY=s3cret", "variable record 1 on stdin has no terminating NUL"),
+			Entry("a name that is not a variable name", "\x00A=1\x00BAD-NAME=s3cret\x00", "variable record 2 on stdin is not NAME=VALUE"),
+			Entry("a repeated name", "\x00ANTHROPIC_API_KEY=s3cret\x00ANTHROPIC_API_KEY=s3cret2\x00", "variable record 2 on stdin repeats ANTHROPIC_API_KEY"),
+			Entry("more than 1 MiB", "\x00ANTHROPIC_API_KEY="+strings.Repeat("s3cret", 1<<20/6+1)+"\x00", "stdin holds more than 1 MiB"),
+		)
+
+		It("accepts exactly 1 MiB on stdin", func() {
+			stdin := "\x00K=" + strings.Repeat("x", 1<<20-4) + "\x00"
+			Expect(stdin).To(HaveLen(1 << 20))
+			s := runEgressIn(stdin, upArgs("1", "s1")...)
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("MiB"))
+			Expect(log).To(BeAnExistingFile())
+		})
+
+		// privateRuntime makes a private dir on /dev/shm, a tmpfs, for
+		// $XDG_RUNTIME_DIR, removed after the spec; it skips the spec
+		// where there is none.
+		privateRuntime := func() string {
+			run, err := os.MkdirTemp("/dev/shm", "riotbox-core-spec-")
+			if err != nil {
+				Skip("no /dev/shm to make a tmpfs runtime dir in: " + err.Error())
+			}
+			DeferCleanup(os.RemoveAll, run)
+			if ok, err := state.HostRuntime().IsTmpfs(run); err != nil || !ok {
+				Skip("/dev/shm is not a tmpfs here")
+			}
+			return run
+		}
+		// noRuntime points $XDG_RUNTIME_DIR at a dir that does not
+		// qualify (mode 0755), and skips the spec when /run/user/<uid>
+		// does.
+		noRuntime := func() {
+			h := state.HostRuntime()
+			h.Getenv = func(string) string { return "" }
+			if _, err := state.RuntimeBase(h); err == nil {
+				Skip("/run/user/<uid> is a private tmpfs here, so egress-up has a runtime dir")
+			}
+			run := filepath.Join(tmp, "run")
+			Expect(os.Mkdir(run, 0o755)).To(Succeed())
+			Expect(os.Chmod(run, 0o755)).To(Succeed())
+			env = append(env, "XDG_RUNTIME_DIR="+run)
+		}
+		keyStdin := "api.example.com\n\x00ANTHROPIC_API_KEY=sk-ant-s3cret-injected\x00"
+
+		// The fake engine runs no Envoy, so these starts fail at the
+		// readiness wait, after every engine object was created, and roll
+		// back.
+		It("mounts the injected key's secrets from the runtime tmpfs, keeps the CA and record in the state dir, and removes the secrets on rollback", func() {
+			run := privateRuntime()
+			env = append(env, "XDG_RUNTIME_DIR="+run)
+			s := runEgressIn(keyStdin, upArgs("1", "s1")...)
+			Expect(string(s.Err.Contents())).To(ContainSubstring("the egress proxy exited during startup"))
+			secrets := filepath.Join(run, "riotbox-egress", "s1", "secrets")
+			engineLog, err := os.ReadFile(log)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(engineLog)).To(ContainSubstring(" -v " + secrets + ":/etc/riotbox-egress-secrets:ro,z "))
+			Expect(filepath.Join(root, "s1", "ca.crt")).To(BeARegularFile())
+			Expect(filepath.Join(root, "s1", "injected")).To(BeARegularFile())
+			Expect(filepath.Join(root, "s1", "secrets")).NotTo(BeAnExistingFile())
+			Expect(filepath.Dir(secrets)).NotTo(BeAnExistingFile())
+		})
+
+		It("fails with keys to inject and no private tmpfs runtime dir, creating nothing", func() {
+			noRuntime()
+			s := runEgressIn(keyStdin, upArgs("1", "s1")...)
+			Expect(s.ExitCode()).To(Equal(1))
+			Expect(string(s.Err.Contents())).To(ContainSubstring("credential injection needs a private tmpfs runtime dir ($XDG_RUNTIME_DIR or /run/user/<uid>) so keys never reach disk; none found — unset the keys to run without injection, or start the session from a login session"))
+			Expect(string(s.Err.Contents())).To(ContainSubstring("is mode 0755, not 0700"))
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("s3cret"))
+			Expect(root).NotTo(BeAnExistingFile())
+			Expect(log).NotTo(BeAnExistingFile())
+		})
+
+		It("starts a session with no key to inject without a runtime dir", func() {
+			noRuntime()
+			s := runEgressIn("api.example.com\n\x00GITHUB_TOKEN=ghp-passthrough-value\x00", upArgs("1", "s1")...)
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("runtime dir"))
+			engineLog, err := os.ReadFile(log)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(engineLog)).To(ContainSubstring("run -d "))
+			Expect(string(engineLog)).NotTo(ContainSubstring("riotbox-egress-secrets"))
+		})
+
+		It("removes the runtime secrets at egress-down, and an idle orphan's at egress-sweep", func() {
+			run := privateRuntime()
+			env = append(env, "XDG_RUNTIME_DIR="+run)
+			secrets := filepath.Join(run, "riotbox-egress", "s1", "secrets")
+			Expect(os.MkdirAll(secrets, 0o700)).To(Succeed())
+			Expect(runEgress("egress-down", "--engine", engine, "--state-root", root, "--", "s1").ExitCode()).To(Equal(0))
+			Expect(filepath.Dir(secrets)).NotTo(BeAnExistingFile())
+
+			orphan := filepath.Join(run, "riotbox-egress", "gone", "secrets")
+			Expect(os.MkdirAll(orphan, 0o700)).To(Succeed())
+			old := time.Now().Add(-2 * time.Hour)
+			Expect(os.Chtimes(filepath.Dir(orphan), old, old)).To(Succeed())
+			Expect(runEgress("egress-sweep", "--engine", engine, "--state-root", root).ExitCode()).To(Equal(0))
+			Expect(filepath.Dir(orphan)).NotTo(BeAnExistingFile())
+		})
+
+		It("drops the injected keys from the engine's environment, keeps the others, and names them without values", func() {
+			environ := filepath.Join(tmp, "environ")
+			env = append(env, "XDG_RUNTIME_DIR="+privateRuntime(), "FAKE_ENVIRON="+environ,
+				"ANTHROPIC_API_KEY=sk-ant-s3cret-injected", "GITHUB_TOKEN=ghp-passthrough-value")
+			s := runEgressIn("api.example.com\n\x00ANTHROPIC_API_KEY=sk-ant-s3cret-injected\x00GITHUB_TOKEN=ghp-passthrough-value\x00",
+				upArgs("1", "s1")...)
+			Expect(string(s.Err.Contents())).To(ContainSubstring("egress: these keys still enter the container: GITHUB_TOKEN (not injectable: not in the provider table)"))
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("ANTHROPIC_API_KEY ("))
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("s3cret"))
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("ghp-passthrough-value"))
+			// Booleans, not ContainSubstring: a failure must not print the
+			// engine's environment, which holds this session's own tokens.
+			got, err := os.ReadFile(environ)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(strings.Contains(string(got), "s3cret")).To(BeFalse(), "an engine command inherited the injected key")
+			Expect(strings.Contains("\n"+string(got), "\nGITHUB_TOKEN=ghp-passthrough-value\n")).To(BeTrue(), "an engine command lost the pass-through key")
 		})
 	})
 
@@ -566,6 +699,35 @@ var _ = Describe("egress verbs", func() {
 				"  project: unknown\n" +
 				"  log:     " + d2.AccessLog() + "\n" +
 				"  strict:  off (default)\n"))
+		})
+
+		It("names each injected key's variable and host, never its value, between strict and allow", func() {
+			d := seed("s1", policy.Entry{Host: "api.anthropic.com", Port: 443}).WithRuntime(filepath.Join(tmp, "run"))
+			Expect(d.WriteInjection([]inject.Credential{
+				{Env: "ANTHROPIC_API_KEY", Host: "api.anthropic.com", Header: "x-api-key", Value: "sk-s3cret"},
+				{Env: "OPENAI_API_KEY", Host: "api.openai.com", Header: "authorization", Value: "Bearer sk-s3cret"},
+			}, time.Now())).To(Succeed())
+			env = append(env, gatewaysJSON("s1"))
+			s := runEgress("egress-list", "--engine", engine, "--state-root", root)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Out.Contents())).To(Equal("s1\n  started: unknown\n  owner:   unknown\n  project: unknown\n" +
+				"  log:     " + d.AccessLog() + "\n  strict:  off (default)\n" +
+				"  inject:  ANTHROPIC_API_KEY → api.anthropic.com\n" +
+				"  inject:  OPENAI_API_KEY → api.openai.com\n" +
+				"  allow:   api.anthropic.com\n"))
+			Expect(string(s.Out.Contents())).NotTo(ContainSubstring("s3cret"))
+		})
+
+		It("shows inject unreadable, says why, and lists the session, when the injection record is corrupt", func() {
+			d := seed("s1")
+			Expect(os.WriteFile(filepath.Join(d.Path(), "injected"), []byte("K \x1b[31m x-api-key\n"), 0o600)).To(Succeed())
+			env = append(env, gatewaysJSON("s1"))
+			s := runEgress("egress-list", "--engine", engine, "--state-root", root)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Out.Contents())).To(ContainSubstring("  strict:  off (default)\n  inject:  unreadable\n"))
+			Expect(string(s.Out.Contents())).NotTo(ContainSubstring("\x1b"))
+			Expect(string(s.Err.Contents())).To(ContainSubstring("riotbox-core: egress: s1: "))
+			Expect(string(s.Err.Contents())).To(ContainSubstring("injected:1: not a variable, a host and a header"))
 		})
 
 		It("says unknown for what the engine does not report", func() {

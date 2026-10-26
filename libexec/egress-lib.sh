@@ -14,9 +14,15 @@
 #   EGRESS_USER_CONF              the user egress.conf
 #   EGRESS_FLAGS                  set by egress_start: the agent's extra
 #                                 engine flags (pod, network, proxy env,
-#                                 RIOTBOX_EGRESS_SESSION)
+#                                 RIOTBOX_EGRESS_SESSION, and, when the
+#                                 proxy injects keys, the session CA and a
+#                                 placeholder per key)
 #   EGRESS_MASK_FLAGS             set by egress_mask_data: the agent's tmpfs
 #                                 masks over the egress root
+#   EGRESS_PLACEHOLDER            what an injected key holds in the agent;
+#                                 equals riotbox-core's inject.Placeholder
+#   EGRESS_INJECTED               set by egress_start: the names of the keys
+#                                 the proxy injects
 #
 # Public:
 #   egress_gate   return 1, saying why, when egress mode cannot be enforced
@@ -33,11 +39,18 @@
 #                 reaching it, or, with RIOTBOX_NESTED=1, any mount that
 #                 needs a mask. Requires: RIOTBOX_EGRESS_ROOT,
 #                 PROJECT_VOLUME_FLAGS, MOUNTS, CREDFILE_FLAGS.
-#   egress_start  sweep orphaned egress pods, start this launch's pod, set
-#                 EGRESS_FLAGS, say on stderr which session to name to
-#                 `riotbox egress`, and trap EXIT (and INT/TERM, through it)
-#                 to remove the pod. Requires: CONTAINER_CMD, CONTAINER_NAME,
-#                 SESSION_KEY, PROJECT_DIRS, RIOTBOX_EGRESS_ROOT, RIOTBOX_CORE and
+#   egress_gate_env
+#                 after egress_start, the same for RIOTBOX_EXTRA_ARGS that
+#                 would put an injected key in the agent, or let it read
+#                 one from a host process. Requires: EGRESS_INJECTED.
+#   egress_start  sweep orphaned egress pods, start this launch's pod
+#                 (sending egress-up the agent's variables, whose provider
+#                 keys the proxy injects), export each injected key's
+#                 placeholder over the key, set EGRESS_FLAGS, say on stderr
+#                 which session to name to `riotbox egress`, and trap EXIT
+#                 (and INT/TERM, through it) to remove the pod. Requires:
+#                 CONTAINER_CMD, CONTAINER_NAME, SESSION_KEY, PROJECT_DIRS,
+#                 PASSTHROUGH_FLAGS, RIOTBOX_EGRESS_ROOT, RIOTBOX_CORE and
 #                 riotbox_core_require (scripts/lib/riotbox-core.sh), and
 #                 agent_call (agents/registry.sh).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -47,6 +60,8 @@ EGRESS_SYSTEM_CONF="${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}/egress.conf"
 EGRESS_USER_CONF="${XDG_CONFIG_HOME:-${HOME}/.config}/riotbox/egress.conf"
 EGRESS_FLAGS=()
 EGRESS_MASK_FLAGS=()
+EGRESS_PLACEHOLDER="riotbox-egress-placeholder"
+EGRESS_INJECTED=()
 
 # _egress_mount_why <flag> <value> [origin] — print why mounting <value> of
 # <flag> (-v, --volume or --mount) is refused, or nothing. <origin> names
@@ -130,36 +145,47 @@ _egress_mount_why() {
 
 # _egress_split_args <args> — print engine flags <args>, split on whitespace
 # as launch.sh splits them into the run command, as NUL-terminated records
-# in the order podman reads them: `w<word>` for each word and, for each
-# mount, `m<flag>` (-v, --volume or --mount) followed by its value. A word
-# that is a mount's value is also printed as a word, so a check of words
-# still sees it. Grouped short flags are read as podman parses them: its
-# boolean ones (-d -i -P -q -t) are skipped; a v then takes the rest of the
-# word, less one =, or else the next word. Any other letter takes the rest
-# as its own value.
+# in the order podman reads them: `w<word>` for each word; for each mount,
+# `m<flag>` (-v, --volume or --mount) followed by its value; for each
+# -e/--env, `e<value>`; for each --secret, `s<value>`; and for each --pid,
+# `p<value>`. A word that is a flag's value is also printed as a
+# word, so a check of words still sees it. Grouped short flags are read as
+# podman parses them: its boolean ones (-d -i -P -q -t) are skipped; a v or
+# an e then takes the rest of the word, less one =, or else the next word.
+# Any other letter takes the rest as its own value.
 _egress_split_args() {
 	local args="$1" arg flag="" short
 	# shellcheck disable=SC2086 # split as launch.sh splits it into the run command
 	for arg in ${args}; do
-		if [[ -n "${flag}" ]]; then
-			printf 'm%s\0%s\0' "${flag}" "${arg}"
-			flag=""
-		fi
+		case "${flag}" in
+		"") ;;
+		-e | --env) printf 'e%s\0' "${arg}" ;;
+		--secret) printf 's%s\0' "${arg}" ;;
+		--pid) printf 'p%s\0' "${arg}" ;;
+		*) printf 'm%s\0%s\0' "${flag}" "${arg}" ;;
+		esac
+		flag=""
 		printf 'w%s\0' "${arg}"
 		case "${arg}" in
-		--volume | --mount) flag="${arg}" ;;
+		--volume | --mount | --env | --secret | --pid) flag="${arg}" ;;
 		--volume=* | --mount=*) printf 'm%s\0%s\0' "${arg%%=*}" "${arg#*=}" ;;
+		--env=*) printf 'e%s\0' "${arg#*=}" ;;
+		--secret=*) printf 's%s\0' "${arg#*=}" ;;
+		--pid=*) printf 'p%s\0' "${arg#*=}" ;;
 		--*) ;;
 		-?*)
 			short="${arg#-}"
 			while [[ "${short}" == [diPqt]* ]]; do short="${short:1}"; done
-			if [[ "${short}" == v* ]]; then
-				short="${short#v}"
+			if [[ "${short}" == [ev]* ]]; then
+				flag="-${short:0:1}"
+				short="${short:1}"
 				short="${short#=}"
 				if [[ -n "${short}" ]]; then
-					printf 'm-v\0%s\0' "${short}"
-				else
-					flag="-v"
+					case "${flag}" in
+					-e) printf 'e%s\0' "${short}" ;;
+					*) printf 'm-v\0%s\0' "${short}" ;;
+					esac
+					flag=""
 				fi
 			fi
 			;;
@@ -168,23 +194,66 @@ _egress_split_args() {
 	done
 }
 
-# _egress_args_why <origin> <args> — print why engine flags <args>, from
-# <origin>, are refused, or nothing. The agent's only protection from a
-# route around the proxy is that it has no NET_ADMIN and no other network;
-# these flags could change either, and a mount or a host root (--rootfs,
-# --volumes-from) could hand it a host engine socket. <args> is read as
-# _egress_split_args reads it, as the engine will read it.
+# _egress_env_why <origin> <value> [protected-name...] — print why an engine
+# -e/--env <value> from <origin> is refused, or nothing: NAME=VALUE for a
+# protected name (a key the proxy injects) would replace the placeholder the
+# agent must hold. The value is never printed.
+_egress_env_why() {
+	local origin="$1" value="$2" name protected
+	shift 2
+	[[ "${value}" == *=* ]] || return 0
+	name="${value%%=*}"
+	for protected in "$@"; do
+		if [[ "${name}" == "${protected}" ]]; then
+			echo "RIOTBOX_EGRESS=1 refuses ${origin} setting ${name}: the proxy injects that key, and the agent must hold only its placeholder."
+			return 0
+		fi
+	done
+}
+
+# _egress_args_why <origin> <args> [protected-name...] — print why engine
+# flags <args>, from <origin>, are refused, or nothing. The agent's only
+# protection from a route around the proxy is that it has no NET_ADMIN and
+# no other network; these flags could change either, and a mount or a host
+# root (--rootfs, --volumes-from) could hand it a host engine socket. <args>
+# is read as _egress_split_args reads it, as the engine will read it. With
+# protected names (the keys the proxy injects), an -e/--env setting one
+# (_egress_env_why), any --env-file, any --secret of type=env and a --pid
+# other than private are refused too.
 _egress_args_why() {
-	local origin="$1" args="$2" why="" rec i
+	local origin="$1" args="$2" why="" rec i protected=() secret_why pid_why
 	local -a recs
+	shift 2
+	protected=("$@")
+	# A type=env secret's target may be omitted (it defaults to the secret's
+	# name), so any of them could set an injected key.
+	secret_why="RIOTBOX_EGRESS=1 refuses ${origin} containing --secret with type=env while the proxy injects keys: it could set one in the agent."
+	# launch.sh keeps the real keys in its environment for the session; in
+	# the host's PID namespace (host, or joined through another container
+	# or a namespace path) the agent, running as the same uid, could read
+	# them from /proc/<pid>/environ.
+	pid_why="RIOTBOX_EGRESS=1 refuses ${origin} sharing a PID namespace (--pid other than private) while the proxy injects keys: the agent could read a key from a host process's environment."
 	# shellcheck disable=SC2312 # _egress_split_args only prints
 	mapfile -d '' -t recs < <(_egress_split_args "${args}")
 	for ((i = 0; i < ${#recs[@]}; i++)); do
 		rec="${recs[i]}"
-		if [[ "${rec}" == m* ]]; then
+		case "${rec}" in
+		m*)
 			i=$((i + 1))
 			why="$(_egress_mount_why "${rec#m}" "${recs[i]}" "${origin}")"
-		else
+			;;
+		e*) why="$(_egress_env_why "${origin}" "${rec#e}" "${protected[@]}")" ;;
+		s*)
+			if [[ ${#protected[@]} -gt 0 && ",${rec#s}," == *,type=env,* ]]; then
+				why="${secret_why}"
+			fi
+			;;
+		p*)
+			if [[ ${#protected[@]} -gt 0 && "${rec#p}" != private ]]; then
+				why="${pid_why}"
+			fi
+			;;
+		*)
 			case "${rec#w}" in
 			--privileged | --privileged=* | --cap-add | --cap-add=* | --network | --network=* | --net | --net=* | --pod | --pod=* | --userns | --userns=* | --volumes-from | --volumes-from=* | --rootfs | --rootfs=*)
 				why="RIOTBOX_EGRESS=1 refuses ${origin} containing ${rec#w}: it could give the agent a route around the proxy."
@@ -194,9 +263,15 @@ _egress_args_why() {
 			--init-path | --init-path=*)
 				why="RIOTBOX_EGRESS=1 refuses ${origin} containing ${rec#w}: it mounts a host file into the agent that is not checked for the egress proxy's state."
 				;;
+			--env-file | --env-file=*)
+				if [[ ${#protected[@]} -gt 0 ]]; then
+					why="RIOTBOX_EGRESS=1 refuses ${origin} containing --env-file while the proxy injects keys: the file could set one in the agent."
+				fi
+				;;
 			*) ;;
 			esac
-		fi
+			;;
+		esac
 		[[ -z "${why}" ]] || break
 	done
 	[[ -z "${why}" ]] || echo "${why}"
@@ -326,6 +401,24 @@ egress_mask_data() {
 	done
 }
 
+# egress_gate_env — after egress_start: return 1, saying why, when
+# RIOTBOX_EXTRA_ARGS (checked as egress_gate checks it, _egress_args_why)
+# would set a key the proxy injects in the agent: an -e/--env NAME=VALUE for
+# it, any --env-file, or any --secret with type=env. Each would replace the
+# placeholder with a value of the user's choosing, the real key included.
+# A --pid other than private is refused too: in a shared PID namespace the
+# agent could read the key from launch.sh's environment. Requires
+# EGRESS_INJECTED.
+egress_gate_env() {
+	local why
+	[[ ${#EGRESS_INJECTED[@]} -gt 0 ]] || return 0
+	why="$(_egress_args_why RIOTBOX_EXTRA_ARGS "${RIOTBOX_EXTRA_ARGS:-}" "${EGRESS_INJECTED[@]}")"
+	[[ -n "${why}" ]] || return 0
+	echo "ERROR: ${why}" >&2
+	echo "       See README \"Egress proxy\"." >&2
+	return 1
+}
+
 # shellcheck disable=SC2154 # CONTAINER_CMD is set by launch.sh, which sources this file
 egress_gate() {
 	local why=""
@@ -361,7 +454,7 @@ _egress_on_exit() {
 
 # shellcheck disable=SC2154 # set by launch.sh, which sources this file
 egress_start() {
-	local agent="${RIOTBOX_AGENT:-claude}" hosts out dir projects=()
+	local agent="${RIOTBOX_AGENT:-claude}" hosts out dir projects=() words=() sent=() unsent=() name value i
 	# shellcheck disable=SC2310 # it has already said why it failed
 	riotbox_core_require || return 1
 	# The agent's hosts are what the proxy exists to allow: an unknown agent,
@@ -375,7 +468,20 @@ egress_start() {
 	for dir in "${PROJECT_DIRS[@]}"; do
 		projects+=(--project "${dir}")
 	done
-	if ! "${RIOTBOX_CORE}" egress-sweep --engine "${CONTAINER_CMD}" --state-root "${RIOTBOX_EGRESS_ROOT}"; then
+	# The variables the agent gets from the host by name: each "-e NAME"
+	# of the passthrough flags, once. RIOTBOX_HEADROOM is sent separately.
+	read -ra words <<<"${PASSTHROUGH_FLAGS:-}"
+	for ((i = 1; i < ${#words[@]}; i++)); do
+		name="${words[i]}"
+		[[ "${words[i - 1]}" == -e && "${name}" != RIOTBOX_HEADROOM && " ${sent[*]} " != *" ${name} "* ]] || continue
+		sent+=("${name}")
+		[[ "${name}" == XDG_RUNTIME_DIR || "${name}" == HOME ]] || unsent+=(-u "${name}")
+	done
+	# The sweep runs before the placeholders replace the keys, and needs
+	# none of the forwarded variables: its engine calls get none of them,
+	# but for XDG_RUNTIME_DIR and HOME, which it and rootless podman need
+	# to find the runtime secrets and the engine's storage.
+	if ! env "${unsent[@]}" "${RIOTBOX_CORE}" egress-sweep --engine "${CONTAINER_CMD}" --state-root "${RIOTBOX_EGRESS_ROOT}"; then
 		echo "WARNING: could not remove every orphaned egress pod; continuing." >&2
 	fi
 	# Trapped before the pod exists, so an interrupt during startup still
@@ -383,7 +489,18 @@ egress_start() {
 	trap _egress_on_exit EXIT
 	trap 'exit 130' INT
 	trap 'exit 143' TERM
-	out="$(printf '%s\n' "${hosts}" | "${RIOTBOX_CORE}" egress-up \
+	# egress-up reads the hosts, a NUL, then those variables and
+	# RIOTBOX_HEADROOM as NUL-terminated NAME=VALUE records, and decides
+	# which provider keys its proxy injects. printf is a builtin: no key is
+	# ever on a command line.
+	out="$({
+		printf '%s\n' "${hosts}"
+		printf '\0'
+		for name in "${sent[@]}"; do
+			printf '%s=%s\0' "${name}" "${!name:-}"
+		done
+		printf 'RIOTBOX_HEADROOM=%s\0' "${RIOTBOX_HEADROOM:-}"
+	} | "${RIOTBOX_CORE}" egress-up \
 		--engine "${CONTAINER_CMD}" --state-root "${RIOTBOX_EGRESS_ROOT}" \
 		--system-conf "${EGRESS_SYSTEM_CONF}" --user-conf "${EGRESS_USER_CONF}" \
 		--image "${RIOTBOX_EGRESS_IMAGE:-${RIOTBOX_EGRESS_DEFAULT_IMAGE}}" \
@@ -394,5 +511,27 @@ egress_start() {
 	fi
 	# shellcheck disable=SC2034 # read by launch.sh's run command
 	mapfile -t EGRESS_FLAGS <<<"${out}"
+	# For every "-e NAME=VALUE" egress-up returns for a name it was sent
+	# (an injected key's placeholder; a proxy or CA variable the user also
+	# forwards), export VALUE over NAME. The run command also passes NAME by
+	# name (PASSTHROUGH_FLAGS), later, which the engine reads from this
+	# shell's environment: so egress's value wins, and an injected key
+	# reaches neither the engine nor the agent. Fail closed: a name that is
+	# not one, or a failed export, stops the launch.
+	for ((i = 1; i < ${#EGRESS_FLAGS[@]}; i++)); do
+		[[ "${EGRESS_FLAGS[i - 1]}" == -e && "${EGRESS_FLAGS[i]}" == *=* ]] || continue
+		name="${EGRESS_FLAGS[i]%%=*}"
+		value="${EGRESS_FLAGS[i]#*=}"
+		if [[ ! "${name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+			echo "ERROR: riotbox-core egress-up returned an -e flag without a valid variable name." >&2
+			return 1
+		fi
+		[[ " ${sent[*]} " == *" ${name} "* ]] || continue
+		if ! export "${name}=${value}"; then
+			echo "ERROR: could not set ${name} to egress's value; the launch stops." >&2
+			return 1
+		fi
+		[[ "${value}" != "${EGRESS_PLACEHOLDER}" ]] || EGRESS_INJECTED+=("${name}")
+	done
 	echo "egress: session ${CONTAINER_NAME}; change what it may reach with: riotbox egress allow --session ${CONTAINER_NAME} <entry>" >&2
 }

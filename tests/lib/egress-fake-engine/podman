@@ -7,13 +7,22 @@
 #                                  prints the proxy's networks: 10.89.0.1
 #                                  on <name>-int
 #   container inspect              prints "true": the proxy is running
-#   pod ps                         prints ${FAKE_PODS_JSON:-[]}
+#   pod ps                         prints ${FAKE_PODS_JSON:-[]}, and writes
+#                                  its own environment (the sweep's) to
+#                                  ${FAKE_ENGINE_LOG}.pod-ps-environ
 #   ps … label=riotbox.egress-role=gateway
 #                                  prints ${FAKE_GATEWAYS_JSON:-[]}
 #   run -d … (the Envoy proxy)     writes Envoy's readiness line into the host
-#                                  dir mounted at /var/log/riotbox-egress
-#   run … (the agent)              writes its argv to ${CAPTURE}, sleeps
-#                                  ${FAKE_AGENT_SLEEP:-0}s, exits ${FAKE_AGENT_EXIT:-0}
+#                                  dir mounted at /var/log/riotbox-egress, and
+#                                  its own environment to
+#                                  ${FAKE_ENGINE_LOG}.proxy-environ
+#   run … (the agent)              writes its argv to ${CAPTURE}, the agent's
+#                                  environment as podman would set it from -e
+#                                  (NAME=VALUE as given, a bare NAME from this
+#                                  process's environment) to ${CAPTURE}.env,
+#                                  its own environment to ${CAPTURE}.environ,
+#                                  sleeps ${FAKE_AGENT_SLEEP:-0}s, exits
+#                                  ${FAKE_AGENT_EXIT:-0}
 #   anything else (image exists, network/pod create, stop, rm, the
 #   container-name probe `ps`, the sweep's `ps --filter pod=…`)
 #                                  exit 0, no output: no agent runs
@@ -39,6 +48,7 @@ case "${1:-} ${2:-}" in
 	exit 0
 	;;
 "pod ps")
+	env >"${FAKE_ENGINE_LOG}.pod-ps-environ"
 	printf '%s\n' "${FAKE_PODS_JSON:-[]}"
 	exit 0
 	;;
@@ -59,9 +69,22 @@ run)
 			fi
 			prev="${arg}"
 		done
+		env >"${FAKE_ENGINE_LOG}.proxy-environ"
 		exit 0
 	fi
 	printf '%s\n' "$*" >"${CAPTURE}"
+	prev=""
+	for arg in "$@"; do
+		if [[ "${prev}" == -e ]]; then
+			if [[ "${arg}" == *=* ]]; then
+				printf '%s\n' "${arg}"
+			else
+				printf '%s=%s\n' "${arg}" "${!arg:-}"
+			fi
+		fi
+		prev="${arg}"
+	done >"${CAPTURE}.env"
+	env >"${CAPTURE}.environ"
 	sleep "${FAKE_AGENT_SLEEP:-0}"
 	exit "${FAKE_AGENT_EXIT:-0}"
 	;;

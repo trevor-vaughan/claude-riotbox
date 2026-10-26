@@ -1,0 +1,199 @@
+name: egress — the session CA bundle for curl and Python (credential injection)
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# scripts/lib/egress-trust.sh is sourced by container/entrypoint.sh, which
+# calls egress_trust_apply before any agent starts. riotbox-core egress-up
+# sets RIOTBOX_EGRESS_CA (and NODE_EXTRA_CA_CERTS) only when the proxy
+# injects a key.
+
+testcases:
+  - name: outside credential injection it does nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          unset RIOTBOX_EGRESS_CA SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE
+          source "{{.riotbox_dir}}/scripts/lib/egress-trust.sh"
+          printf 'SYSTEM\n' >"${T}/system.pem"
+          egress_trust_apply "${T}/system.pem" "${T}/bundle.pem"
+          [ ! -e "${T}/bundle.pem" ] || { echo "BAD: a bundle was written" >&2; exit 1; }
+          [ -z "${SSL_CERT_FILE:-}${CURL_CA_BUNDLE:-}${REQUESTS_CA_BUNDLE:-}" ] || { echo "BAD: a variable was set" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: it writes the system bundle plus the session CA and points curl and Python at it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          unset SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE
+          source "{{.riotbox_dir}}/scripts/lib/egress-trust.sh"
+          printf -- '-----BEGIN CERTIFICATE-----\nSYSTEM\n-----END CERTIFICATE-----' >"${T}/system.pem"
+          printf -- '-----BEGIN CERTIFICATE-----\nSESSION\n-----END CERTIFICATE-----\n' >"${T}/ca.crt"
+          RIOTBOX_EGRESS_CA="${T}/ca.crt" egress_trust_apply "${T}/system.pem" "${T}/bundle.pem"
+          want="$(printf -- '-----BEGIN CERTIFICATE-----\nSYSTEM\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nSESSION\n-----END CERTIFICATE-----')"
+          [ "$(cat "${T}/bundle.pem")" = "${want}" ] || { echo "BAD: bundle:" >&2; cat "${T}/bundle.pem" >&2; exit 1; }
+          for v in SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE; do
+            [ "${!v:-}" = "${T}/bundle.pem" ] || { echo "BAD: ${v} is not the bundle" >&2; exit 1; }
+          done
+          bash -c '[ "${SSL_CERT_FILE}" = "$1" ] && [ "${CURL_CA_BUNDLE}" = "$1" ] && [ "${REQUESTS_CA_BUNDLE}" = "$1" ]' _ "${T}/bundle.pem" || { echo "BAD: not exported" >&2; exit 1; }
+          [ "$(stat -c %a "${T}/bundle.pem")" = 644 ] || { echo "BAD: bundle mode" >&2; exit 1; }
+          if ls "${T}" | grep -q '^bundle\.pem\.'; then echo "BAD: a temp file was left" >&2; exit 1; fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: an unreadable CA or a missing system bundle warns, exports nothing and returns 1
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          unset SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE
+          source "{{.riotbox_dir}}/scripts/lib/egress-trust.sh"
+          declare -F egress_trust_apply >/dev/null || { echo "BAD: egress_trust_apply is not defined" >&2; exit 1; }
+          printf 'SYSTEM\n' >"${T}/system.pem"
+          if RIOTBOX_EGRESS_CA="${T}/missing.crt" egress_trust_apply "${T}/system.pem" "${T}/bundle.pem" 2>"${T}/err"; then
+            echo "BAD: a missing CA succeeded" >&2; exit 1
+          fi
+          grep -q 'WARNING: egress: the session CA' "${T}/err" || { echo "BAD: no warning for the CA" >&2; exit 1; }
+          printf 'CA\n' >"${T}/ca.crt"
+          if RIOTBOX_EGRESS_CA="${T}/ca.crt" egress_trust_apply "${T}/nosystem.pem" "${T}/bundle.pem" 2>"${T}/err"; then
+            echo "BAD: a missing system bundle succeeded" >&2; exit 1
+          fi
+          grep -q 'WARNING: egress: no system CA bundle' "${T}/err" || { echo "BAD: no warning for the system bundle" >&2; exit 1; }
+          [ ! -e "${T}/bundle.pem" ] || { echo "BAD: a bundle was written" >&2; exit 1; }
+          [ -z "${SSL_CERT_FILE:-}${CURL_CA_BUNDLE:-}${REQUESTS_CA_BUNDLE:-}" ] || { echo "BAD: a variable was set" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a bundle it cannot write warns, leaves no temp file and returns 1
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'chmod -R u+w "${T}"; rm -rf "${T}"' EXIT
+          if [ "$(id -u)" = 0 ]; then echo "SKIP: root ignores directory permissions"; echo OK; exit 0; fi
+          unset SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE
+          source "{{.riotbox_dir}}/scripts/lib/egress-trust.sh"
+          printf 'SYSTEM\n' >"${T}/system.pem"
+          printf 'CA\n' >"${T}/ca.crt"
+          mkdir "${T}/ro"
+          chmod 0500 "${T}/ro"
+          if touch "${T}/ro/probe" 2>/dev/null; then echo "SKIP: the directory is still writable"; echo OK; exit 0; fi
+          if RIOTBOX_EGRESS_CA="${T}/ca.crt" egress_trust_apply "${T}/system.pem" "${T}/ro/bundle.pem" 2>"${T}/err"; then
+            echo "BAD: an unwritable bundle succeeded" >&2; exit 1
+          fi
+          grep -q 'WARNING: egress: could not write' "${T}/err" || { echo "BAD: no warning" >&2; cat "${T}/err" >&2; exit 1; }
+          [ -z "$(ls -A "${T}/ro")" ] || { echo "BAD: something was left in the bundle's dir" >&2; exit 1; }
+          [ -z "${SSL_CERT_FILE:-}" ] || { echo "BAD: SSL_CERT_FILE was set" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the entrypoint applies it before any agent's setup runs
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          ep="{{.riotbox_dir}}/container/entrypoint.sh"
+          src="$(grep -nF 'source "${RIOTBOX_SCRIPT_DIR}/lib/egress-trust.sh"' "${ep}" | cut -d: -f1)"
+          call="$(grep -nx 'egress_trust_apply' "${ep}" | cut -d: -f1)"
+          loop="$(grep -nF 'agent_call "${_agent}" container_setup' "${ep}" | cut -d: -f1)"
+          [ -n "${src}" ] && [ -n "${call}" ] && [ -n "${loop}" ] || { echo "BAD: a line is missing (${src:-?} ${call:-?} ${loop:-?})" >&2; exit 1; }
+          [ "${src}" -lt "${call}" ] && [ "${call}" -lt "${loop}" ] || { echo "BAD: wrong order" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a symlink as the session CA is refused and not read
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          unset SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE
+          source "{{.riotbox_dir}}/scripts/lib/egress-trust.sh"
+          declare -F egress_trust_apply >/dev/null || { echo "BAD: egress_trust_apply is not defined" >&2; exit 1; }
+          printf 'SYSTEM\n' >"${T}/system.pem"
+          printf 'SECRET\n' >"${T}/target"
+          ln -s "${T}/target" "${T}/ca.crt"
+          if RIOTBOX_EGRESS_CA="${T}/ca.crt" egress_trust_apply "${T}/system.pem" "${T}/bundle.pem" 2>"${T}/err"; then
+            echo "BAD: a symlinked CA succeeded" >&2; exit 1
+          fi
+          grep -q 'WARNING: egress: the session CA' "${T}/err" || { echo "BAD: no warning" >&2; exit 1; }
+          [ ! -e "${T}/bundle.pem" ] || { echo "BAD: a bundle was written" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a symlink planted at the bundle path is replaced, not written through
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          unset SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE
+          source "{{.riotbox_dir}}/scripts/lib/egress-trust.sh"
+          printf 'SYSTEM\n' >"${T}/system.pem"
+          printf 'CA\n' >"${T}/ca.crt"
+          printf 'VICTIM\n' >"${T}/victim"
+          ln -s "${T}/victim" "${T}/bundle.pem"
+          RIOTBOX_EGRESS_CA="${T}/ca.crt" egress_trust_apply "${T}/system.pem" "${T}/bundle.pem"
+          [ "$(cat "${T}/victim")" = VICTIM ] || { echo "BAD: wrote through the symlink" >&2; exit 1; }
+          [ -f "${T}/bundle.pem" ] && [ ! -L "${T}/bundle.pem" ] || { echo "BAD: bundle is still a link" >&2; exit 1; }
+          grep -qx CA "${T}/bundle.pem" || { echo "BAD: bundle lacks the CA" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a system bundle reached through a symlink is read (the image's is one)
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          unset SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE
+          source "{{.riotbox_dir}}/scripts/lib/egress-trust.sh"
+          printf 'SYSTEM\n' >"${T}/real.pem"
+          ln -s "${T}/real.pem" "${T}/system.pem"
+          printf 'CA\n' >"${T}/ca.crt"
+          RIOTBOX_EGRESS_CA="${T}/ca.crt" egress_trust_apply "${T}/system.pem" "${T}/bundle.pem"
+          grep -qx SYSTEM "${T}/bundle.pem" || { echo "BAD: bundle lacks the system roots" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: with no system bundle argument it finds one of the image's default paths
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          unset SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE
+          source "{{.riotbox_dir}}/scripts/lib/egress-trust.sh"
+          found=""
+          for p in "${EGRESS_TRUST_SYSTEM_BUNDLES[@]}"; do [ -f "${p}" ] && found="${p}" && break; done
+          if [ -z "${found}" ]; then echo "SKIP: no system bundle in this environment"; echo OK; exit 0; fi
+          printf 'CA\n' >"${T}/ca.crt"
+          RIOTBOX_EGRESS_CA="${T}/ca.crt" egress_trust_apply "" "${T}/bundle.pem"
+          [ "$(wc -c <"${T}/bundle.pem")" -gt "$(wc -c <"${found}")" ] || { echo "BAD: bundle is not the system roots plus the CA" >&2; exit 1; }
+          grep -q 'BEGIN CERTIFICATE' "${T}/bundle.pem" || { echo "BAD: no certificates" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
