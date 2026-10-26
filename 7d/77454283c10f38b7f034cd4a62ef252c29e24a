@@ -1,6 +1,6 @@
 tests/egress-launch.venom.yml
-  s_6add4080ebfdca::t_27b02d550771bc 602-604
-  s_6add4080ebfdca::t_e640022929e4d0 587-601,605-610
+  s_6add4080ebfdca::t_27b02d550771bc 602-604,720-722
+  s_6add4080ebfdca::t_e640022929e4d0 587-601,605-610,705-719,723-728
 ---
 {
   "schema_version": "authorship/3.0.0",

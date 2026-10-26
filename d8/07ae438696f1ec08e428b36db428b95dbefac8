@@ -5,19 +5,19 @@ internal/egress/inject/plan_test.go
 internal/egress/inject/plan.go
   s_6add4080ebfdca::t_673ce082e60558 90
 libexec/egress-lib.sh
-  s_6add4080ebfdca::t_da3772f2189031 257-259
+  s_6add4080ebfdca::t_da3772f2189031 257-259,394-396
 README.md
   s_6add4080ebfdca::t_d062ff65287cd3 1060-1064
-  s_6add4080ebfdca::t_27054c8c3f555c 1382-1387
-  s_6add4080ebfdca::t_40916ce9fb1c8b 1322-1325
-  s_6add4080ebfdca::t_9dc9d1905143c7 1333
+  s_6add4080ebfdca::t_27054c8c3f555c 1382-1387,1397-1402
+  s_6add4080ebfdca::t_40916ce9fb1c8b 1322-1325,1337-1340
+  s_6add4080ebfdca::t_9dc9d1905143c7 1333,1348
 docs/dev/decisions/egress-proxy.md
   s_6add4080ebfdca::t_af0d97a07979c2 134
 docs/dev/egress.md
-  s_6add4080ebfdca::t_341bbc4bc23217 343-344,358-366,410-414
+  s_6add4080ebfdca::t_341bbc4bc23217 343-344,358-366,382-383,397-405,410-414,449-453
 THREAT_MODEL.md
-  s_6add4080ebfdca::t_2e3b63941cb8d7 1318-1347
-  s_6add4080ebfdca::t_2bdbae834f8ed1 3271
+  s_6add4080ebfdca::t_2e3b63941cb8d7 1318-1347,1328-1357
+  s_6add4080ebfdca::t_2bdbae834f8ed1 3271,3281
 ---
 {
   "schema_version": "authorship/3.0.0",

@@ -3,7 +3,7 @@ internal/egress/state/runtime_test.go
 internal/egress/pod/sessions.go
   s_6add4080ebfdca::t_06c1e5d01a828d 160-164,170,203,221,241,247
 README.md
-  s_6add4080ebfdca::t_d59ca853afb385 1367-1368
+  s_6add4080ebfdca::t_d59ca853afb385 1367-1368,1382-1383
 internal/egress/pod/pod_test.go
   s_6add4080ebfdca::t_b9335991a46fb6 505-518
 docs/dev/riotbox-core.md
@@ -11,16 +11,16 @@ docs/dev/riotbox-core.md
 internal/egress/state/runtime.go
   s_6add4080ebfdca::t_06c1e5d01a828d 9,59-78,86-94,96,98,100
 tests/egress-launch.venom.yml
-  s_6add4080ebfdca::t_77ebd10cfe0438 623,635-637
+  s_6add4080ebfdca::t_77ebd10cfe0438 623,635-637,741,753-755
 internal/egress/state/state.go
   s_6add4080ebfdca::t_d59ca853afb385 18-19
 libexec/egress-lib.sh
-  s_6add4080ebfdca::t_63741eb6c1008e 340,343-345
+  s_6add4080ebfdca::t_63741eb6c1008e 340,343-345,478,481-483
 docs/dev/egress.md
-  s_6add4080ebfdca::t_d59ca853afb385 174-175,178-182
-  s_6add4080ebfdca::t_6d26692c604bfb 477-479
+  s_6add4080ebfdca::t_d59ca853afb385 174-175,178-182,213-214,217-221
+  s_6add4080ebfdca::t_6d26692c604bfb 477-479,519-521
 THREAT_MODEL.md
-  s_6add4080ebfdca::t_d59ca853afb385 1305-1306,3292
+  s_6add4080ebfdca::t_d59ca853afb385 1305-1306,1315-1316,3292,3302
 internal/egress/pod/pod.go
   s_6add4080ebfdca::t_06c1e5d01a828d 424-426,432,450,465-474
   s_6add4080ebfdca::t_287a69c4542683 475-477

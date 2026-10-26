@@ -1,9 +1,9 @@
 libexec/egress-lib.sh
-  s_6add4080ebfdca::t_196395a239f148 161-163,165,171-175,183-184,197-202
-  s_6add4080ebfdca::t_b56eaeee1342f4 35-36,271-273
+  s_6add4080ebfdca::t_196395a239f148 161-163,165,171-175,183-184,197-202,231-235
+  s_6add4080ebfdca::t_b56eaeee1342f4 35-36,44-45,271-273,409-411
 tests/egress-launch.venom.yml
-  s_6add4080ebfdca::t_f68734c36f74ed 684,698-699,715,725-726,730-732
-  s_6add4080ebfdca::t_22ec58a766e11f 733
+  s_6add4080ebfdca::t_f68734c36f74ed 684,698-699,715,725-726,730-732,802,816-817,833,843-844,848-850
+  s_6add4080ebfdca::t_22ec58a766e11f 733,851
 ---
 {
   "schema_version": "authorship/3.0.0",

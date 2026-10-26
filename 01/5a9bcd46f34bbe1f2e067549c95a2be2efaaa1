@@ -1,9 +1,9 @@
 libexec/egress-lib.sh
-  s_6add4080ebfdca::t_4d59089bbb7558 305,326,328-330
+  s_6add4080ebfdca::t_4d59089bbb7558 305,326,328-330,442,463,465-467
 tests/lib/egress-fake-engine/podman
   s_6add4080ebfdca::t_524c2025a54d78 10-12,51
 tests/egress-launch.venom.yml
-  s_6add4080ebfdca::t_524c2025a54d78 561-564,607-610
+  s_6add4080ebfdca::t_524c2025a54d78 561-564,607-610,679-682,725-728
 ---
 {
   "schema_version": "authorship/3.0.0",
