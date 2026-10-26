@@ -12,7 +12,7 @@ tests/lib/egress-test-helpers.sh
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.5",
-  "base_commit_sha": "53e100924458009cd6eec2d70fa52b2d8d1f0975",
+  "base_commit_sha": "cef8022d8306480661794b3962fb0eb2209ee0f0",
   "prompts": {},
   "sessions": {
     "s_6add4080ebfdca": {
