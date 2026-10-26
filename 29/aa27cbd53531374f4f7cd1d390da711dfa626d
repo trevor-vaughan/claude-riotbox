@@ -1,0 +1,23 @@
+internal/egress/inject/certs_test.go
+  s_6add4080ebfdca::t_be330359546bdd 165-203
+internal/egress/inject/certs.go
+  s_6add4080ebfdca::t_7a62f7ce8c9e8b 47-50,58-59,64-65
+  s_6add4080ebfdca::t_ff386a6e29db5b 82-112
+  s_6add4080ebfdca::t_10aa6a520d486a 14,66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "29aa27cbd53531374f4f7cd1d390da711dfa626d",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
