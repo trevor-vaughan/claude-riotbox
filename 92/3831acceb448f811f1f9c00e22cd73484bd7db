@@ -1,12 +1,13 @@
 libexec/egress-lib.sh
   s_6add4080ebfdca::t_04f15b42b963b0 160-163,165,168-170,176-177,190-195,225-227,240-242
+  s_6add4080ebfdca::t_cb4a6becfa43f7 149-150,171,218-219,221,238-239
 tests/egress-launch.venom.yml
   s_6add4080ebfdca::t_ca8ffc29e8ece9 666-667,683,692,698-701,784-785,801,810,816-819
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.5",
-  "base_commit_sha": "e730139e26ec7e3a810a70ae2e6d0ed3ce145a37",
+  "base_commit_sha": "923831acceb448f811f1f9c00e22cd73484bd7db",
   "prompts": {},
   "sessions": {
     "s_6add4080ebfdca": {
