@@ -1,0 +1,23 @@
+README.md
+  s_6add4080ebfdca::t_0cb1b87dc56cd7 1435-1438
+THREAT_MODEL.md
+  s_6add4080ebfdca::t_0cb1b87dc56cd7 1356-1357
+docs/dev/egress.md
+  s_6add4080ebfdca::t_0cb1b87dc56cd7 565-569
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1df8f5a58c9a4d93d7d94c23bf0c0987173e7793",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
