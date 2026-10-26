@@ -1,0 +1,21 @@
+internal/egress/envoyconfig/envoyconfig.go
+  s_6add4080ebfdca::t_f48bf2e1a78712 90-92,95,425-428
+internal/egress/envoyconfig/intercept_test.go
+  s_6add4080ebfdca::t_3526e38730d894 110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e1f19d9cccb60558dbcbcd69ba8fac48803a0a22",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}

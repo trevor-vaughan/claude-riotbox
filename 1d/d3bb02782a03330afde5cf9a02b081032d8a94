@@ -1,0 +1,35 @@
+THREAT_MODEL.md
+  s_6add4080ebfdca::t_997834086fa027 1300-1313,1322-1326,1342-1349
+  s_6add4080ebfdca::t_5b3b27e0440e67 3292
+docs/dev/decisions/egress-proxy.md
+  s_6add4080ebfdca::t_0a9e44202ad312 157-171
+scripts/lib/egress-trust.sh
+  s_6add4080ebfdca::t_215470dd24edf7 8-14
+docs/dev/riotbox-core.md
+  s_6add4080ebfdca::t_0a9e44202ad312 193-195
+internal/egress/pod/pod.go
+  s_6add4080ebfdca::t_215470dd24edf7 317-321
+docs/dev/egress.md
+  s_6add4080ebfdca::t_7ba591bbe6e581 536-538
+  s_6add4080ebfdca::t_71eaec0d28acd7 37,91-94,160,165-184,373-375,402-414,474-476,511-525
+README.md
+  s_6add4080ebfdca::t_70f590aef9a8b0 1368-1370
+  s_6add4080ebfdca::t_76bd9434566fe6 1421-1423
+  s_6add4080ebfdca::t_319040aa21aef8 1100-1104,1343-1346,1350-1353,1364-1367,1372-1388,1418-1420
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "43a6e99dd185d3e14a92f815b9672266f605dcae",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}

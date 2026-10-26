@@ -1,0 +1,24 @@
+container/entrypoint.sh
+  s_6add4080ebfdca::t_5305f9a6964d52 90-97
+tests/egress-trust.venom.yml
+  s_6add4080ebfdca::t_1d429d291d93cf 119-199
+  s_6add4080ebfdca::t_2ead36674efecb 1-118
+scripts/lib/egress-trust.sh
+  s_6add4080ebfdca::t_5305f9a6964d52 1-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "19fdc0bce3cb89addc363284b7a65a754670471e",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
