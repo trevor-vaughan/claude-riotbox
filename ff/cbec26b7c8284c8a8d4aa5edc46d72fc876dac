@@ -1,0 +1,38 @@
+docs/dev/egress.md
+  s_6add4080ebfdca::t_ceddc1b322d9d9 357
+  s_6add4080ebfdca::t_697b283f2c3706 105-133,355-356
+libexec/launch.sh
+  s_6add4080ebfdca::t_3ac9f717ca8ce0 324-325,327,332-333,362
+README.md
+  s_6add4080ebfdca::t_697b283f2c3706 1087-1096
+tests/egress-launch.venom.yml
+  s_6add4080ebfdca::t_d2ea104a6438d8 465
+  s_6add4080ebfdca::t_35cae7e53e04e7 471
+  s_6add4080ebfdca::t_69353130b8bd39 388-464,466-470,472-483
+libexec/egress-lib.sh
+  s_6add4080ebfdca::t_4ce8f34856d4bd 217-296
+  s_6add4080ebfdca::t_3ac9f717ca8ce0 18-19,29-33,47
+  s_6add4080ebfdca::t_c8d0763006bcb1 129-139,143,146,149,158,166-192
+tests/egress-e2e.venom.yml
+  s_6add4080ebfdca::t_81a93bd76fcf61 274-293,300,303,308,310-317
+  s_6add4080ebfdca::t_829495b13b41fa 304-306
+  s_6add4080ebfdca::t_a3167145c47c36 294-299,301-302,307,309
+THREAT_MODEL.md
+  s_6add4080ebfdca::t_697b283f2c3706 1257-1265
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ffcbec26b7c8284c8a8d4aa5edc46d72fc876dac",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
