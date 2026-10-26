@@ -1,0 +1,23 @@
+libexec/egress-lib.sh
+  s_6add4080ebfdca::t_4d59089bbb7558 305,326,328-330
+tests/lib/egress-fake-engine/podman
+  s_6add4080ebfdca::t_524c2025a54d78 10-12,51
+tests/egress-launch.venom.yml
+  s_6add4080ebfdca::t_524c2025a54d78 561-564,607-610
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b15a75b2b7fcb86a0d570dbe13a26fa5f6a6dea6",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
