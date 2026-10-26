@@ -345,6 +345,10 @@ RUN (groupadd -g ${HOST_GID} llm && \
     useradd -l -m -s /bin/bash llm && \
     mkdir -p /workspace && chown llm /workspace && \
     echo "llm ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/llm && \
+    # env_reset would drop the egress proxy variables, so keep them for
+    # `sudo dnf install` under RIOTBOX_EGRESS=1.
+    echo 'Defaults:llm env_keep += "http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY"' >> /etc/sudoers.d/llm && \
+    visudo -cf /etc/sudoers.d/llm && \
     # /etc/subuid and /etc/subgid are rewritten at runtime by
     # container/nested-podman-setup.sh based on /proc/self/uid_map. Any
     # static range we bake here would point to outer UIDs that aren't

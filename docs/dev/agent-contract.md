@@ -2,7 +2,7 @@
 
 Reference for every function an `agents/<name>/manifest.sh` may define. Eight are
 required; the rest are optional and probed with `declare -F` — absence is never an
-error.
+error, except that `egress_hosts` is needed to launch with `RIOTBOX_EGRESS=1`.
 
 **Adding an agent for the first time?** Start at
 [adding-an-agent.md](adding-an-agent.md), which walks the three steps and shows a
@@ -30,6 +30,7 @@ Function names are mechanical: `agent_<name>_<verb>`.
 | [`context_mode_strip`](#agent_name_context_mode_strip) | no | session start |
 | [`context_mode_build_assert`](#agent_name_context_mode_build_assert) | no | image build |
 | [`git_ai_strip`](#agent_name_git_ai_strip) | no | session start |
+| [`egress_hosts`](#agent_name_egress_hosts) | for `RIOTBOX_EGRESS=1` | host, before launch, when `RIOTBOX_EGRESS=1` |
 
 ## Required verbs
 
@@ -182,8 +183,28 @@ agent_<name>_container_setup() {
 Called by `container/entrypoint.sh` on every container start. Use this for
 agents that need runtime config placement (e.g. opencode's
 `agents/opencode/setup.sh` writes `AGENTS.md` and `opencode.json`). For agents
-whose config is fully baked at build time (e.g. claude's managed-policy
-`/etc/claude-code/CLAUDE.md`), this is a no-op.
+whose config is fully baked at build time, this is a no-op.
+
+Every agent with a system prompt file also calls one of the functions in
+`scripts/lib/egress-prompt.sh` (which the entrypoint sources first) on the
+file its agent reads, to add the section that tells the agent a proxy 403
+is the egress allowlist and to ask the user
+([egress.md](egress.md#telling-the-agent-about-denials)):
+
+| Agent | Prompt file | Call |
+|---|---|---|
+| claude | `${RIOTBOX_MANAGED_POLICY_DIR:-/etc/claude-code}/CLAUDE.md` | `egress_prompt_apply` |
+| pi | `~/.pi/agent/AGENTS.md` | `egress_prompt_apply_shared` |
+| opencode | `~/.config/opencode/AGENTS.md` | `egress_prompt_apply_shared` |
+
+Use `egress_prompt_apply` for a file that is fresh in each container: in
+egress mode it writes the section naming the session, otherwise it strips
+an old one. Use `egress_prompt_apply_shared` for a file every session of a
+project shares (a persistent agent dir): it writes the same
+session-agnostic section at every start and never strips it, so concurrent
+sessions cannot take it from each other. Both only warn on failure. A new
+agent that reads no prompt file at start gets only the proxy's 403 text,
+which most clients do not show; say so in its manifest.
 
 The claude and opencode implementations also run a session-start strip of stale
 GitHub/GitLab MCP entries that earlier images wrote (`agents/<name>/forge-mcp.sh`,
@@ -766,3 +787,38 @@ upstream writes for each one has a different shape:
   either is left in place with a NOTE on stderr. Because `install-hooks` runs
   after `host_sync`, it also replaces any host copy the sync brought in, whose
   baked binary path is a host path.
+
+## Optional verbs: egress
+
+### `agent_<name>_egress_hosts`
+
+```bash
+agent_<name>_egress_hosts() {
+    cat <<'EOF'
+api.provider.example
+models.example.dev
+EOF
+}
+```
+
+Print the hosts this agent must reach when `RIOTBOX_EGRESS=1` confines the
+session to an allowlist, one `egress.conf` entry per line: `host`,
+`host:port` or `*.domain` (see [egress.md](egress.md)). `egress_start` in
+`libexec/egress-lib.sh` calls it once per launch, on the host, for the
+**active** agent only. Unlike `env_vars`, lists are not unioned across agents,
+so a session allows only its own agent's hosts.
+
+The verb is optional for the contract but not for egress mode: a launch with
+`RIOTBOX_EGRESS=1` stops when the active agent lacks it, because a proxy that
+blocks the agent's API is useless. `riotbox-core` validates every line and
+refuses the launch on a bad one. `tests/egress-manifests.venom.yml` requires
+every registered agent to declare a non-empty, well-formed list.
+
+List only what the agent cannot start or answer without (its API, its login
+and token-refresh hosts, a catalogue it fetches at start), with a comment per
+host above the function. Optional provider routes (Vertex, Bedrock) belong in
+the user's `egress.conf`. The package registries are the built-in
+`@registries` group and need no listing. The hosts this verb prints are the
+session's `@agent` group: in strict mode they are allowed only where a conf
+file or `riotbox egress allow` names `@agent` (or the hosts), and the launch
+warns when they are left out.

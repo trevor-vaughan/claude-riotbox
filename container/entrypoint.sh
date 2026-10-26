@@ -82,6 +82,11 @@ source "${RIOTBOX_SCRIPT_DIR}/lib/overlay-ignore.sh"
 # neither can own the writer.
 # shellcheck source=../scripts/lib/json-write.sh disable=SC1091
 source "${RIOTBOX_SCRIPT_DIR}/lib/json-write.sh"
+# The egress prompt section (RIOTBOX_EGRESS=1), sourced ahead of the agent
+# loop below: each agent's container_setup calls egress_prompt_apply or
+# egress_prompt_apply_shared on the prompt file that agent reads.
+# shellcheck source=../scripts/lib/egress-prompt.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/lib/egress-prompt.sh"
 # Elapsed-time reporting for slow startup steps. Sourced ahead of
 # plugin-setup.sh, which is the only caller today; it lives here rather than in
 # that file for the same reason json-write.sh does — the entrypoint composes all

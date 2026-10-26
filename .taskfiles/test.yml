@@ -80,3 +80,17 @@ tasks:
       GIT_COMMITTER_EMAIL: riotbox-tests@invalid
     cmds:
       - "{{.ROOT_DIR}}/scripts/venom-run.sh {{.ARGS}}"
+
+  egress-e2e:
+    desc: "Run the egress proxy end-to-end suite against this host's podman (pulls Envoy; needs the internet; MODE=human|llm)"
+    deps: [":go:build"]
+    vars:
+      EGRESS_IMAGE:
+        sh: bash -c 'source "{{.ROOT_DIR}}/libexec/egress-lib.sh" && printf "%s" "${RIOTBOX_EGRESS_DEFAULT_IMAGE}"'
+    env:
+      RIOTBOX_EGRESS_E2E: "1"
+      RIOTBOX_EGRESS_IMAGE: "{{.EGRESS_IMAGE}}"
+      TEST_MODE: '{{.MODE | default "human"}}'
+    cmds:
+      - go tool ginkgo --label-filter=e2e {{if eq (.MODE | default "human") "llm"}}--succinct --no-color{{end}} ./internal/egress/...
+      - "{{.ROOT_DIR}}/scripts/venom-run.sh tests/egress-e2e.venom.yml"

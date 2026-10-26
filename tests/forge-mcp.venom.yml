@@ -10,8 +10,9 @@ vars:
 # riotbox wrote — decided on the entry's shape, never on the key name — at
 # every session start.
 #
-# Every case sources scripts/lib/json-write.sh first, the way entrypoint.sh
-# does before the agent setup loop.
+# Every case sources scripts/lib/json-write.sh first (and the container_setup
+# cases scripts/lib/egress-prompt.sh), the way entrypoint.sh does before the
+# agent setup loop.
 
 testcases:
   - name: strip removes the GitHub entry riotbox wrote
@@ -358,6 +359,7 @@ testcases:
           JSON
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
           source "{{.riotbox_dir}}/agents/claude/manifest.sh"
           declare -F agent_claude_container_setup >/dev/null \
             || { echo "FAIL: agent_claude_container_setup is not defined"; exit 1; }
@@ -973,6 +975,7 @@ testcases:
           JSON
           unset RIOTBOX_PROMPT
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
           source "{{.riotbox_dir}}/agents/opencode/manifest.sh"
           declare -F agent_opencode_container_setup >/dev/null \
             || { echo "FAIL: agent_opencode_container_setup is not defined"; exit 1; }

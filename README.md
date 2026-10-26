@@ -70,7 +70,7 @@ sudo apt install ./riotbox_<ver>_<arch>.deb        # arch: amd64 or arm64
 
 |                               | App tree                                                    | CLI symlink            | Config dir                                               |
 |-------------------------------|-------------------------------------------------------------|------------------------|----------------------------------------------------------|
-| **rpm / deb** (system)        | `/opt/riotbox`                                              | `/usr/bin/riotbox`     | `/etc/riotbox/{config,mounts.conf}`                      |
+| **rpm / deb** (system)        | `/opt/riotbox`                                              | `/usr/bin/riotbox`     | `/etc/riotbox/{config,mounts.conf,egress.conf}`          |
 | **rootless** (`./install.sh`) | `$XDG_DATA_HOME/riotbox` (default `~/.local/share/riotbox`) | `~/.local/bin/riotbox` | `$XDG_CONFIG_HOME/riotbox` (default `~/.config/riotbox`) |
 
 The `riotbox` dispatcher is self-locating, so it works from either tree without extra configuration.
@@ -93,7 +93,7 @@ env  >  $XDG_CONFIG_HOME/riotbox  >  /etc/riotbox  >  built-in defaults
 ```
 
 This applies to the host-side settings the launcher reads: `config` (sourced by the launcher) and `mounts.conf` (read by mount detection). A value in your user config overrides the system `/etc/riotbox` default, and an explicit environment variable overrides both. Plugins are configured per-user only (`$XDG_CONFIG_HOME/riotbox/plugins.conf` or the `RIOTBOX_PLUGINS` env var) — they are applied
-inside the container, where host `/etc/riotbox` is not visible, so there is no system-wide plugin layer.
+inside the container, where host `/etc/riotbox` is not visible, so there is no system-wide plugin layer. `egress.conf` is read from both places and combined; see [Egress proxy](#egress-proxy).
 
 **After installing**, build the image and verify your host:
 
@@ -146,7 +146,7 @@ If you prefer to set things up yourself:
 
    Re-running `./install.sh` never overwrites your files in
    `$XDG_CONFIG_HOME/riotbox`. When a newer version of `config`,
-   `mounts.conf`, or `plugins.conf` ships, the installer writes it beside
+   `mounts.conf`, `plugins.conf`, or `egress.conf` ships, the installer writes it beside
    yours as `<name>.new` (for example `config.new`) and prints the `diff`
    command to review it. Merge what you want, then delete the `.new` file.
 
@@ -299,6 +299,7 @@ The `pi` command also runs with `PI_TELEMETRY=0` and `PI_SKIP_VERSION_CHECK=1`. 
 | `riotbox ctx-stats [args...]`         | Context Mode savings recorded across sessions, read on the host from the run ledger — see [Context Mode](#context-mode-opt-in)               |
 | `riotbox git-ai [args...]`            | Unified [git-ai](https://usegitai.com/) usage merged across every session store plus your own `~/.git-ai` — see [AI-authorship attribution](#ai-authorship-attribution-git-ai)                     |
 | `riotbox repair-notes [--all]`        | Reattach orphaned git-ai attribution notes to the commits that replaced them after a history rewrite — see [AI-authorship attribution](#ai-authorship-attribution-git-ai) |
+| `riotbox egress <list\|groups\|allow\|deny\|strict\|reload>` | Show or change a running `RIOTBOX_EGRESS=1` session's allowlist without restarting it — see [Egress proxy](#egress-proxy) |
 | `riotbox doctor`                      | Walks every preflight check; prints each result with a fix hint. Exits with the first failure's code (0 on full pass).                      |
 
 ## Pre-installed tools
@@ -1035,6 +1036,292 @@ mode, into the overlay). Nothing current writes these; remove what you find:
 - A headroom block (between headroom's marker comments) in `CLAUDE.local.md`
   or `AGENTS.md`, written by failure learning: delete the block, or the file
   if headroom created it.
+
+## Egress proxy
+
+Opt-in. By default a session has the same network access as any rootless
+podman container. With `RIOTBOX_EGRESS=1` it gets its own
+[Envoy](https://www.envoyproxy.io/) proxy, and that proxy is its **only** way
+out: the agent can open HTTPS connections to the hosts on an allowlist and to
+nothing else.
+
+```bash
+RIOTBOX_EGRESS=1 riotbox run "<task>"
+# or persist it in ~/.config/riotbox/config:
+: "${RIOTBOX_EGRESS:=1}"
+```
+
+`RIOTBOX_EGRESS` must be unset, empty, `0` or `1`; any other value (such as
+`true`) stops the launch with an error rather than running without the proxy.
+
+The first egress launch pulls the Envoy image (pinned by digest;
+`RIOTBOX_EGRESS_IMAGE` overrides it). Inside the session, `HTTPS_PROXY` and
+`HTTP_PROXY` (and their lowercase forms) point at the proxy.
+
+### What the launch refuses
+
+Egress mode needs podman: the agent and its proxy run as a podman pod. The
+launch stops, before creating anything, with a message naming the conflict
+when egress mode is combined with:
+
+- docker;
+- `RIOTBOX_SOCKET=1` (with the host's podman socket the agent could start a
+  container that bypasses the proxy);
+- `RIOTBOX_NETWORK=none`;
+- `RIOTBOX_EXTRA_ARGS` containing `--privileged`, `--cap-add`, `--network`,
+  `--net`, `--pod`, `--userns`, `--rootfs`, `--volumes-from` or
+  `--init-path`, in any
+  spelling (`--flag value` or `--flag=value`);
+- `RIOTBOX_EXTRA_ARGS` mounts (`-v`, `--volume`, `--mount`) whose host source
+  is a Unix socket, or a directory (or a path that does not exist yet) that
+  is, lies under, or contains your runtime directory (`/run/user/<uid>`, and
+  `$XDG_RUNTIME_DIR` when set to an absolute path), where the rootless podman
+  socket lives. A regular file there, such as a credential file a secret
+  manager keeps under `$XDG_RUNTIME_DIR`, is allowed. A `--mount` with `volume-opt=`,
+  `type=glob` or a quoted value is refused because it cannot be checked;
+- the same mount check for the mounts RiotBox builds itself: `mounts.conf`
+  entries, project directories and credential files (`RIOTBOX_CREDFILE_VARS`).
+  The error names which one. A `mounts.conf` entry such as
+  `/run/user/1000/podman/podman.sock` or `/run/user/1000/bus` stops the launch
+  rather than being dropped; remove it, or run without `RIOTBOX_EGRESS=1`.
+
+It also stops when any of those mounts is a file inside the proxy's state
+directory, `${XDG_DATA_HOME:-~/.local/share}/riotbox-egress/`, or a `:O`
+mount whose `upperdir=` or `workdir=` is in or above it.
+
+Every session's allowlist lives in that directory, and the agent runs as
+you, so a mount that reaches it (`riotbox ~`, a `mounts.conf` entry for
+`~/.local/share`) would let the agent rewrite its own allowlist. The launch
+mounts an empty directory over it wherever such a mount puts it in the
+container (`/workspace/.local/share/riotbox-egress` for `riotbox ~`), so the
+agent sees nothing there and cannot write to it. `riotbox ~` keeps working.
+With `RIOTBOX_NESTED=1`, a project or mount that contains the egress state
+is refused: nested mode lets the agent remove that mask. Mount a narrower
+directory, or drop nested or egress mode.
+
+It also stops when the agent's manifest has no `egress_hosts` verb (see
+[docs/dev/agent-contract.md](docs/dev/agent-contract.md#agent_name_egress_hosts)):
+a proxy that blocks the agent's own API is no use. Nested mode
+(`RIOTBOX_NESTED=1`) is allowed.
+
+### What is allowed
+
+Unless strict mode is on, the allowlist is the union of:
+
+- `@registries`, the package registries: the groups `@npm`, `@pypi`, `@go`,
+  `@crates` and `@github` (see [Groups](#groups)).
+- `@agent`: the running agent's own API hosts, and only that agent's.
+  Claude: `api.anthropic.com`, `claude.ai`, `platform.claude.com`,
+  `console.anthropic.com`. opencode and Pi: the API host of each provider
+  whose key they pass through (opencode also `models.dev`). Vertex and
+  Bedrock hosts are not included; add them yourself if you use them.
+- What `/etc/riotbox/egress.conf` (system) and
+  `${XDG_CONFIG_HOME:-~/.config}/riotbox/egress.conf` (yours) allow. Both
+  are read, not one instead of the other. `./install.sh` seeds yours, and
+  the rpm and deb install the system one, from a commented template that
+  explains the format; in short:
+
+  ```ini
+  strict                    # optional, before any section: only what the files list
+  [group mirrors]           # your own group: host, host:port or *.domain lines
+  mirror.corp.example:8443
+  [allow]                   # lines before any section are [allow] lines too
+  example.com               # port 443
+  example.com:8443          # that port only
+  *.example.com             # any subdomain at any depth, not example.com itself
+  @agent                    # the agent's own API hosts (needed under strict)
+  @containers               # every host of a group
+  @mirrors
+  -pypi.org                 # remove an entry another line, file or group allows
+  -@npm                     # remove every host of a group
+  ```
+
+A removal (`-entry`, `-@group`) in either file wins over every addition,
+including the hosts a group adds, and it must match the entry exactly:
+`-*.example.com` does not remove `a.example.com`. Everything not on the list
+is refused with `403`, and so is all plain HTTP. Only names are accepted,
+never IP addresses. A bad line stops the launch, and every
+`riotbox egress` command that reads the file, with
+`<file>:<line>: <reason>`, for example: an invalid entry or group name, an
+unknown section or setting, a `strict` after the first section, an `@name`
+that no file or built-in defines, an empty group, a group defined twice in
+one file, a `-` or `@` line in a group, or `[group agent]`.
+
+#### Strict mode
+
+`strict` (or `strict = on`) before the first section of an `egress.conf`
+drops the implicit `@registries` and `@agent`: the session reaches only
+what the files list. List `@agent` yourself, or the agent cannot reach its
+own API. When strict mode leaves out any of the agent's hosts, the launch
+warns, without refusing, after the proxy is up:
+
+```text
+WARNING: strict mode does not allow the agent's own API hosts (api.anthropic.com, claude.ai, console.anthropic.com, platform.claude.com); add @agent
+```
+
+`strict = off` in your file turns off a `strict` in the system file. A
+session's own setting (`riotbox egress strict`, below) beats yours, which
+beats the system file's; with none of them, strict mode is off.
+
+#### Groups
+
+`riotbox egress groups` lists every group, its hosts, and where its
+definition comes from. A `[group NAME]` in either file replaces the
+built-in group of that name (yours beats the system file's), and every
+`@NAME` in either file uses the result. `@registries` follows too, so a
+`[group pypi]` pointing at your mirror replaces pypi in the default
+allowlist. A group you define lists hosts, not other groups. `@agent` is
+reserved. The built-in groups:
+
+| Group | Hosts |
+|---|---|
+| `@npm` | registry.npmjs.org |
+| `@pypi` | pypi.org, files.pythonhosted.org |
+| `@go` | proxy.golang.org, sum.golang.org |
+| `@crates` | index.crates.io, static.crates.io |
+| `@github` | github.com, api.github.com, codeload.github.com, `*.githubusercontent.com` |
+| `@registries` | `@npm`, `@pypi`, `@go`, `@crates`, `@github` |
+| `@agent` | the running agent's API hosts (above) |
+| `@search` | www.google.com, www.bing.com, duckduckgo.com, search.brave.com, api.search.brave.com |
+| `@docs` | developer.mozilla.org, docs.python.org, pkg.go.dev, docs.rs, stackoverflow.com, `*.stackexchange.com`, `*.readthedocs.io` |
+| `@wikipedia` | `*.wikipedia.org`, `*.wikimedia.org` |
+| `@rubygems` | rubygems.org |
+| `@maven` | repo.maven.apache.org, repo1.maven.org |
+| `@gitlab` | gitlab.com, registry.gitlab.com |
+| `@containers` | registry-1.docker.io, auth.docker.io, production.cloudfront.docker.com, quay.io, `*.quay.io`, ghcr.io, pkg-containers.githubusercontent.com |
+| `@centos` | mirrors.centos.org, mirror.stream.centos.org |
+| `@huggingface` | huggingface.co, `*.hf.co` |
+
+Built-in groups can change between releases as vendors move their hosts;
+if you need a fixed set, define your own group. `@search` and `@docs` let
+the agent send data out through search queries and Q&A sites: allow them
+only when you accept that.
+
+### Changing a running session
+
+`egress.conf` is read when a session starts. To change a session without
+restarting it:
+
+```bash
+riotbox egress list                     # running sessions: start, owner, projects, log, strict, allowlist
+riotbox egress groups                   # every group, its hosts and where it is defined
+riotbox egress allow api.example.com    # allowed now
+riotbox egress allow @pypi              # every host of a group
+riotbox egress deny api.example.com     # new connections refused; open ones stay up
+riotbox egress allow --save x.example   # ...and record it in your egress.conf
+riotbox egress strict --enable          # only what egress.conf lists, from now on
+riotbox egress strict --disable         # off for this session, whatever egress.conf says
+riotbox egress strict --clear           # back to what egress.conf says
+riotbox egress reload                   # re-read egress.conf into every running session
+```
+
+An `allow` or `deny` lasts until the session ends and wins over the conf
+files, so it can re-allow something a conf file removes. Within a session
+the latest `allow` or `deny` of a host wins: `allow @pypi` then
+`deny pypi.org` leaves `files.pythonhosted.org` allowed and `pypi.org`
+refused. A group is kept as its name, so `reload` picks up a changed group.
+If you delete a `[group NAME]` the session allowed or denied, every
+`reload`, `allow`, `deny` and `strict` for that session fails until you
+drop it: `riotbox egress deny --session <name> @NAME` removes the session's
+line for it and applies the rest (the error says so; `--save` refuses).
+`--save` also writes the entry or `@group` to your `egress.conf`, at the
+end of its last `[allow]` section (a new `[allow]` section at the end of a
+file that has sections but none of them `[allow]`; a bare last line in a
+file without sections), replacing any earlier line for it, so a saved allow undoes a
+saved deny in your `egress.conf` (a removal in the system `egress.conf`
+still wins). `strict --save` writes `strict = on` or `strict = off` near the
+top of your `egress.conf`, replacing one already there, and
+`strict --clear --save` removes it. `strict --enable`, and `strict --clear`
+when a conf file is strict, print the warning above when the agent's hosts
+are left out. `deny` of a host that a wildcard still matches says which
+wildcard. Connections already open are never cut by `allow`, `deny`,
+`strict` or `reload`.
+
+With more than one session running, `allow` and `deny` refuse and list
+them; name one with `--session <name>`. The launch prints the name:
+
+```text
+egress: session riotbox-proj-1a2b3c4d; change what it may reach with: riotbox egress allow --session riotbox-proj-1a2b3c4d <entry>
+```
+
+`riotbox egress list` shows it too, with what tells sessions of one project
+apart: when each started, the PID of the launch that owns it, and its
+project dirs (`unknown` for what was not recorded, such as the projects of
+a session an older release started):
+
+```text
+riotbox-proj-1a2b3c4d
+  started: 2026-10-24 14:03:11 CEST
+  owner:   PID 41235
+  project: /home/me/proj
+  log:     /home/me/.local/share/riotbox-egress/riotbox-proj-1a2b3c4d/log/access.log
+  strict:  off (default)
+  allow:   api.anthropic.com
+```
+
+`strict:` says whether strict mode is on and where that comes from:
+`session`, `user conf`, `system conf` or `default` (`unknown` for a session
+an older release started). A project record that cannot be read shows as
+`project: unreadable`, with the reason on stderr.
+
+`reload` without `--session` reloads every running session.
+`riotbox egress --help` has the details; a command with wrong arguments
+prints an `ERROR:` line saying what is wrong, usually followed by the
+usage, and exits 2.
+
+### Finding what was blocked
+
+Each request is logged as a line of JSON in
+`${XDG_DATA_HOME:-~/.local/share}/riotbox-egress/<session>/log/access.log`.
+When a session ends, RiotBox removes its proxy and prints
+`egress: N denied request(s), see <log>` if anything was refused. A later
+egress launch deletes a session's logs once they have gone 7 days unused.
+
+If RiotBox itself is killed, its proxy pod is left behind until the next
+egress launch removes it; that cleanup never touches a session that is
+still running. Pressing Ctrl-C while the pod is being removed does not
+interrupt the removal.
+
+A refused request's `403` carries an `x-riotbox-egress: denied <host[:port]>`
+header and a short text body. For HTTPS it names the session and the
+`riotbox egress allow` command to run, and asks the agent to stop and ask
+you; for plain HTTP it says to use HTTPS, since allowing the host will not
+help. The host in that text is whatever the agent asked for: check it
+before you allow it. Most clients drop the body for HTTPS (curl prints only
+`CONNECT tunnel failed, response 403`), so the agent's system prompt
+(Claude, opencode and Pi) also says that such a failure is the allowlist,
+not the network, and to ask you to allow the host instead of looking for a
+way around it.
+
+### Known limits
+
+- Tools that ignore `HTTPS_PROXY` get no network at all.
+- The session has no DNS: no name resolves inside it except the proxy's,
+  so `nslookup`, `dig` and anything else that resolves a name itself fail.
+  The proxy resolves the hosts it allows. Containers that nested podman
+  (`RIOTBOX_NESTED=1`) starts inherit no working resolver either: they can
+  use the proxy, but cannot resolve names themselves.
+- `sudo dnf install` works once `@centos` is allowed (the template has it,
+  commented out): the image's sudoers keeps the proxy variables across
+  `sudo`. Containers built before this need a rebuild.
+- Git over SSH does not work; use HTTPS remotes.
+- Nested podman (`RIOTBOX_NESTED=1`) needs `@containers` (or your
+  registries) allowed; the template has it, commented out.
+- An allowed name can resolve to a private or loopback address; the proxy
+  checks names, not addresses. The agent can then reach whatever the proxy's
+  network can: your LAN, the host itself, link-local metadata addresses.
+  Keep wildcards narrow.
+- The proxy does not look inside HTTPS, so data can still be sent to any
+  allowed host.
+- Credentials still enter the agent container as they do without egress
+  mode.
+- `RIOTBOX_EXTRA_ARGS` is your own configuration and is trusted. The checks
+  above catch mistakes; they are not a sandbox for it. Two gaps are known: a
+  mounted directory that happens to contain a Unix socket elsewhere than
+  your runtime directory, and a named volume you created earlier with a bind
+  option.
+
+How it works: [docs/dev/egress.md](docs/dev/egress.md).
 
 ## Context Mode (opt-in)
 
@@ -2016,12 +2303,12 @@ Non-interactive callers (`riotbox run`, CI, scripts) never block on the prompt: 
 | `~/.claude.json`                         | file copy into session dir   | Each container gets a writable snapshot       |
 | opencode and Pi auth files (`~/.local/share/opencode/auth.json`, `~/.pi/agent/auth.json`, `~/.pi/agent/mcp-auth.json`) | bind mount (RW), when present | Token refreshes write back; mounted whichever `--agent` runs |
 | Pi config allowlist (`~/.pi/agent/`)     | file copy into state dir     | See [Pi config](#pi-config); nothing flows back |
-| RiotBox config (`~/.config/riotbox/`)    | bind mount (`:z`)            | `plugins.conf`, `config`, `mounts.conf`       |
+| RiotBox config (`~/.config/riotbox/`)    | bind mount (`:z`)            | `plugins.conf`, `config`, `mounts.conf`, `egress.conf` |
 | Host plugins (`~/.claude/plugins/`)      | read-only bind mount         | Merged into session at startup                |
 | User scripts (`~/bin`)                   | read-only bind mount         | Available but not writable                    |
 | User-defined mounts                      | read-only bind mount by default | From `~/.config/riotbox/mounts.conf`; per-entry `:rw` opt-in |
 | Package caches                           | named volumes                | Shared across containers, not with host       |
-| Network                                  | enabled                      | The agent needs npm/PyPI/crates.io etc.       |
+| Network                                  | enabled; with `RIOTBOX_EGRESS=1`, only through a per-session allowlisting proxy | The agent needs npm/PyPI/crates.io etc. See [Egress proxy](#egress-proxy) |
 
 ### What's NOT exposed
 
@@ -2080,6 +2367,7 @@ task fmt            # format Go code (alias for go:fmt: golangci-lint's gofmt + 
 task test:direct    # run venom directly on host (skip container build)
 task test:as-root   # re-run a suite as uid 0 in the container (see below)
 task test:lint      # structural lint of .venom.yml test suites
+task test:egress-e2e  # egress proxy suite against this host's real podman (pulls Envoy; needs the internet)
 task test:list      # list available test suites
 task clean          # remove build output: .test-output/, dist/, configs/, libexec/riotbox-core, .task/
 ```

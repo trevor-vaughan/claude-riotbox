@@ -1,0 +1,465 @@
+name: egress — the system prompt section that tells the agent about the allowlist
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# scripts/lib/egress-prompt.sh is sourced by container/entrypoint.sh; each
+# agent's container_setup applies it to the prompt file that agent reads.
+# egress_prompt_apply (Claude's per-container managed policy) names the
+# session; egress_prompt_apply_shared (Pi's and opencode's AGENTS.md, shared
+# by every session of a project) installs static text at every start, egress
+# or not, and never strips it.
+
+testcases:
+  - name: appends the section naming the session, once however often it runs
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          f="${T}/AGENTS.md"
+          printf 'You are in a riotbox.\n' >"${f}"
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply "${f}"
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply "${f}"
+          [ "$(head -1 "${f}")" = "You are in a riotbox." ] || { echo "BAD: the prompt's own text was lost" >&2; exit 1; }
+          [ "$(grep -cxF '<!-- riotbox:egress begin -->' "${f}")" -eq 1 ] || { echo "BAD: section not there exactly once" >&2; cat "${f}" >&2; exit 1; }
+          [ "$(grep -cxF '<!-- riotbox:egress end -->' "${f}")" -eq 1 ] || { echo "BAD: end marker not there exactly once" >&2; exit 1; }
+          grep -qF 'riotbox egress allow --session riotbox-proj-1a2b3c4d <host>' "${f}" || { echo "BAD: no allow command" >&2; exit 1; }
+          grep -qF 'It is not a transient error. Do not retry it' "${f}" || { echo "BAD: no instruction" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: removes an earlier session's section, leaving the rest byte for byte, outside egress mode
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          printf 'line one\n\nline two\n' >"${T}/orig"
+          cp "${T}/orig" "${T}/AGENTS.md"
+          RIOTBOX_EGRESS_SESSION=old-11111111 egress_prompt_apply "${T}/AGENTS.md"
+          unset RIOTBOX_EGRESS_SESSION
+          egress_prompt_apply "${T}/AGENTS.md"
+          cmp "${T}/orig" "${T}/AGENTS.md" || { echo "BAD: not restored: $(cat "${T}/AGENTS.md")" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: replaces an earlier session's section with this session's
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          f="${T}/AGENTS.md"
+          printf 'prompt\n' >"${f}"
+          RIOTBOX_EGRESS_SESSION=old-11111111 egress_prompt_apply "${f}"
+          RIOTBOX_EGRESS_SESSION=new-22222222 egress_prompt_apply "${f}"
+          grep -qF -- '--session new-22222222' "${f}" || { echo "BAD: new session not named" >&2; exit 1; }
+          if grep -qF 'old-11111111' "${f}"; then echo "BAD: old session left behind" >&2; exit 1; fi
+          [ "$(grep -cxF '<!-- riotbox:egress begin -->' "${f}")" -eq 1 ] || { echo "BAD: two sections" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: creates a missing file only to hold a section, and leaves an untouched file alone
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          unset RIOTBOX_EGRESS_SESSION
+          egress_prompt_apply "${T}/missing.md"
+          [ ! -e "${T}/missing.md" ] || { echo "BAD: created a file outside egress mode" >&2; exit 1; }
+          printf 'plain\n' >"${T}/plain.md"
+          touch -d '2000-01-01' "${T}/plain.md"
+          egress_prompt_apply "${T}/plain.md"
+          [ "$(stat -c %Y "${T}/plain.md")" = "$(date -d '2000-01-01' +%s)" ] || { echo "BAD: rewrote a file with no section" >&2; exit 1; }
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply "${T}/missing.md"
+          grep -qxF '<!-- riotbox:egress begin -->' "${T}/missing.md" || { echo "BAD: no section in a new file" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: replaces a link at the prompt path with the section alone, never reading or writing its target
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          printf 'secret\n' >"${T}/target"
+          touch -d '2000-01-01' "${T}/target"
+          for fn in egress_prompt_apply egress_prompt_apply_shared; do
+            f="${T}/${fn}.md"
+            ln -s "${T}/target" "${f}"
+            RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d "${fn}" "${f}" 2>"${T}/err" || { echo "BAD: ${fn} failed: $(cat "${T}/err")" >&2; exit 1; }
+            [ ! -L "${f}" ] && [ -f "${f}" ] || { echo "BAD: ${fn}: still a link" >&2; exit 1; }
+            [ "$(head -1 "${f}")" = '<!-- riotbox:egress begin -->' ] || { echo "BAD: ${fn}: not the section alone: $(cat "${f}")" >&2; exit 1; }
+            if grep -qF secret "${f}"; then echo "BAD: ${fn}: copied the link target's text" >&2; exit 1; fi
+            grep -qF "[egress] WARN: ${f} is a symbolic link" "${T}/err" || { echo "BAD: ${fn}: no warning: $(cat "${T}/err")" >&2; exit 1; }
+          done
+          [ "$(cat "${T}/target")" = "secret" ] || { echo "BAD: wrote through the link" >&2; exit 1; }
+          [ "$(stat -c %Y "${T}/target")" = "$(date -d '2000-01-01' +%s)" ] || { echo "BAD: the target was touched" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: replaces a FIFO at the prompt path without blocking on it, and leaves it alone outside egress mode
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          lib="{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          mkfifo "${T}/plain.md"
+          timeout 10 bash -c 'source "$1"; unset RIOTBOX_EGRESS_SESSION; egress_prompt_apply "$2"' _ "${lib}" "${T}/plain.md" \
+            || { echo "BAD: egress_prompt_apply outside egress mode failed or hung on a FIFO" >&2; exit 1; }
+          [ -p "${T}/plain.md" ] || { echo "BAD: replaced a FIFO outside egress mode" >&2; exit 1; }
+          for fn in egress_prompt_apply egress_prompt_apply_shared; do
+            f="${T}/${fn}.md"
+            mkfifo "${f}"
+            timeout 10 env RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d bash -c 'source "$1"; "$2" "$3"' _ "${lib}" "${fn}" "${f}" 2>"${T}/err" \
+              || { echo "BAD: ${fn} failed or hung on a FIFO: $(cat "${T}/err")" >&2; exit 1; }
+            [ -f "${f}" ] && [ ! -p "${f}" ] || { echo "BAD: ${fn}: the FIFO is still there" >&2; exit 1; }
+            [ "$(head -1 "${f}")" = '<!-- riotbox:egress begin -->' ] || { echo "BAD: ${fn}: not the section alone" >&2; exit 1; }
+            grep -qF "[egress] WARN: ${f} is not a regular file" "${T}/err" || { echo "BAD: ${fn}: no warning: $(cat "${T}/err")" >&2; exit 1; }
+          done
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: warns and returns 1, changing nothing, when the prompt cannot be rewritten
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          T="$(mktemp -d)"; trap 'chmod -R u+w "${T}"; rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          mkdir "${T}/dir.md"
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply "${T}/dir.md" 2>"${T}/err"; rc=$?
+          [ "${rc}" -eq 1 ] || { echo "BAD: a directory: exit ${rc}" >&2; exit 1; }
+          grep -qF '[egress] WARN' "${T}/err" || { echo "BAD: no warning for a directory" >&2; exit 1; }
+          if [ "$(id -u)" -eq 0 ]; then echo "SKIP: root ignores directory permissions"; echo OK; exit 0; fi
+          mkdir "${T}/ro"
+          printf 'prompt\n' >"${T}/ro/AGENTS.md"
+          chmod 0500 "${T}/ro"
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply "${T}/ro/AGENTS.md" 2>"${T}/err"; rc=$?
+          [ "${rc}" -eq 1 ] || { echo "BAD: read-only dir: exit ${rc}" >&2; exit 1; }
+          grep -qF '[egress] WARN' "${T}/err" || { echo "BAD: no warning for a read-only dir" >&2; exit 1; }
+          [ "$(cat "${T}/ro/AGENTS.md")" = "prompt" ] || { echo "BAD: the prompt changed" >&2; exit 1; }
+          [ "$(ls -A "${T}/ro")" = "AGENTS.md" ] || { echo "BAD: a temporary file was left: $(ls -A "${T}/ro")" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: each agent's container setup puts the right form of the section in the prompt file it reads, at every start
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}/home"
+          mkdir -p "${HOME}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED RIOTBOX_PROMPT
+          export RIOTBOX_MANAGED_POLICY_DIR="${T}/policy" RIOTBOX_PI_DIR="${T}/pi"
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          mkdir -p "${RIOTBOX_MANAGED_POLICY_DIR}"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          claude="${RIOTBOX_MANAGED_POLICY_DIR}/CLAUDE.md"
+          shared=("${HOME}/.pi/agent/AGENTS.md" "${HOME}/.config/opencode/AGENTS.md")
+          export RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d
+          for a in claude pi opencode; do agent_call "${a}" container_setup 2>>"${T}/err"; done
+          grep -qF -- '--session riotbox-proj-1a2b3c4d <host>' "${claude}" || { echo "BAD: Claude's section does not name the session" >&2; exit 1; }
+          for f in "${shared[@]}"; do
+            grep -qF -- '--session <value of $RIOTBOX_EGRESS_SESSION> <host>' "${f}" || { echo "BAD: no shared section in ${f}" >&2; exit 1; }
+            if grep -qF 'riotbox-proj-1a2b3c4d' "${f}"; then echo "BAD: session name in shared ${f}" >&2; exit 1; fi
+            cp "${f}" "${f}.egress"
+          done
+          unset RIOTBOX_EGRESS_SESSION
+          for a in claude pi opencode; do agent_call "${a}" container_setup 2>>"${T}/err"; done
+          if grep -qF 'riotbox:egress' "${claude}"; then echo "BAD: section left in ${claude}" >&2; exit 1; fi
+          for f in "${shared[@]}"; do
+            cmp "${f}.egress" "${f}" || { echo "BAD: a normal start changed the section in ${f}" >&2; exit 1; }
+            rm -f "${f}"
+          done
+          for a in pi opencode; do agent_call "${a}" container_setup 2>>"${T}/err"; done
+          for f in "${shared[@]}"; do
+            cmp "${f}.egress" "${f}" || { echo "BAD: a normal first start did not install the section in ${f}" >&2; exit 1; }
+          done
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a normal start with RIOTBOX_PROMPT renders the prompt, then adds exactly one shared section
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export HOME="${T}/home"
+          mkdir -p "${HOME}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED RIOTBOX_EGRESS_SESSION
+          export RIOTBOX_MANAGED_POLICY_DIR="${T}/policy" RIOTBOX_PI_DIR="${T}/pi"
+          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
+          mkdir -p "${RIOTBOX_MANAGED_POLICY_DIR}"
+          printf 'Custom prompt on {{"{{"}}OS_PRETTY_NAME{{"}}"}}.\nSecond line.\n' >"${T}/prompt.md"
+          grep -qF '{{"{{"}}OS_PRETTY_NAME{{"}}"}}' "${T}/prompt.md" || { echo "BAD: the placeholder did not survive templating" >&2; exit 1; }
+          export RIOTBOX_PROMPT="${T}/prompt.md"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          for run in 1 2; do
+            for a in claude pi opencode; do agent_call "${a}" container_setup 2>>"${T}/err"; done
+          done
+          claude="${RIOTBOX_MANAGED_POLICY_DIR}/CLAUDE.md"
+          head -1 "${claude}" | grep -q '^Custom prompt on ' || { echo "BAD: Claude's prompt not rendered" >&2; exit 1; }
+          if grep -qF 'riotbox:egress' "${claude}"; then echo "BAD: a normal start gave Claude a section" >&2; exit 1; fi
+          for f in "${HOME}/.pi/agent/AGENTS.md" "${HOME}/.config/opencode/AGENTS.md"; do
+            head -1 "${f}" | grep -q '^Custom prompt on ' || { echo "BAD: ${f} does not start with the rendered prompt" >&2; exit 1; }
+            if grep -qF 'OS_PRETTY_NAME' "${f}"; then echo "BAD: ${f} not rendered" >&2; exit 1; fi
+            [ "$(sed -n 2p "${f}")" = "Second line." ] || { echo "BAD: ${f} prompt body changed" >&2; exit 1; }
+            [ "$(sed -n 3p "${f}")" = '<!-- riotbox:egress begin -->' ] || { echo "BAD: ${f}: section does not follow the prompt" >&2; cat "${f}" >&2; exit 1; }
+            [ "$(grep -cxF '<!-- riotbox:egress begin -->' "${f}")" -eq 1 ] || { echo "BAD: ${f}: section not there exactly once" >&2; exit 1; }
+            [ "$(tail -1 "${f}")" = '<!-- riotbox:egress end -->' ] || { echo "BAD: ${f}: section not last" >&2; exit 1; }
+            grep -qF -- '--session <value of $RIOTBOX_EGRESS_SESSION> <host>' "${f}" || { echo "BAD: ${f}: not the shared form" >&2; exit 1; }
+          done
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the shared section is the same for every session and appears once
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          f="${T}/AGENTS.md"
+          printf 'You are in a riotbox.\n' >"${f}"
+          RIOTBOX_EGRESS_SESSION=old-11111111 egress_prompt_apply_shared "${f}"
+          cp "${f}" "${T}/first"
+          RIOTBOX_EGRESS_SESSION=new-22222222 egress_prompt_apply_shared "${f}"
+          cmp "${T}/first" "${f}" || { echo "BAD: the shared section depends on the session" >&2; exit 1; }
+          [ "$(head -1 "${f}")" = "You are in a riotbox." ] || { echo "BAD: the prompt's own text was lost" >&2; exit 1; }
+          [ "$(grep -cxF '<!-- riotbox:egress begin -->' "${f}")" -eq 1 ] || { echo "BAD: section not there exactly once" >&2; cat "${f}" >&2; exit 1; }
+          grep -qF 'If the environment variable `RIOTBOX_EGRESS_SESSION` is set' "${f}" || { echo "BAD: no condition" >&2; exit 1; }
+          grep -qF 'is not set, this section does not apply.' "${f}" || { echo "BAD: no opt-out" >&2; exit 1; }
+          grep -qF 'It is not a transient error. Do not retry it' "${f}" || { echo "BAD: no instruction" >&2; exit 1; }
+          if grep -qE 'old-11111111|new-22222222' "${f}"; then echo "BAD: a session name leaked in" >&2; exit 1; fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a normal start installs the same shared section as an egress start, creating a missing file
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          printf 'prompt\n' >"${T}/egress.md"
+          printf 'prompt\n' >"${T}/normal.md"
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply_shared "${T}/egress.md"
+          unset RIOTBOX_EGRESS_SESSION
+          egress_prompt_apply_shared "${T}/normal.md"
+          cmp "${T}/egress.md" "${T}/normal.md" || { echo "BAD: a normal start installed something else" >&2; exit 1; }
+          egress_prompt_apply_shared "${T}/egress.md"
+          cmp "${T}/egress.md" "${T}/normal.md" || { echo "BAD: a normal start stripped or changed the section" >&2; exit 1; }
+          egress_prompt_apply_shared "${T}/missing.md"
+          [ "$(head -1 "${T}/missing.md")" = '<!-- riotbox:egress begin -->' ] || { echo "BAD: no section in a new file" >&2; exit 1; }
+          [ "$(grep -cxF '<!-- riotbox:egress end -->' "${T}/missing.md")" -eq 1 ] || { echo "BAD: section not there exactly once" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a CRLF file keeps its lines and ends up with one section
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          printf 'one\r\ntwo\r\n' >"${T}/orig"
+          printf 'one\r\ntwo\r\n<!-- riotbox:egress begin -->\r\nold\r\n<!-- riotbox:egress end -->\r\n' >"${T}/c.md"
+          cp "${T}/c.md" "${T}/s.md"
+          unset RIOTBOX_EGRESS_SESSION
+          egress_prompt_apply "${T}/c.md"
+          cmp "${T}/orig" "${T}/c.md" || { echo "BAD: CRLF section not stripped: $(od -c "${T}/c.md")" >&2; exit 1; }
+          egress_prompt_apply_shared "${T}/s.md"
+          egress_prompt_apply_shared "${T}/s.md"
+          [ "$(head -c 10 "${T}/s.md")" = "$(printf 'one\r\ntwo\r\n')" ] || { echo "BAD: CRLF lines changed" >&2; exit 1; }
+          if grep -qF 'old' "${T}/s.md"; then echo "BAD: the CRLF section was kept" >&2; exit 1; fi
+          [ "$(grep -c 'riotbox:egress begin' "${T}/s.md")" -eq 1 ] || { echo "BAD: section not there exactly once" >&2; cat -A "${T}/s.md" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a file without a final newline keeps its last line apart from the section
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          f="${T}/AGENTS.md"
+          printf 'first\nlast' >"${f}"
+          egress_prompt_apply_shared "${f}"
+          egress_prompt_apply_shared "${f}"
+          [ "$(sed -n 2p "${f}")" = "last" ] || { echo "BAD: last line merged: $(cat -A "${f}")" >&2; exit 1; }
+          [ "$(sed -n 3p "${f}")" = '<!-- riotbox:egress begin -->' ] || { echo "BAD: begin marker not on its own line" >&2; exit 1; }
+          [ "$(grep -cxF '<!-- riotbox:egress begin -->' "${f}")" -eq 1 ] || { echo "BAD: section not there exactly once" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: two old sections collapse to one, and the file keeps its mode
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          f="${T}/AGENTS.md"
+          printf 'a\n<!-- riotbox:egress begin -->\nx\n<!-- riotbox:egress end -->\nb\n<!-- riotbox:egress begin -->\ny\n<!-- riotbox:egress end -->\nc\n' >"${f}"
+          cp "${f}" "${T}/c.md"
+          chmod 0640 "${f}" "${T}/c.md"
+          egress_prompt_apply_shared "${f}"
+          [ "$(grep -cxF '<!-- riotbox:egress begin -->' "${f}")" -eq 1 ] || { echo "BAD: sections not collapsed" >&2; cat "${f}" >&2; exit 1; }
+          [ "$(head -3 "${f}")" = "$(printf 'a\nb\nc')" ] || { echo "BAD: user text changed" >&2; exit 1; }
+          if grep -qxE 'x|y' "${f}"; then echo "BAD: an old section was kept" >&2; exit 1; fi
+          [ "$(stat -c %a "${f}")" = 640 ] || { echo "BAD: mode $(stat -c %a "${f}")" >&2; exit 1; }
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply "${T}/c.md"
+          [ "$(grep -cxF '<!-- riotbox:egress begin -->' "${T}/c.md")" -eq 1 ] || { echo "BAD: named form did not collapse" >&2; exit 1; }
+          [ "$(stat -c %a "${T}/c.md")" = 640 ] || { echo "BAD: named form mode $(stat -c %a "${T}/c.md")" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the shared form keeps text after an unmatched begin marker and warns when it cannot write
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          f="${T}/AGENTS.md"
+          printf 'top\n<!-- riotbox:egress begin -->\nuser text\n' >"${f}"
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply_shared "${f}" 2>"${T}/err" || { echo "BAD: refused" >&2; exit 1; }
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply_shared "${f}" 2>>"${T}/err" || { echo "BAD: refused" >&2; exit 1; }
+          grep -qxF 'user text' "${f}" || { echo "BAD: user text lost" >&2; exit 1; }
+          [ "$(grep -cxF '<!-- riotbox:egress end -->' "${f}")" -eq 1 ] || { echo "BAD: section not there exactly once" >&2; cat "${f}" >&2; exit 1; }
+          grep -qF '[egress] WARN' "${T}/err" || { echo "BAD: no warning for an unmatched begin marker" >&2; exit 1; }
+          mkdir "${T}/dir.md"
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply_shared "${T}/dir.md" 2>"${T}/err"; rc=$?
+          [ "${rc}" -eq 1 ] || { echo "BAD: a directory: exit ${rc}" >&2; exit 1; }
+          grep -qF '[egress] WARN' "${T}/err" || { echo "BAD: no warning for a directory" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: strips a section from the middle of the file, keeping the user's text after it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          unset RIOTBOX_EGRESS_SESSION
+          printf 'before\n<!-- riotbox:egress begin -->\nold section\n<!-- riotbox:egress end -->\nafter\n' >"${T}/AGENTS.md"
+          egress_prompt_apply "${T}/AGENTS.md"
+          [ "$(cat "${T}/AGENTS.md")" = "$(printf 'before\nafter')" ] || { echo "BAD: got: $(cat "${T}/AGENTS.md")" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: keeps everything after a begin marker that has no end marker, with a warning
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          f="${T}/AGENTS.md"
+          printf 'top\n<!-- riotbox:egress begin -->\nuser text one\nuser text two\n' >"${f}"
+          cp "${f}" "${T}/orig"
+          unset RIOTBOX_EGRESS_SESSION
+          egress_prompt_apply "${f}" 2>"${T}/err"
+          cmp "${T}/orig" "${f}" || { echo "BAD: unmatched marker changed the file: $(cat "${f}")" >&2; exit 1; }
+          grep -qF '[egress] WARN' "${T}/err" || { echo "BAD: no warning for an unmatched begin marker" >&2; exit 1; }
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply "${f}" 2>/dev/null
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply "${f}" 2>/dev/null
+          grep -qxF 'user text two' "${f}" || { echo "BAD: user text after the marker was lost" >&2; exit 1; }
+          [ "$(grep -cxF '<!-- riotbox:egress end -->' "${f}")" -eq 1 ] || { echo "BAD: section not there exactly once" >&2; cat "${f}" >&2; exit 1; }
+          [ "$(grep -cF 'riotbox egress allow --session' "${f}")" -eq 1 ] || { echo "BAD: section duplicated" >&2; cat "${f}" >&2; exit 1; }
+          egress_prompt_apply "${f}" 2>/dev/null
+          cmp "${T}/orig" "${f}" || { echo "BAD: not restored: $(cat "${f}")" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: keeps a stray end marker the user wrote outside any section
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          f="${T}/AGENTS.md"
+          printf 'a\n<!-- riotbox:egress end -->\nb\n' >"${f}"
+          cp "${f}" "${T}/orig"
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply "${f}"
+          unset RIOTBOX_EGRESS_SESSION
+          egress_prompt_apply "${f}"
+          cmp "${T}/orig" "${f}" || { echo "BAD: stray end marker not kept: $(cat "${f}")" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: refuses a session name that is not one, stripping the old section and appending nothing
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/scripts/lib/egress-prompt.sh"
+          f="${T}/AGENTS.md"
+          printf 'prompt\n' >"${f}"
+          RIOTBOX_EGRESS_SESSION=riotbox-proj-1a2b3c4d egress_prompt_apply "${f}" || { echo "BAD: valid name refused" >&2; exit 1; }
+          for bad in '$(touch pwned)' 'a b' '-x' "$(printf 'a\nb')" 'a/b' 'x&y' "$(printf 'a%.0s' $(seq 1 129))"; do
+            RIOTBOX_EGRESS_SESSION="${bad}" egress_prompt_apply "${f}" 2>"${T}/err"; rc=$?
+            [ "${rc}" -eq 1 ] || { echo "BAD: [${bad}] exit ${rc}" >&2; exit 1; }
+            grep -qF '[egress] WARN' "${T}/err" || { echo "BAD: no warning for [${bad}]" >&2; exit 1; }
+            [ "$(cat "${f}")" = "prompt" ] || { echo "BAD: [${bad}] left: $(cat "${f}")" >&2; exit 1; }
+          done
+          [ ! -e pwned ] && [ ! -e "${T}/pwned" ] || { echo "BAD: the name was evaluated" >&2; exit 1; }
+          RIOTBOX_EGRESS_SESSION="$(printf 'a%.0s' $(seq 1 128))" egress_prompt_apply "${f}" || { echo "BAD: 128-char name refused" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK

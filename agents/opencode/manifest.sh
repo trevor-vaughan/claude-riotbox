@@ -157,12 +157,17 @@ agent_opencode_headroom_argv() {
 # Then move Context Mode stores an earlier release left under the config dir
 # (see context-mode.sh). Finally strip any GitHub/GitLab MCP entry an earlier
 # image left in the persisted opencode.jsonc, which opencode_setup merges back
-# in. entrypoint.sh runs this before context_mode_setup, after sourcing
-# scripts/lib/json-write.sh.
+# in. AGENTS.md gets the egress prompt section at every start, egress or
+# not, in its session-agnostic form: every session of the project shares the
+# file (scripts/lib/egress-prompt.sh).
+# entrypoint.sh runs this before context_mode_setup, after sourcing
+# scripts/lib/json-write.sh and scripts/lib/egress-prompt.sh.
 agent_opencode_container_setup() {
 	# shellcheck source=./setup.sh
 	source "${_AGENT_OPENCODE_DIR}/setup.sh"
 	opencode_setup
+	# From scripts/lib/egress-prompt.sh, which container/entrypoint.sh sources.
+	egress_prompt_apply_shared "${HOME}/.config/opencode/AGENTS.md"
 	opencode_strip_forge_mcp_entries
 	_agent_opencode_cm_migrate_store
 }
@@ -196,5 +201,23 @@ GROQ_API_KEY
 MISTRAL_API_KEY
 DEEPSEEK_API_KEY
 XAI_API_KEY
+EOF
+}
+
+# agent_opencode_egress_hosts — the hosts opencode must reach through the
+# RIOTBOX_EGRESS=1 proxy (docs/dev/agent-contract.md): the API host of each
+# provider whose key env_vars passes through, in the same order, then
+# models.dev, the model catalogue opencode fetches at start.
+agent_opencode_egress_hosts() {
+	cat <<'EOF'
+api.anthropic.com
+api.openai.com
+openrouter.ai
+generativelanguage.googleapis.com
+api.groq.com
+api.mistral.ai
+api.deepseek.com
+api.x.ai
+models.dev
 EOF
 }

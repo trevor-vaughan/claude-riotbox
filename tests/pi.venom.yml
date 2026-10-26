@@ -456,10 +456,17 @@ testcases:
           pi_setup 2>/dev/null
           [[ "$(cat "${md}")" == "HOSTCOPY" ]] || { echo "FAIL: host copy overwritten"; exit 1; }
           echo 'prompt on {{OS_PRETTY_NAME}}' > "${T}/prompt.md"
+          chmod 0640 "${md}"
+          ino="$(stat -c %i "${md}")"
           RIOTBOX_PROMPT="${T}/prompt.md" pi_setup 2>/dev/null
           if grep -q '^prompt on ' "${md}" && ! grep -qF 'OS_PRETTY_NAME' "${md}"; then :; else
             echo "FAIL: RIOTBOX_PROMPT not rendered"; cat "${md}"; exit 1
           fi
+          # Another session sharing the file must never read it half-written:
+          # it is replaced by a rename, not truncated and rewritten in place.
+          [ "$(stat -c %i "${md}")" != "${ino}" ] || { echo "FAIL: AGENTS.md was rewritten in place"; exit 1; }
+          [ "$(stat -c %a "${md}")" = 640 ] || { echo "FAIL: mode $(stat -c %a "${md}"), want 640"; exit 1; }
+          if compgen -G "${md}.?*" >/dev/null; then echo "FAIL: a temporary file was left: $(ls -A "${HOME}/.pi/agent")"; exit 1; fi
           echo "AGENTS_MD_OK"
         assertions:
           - result.code ShouldEqual 0

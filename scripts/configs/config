@@ -1,4 +1,4 @@
-# riotbox-config-version: 8
+# riotbox-config-version: 9
 # ~/.config/riotbox/config — Persistent defaults for riotbox.
 #
 # This file is *sourced* as a bash script by the launcher, so each setting is
@@ -37,6 +37,17 @@
 # but also blocks exfiltration. Useful for auditing untrusted code.
 #
 # : "${RIOTBOX_NETWORK:=none}"
+
+# ── Egress proxy ─────────────────────────────────────────────────────────
+# RIOTBOX_EGRESS=1 gives each session its own Envoy proxy as its only way to
+# the network. The agent can reach what egress.conf allows: by default the
+# package registries (@registries), its own API hosts (@agent) and the hosts
+# you list; with `strict` in egress.conf, only what you list. Podman only.
+# Change a running session with `riotbox egress`. See README "Egress proxy".
+# : "${RIOTBOX_EGRESS:=1}"
+#
+# The Envoy image, pinned by digest. Override only to try another Envoy.
+# : "${RIOTBOX_EGRESS_IMAGE:=docker.io/envoyproxy/envoy:distroless-v1.40.1@sha256:48a8c5ec92d9775d5483e32fbb2d6775439bdf957c1602d47afb90644526c093}"
 
 # ── Overlay mode (podman only) ───────────────────────────────────────────
 # When enabled, project directories are mounted via fuse-overlayfs so that

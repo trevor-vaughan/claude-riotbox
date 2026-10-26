@@ -69,7 +69,7 @@ _No tool data recorded_
 
 | Area                                                                     | Reason                                                                                                                                                                                                                                                                                                                                                                                  | Gap Type | Recommended Action |
 |--------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|--------------------|
-| Runtime and dynamic behaviour                                            | Static analysis only -- cannot assess runtime container escape, memory corruption, or dynamic network behaviour                                                                                                                                                                                                                                                                         |          |                    |
+| Runtime and dynamic behaviour                                            | Static analysis only -- cannot assess runtime container escape, memory corruption, or dynamic network behaviour (the egress proxy's boundary is exercised dynamically by tests/egress-e2e.venom.yml; see "Egress proxy (opt-in feature)")                                                                                                                                               |          |                    |
 | Social engineering and physical vectors                                  | Out of scope for static code-level threat modelling                                                                                                                                                                                                                                                                                                                                     |          |                    |
 | Third-party and vendor code not in the repository                        | Claude Code npm package internals, podman/docker runtime, and CentOS base image vulnerabilities are not assessed                                                                                                                                                                                                                                                                        |          |                    |
 | Anthropic API authentication flow                                        | OAuth token refresh logic is inside the Claude Code npm binary; only the credential file handling is assessed                                                                                                                                                                                                                                                                           |          |                    |
@@ -133,6 +133,10 @@ flowchart LR
     HOST_PODMAN_SOCK["User podman.socket (XDG_RUNTIME_DIR/podman/podman.sock)"]
   end
 
+  subgraph EGRESSPOD["Egress proxy (RIOTBOX_EGRESS=1 only)"]
+    EGRESSPROXY["Envoy egress proxy"]
+  end
+
   subgraph CONTAINER["Rootless Container (podman/docker)"]
     ENTRY["entrypoint.sh"]
     WRAPPER["agent-wrapper.sh"]
@@ -168,6 +172,8 @@ flowchart LR
   ENTRY -->|"calls"| SBRANCH
   WRAPPER -->|"exec --dangerously-skip-permissions"| CLAUDE
   CLAUDE -->|"HTTPS API calls"| ANTHROPIC
+  CLAUDE -->|"egress mode: HTTPS CONNECT only"| EGRESSPROXY
+  EGRESSPROXY -->|"allowlisted host:port only"| ANTHROPIC
   CLAUDE -->|"reads/writes"| PROJ
   BUILDSH -->|"generates build args"| DOCKERFILE
   DOCKERFILE -->|"fetches tools via"| CURLSH
@@ -1206,6 +1212,116 @@ above `publish` is the authoritative list.
 can publish a validly signed bad binary. The build provenance attestation
 (`gh attestation verify`) records which workflow run built each artifact; it
 does not prevent this.
+
+## Egress proxy (opt-in feature)
+
+With `RIOTBOX_EGRESS=1` the agent container is attached only to a per-session
+podman `--internal` network and reaches the network through a per-session
+Envoy proxy that allows HTTPS CONNECT to an allowlist of `host:port` pairs
+(unless strict mode is on, the built-in `@registries` group and the active
+agent's API hosts; the system and user `egress.conf`, which can name
+built-in or user-defined host groups; and a live per-session overlay) and answers everything else
+`403`, plain HTTP included. Design and evidence: `docs/dev/egress.md`,
+`docs/dev/decisions/egress-proxy.md`. In the data flow diagram this is the
+egress proxy (its pod, which the agent also joins, groups their lifecycle
+only); without the flag the agent's HTTPS goes out directly.
+
+- **Boundary.** `--internal` is enforced by routing only; a process with
+  `CAP_NET_ADMIN` could add a route around the proxy. The agent runs with
+  `--cap-drop=NET_ADMIN,NET_RAW`, its normal and nested capability sets lack
+  `NET_ADMIN`, and the launch refuses, before any side effect: docker; socket
+  mode; `RIOTBOX_NETWORK=none`; `RIOTBOX_EXTRA_ARGS` that could re-grant
+  capabilities, change networks or expose a host root (`--privileged`,
+  `--cap-add`, `--network`, `--net`, `--pod`, `--userns`, `--rootfs`,
+  `--volumes-from`), or mount a host file unchecked (`--init-path`); and `RIOTBOX_EXTRA_ARGS` mounts whose host source is a
+  Unix socket, or a directory (or a path that does not exist yet) that is,
+  lies under, or is an ancestor of the user runtime dir (`/run/user/<uid>`,
+  and `$XDG_RUNTIME_DIR` when absolute), where the rootless podman socket
+  lives. A regular file there is allowed: it cannot carry a socket. A `--mount` with `volume-opt=` (which can bind
+  any host path), `type=glob` or a quoted value is refused as uncheckable.
+  The same mount check covers `mounts.conf` entries, project directories and
+  credential files, so a `mounts.conf` line naming a socket or the runtime
+  dir stops the launch.
+  Verified by `tests/egress-e2e.venom.yml` on real podman, with a positive
+  control, and by `tests/egress-launch.venom.yml` for the gate.
+- **No DNS channel.** The internal network is created with `--disable-dns`
+  and the agent runs with `--dns none`, so it has no resolver to send a
+  query to (some aardvark-dns and CNI versions forward an internal network's
+  queries upstream, which would carry data past the proxy). It reaches the
+  proxy by name through an `--add-host` entry holding the proxy's address,
+  read from the engine and accepted only as an IP literal. Only Envoy
+  resolves names, through its external network. Verified by
+  `tests/egress-e2e.venom.yml`: no `resolv.conf`, no outside name resolves,
+  and no nameserver the agent could try answers, with a positive control.
+- **Policy integrity.** Allowlist files are host-side, mounted read-only into
+  the proxy only; the user config dir reaches the agent read-only. The
+  per-session state root (`riotbox-egress/`, every session's live-reloaded
+  `rds.json` and access logs) is writable by the host user, whom the agent
+  runs as; wherever an agent mount reaches it (`riotbox ~`, a `mounts.conf`
+  entry for `~/.local/share`, `RIOTBOX_EXTRA_ARGS`), the launch mounts an
+  empty, root-owned tmpfs over it at that container path (`notmpcopyup`, so
+  nothing is copied in), and refuses a mount of a file inside it or a `:O`
+  `upperdir=`/`workdir=` in or above it (issue #48). With `RIOTBOX_NESTED=1`
+  the agent holds `CAP_SYS_ADMIN` in a namespace where the mask is not
+  locked and could unmount it, so there any mount that would need a mask is
+  refused instead. With that, the agent cannot widen its allowlist. Verified by
+  `tests/egress-e2e.venom.yml` on real podman. Entries are validated (RFC 1123 names, ASCII
+  checked before case folding, no IP literals in any resolver-readable form)
+  before being serialised to Envoy JSON with `encoding/json`.
+- **Strict mode and groups.** `strict` in either `egress.conf`, or
+  `riotbox egress strict --enable` for one session, drops the implicit
+  registries and agent hosts, so a session reaches only what is listed; the
+  launch warns, without refusing, when that leaves out the agent's own API.
+  Groups are named host lists resolved on the host before any value reaches
+  Envoy, with the same validation as entries. Built-in group contents can
+  change between releases. `@search` and `@docs` widen the reach of
+  exfiltration the proxy cannot see into: a search query or a Q&A post
+  carries whatever the agent writes in it.
+- **Denial text.** Every 403 the proxy sends carries a `text/plain` body and
+  an `x-riotbox-egress: denied <authority>` header; a refused CONNECT's body
+  names the session and the `riotbox egress allow` command, and the agent's
+  system prompt says the same. The authority is chosen by the agent, the
+  untrusted party, and reflected in the header and the body, so a
+  prompt-injected agent can make the command it relays name a host of its
+  choosing. The listener speaks HTTP/1 only (`codec_type: HTTP1`): with
+  Envoy's default it also took cleartext HTTP/2, whose CONNECT passed
+  `; $ ( ) ' &` and the other RFC 3986 sub-delimiters into the body's
+  `riotbox egress allow` line. Checked against the pinned Envoy (1.40.1),
+  an HTTP/2 connection is now refused with a bare 400, and an HTTP/1.1
+  CONNECT whose target holds anything but letters, digits, `-`, `.` and
+  `:` is refused with a bare 400 too, so a refused CONNECT's text holds
+  only those. A plain-HTTP 403 still reflects the `Host` header, which may
+  hold such characters, but its body holds no command. The text tells the
+  user to check the host before running it.
+  Neither holds a secret, and neither widens the allowlist by itself: only
+  the user, on the host, can run the command. The prompt section names the session only after checking it is a
+  session name, so it cannot carry forged prompt text.
+- **Proxy hardening.** Digest-pinned upstream distroless image, non-root
+  (keep-id), read-only rootfs, all capabilities dropped, no-new-privileges,
+  no admin interface. Its log files are treated as untrusted by the host:
+  opened without following links, regular files only, bounded reads.
+- **Lifecycle.** The pod is removed when the launch exits; INT and HUP are
+  ignored during teardown. A pod left by a killed launch is removed by the
+  next egress launch's sweep, which spares any session whose owner is alive,
+  in another PID namespace, or not provably dead, and any whose agent
+  container still runs.
+- **Residual risks.** Exfiltration to an allowed host remains possible (the
+  proxy does not inspect TLS). An allowed name, especially under a wildcard,
+  can resolve to a loopback or private address (DNS rebinding, `*.nip.io`
+  style names, a subdomain whose DNS someone else controls); Envoy then
+  connects to it from its own network namespace, so the agent can reach
+  whatever that namespace can route to: the host's LAN, pasta's mapping of
+  the host itself, and link-local cloud metadata addresses, on any port the
+  allowlist's name accepts. Name validation cannot prevent this; keep
+  wildcards narrow. Credentials still enter the agent container (CT-012 is
+  unchanged until credential injection lands). `RIOTBOX_EXTRA_ARGS` is
+  trusted user configuration and the gate guards against mistakes, not a
+  hostile author; two gaps are known and accepted: a mounted directory
+  outside the runtime dir that contains a Unix socket, and a pre-existing
+  named volume created with a bind option, would each give the agent that
+  socket's or path's reach undetected. Request logs (`access.log`) record
+  requested hostnames and are kept, in a 0700 directory, for at least 7 days
+  after last use; the next egress launch after that deletes them.
 
 ## Findings
 

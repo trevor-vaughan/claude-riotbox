@@ -142,12 +142,13 @@ generate_container_name() {
 	CONTAINER_NAME="${prefix}-${readable:0:${readable_max}}${suffix}"
 }
 
-# Set the two per-user roots every session lives under, from XDG_DATA_HOME:
+# Set the three per-user roots every session lives under, from XDG_DATA_HOME:
 #   RIOTBOX_DATA_DIR    session dirs (each mounted at ~/.claude) and backups/;
 #                       on a rootless install, the app tree as well
 #   RIOTBOX_STATE_ROOT  one state dir per session (scripts/lib/session-state.sh)
+#   RIOTBOX_EGRESS_ROOT one dir per RIOTBOX_EGRESS=1 launch (libexec/egress-lib.sh)
 # plus the Context Mode ledger root shared by every session:
-#   RIOTBOX_LEDGER_ROOT $RIOTBOX_CONTEXT_LEDGER, else beside the other two
+#   RIOTBOX_LEDGER_ROOT $RIOTBOX_CONTEXT_LEDGER, else beside the other three
 # The one place any of them is spelled out for the launch and the session
 # commands, which call this rather than deriving the paths again
 # (scripts/ctx-stats.sh does not source this file and keeps its own ledger
@@ -156,11 +157,13 @@ resolve_data_roots() {
 	local data_home="${XDG_DATA_HOME:-${HOME}/.local/share}"
 	RIOTBOX_DATA_DIR="${data_home}/riotbox"
 	RIOTBOX_STATE_ROOT="${data_home}/riotbox-state"
+	# shellcheck disable=SC2034  # used by caller after sourcing
+	RIOTBOX_EGRESS_ROOT="${data_home}/riotbox-egress"
 	RIOTBOX_LEDGER_ROOT="${RIOTBOX_CONTEXT_LEDGER:-${data_home}/riotbox-context-mode}"
 }
 
 # Lightweight resolver: populates PROJECT_DIRS (each project once), PROJECT_DIRS_GIVEN, PROJECT_SUMMARY,
-# RIOTBOX_SESSION_DIR and RIOTBOX_STATE_DIR (plus the three roots from
+# RIOTBOX_SESSION_DIR and RIOTBOX_STATE_DIR (plus the four roots from
 # resolve_data_roots) without creating dirs, copying files, or spawning
 # container commands. Used by recipes that only need the session path.
 resolve_projects() {

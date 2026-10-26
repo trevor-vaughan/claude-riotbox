@@ -77,6 +77,9 @@ Session management:
                                all: every session; force: no prompt
   session-migrate [project...]
                                Retry moving old session data that failed to move
+  egress <list|groups|allow|deny|strict|reload>
+                               Show or change a running session's egress
+                               allowlist (RIOTBOX_EGRESS=1; see egress --help)
 
 Overlay commands (podman-only):
   overlays                     List sessions with pending overlay data
@@ -171,6 +174,7 @@ esac
 print_command_help() {
 	case "$1" in
 	audit) exec "${LIBEXEC}/audit.sh" --help ;;
+	egress) exec "${LIBEXEC}/egress.sh" --help ;;
 	install-hooks) exec "${LIBEXEC}/install-hooks.sh" --help ;;
 	ctx-stats) exec "${SCRIPTS}/ctx-stats.sh" --help ;;
 	build | rebuild | update)
@@ -349,6 +353,7 @@ session-list) exec "${LIBEXEC}/list-sessions.sh" ;;
 session-remove) exec "${LIBEXEC}/remove-session.sh" "$@" ;;
 session-reset) exec "${LIBEXEC}/reset-session.sh" "$@" ;;
 session-migrate) exec "${LIBEXEC}/migrate-session.sh" "$@" ;;
+egress) exec "${LIBEXEC}/egress.sh" "$@" ;;
 
 overlays) exec "${SCRIPTS}/overlay.sh" list ;;
 overlay-diff) exec "${SCRIPTS}/overlay.sh" diff "$@" ;;
