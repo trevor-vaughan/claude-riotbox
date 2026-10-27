@@ -1,0 +1,130 @@
+internal/egress/pod/pod_test.go
+  s_d98a82223f1933::t_10d9fab20419c4 73-94
+libexec/egress-lib.sh
+  s_d98a82223f1933::t_3bd90064c99222 506
+  s_d98a82223f1933::t_8f8403c52ba749 53-54
+internal/egress/pod/pod.go
+  s_d98a82223f1933::t_3bd90064c99222 154,208-211,218-219
+  s_d98a82223f1933::t_8f8403c52ba749 189-192
+  s_d98a82223f1933::t_29b492b5943c89 220
+libexec/egress.sh
+  s_d98a82223f1933::t_3bd90064c99222 156
+tests/lib/egress-e2e-helpers.sh
+  s_d98a82223f1933::t_3bd90064c99222 10,83
+  s_d98a82223f1933::t_506f008e754e2e 138-139
+  s_d98a82223f1933::t_b0d0173ae893d0 15-27,130-136,140-145,150-155,162-164,172-173
+  s_d98a82223f1933::t_3193b479d6221f 12
+  s_d98a82223f1933::t_0b6803af865561 11,137,148,156-161,165-171,174-180
+  s_d98a82223f1933::t_173027e2713faa 146-147,149
+  s_d98a82223f1933::t_2a8fc9d2e187bb 181
+cmd/riotbox-core/egress.go
+  s_d98a82223f1933::t_3bd90064c99222 96,560-561,571
+  s_d98a82223f1933::t_d077651163e8ea 572-573
+cmd/riotbox-core/egress_test.go
+  s_d98a82223f1933::t_10d9fab20419c4 104-116,976-981,990-997
+  s_d98a82223f1933::t_4613e76b451038 998
+  s_d98a82223f1933::t_58ab81f03a0ca9 982-989
+cmd/riotbox-core/main.go
+  s_d98a82223f1933::t_3bd90064c99222 187,198
+tests/egress-launch.venom.yml
+  s_d98a82223f1933::t_655d87adf19838 913
+  s_d98a82223f1933::t_7ed665e52adc2c 701
+  s_c570bc83c76de8::t_15db17888f5173 101
+scripts/lib/egress-os.sh
+  s_d98a82223f1933::t_5b2d245c08a0a5 38
+os/registry.sh
+  s_d98a82223f1933::t_5b2d245c08a0a5 14-19,50-51,59-64
+tests/egress-os.venom.yml
+  s_d98a82223f1933::t_6ccd139c7a43fe 498,500-504,547-564
+  s_d98a82223f1933::t_58696df70a72e3 104-105,122-126,153
+tests/egress-cli.venom.yml
+  s_d98a82223f1933::t_7ed665e52adc2c 335
+THREAT_MODEL.md
+  s_d98a82223f1933::t_f0dea946f81f6a 1382-1391
+  s_d98a82223f1933::t_34ca258732aa04 1267-1269,1392-1398
+  s_c570bc83c76de8::t_845d5cbbc97c54 1281-1284
+docs/dev/os-contract.md
+  s_d98a82223f1933::t_528e16e105bf80 1-29,35-99,101-123
+  s_d98a82223f1933::t_fe6f8ed430cf02 100
+  s_d98a82223f1933::t_c8fb254689910c 30-34
+docs/dev/decisions/egress-proxy.md
+  s_d98a82223f1933::t_f0dea946f81f6a 191-219
+README.md
+  s_d98a82223f1933::t_f0dea946f81f6a 1191-1192,1210-1216,1223-1234,1236-1238,1245-1248,1454,1459-1461
+  s_d98a82223f1933::t_fe6f8ed430cf02 1235
+  s_d98a82223f1933::t_b32693006a5d67 1249-1252,1455-1458
+  s_d98a82223f1933::t_c8fb254689910c 1217,1239-1241
+  s_d98a82223f1933::t_b735cb1d7c0bb9 1242-1244
+  s_c570bc83c76de8::t_845d5cbbc97c54 1129-1132,1176,1198,1204
+docs/README.md
+  s_d98a82223f1933::t_f0dea946f81f6a 15,31
+docs/dev/egress.md
+  s_d98a82223f1933::t_f0dea946f81f6a 18,20,23-24,197,269-271,585-586,589
+  s_d98a82223f1933::t_b735cb1d7c0bb9 272-278
+docs/dev/riotbox-core.md
+  s_d98a82223f1933::t_8bf4c90a9e1977 89,94,193
+  s_d98a82223f1933::t_d14d08b0c1c76c 200
+tests/egress-e2e.venom.yml
+  s_d98a82223f1933::t_f8f413df56715b 9-10
+  s_d98a82223f1933::t_2378134f243cec 322,324-330,333-335,337-338,344,348-350,352-353,355-378,381-382,386-392
+  s_d98a82223f1933::t_969fa31d4f08f5 331-332,383-385
+  s_d98a82223f1933::t_2d5f169e91215f 323,336,339-343,345-347,351,354,379-380
+internal/egress/inject/vouch_e2e_test.go
+  s_d98a82223f1933::t_564df316235a65 20
+internal/egress/pod/inject_e2e_test.go
+  s_d98a82223f1933::t_50eb56fb1b51ee 25
+os/centos/egress-hosts
+  s_d98a82223f1933::t_fe6f8ed430cf02 3,5
+os/centos/manifest.sh
+  s_d98a82223f1933::t_c35f07fbe862dd 8,12-15,21
+internal/egress/policy/resolve_test.go
+  s_d98a82223f1933::t_d705bb8047c389 34,41-42
+  s_d98a82223f1933::t_bfa18c3e4046b0 43-44
+  s_c570bc83c76de8::t_11954db15d16c0 50,53-60
+  s_c570bc83c76de8::t_89f165ad9f887e 124
+internal/egress/policy/os_test.go
+  s_d98a82223f1933::t_d705bb8047c389 24,66-87,100-127
+  s_d98a82223f1933::t_3c1b78dd1ff806 128
+  s_d98a82223f1933::t_b735cb1d7c0bb9 88-99
+internal/egress/policy/groups.go
+  s_d98a82223f1933::t_55d0f2daad4676 75-77,82-83,103-104,115-116,148-154
+  s_d98a82223f1933::t_b735cb1d7c0bb9 80-81,105-107
+  s_c570bc83c76de8::t_6ecb6b67559f60 39-41,43
+  s_c570bc83c76de8::t_15f7da58cb3182 21-23
+scripts/configs/egress.conf
+  s_d98a82223f1933::t_8ee691f1dea1ce 21,86-87
+  s_c570bc83c76de8::t_568bdae9e7d924 1
+internal/egress/policy/template_test.go
+  s_c570bc83c76de8::t_d888e36f66c105 37,39
+internal/egress/state/state_test.go
+  s_c570bc83c76de8::t_89f165ad9f887e 143,165
+agents/claude/manifest.sh
+  s_c570bc83c76de8::t_c015cc921f5eb8 159-162,164-165
+  s_c570bc83c76de8::t_c6cd936132dc7f 163,174
+tests/egress-manifests.venom.yml
+  s_c570bc83c76de8::t_15db17888f5173 44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3eb80f282473aaaaf28dfbac0f7ba7e81a4ea740",
+  "prompts": {},
+  "sessions": {
+    "s_c570bc83c76de8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a8e7cc23-8cc4-4665-b7e7-7aa559fd65b2",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    },
+    "s_d98a82223f1933": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bba9419-7fe8-4666-9200-e8afbf914acc",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
