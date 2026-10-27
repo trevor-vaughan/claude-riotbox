@@ -1,0 +1,22 @@
+internal/egress/policy/template_test.go
+  s_d98a82223f1933::t_02c70621f53327 4,8,15,37,39,54,59,61,63,71-99
+  s_d98a82223f1933::t_c67e1c756d0c1b 100-101
+scripts/configs/egress.conf
+  s_d98a82223f1933::t_46ec77112dab31 1,14-28,75-78,80-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "927ff8d0f54850d050aee02591f697e389c24de3",
+  "prompts": {},
+  "sessions": {
+    "s_d98a82223f1933": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bba9419-7fe8-4666-9200-e8afbf914acc",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
