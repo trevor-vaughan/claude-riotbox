@@ -1,0 +1,29 @@
+os/debian/manifest.sh
+  s_d98a82223f1933::t_1d76310c2e451b 1-9,13-14
+  s_d98a82223f1933::t_55aa6635c840f6 10-12
+os/ubuntu/manifest.sh
+  s_d98a82223f1933::t_1d76310c2e451b 1-9,13-14
+  s_d98a82223f1933::t_3079e43674b5d3 10-12
+os/lib/apt.sh
+  s_d98a82223f1933::t_b8e192c18f1e5a 30-31
+  s_d98a82223f1933::t_1d76310c2e451b 1-29,32-44
+tests/egress-os.venom.yml
+  s_d98a82223f1933::t_1d76310c2e451b 312
+  s_d98a82223f1933::t_c9223a5dffca9a 267-311,313-364
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "77939f7c1b305ccfb8237c397e27523130ffc6bc",
+  "prompts": {},
+  "sessions": {
+    "s_d98a82223f1933": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bba9419-7fe8-4666-9200-e8afbf914acc",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
