@@ -1,0 +1,25 @@
+install.sh
+  s_d98a82223f1933::t_4d08de341dcfd4 77
+tests/install-rootless.venom.yml
+  s_d98a82223f1933::t_4d08de341dcfd4 26
+.goreleaser.yaml
+  s_d98a82223f1933::t_4d08de341dcfd4 77-78
+Containerfile
+  s_d98a82223f1933::t_4d08de341dcfd4 699-701
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0963c820d1201f73dd0ce2b80add1e0ef6f6583f",
+  "prompts": {},
+  "sessions": {
+    "s_d98a82223f1933": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bba9419-7fe8-4666-9200-e8afbf914acc",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
