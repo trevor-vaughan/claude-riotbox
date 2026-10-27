@@ -1,0 +1,20 @@
+tests/egress-os.venom.yml
+  s_d98a82223f1933::t_bcfb91e685bb75 430-433,444-461
+  s_d98a82223f1933::t_a6516811e2f493 462-465
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "515026891f9cc5ded0b5b4ba6e746d14737c051f",
+  "prompts": {},
+  "sessions": {
+    "s_d98a82223f1933": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bba9419-7fe8-4666-9200-e8afbf914acc",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
