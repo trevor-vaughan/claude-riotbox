@@ -1,0 +1,36 @@
+internal/egress/state/state_test.go
+  s_c570bc83c76de8::t_89f165ad9f887e 143,165
+internal/egress/policy/groups.go
+  s_c570bc83c76de8::t_6ecb6b67559f60 39-41,43
+  s_c570bc83c76de8::t_15f7da58cb3182 21-23
+internal/egress/policy/resolve_test.go
+  s_c570bc83c76de8::t_11954db15d16c0 50,53-60
+  s_c570bc83c76de8::t_89f165ad9f887e 124
+agents/claude/manifest.sh
+  s_c570bc83c76de8::t_c015cc921f5eb8 159-162,164-165
+  s_c570bc83c76de8::t_c6cd936132dc7f 163,174
+tests/egress-manifests.venom.yml
+  s_c570bc83c76de8::t_15db17888f5173 44
+README.md
+  s_c570bc83c76de8::t_845d5cbbc97c54 1129-1132,1176,1198,1204
+tests/egress-launch.venom.yml
+  s_c570bc83c76de8::t_15db17888f5173 101
+THREAT_MODEL.md
+  s_c570bc83c76de8::t_845d5cbbc97c54 1281-1284
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d7c26a97dc850e2b50766803d0c2618c600be84a",
+  "prompts": {},
+  "sessions": {
+    "s_c570bc83c76de8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a8e7cc23-8cc4-4665-b7e7-7aa559fd65b2",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
