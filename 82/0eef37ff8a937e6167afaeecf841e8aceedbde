@@ -1,0 +1,23 @@
+os/registry.sh
+  s_d98a82223f1933::t_d81cc42bdc8a35 73-74
+os/centos/egress-hosts
+  s_d98a82223f1933::t_d81cc42bdc8a35 8
+tests/egress-os.venom.yml
+  s_d98a82223f1933::t_c99e77d9b2eafc 50-51,53-54,69-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "820eef37ff8a937e6167afaeecf841e8aceedbde",
+  "prompts": {},
+  "sessions": {
+    "s_d98a82223f1933": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bba9419-7fe8-4666-9200-e8afbf914acc",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
