@@ -332,7 +332,7 @@ testcases:
           conf="${XDG_CONFIG_HOME}/riotbox/egress.conf"
           printf '[group corp]\nmirror.corp.example\n' >"${conf}"
           out="$(bash "{{.root}}/bin/riotbox" egress groups)" || { echo "BAD: groups failed" >&2; exit 1; }
-          for want in '@agent (per session)' '@pypi (built-in)' '  pypi.org' '@corp (user conf)' '  mirror.corp.example'; do
+          for want in '@agent (per session)' '@pypi (built-in)' '  pypi.org' '@corp (user conf)' '  mirror.corp.example' '@centos (os)'; do
             grep -qxF -- "${want}" <<<"${out}" || { echo "BAD: groups lacks: ${want}" >&2; exit 1; }
           done
           egress_seed_session riotbox-proj-11111111 api.anthropic.com

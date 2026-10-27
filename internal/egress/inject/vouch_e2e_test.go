@@ -17,7 +17,7 @@ import (
 
 // The images whose TLS clients the session CA must work with, by digest.
 const (
-	vouchCurlImage = "quay.io/centos/centos:stream10@sha256:6f8d618844ed5af4365bad24bea19fb0435fd5ec808201af9aeb19d7a28eb515"
+	vouchCurlImage = "quay.io/centos/centos:stream10@sha256:99b8fe27dd4958b5dc2630ce35f5f6a7ff7bf9b2b1a72078102fde50d3277550"
 	vouchNodeImage = "docker.io/library/node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53"
 )
 

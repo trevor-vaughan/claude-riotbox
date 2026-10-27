@@ -74,6 +74,8 @@ nfpms:
         dst: /opt/riotbox/scripts
       - src: ./agents
         dst: /opt/riotbox/agents
+      - src: ./os
+        dst: /opt/riotbox/os
       - src: ./container
         dst: /opt/riotbox/container
       # NOTE: top-level configs/ is intentionally NOT shipped. It is a host-specific

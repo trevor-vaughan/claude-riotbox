@@ -95,6 +95,13 @@ source "${RIOTBOX_SCRIPT_DIR}/lib/egress-prompt.sh"
 # shellcheck source=../scripts/lib/egress-trust.sh disable=SC1091
 source "${RIOTBOX_SCRIPT_DIR}/lib/egress-trust.sh"
 egress_trust_apply
+# In an egress session, point the distro's package manager at its own HTTPS
+# mirror (os/<ID>/), which the @<ID> group allows: stock repo configs use
+# metalinks or plain HTTP, which the proxy refuses. It warns and returns 1
+# when it cannot; the session starts either way.
+# shellcheck source=../scripts/lib/egress-os.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/lib/egress-os.sh"
+egress_os_apply "${RIOTBOX_SCRIPT_DIR}/os/registry.sh"
 # Elapsed-time reporting for slow startup steps. Sourced ahead of
 # plugin-setup.sh, which is the only caller today; it lives here rather than in
 # that file for the same reason json-write.sh does — the entrypoint composes all

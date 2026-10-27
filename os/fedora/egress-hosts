@@ -1,0 +1,5 @@
+# @fedora: the mirror dnf uses in a Fedora egress session, once
+# os/fedora/manifest.sh has pointed the repos at it. docs/dev/os-contract.md.
+# Source: https://fedoraproject.org/wiki/Infrastructure/Mirroring (dl.fedoraproject.org, the
+# master mirror)
+dl.fedoraproject.org

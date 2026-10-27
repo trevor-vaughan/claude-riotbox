@@ -15,11 +15,13 @@ runs, and the invariants a change must keep.
 | `libexec/egress-lib.sh` | The launch side: the gates (`egress_gate`, `egress_gate_mounts`, `egress_gate_env`), start (`egress_start`), the teardown trap, and the pinned image (`RIOTBOX_EGRESS_DEFAULT_IMAGE`) |
 | `libexec/egress.sh` | `riotbox egress list\|groups\|allow\|deny\|strict\|reload`: parses the command line and calls the core; `--save` always passes the user `egress.conf` as `--save-to` |
 | `cmd/riotbox-core/egress.go` | The nine `egress-*` verbs (see [riotbox-core.md](riotbox-core.md#egress-verbs)) |
-| `internal/egress/policy` | Entry grammar (`policy.go`), `egress.conf` grammar (`conf.go`), built-in groups (`groups.go`), resolution (`resolve.go`) |
+| `internal/egress/policy` | Entry grammar (`policy.go`), `egress.conf` grammar (`conf.go`), built-in groups and OS group validation (`groups.go`), resolution (`resolve.go`) |
 | `internal/egress/envoyconfig` | Entries and intercepts → Envoy's four JSON files, including the 403 rewrite and the credential hosts' TLS interception; `RenderCredential`, the SDS file of one key |
-| `internal/egress/state` | One session's host directory: config files, overlay, logs, lock, the stale-dir rule, the injection's secrets, CA certificate and record |
+| `internal/egress/state` | One session's host directory: config files, overlay, logs, lock, the stale-dir rule, the injection's secrets, CA certificate and record, and the OS plugins (`os.go`: `LoadOS`, `os.conf`) |
 | `internal/egress/pod` | The engine side: create, wait for readiness, remove, list running sessions, sweep orphans |
 | `internal/egress/inject` | Credential injection: the provider table (`providers.go`), `egress-up`'s stdin framing (`input.go`), the inject/pass-through decision and notice (`plan.go`), the per-session CA and leaves (`certs.go`) |
+| `os/` | OS plugins: each distro's mirrors as `@<ID>` and the repo rewrite ([os-contract.md](os-contract.md)) |
+| `scripts/lib/egress-os.sh` | Runs the distro's repo rewrite at session start (`egress_os_apply`), called from `container/entrypoint.sh` |
 | `scripts/lib/egress-trust.sh` | The combined CA bundle for curl and Python (`egress_trust_apply`), called from `container/entrypoint.sh` |
 | `agents/<name>/manifest.sh` | `agent_<name>_egress_hosts`, the agent's API hosts ([agent-contract.md](agent-contract.md#agent_name_egress_hosts)) |
 | `scripts/lib/egress-prompt.sh` | The egress section of each agent's system prompt (`egress_prompt_apply`, `egress_prompt_apply_shared`), called from each manifest's `container_setup` |
@@ -192,6 +194,7 @@ mode 0700 (`state.Dir.Create` refuses a link in place of the session,
 | `config/` | `bootstrap.json` (LDS and CDS from files), `cds.json` (cluster `egress`, a dynamic forward proxy), `lds.json` (the CONNECT listener, which loads its routes from `rds.json`), `rds.json` (the allowlist). Mounted read-only into Envoy |
 | `log/` | `access.log` (one JSON line per request) and `envoy.log` (Envoy's `--log-path`). Mounted read-write; emptied at each start |
 | `agent.conf` | The active agent's `egress_hosts` output, saved at start |
+| `os.conf` | The OS plugins' groups, loaded from `egress-up --os-dir` at start and saved as `[group]` sections; later commands read them from here. Absent for a session an older release started: it has no OS groups |
 | `projects.json` | The launch's project dirs (`egress-up --project`), a JSON list so any path reads back whole; `riotbox egress list` shows them. Absent for a session an older release started, which `list` shows as `unknown` |
 | `session.conf` | The overlay `riotbox egress allow\|deny\|strict` writes, in the `egress.conf` grammar: an optional `strict = on\|off` line, then one entry or `@group` line per change, the latest last. No sections |
 | `applied.conf` | The allowlist last written to `rds.json`; `riotbox egress list` shows this |
@@ -263,11 +266,16 @@ the same grammar, entries only).
 `state.Dir.Policy` gathers the inputs and `policy.Resolve` combines them:
 
 1. **Group table** (`policy.Groups`): the built-ins (`groups.go`, each with
-   the vendor documentation its hosts come from), replaced by the system
-   file's `[group]`s, replaced by the user file's; `agent.conf` as
-   `@agent`, which no file may define. `@registries` is expanded against the
-   final table, so a user's `[group pypi]` changes it too. Only built-ins
-   nest, one level; user groups list hosts.
+   the vendor documentation its hosts come from), then `os.conf`'s OS
+   groups, replaced by the system file's `[group]`s, replaced by the user
+   file's; `agent.conf` as `@agent`, which no file may define. `@registries`
+   and `@forges` are expanded against the final table, so a user's
+   `[group pypi]` changes it too. `@os` is the union of the OS groups'
+   members in that final table (a user's `[group centos]` shows in it); it
+   is empty without OS plugins, which allows nothing and is not an error,
+   and a file's `[group os]` replaces it. It is opt-in, outside
+   `@registries`. Only built-ins nest, one level, and none nests `@os`; user
+   groups list hosts.
 2. **Strict**: `session.conf`'s setting, else the user file's, else the
    system file's, else off (`StrictFrom` records which).
 3. **Conf merge**: every addition of the two files, plus `@registries` and
@@ -574,9 +582,11 @@ the gate refuses.
 |---|---|---|
 | Ginkgo | `internal/egress/*`, `cmd/riotbox-core/egress_test.go` | grammar, groups, resolution, section-aware saving, JSON shape (403 rewrite included), state files, engine call sequences and rollback (fake engine) |
 | Venom, fake engine | `tests/egress-launch.venom.yml`, `tests/egress-cli.venom.yml` (`tests/lib/egress-fake-engine`) | the gate, flags, trap teardown and signals, the CLI |
+| Venom | `tests/egress-os.venom.yml` | the OS plugin registry, each repo rewrite against fixture trees (idempotence, required repos, the CA-bundle refusal, symlinks), the entrypoint helper |
+| Ginkgo | `internal/egress/state/os_test.go`, `internal/egress/policy/os_test.go` | loading OS plugins, their refusals, `os.conf`, their place in the group table |
 | Venom | `tests/egress-manifests.venom.yml` | every registered agent declares well-formed `egress_hosts` |
 | Venom | `tests/egress-prompt.venom.yml` | the prompt section: both forms, append once, strip, CRLF, unmatched markers, links, FIFOs, failures, each agent's `container_setup` |
-| Ginkgo (`e2e` label) and Venom, real podman | `task test:egress-e2e`; a step of CI's `test` job on the host runner | the boundary, live reload with an open tunnel, teardown, sweep, strict mode and a live `allow @pypi`, both 403 texts, `RIOTBOX_EGRESS_SESSION` in the agent, `envoy --mode validate` on a static rendering |
+| Ginkgo (`e2e` label) and Venom, real podman | `task test:egress-e2e`; a step of CI's `test` job on the host runner | the boundary, live reload with an open tunnel, teardown, sweep, strict mode and a live `allow @pypi`, both 403 texts, `RIOTBOX_EGRESS_SESSION` in the agent, `envoy --mode validate` on a static rendering, each distro's package manager through its own group (and not without it) |
 | Ginkgo | `internal/egress/inject`, `internal/egress/state/injection_test.go`, `internal/egress/state/runtime_test.go`, `internal/egress/envoyconfig/intercept_test.go` | the provider table (against the agents' `env_vars`), stdin framing, the decision and notice, the CA's constraints and validity, the runtime dir's resolution (each fallback, owner, mode, tmpfs, failure), the secrets layout on it and that the CA key is written nowhere, the interception's JSON shape and that no config file or access log holds a key |
 | Ginkgo, fake engine | `internal/egress/pod`, `cmd/riotbox-core/egress_test.go` | `Up` refusing keys without a runtime dir before creating anything, `egress-up` failing so with the actionable message and starting without keys, the secrets mount from the runtime dir, `Down` and the sweep cleaning runtime and legacy secrets, the proxy's `--ulimit core=0` |
 | Venom, fake engine | `tests/egress-launch.venom.yml` (injection cases) | the key is in no engine argv, environment (the sweep's included) or the agent's env; the placeholder is, and equals `EGRESS_PLACEHOLDER`; the pass-through notice; no key → nothing intercepted and no runtime dir needed; the `RIOTBOX_EXTRA_ARGS` env and `--pid` refusals; the runtime secrets dir refused as a mount |

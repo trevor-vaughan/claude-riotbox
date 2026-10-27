@@ -74,7 +74,7 @@ BIN_DIR="${BIN_DIR:-${HOME}/.local/bin}"
 # that is NOT in this list (notably session dirs, backups/, and any user
 # additions) is preserved across upgrades — wiping DATA_DIR wholesale would
 # destroy the safety backups described in README and silently lose work.
-APP_PATHS=(bin libexec scripts agents container Containerfile .dockerignore VERSION)
+APP_PATHS=(bin libexec scripts agents os container Containerfile .dockerignore VERSION)
 APP_MARKER=".riotbox-app"
 
 echo "Installing RiotBox ${VERSION} → ${DATA_DIR}"

@@ -153,7 +153,7 @@ target=()
 # shellcheck disable=SC2154 # RIOTBOX_CORE comes from scripts/lib/riotbox-core.sh, sourced by mount-projects.sh
 case "${sub}" in
 list) exec "${RIOTBOX_CORE}" egress-list "${common[@]}" ;;
-groups) exec "${RIOTBOX_CORE}" egress-groups "${common[@]}" "${conf[@]}" ;;
+groups) exec "${RIOTBOX_CORE}" egress-groups "${common[@]}" "${conf[@]}" --os-dir "${ROOT_DIR}/os" ;;
 reload) exec "${RIOTBOX_CORE}" egress-reload "${common[@]}" "${conf[@]}" "${target[@]}" ;;
 strict) exec "${RIOTBOX_CORE}" egress-strict "${common[@]}" "${conf[@]}" "${target[@]}" -- "${strict_mode}" ;;
 *) exec "${RIOTBOX_CORE}" "egress-${sub}" "${common[@]}" "${conf[@]}" "${target[@]}" -- "$1" ;;

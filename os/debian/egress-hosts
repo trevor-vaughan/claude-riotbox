@@ -1,0 +1,7 @@
+# @debian: the mirrors apt uses in a Debian egress session, once
+# os/debian/manifest.sh has switched their sources to HTTPS.
+# docs/dev/os-contract.md.
+# Source: https://deb.debian.org/ (the Debian archive, and debian-security in the stock sources)
+deb.debian.org
+# Source: https://www.debian.org/security/faq (security.debian.org)
+security.debian.org

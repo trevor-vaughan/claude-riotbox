@@ -50,7 +50,8 @@
 #                 which session to name to `riotbox egress`, and trap EXIT
 #                 (and INT/TERM, through it) to remove the pod. Requires:
 #                 CONTAINER_CMD, CONTAINER_NAME, SESSION_KEY, PROJECT_DIRS,
-#                 PASSTHROUGH_FLAGS, RIOTBOX_EGRESS_ROOT, RIOTBOX_CORE and
+#                 PASSTHROUGH_FLAGS, RIOTBOX_EGRESS_ROOT, ROOT_DIR (its os/ is
+#                 passed as --os-dir), RIOTBOX_CORE and
 #                 riotbox_core_require (scripts/lib/riotbox-core.sh), and
 #                 agent_call (agents/registry.sh).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -502,7 +503,7 @@ egress_start() {
 		printf 'RIOTBOX_HEADROOM=%s\0' "${RIOTBOX_HEADROOM:-}"
 	} | "${RIOTBOX_CORE}" egress-up \
 		--engine "${CONTAINER_CMD}" --state-root "${RIOTBOX_EGRESS_ROOT}" \
-		--system-conf "${EGRESS_SYSTEM_CONF}" --user-conf "${EGRESS_USER_CONF}" \
+		--system-conf "${EGRESS_SYSTEM_CONF}" --user-conf "${EGRESS_USER_CONF}" --os-dir "${ROOT_DIR}/os" \
 		--image "${RIOTBOX_EGRESS_IMAGE:-${RIOTBOX_EGRESS_DEFAULT_IMAGE}}" \
 		--session-key "${SESSION_KEY}" --owner-pid "$$" "${projects[@]}" -- "${CONTAINER_NAME}")" || return 1
 	if [[ -z "${out}" ]]; then

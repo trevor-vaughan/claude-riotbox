@@ -9,6 +9,7 @@ import (
 // Where a group's definition, or the strict setting, comes from.
 const (
 	SourceBuiltin = "built-in"
+	SourceOS      = "os"
 	SourceSystem  = "system conf"
 	SourceUser    = "user conf"
 	SourceSession = "session"
@@ -18,9 +19,10 @@ const (
 
 // Sources is what a session's allowlist is resolved from.
 type Sources struct {
-	Agent        []Entry // the active agent's hosts (agent.conf): @agent
-	System, User Conf    // the egress.conf files; a zero Conf for a missing file
-	Overlay      Conf    // session.conf, which riotbox egress writes
+	Agent        []Entry    // the active agent's hosts (agent.conf): @agent
+	OS           []GroupDef // the OS plugins' groups (os.conf): @centos and the like
+	System, User Conf       // the egress.conf files; a zero Conf for a missing file
+	Overlay      Conf       // session.conf, which riotbox egress writes
 }
 
 // Resolved is a session's allowlist and how it came about.
@@ -48,7 +50,7 @@ func Resolve(s Sources) (Resolved, error) {
 	if len(s.Overlay.Groups) > 0 {
 		return Resolved{}, fmt.Errorf("%s:%d: a session overlay cannot define groups", s.Overlay.Name, s.Overlay.Groups[0].Line)
 	}
-	r := Resolved{Groups: Groups(s.Agent, s.System, s.User), StrictFrom: SourceDefault}
+	r := Resolved{Groups: Groups(s.Agent, s.OS, s.System, s.User), StrictFrom: SourceDefault}
 	for _, f := range []struct {
 		conf   Conf
 		source string

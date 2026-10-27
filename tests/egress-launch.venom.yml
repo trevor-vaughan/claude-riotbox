@@ -98,7 +98,7 @@ testcases:
           printf 'strict\n' >"${conf}"
           rm -f "${CAPTURE}"
           RIOTBOX_EGRESS=1 egress_launch 2>"${TMP}/err"
-          grep -qF "WARNING: strict mode does not allow the agent's own API hosts (api.anthropic.com, claude.ai, console.anthropic.com, platform.claude.com); add @agent" "${TMP}/err" \
+          grep -qF "WARNING: strict mode does not allow the agent's own API hosts (api.anthropic.com, claude.ai, console.anthropic.com, mcp-proxy.anthropic.com, platform.claude.com); add @agent" "${TMP}/err" \
             || { echo "BAD: no lock-out warning: $(cat "${TMP}/err")" >&2; exit 1; }
           [ -s "${CAPTURE}" ] || { echo "BAD: the warning stopped the launch" >&2; exit 1; }
           printf 'strict\n@agent\n' >"${conf}"
@@ -698,6 +698,7 @@ testcases:
           [[ "${argv}" != *"/secrets:"* ]] || { echo "BAD: the agent mounts the secrets dir" >&2; exit 1; }
           grep -qF -- "-v ${secrets}:/etc/riotbox-egress-secrets:ro,z " "${FAKE_ENGINE_LOG}" || { echo "BAD: the proxy lacks the secrets mount from the runtime dir" >&2; exit 1; }
           grep -qxF "ANTHROPIC_API_KEY api.anthropic.com x-api-key" "${state}/injected" || { echo "BAD: injection not recorded" >&2; exit 1; }
+          grep -qxF "[group centos]" "${state}/os.conf" || { echo "BAD: the OS plugins were not saved as os.conf" >&2; exit 1; }
           [ ! -e "${state}/secrets" ] || { echo "BAD: secrets in the state dir" >&2; exit 1; }
           [ ! -e "${XDG_RUNTIME_DIR}/riotbox-egress/${name}" ] || { echo "BAD: the secrets dir outlived the session" >&2; exit 1; }
           if grep -q 'still enter the container' "${TMP}/err"; then echo "BAD: a pass-through notice for an injected key" >&2; exit 1; fi
@@ -909,7 +910,7 @@ testcases:
           chmod +x "${TMP}/core"
           riotbox_core_require() { return 0; }
           agent_call() { echo api.anthropic.com; }
-          RIOTBOX_CORE="${TMP}/core" CONTAINER_CMD=podman CONTAINER_NAME=c SESSION_KEY=k PROJECT_DIRS=() \
+          ROOT_DIR="{{.root}}" RIOTBOX_CORE="${TMP}/core" CONTAINER_CMD=podman CONTAINER_NAME=c SESSION_KEY=k PROJECT_DIRS=() \
             RIOTBOX_EGRESS_ROOT="${TMP}" PASSTHROUGH_FLAGS="-e ANTHROPIC_API_KEY"
           export ANTHROPIC_API_KEY=k-venom-real
           # egress_start traps EXIT, INT and TERM for its pod; put the cleanup back.

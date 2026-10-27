@@ -26,16 +26,20 @@ func hosts(entries []policy.Entry) []string {
 }
 
 var _ = Describe("the built-in groups", func() {
-	table := policy.Groups(nil, policy.Conf{}, policy.Conf{})
+	table := policy.Groups(nil, nil, policy.Conf{}, policy.Conf{})
 
 	It("are the documented groups, each built-in and non-empty", func() {
 		Expect(slices.Sorted(maps.Keys(table))).To(Equal([]string{
-			"agent", "centos", "containers", "crates", "docs", "github", "gitlab", "go",
-			"huggingface", "maven", "npm", "pypi", "registries", "rubygems", "search", "wikipedia",
+			"agent", "containers", "crates", "docs", "forges", "github", "gitlab", "go",
+			"huggingface", "maven", "npm", "os", "pypi", "registries", "rubygems", "search", "wikipedia",
 		}))
 		for name, g := range table {
 			Expect(g.Name).To(Equal(name))
 			if name == policy.AgentGroup {
+				continue
+			}
+			if name == "os" {
+				Expect(g.Source).To(Equal(policy.SourceBuiltin))
 				continue
 			}
 			Expect(g.Source).To(Equal(policy.SourceBuiltin), name)
@@ -43,11 +47,17 @@ var _ = Describe("the built-in groups", func() {
 		}
 	})
 
-	It("make @registries exactly the allowlist every session had before strict mode existed", func() {
+	It("make @registries exactly the package hosts every session allows outside strict mode", func() {
 		Expect(hosts(table["registries"].Members)).To(ConsistOf(
 			"registry.npmjs.org", "pypi.org", "files.pythonhosted.org", "proxy.golang.org", "sum.golang.org",
-			"index.crates.io", "static.crates.io", "github.com", "api.github.com", "codeload.github.com",
-			"*.githubusercontent.com"))
+			"vuln.go.dev", "index.crates.io", "static.crates.io", "github.com", "api.github.com",
+			"codeload.github.com", "*.githubusercontent.com"))
+	})
+
+	It("make @docs exactly the vendor documentation and Q&A sites", func() {
+		Expect(hosts(table["docs"].Members)).To(ConsistOf(
+			"developer.mozilla.org", "docs.python.org", "go.dev", "pkg.go.dev", "docs.github.com", "docs.rs",
+			"stackoverflow.com", "*.stackexchange.com", "*.readthedocs.io"))
 	})
 
 	It("make @registries the union of @npm @pypi @go @crates @github", func() {
@@ -58,15 +68,25 @@ var _ = Describe("the built-in groups", func() {
 		Expect(table["registries"].Members).To(ConsistOf(union))
 	})
 
-	It("cover the template's container-registry and CentOS examples", func() {
+	It("make @forges the hosted forges, @github and @gitlab included", func() {
+		want := slices.Concat(table["github"].Members, table["gitlab"].Members)
+		for _, h := range []string{
+			"bitbucket.org", "api.bitbucket.org", "codeberg.org", "gitea.com", "git.sr.ht", "hg.sr.ht",
+			"dev.azure.com", "git.launchpad.net", "code.launchpad.net",
+		} {
+			want = append(want, entry(h, 443))
+		}
+		Expect(table["forges"].Members).To(ConsistOf(want))
+	})
+
+	It("cover the template's container-registry example", func() {
 		Expect(hosts(table["containers"].Members)).To(ContainElements(
 			"quay.io", "*.quay.io", "registry-1.docker.io", "auth.docker.io", "production.cloudfront.docker.com"))
-		Expect(hosts(table["centos"].Members)).To(ConsistOf("mirrors.centos.org", "mirror.stream.centos.org"))
 	})
 
 	It("make @agent the agent's hosts, and nothing without an agent", func() {
 		Expect(table[policy.AgentGroup]).To(Equal(policy.Group{Name: "agent", Source: policy.SourceAgent}))
-		t := policy.Groups([]policy.Entry{entry("api.agent.example", 443)}, policy.Conf{}, policy.Conf{})
+		t := policy.Groups([]policy.Entry{entry("api.agent.example", 443)}, nil, policy.Conf{}, policy.Conf{})
 		Expect(t[policy.AgentGroup].Members).To(Equal([]policy.Entry{entry("api.agent.example", 443)}))
 	})
 })
@@ -75,20 +95,20 @@ var _ = Describe("Groups", func() {
 	It("lets the system file replace a built-in, and the user file replace the system's", func() {
 		sys := conf("sys", "[group npm]\nnpm.sys.example\n[group corp]\ncorp.sys.example\n")
 		user := conf("user", "[group corp]\ncorp.user.example\n")
-		t := policy.Groups(nil, sys, user)
+		t := policy.Groups(nil, nil, sys, user)
 		Expect(t["npm"]).To(Equal(policy.Group{Name: "npm", Source: policy.SourceSystem, Members: []policy.Entry{entry("npm.sys.example", 443)}}))
 		Expect(t["corp"]).To(Equal(policy.Group{Name: "corp", Source: policy.SourceUser, Members: []policy.Entry{entry("corp.user.example", 443)}}))
 	})
 
 	It("expands @registries against the final table, so a user's pypi mirror replaces pypi there too", func() {
-		t := policy.Groups(nil, policy.Conf{}, conf("user", "[group pypi]\npypi.corp.example\n"))
+		t := policy.Groups(nil, nil, policy.Conf{}, conf("user", "[group pypi]\npypi.corp.example\n"))
 		Expect(hosts(t["registries"].Members)).To(ContainElement("pypi.corp.example"))
 		Expect(hosts(t["registries"].Members)).NotTo(ContainElements("pypi.org", "files.pythonhosted.org"))
 		Expect(hosts(t["registries"].Members)).To(ContainElement("registry.npmjs.org"))
 	})
 
 	It("lets a user replace @registries itself with hosts", func() {
-		t := policy.Groups(nil, policy.Conf{}, conf("user", "[group registries]\nmirror.corp.example\n"))
+		t := policy.Groups(nil, nil, policy.Conf{}, conf("user", "[group registries]\nmirror.corp.example\n"))
 		Expect(t["registries"]).To(Equal(policy.Group{Name: "registries", Source: policy.SourceUser, Members: []policy.Entry{entry("mirror.corp.example", 443)}}))
 	})
 })
@@ -101,7 +121,7 @@ var _ = Describe("Resolve", func() {
 		Expect(err).NotTo(HaveOccurred())
 		want := append(slices.Clone(r.Groups["registries"].Members), agent...)
 		Expect(r.Entries).To(ConsistOf(want))
-		Expect(r.Entries).To(HaveLen(12))
+		Expect(r.Entries).To(HaveLen(13))
 		Expect(r.Strict).To(BeFalse())
 		Expect(r.StrictFrom).To(Equal(policy.SourceDefault))
 		Expect(r.StrictLabel()).To(Equal("off (default)"))

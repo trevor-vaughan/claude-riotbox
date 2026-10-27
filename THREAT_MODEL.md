@@ -1264,7 +1264,9 @@ only); without the flag the agent's HTTPS goes out directly.
   `upperdir=`/`workdir=` in or above it (issue #48). With `RIOTBOX_NESTED=1`
   the agent holds `CAP_SYS_ADMIN` in a namespace where the mask is not
   locked and could unmount it, so there any mount that would need a mask is
-  refused instead. With that, the agent cannot widen its allowlist. Verified by
+  refused instead. With that, the agent cannot widen its running session's
+  allowlist; the OS groups a later launch reads come from the install tree,
+  which has its own exposure (see OS package mirrors). Verified by
   `tests/egress-e2e.venom.yml` on real podman. Entries are validated (RFC 1123 names, ASCII
   checked before case folding, no IP literals in any resolver-readable form)
   before being serialised to Envoy JSON with `encoding/json`.
@@ -1276,7 +1278,10 @@ only); without the flag the agent's HTTPS goes out directly.
   Envoy, with the same validation as entries. Built-in group contents can
   change between releases. `@search` and `@docs` widen the reach of
   exfiltration the proxy cannot see into: a search query or a Q&A post
-  carries whatever the agent writes in it.
+  carries whatever the agent writes in it. Claude's `@agent` includes
+  `mcp-proxy.anthropic.com`, which carries the connectors the user added
+  on claude.ai, so a session can read and act on those accounts (mail,
+  files, calendars); `-mcp-proxy.anthropic.com` in `egress.conf` removes it.
 - **Denial text.** Every 403 the proxy sends carries a `text/plain` body and
   an `x-riotbox-egress: denied <authority>` header; a refused CONNECT's body
   names the session and the `riotbox egress allow` command, and the agent's
@@ -1374,6 +1379,23 @@ only); without the flag the agent's HTTPS goes out directly.
   (`access.log`) record requested hostnames and are kept, in a 0700
   directory, for at least 7 days after last use; the next egress launch
   after that deletes them.
+- **OS package mirrors.** At session start the entrypoint, as root, rewrites
+  the distro's repo config to its own HTTPS mirrors (`os/<ID>/`,
+  `docs/dev/os-contract.md`), so the OS group (`@centos`, ...) can allow
+  them. A rewritten dnf repo is no longer checked against its metalink's
+  checksum; packages stay GPG-checked and TLS to the project's mirror stands
+  in. apt sources are switched to HTTPS only when the image has a CA bundle;
+  otherwise the rewrite is refused, never TLS verification disabled. The
+  plugins run from the image's `~/.riotbox/os/`, which the agent's user owns,
+  but they run before any agent starts, and that user already has
+  passwordless `sudo`. Every rewrite refuses a file that resolves outside
+  its root. On the host, each egress launch defines `@<ID>` from
+  `${ROOT_DIR}/os/*/egress-hosts`, which lives in the install tree beside
+  `libexec/` and has the same exposure: a session that can write that tree
+  (`riotbox ~` over a rootless install in `~/.local/share/riotbox`, or a
+  RiotBox checkout run on itself) can add hosts to an OS group for later
+  launches that allow it. A running session keeps the `os.conf` snapshot
+  taken at its launch, in the masked state root.
 
 ## Findings
 

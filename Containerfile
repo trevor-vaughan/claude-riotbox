@@ -696,6 +696,9 @@ RUN if [ "${RIOTBOX_DIAGRAMS}" = "1" ]; then \
 # entries in /home/llm/.riotbox/bin/ are symlinks created from the
 # registry. Adding a new agent is a manifest edit, not a Containerfile edit.
 COPY --chown=llm:llm agents/ /home/llm/.riotbox/agents/
+# OS plugins (os/<ID>/): in an egress session the entrypoint points the
+# distro's package manager at its own mirror (scripts/lib/egress-os.sh).
+COPY --chown=llm:llm os/ /home/llm/.riotbox/os/
 COPY --chown=llm:llm container/find-real-bin.sh /home/llm/.riotbox/find-real-bin.sh
 COPY --chown=llm:llm container/agent-wrapper.sh /home/llm/.riotbox/agent-wrapper.sh
 RUN chmod +x /home/llm/.riotbox/agent-wrapper.sh \

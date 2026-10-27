@@ -1,0 +1,9 @@
+# @ubuntu: the mirrors apt uses in an Ubuntu egress session, once
+# os/ubuntu/manifest.sh has switched their sources to HTTPS.
+# docs/dev/os-contract.md.
+# Source: /etc/apt/sources.list.d/ubuntu.sources of docker.io/library/ubuntu:24.04 (amd64)
+archive.ubuntu.com
+# Source: the same file (the security section)
+security.ubuntu.com
+# Source: the same file in the arm64 image (ubuntu-ports)
+ports.ubuntu.com
