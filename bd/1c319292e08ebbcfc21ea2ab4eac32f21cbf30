@@ -1,0 +1,23 @@
+.hadolint.yaml
+  s_f98458d3a6feca::t_5e1dffafd8bccd 10-11
+Containerfile
+  s_f98458d3a6feca::t_7fc386a4dc1213 14-17,31,142-143
+THREAT_MODEL.md
+  s_f98458d3a6feca::t_02dc11ded3cf50 1381-1383,1570-1572
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fab3d3c0d585c7bbd5faa98aff2a864df7bd3930",
+  "prompts": {},
+  "sessions": {
+    "s_f98458d3a6feca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c0434176-17c6-48bc-94c0-74fcae9f22b2",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
