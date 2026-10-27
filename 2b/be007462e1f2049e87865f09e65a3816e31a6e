@@ -1,0 +1,61 @@
+docs/dev/decisions/egress-proxy.md
+  s_6add4080ebfdca::t_5b0f8e601e5d28 24-26,126-133,135-149,152-175
+  s_6add4080ebfdca::t_3fa9f031e4ea15 151
+  s_6add4080ebfdca::t_c1eaf64e2297a7 150
+  s_6add4080ebfdca::t_af0d97a07979c2 134
+libexec/egress.sh
+  s_6add4080ebfdca::t_025ca445007c12 23-24
+docs/dev/egress.md
+  s_6add4080ebfdca::t_1914ade04f59ee 502-505,544-547
+  s_6add4080ebfdca::t_6b81747a5061a8 15
+  s_6add4080ebfdca::t_6adc6451fe6944 486-489,528-531
+  s_6add4080ebfdca::t_bdffa57a4cac36 438-439,481-482
+  s_6add4080ebfdca::t_81503c163e4de6 458-459,500-501
+  s_6add4080ebfdca::t_d72305c8b645ae 471-475,513-517
+  s_6add4080ebfdca::t_87c009c9155388 19-20,22-23
+  s_6add4080ebfdca::t_f9ca1a03c1013c 157-159,196-198
+  s_6add4080ebfdca::t_dddfe69ae5798a 443,486
+  s_6add4080ebfdca::t_42df702e99fbca 328-381,367-381,384-396,384-396,406-428,406-448,454-468
+  s_6add4080ebfdca::t_341bbc4bc23217 343-344,358-366,382-383,397-405,410-414,449-453
+README.md
+  s_6add4080ebfdca::t_737294fa8b3ccd 1097-1101,1112-1116
+  s_6add4080ebfdca::t_cd114ade477e07 1059
+  s_6add4080ebfdca::t_68d9821bdbbf68 1201,1216
+  s_6add4080ebfdca::t_c1deea7026d1e1 1254,1260-1263,1269,1275-1278
+  s_6add4080ebfdca::t_13ce4229d755bb 1378-1381,1393-1396
+  s_6add4080ebfdca::t_4c047eb0b38786 1294-1336,1309-1336,1341-1347,1341-1347,1349-1359,1349-1374
+  s_6add4080ebfdca::t_d062ff65287cd3 1060-1064
+  s_6add4080ebfdca::t_27054c8c3f555c 1382-1387,1397-1402
+  s_6add4080ebfdca::t_40916ce9fb1c8b 1322-1325,1337-1340
+  s_6add4080ebfdca::t_9dc9d1905143c7 1333,1348
+THREAT_MODEL.md
+  s_6add4080ebfdca::t_d1ef6d35441ade 1298-1316,1308-1326,1318,1325-1327
+  s_6add4080ebfdca::t_feeb2f553951d6 3271
+  s_6add4080ebfdca::t_2e3b63941cb8d7 1318-1347,1328-1357
+  s_6add4080ebfdca::t_2bdbae834f8ed1 3271,3281
+docs/dev/riotbox-core.md
+  s_6add4080ebfdca::t_60fa2e597a572c 194-196
+  s_6add4080ebfdca::t_af0d97a07979c2 193
+internal/egress/inject/plan_test.go
+  s_6add4080ebfdca::t_673ce082e60558 79
+internal/egress/inject/plan.go
+  s_6add4080ebfdca::t_673ce082e60558 90
+libexec/egress-lib.sh
+  s_6add4080ebfdca::t_da3772f2189031 257-259,394-396
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2bbe007462e1f2049e87865f09e65a3816e31a6e",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}

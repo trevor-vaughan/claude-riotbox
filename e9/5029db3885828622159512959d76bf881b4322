@@ -1,0 +1,23 @@
+internal/egress/inject/vouch_e2e_test.go
+  s_6add4080ebfdca::t_e1b853d2d6e695 1-3,5-89,93-103
+  s_6add4080ebfdca::t_2ffaa3af83ab33 4,90-92
+internal/egress/pod/inject_e2e_test.go
+  s_6add4080ebfdca::t_f3275171eb95f9 1-3,6-32,36-46,47-79,84,89-94,109-112,115-120,127-132,134-140,145-149,151,153-175,178-186,190-191
+  s_6add4080ebfdca::t_2ffaa3af83ab33 4-5,33-35,80-83,85-88,95-108,113-114,121-126,133,141-144,150,152,176-177,187-189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e95029db3885828622159512959d76bf881b4322",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}

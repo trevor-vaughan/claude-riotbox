@@ -1,0 +1,109 @@
+internal/egress/state/runtime_test.go
+  s_6add4080ebfdca::t_66bec43f49259a 1-109,130-148
+  s_6add4080ebfdca::t_b9335991a46fb6 110-129
+internal/egress/state/state.go
+  s_6add4080ebfdca::t_e8303d5cbf81c9 256,259
+  s_6add4080ebfdca::t_ac28cff5625c30 16-17,20,64,104-109,112-125,165-166,184-190,234-253,255,257-258,260-265,318-333
+  s_6add4080ebfdca::t_d59ca853afb385 18-19
+cmd/riotbox-core/egress_test.go
+  s_6add4080ebfdca::t_3cc3aa4ac41a2a 705
+  s_6add4080ebfdca::t_a285ae0f3c673a 156-157,164-167,194
+  s_6add4080ebfdca::t_2ef70deb93a5ba 171-174,178,183-186,204-207,213-214,216
+  s_6add4080ebfdca::t_9476630758015d 141-155,158-163,168-170,175-177,179-182,187-193,195-203,208-212,215,217-225,228
+tests/lib/egress-test-helpers.sh
+  s_6add4080ebfdca::t_d37cf042151b92 43-51
+cmd/riotbox-core/egress.go
+  s_6add4080ebfdca::t_618f22ffecca09 71-78,120-121
+  s_6add4080ebfdca::t_06c1e5d01a828d 110-114,123-125
+internal/egress/pod/pod.go
+  s_6add4080ebfdca::t_5d3f5c71cd5332 157-158,168-170,195-196
+  s_6add4080ebfdca::t_c9f7cda3236df6 172-176
+  s_6add4080ebfdca::t_18403ac68c0afe 171
+  s_6add4080ebfdca::t_6ac355c257aa89 197
+  s_6add4080ebfdca::t_08874b20f90919 268-270
+  s_6add4080ebfdca::t_215470dd24edf7 317-321
+  s_6add4080ebfdca::t_06c1e5d01a828d 424-426,432,450,465-474
+  s_6add4080ebfdca::t_287a69c4542683 475-477
+internal/egress/pod/sessions_test.go
+  s_6add4080ebfdca::t_bee56b61c9d869 169-170,192-201,204-207,213,218,220-230,232,236-239,241-248,250-253,275-277,279-285,287-294,296-298,301,310,320,329
+  s_6add4080ebfdca::t_b9335991a46fb6 217,231,240,249,254-274,278,286,295,304,314,323,331,337,345,354,367,376,383,409,417,426,441,456,470,481,489,497,518
+tests/egress-launch.venom.yml
+  s_6add4080ebfdca::t_d37cf042151b92 292-299,354-357,558,560,576-578,580-581,594,596,619,621,633-637,668,670,676,678,690,692,697-699,701-702,739,741,744,746,771,773,785-789,820,822,839,841,870,872
+  s_6add4080ebfdca::t_524c2025a54d78 565-568,611-614,683-686,753-756
+  s_6add4080ebfdca::t_f68734c36f74ed 688,702-703,743,753-754,761-763,833,847-848,864,874-875,879-881
+  s_6add4080ebfdca::t_22ec58a766e11f 764,882
+  s_6add4080ebfdca::t_27b02d550771bc 606-608,724-726
+  s_6add4080ebfdca::t_e640022929e4d0 591-605,609-614,709-723,727-732
+  s_6add4080ebfdca::t_77ebd10cfe0438 627,639-641,745,757-759
+  s_6add4080ebfdca::t_ae50392c19c828 283-286
+internal/egress/state/injection_test.go
+  s_6add4080ebfdca::t_2e27e5f3a24907 246-268
+  s_6add4080ebfdca::t_8d1fadb249c65f 31-34,37-38,54-56,214-244,269,273,284,292,296-297,302-310,315
+internal/egress/pod/sessions.go
+  s_6add4080ebfdca::t_5d3f5c71cd5332 8,10,158,220,222,242-246,248-269
+  s_6add4080ebfdca::t_06c1e5d01a828d 160-164,170,203,221,241,247
+internal/egress/state/runtime.go
+  s_6add4080ebfdca::t_f00bc11d4a394a 1-8,10-58,79-85,95,97,99,101-134
+  s_6add4080ebfdca::t_06c1e5d01a828d 9,59-78,86-94,96,98,100
+internal/egress/pod/inject_e2e_test.go
+  s_6add4080ebfdca::t_6dee44300a144f 61,67,194-197,200-206,208-217,219-221
+  s_6add4080ebfdca::t_7ba591bbe6e581 198-199,207,218
+cmd/riotbox-core/main.go
+  s_6add4080ebfdca::t_e1e3ce1fc74d21 69-74
+internal/egress/pod/pod_test.go
+  s_6add4080ebfdca::t_b0df3574928f9a 61,458-467,519-526
+  s_6add4080ebfdca::t_4c9f711349997f 85
+  s_6add4080ebfdca::t_b9335991a46fb6 505-518
+libexec/egress-lib.sh
+  s_6add4080ebfdca::t_4d59089bbb7558 318,339,341-343,457,480,484
+  s_6add4080ebfdca::t_196395a239f148 161-163,165,171-175,183-184,197-202,231-235
+  s_6add4080ebfdca::t_b56eaeee1342f4 35-36,44-45,271-273,409-411
+  s_6add4080ebfdca::t_1567bf3495c0e8 253-255
+  s_6add4080ebfdca::t_4f8ca2cc21a4f4 150-151,164,170,221-222,224,251-252
+  s_6add4080ebfdca::t_63741eb6c1008e 340,343-345,478,481-483
+tests/lib/egress-fake-engine/podman
+  s_6add4080ebfdca::t_524c2025a54d78 10-12,51
+THREAT_MODEL.md
+  s_6add4080ebfdca::t_997834086fa027 1300-1313,1310-1314,1317-1323,1322-1326,1332-1336,1342-1349,1352-1355
+  s_6add4080ebfdca::t_5b3b27e0440e67 3290
+  s_6add4080ebfdca::t_d59ca853afb385 1305-1306,1315-1316,3290,3300
+  s_6add4080ebfdca::t_0cb1b87dc56cd7 1356-1357
+docs/dev/decisions/egress-proxy.md
+  s_6add4080ebfdca::t_0a9e44202ad312 157-171
+scripts/lib/egress-trust.sh
+  s_6add4080ebfdca::t_215470dd24edf7 8-14
+docs/dev/riotbox-core.md
+  s_6add4080ebfdca::t_0a9e44202ad312 193
+  s_6add4080ebfdca::t_d59ca853afb385 194-195
+docs/dev/egress.md
+  s_6add4080ebfdca::t_7ba591bbe6e581 539-541,580-582
+  s_6add4080ebfdca::t_71eaec0d28acd7 37,91-94,92-95,160,165-184,199,204-212,215-216,222-225,375-377,404-416,414-416,445-455,476-478,513-518,518,522-528,556-564
+  s_6add4080ebfdca::t_d59ca853afb385 174-175,178-182,213-214,217-221
+  s_6add4080ebfdca::t_6d26692c604bfb 477-479,519-521
+  s_6add4080ebfdca::t_0cb1b87dc56cd7 565-569
+  s_6add4080ebfdca::t_ae50392c19c828 438,443-444
+README.md
+  s_6add4080ebfdca::t_70f590aef9a8b0 1368-1370,1384-1385
+  s_6add4080ebfdca::t_76bd9434566fe6 1421-1423
+  s_6add4080ebfdca::t_319040aa21aef8 1100-1104,1115-1119,1343-1346,1350-1353,1358-1361,1364-1367,1365-1368,1372-1381,1379-1381,1384-1388,1387-1403,1418-1420,1433-1434
+  s_6add4080ebfdca::t_d59ca853afb385 1367-1368,1382-1383
+  s_6add4080ebfdca::t_0cb1b87dc56cd7 1435-1438
+libexec/launch.sh
+  s_6add4080ebfdca::t_ae50392c19c828 322-324
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c518ae1daf4c68c32cea8bde46a1d7ef3882dce7",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}

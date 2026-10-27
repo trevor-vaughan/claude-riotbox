@@ -1,0 +1,38 @@
+internal/egress/inject/input_test.go
+  s_6add4080ebfdca::t_45aa96e8040fd8 1-57
+internal/egress/inject/input.go
+  s_6add4080ebfdca::t_cb69f4fca8f33b 1-46
+internal/egress/inject/providers_test.go
+  s_6add4080ebfdca::t_050647f3f31bc8 23-27
+  s_6add4080ebfdca::t_45aa96e8040fd8 1-22,28-33,46-81
+  s_6add4080ebfdca::t_e82281e5836ff2 34-45
+internal/egress/inject/providers.go
+  s_6add4080ebfdca::t_cb69f4fca8f33b 1-21,28-40,44-54,56-57
+  s_6add4080ebfdca::t_35df15b304c19e 22-27,41-43,55
+internal/egress/inject/plan_test.go
+  s_6add4080ebfdca::t_45aa96e8040fd8 1-3,6-12,15-48,52-58,62-66,71,73-74,90-92,94-97,100-113,126
+  s_6add4080ebfdca::t_4c182708ebcbdf 4-5,13-14,49-51,59-61,67-70,72,75-89,93,98-99,114-124
+  s_6add4080ebfdca::t_3f77b271589654 125
+internal/egress/inject/plan.go
+  s_6add4080ebfdca::t_cb69f4fca8f33b 1-3,5-19,31-43,45-48,50,57-82,87,91-102,104-122
+  s_6add4080ebfdca::t_4e5d760838a411 4,20-30,44,49,51-54,83-86,88-90,103
+  s_6add4080ebfdca::t_d72b4df61c2677 55-56
+internal/egress/inject/inject_suite_test.go
+  s_6add4080ebfdca::t_45aa96e8040fd8 1-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0f6a5aaed513b59b8a44264e69436a684cb30eca",
+  "prompts": {},
+  "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}

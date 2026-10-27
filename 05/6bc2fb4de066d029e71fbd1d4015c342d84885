@@ -1,0 +1,46 @@
+tests/egress-e2e.venom.yml
+  s_d98a82223f1933::t_f8f413df56715b 9-10
+  s_d98a82223f1933::t_2378134f243cec 322,324-330,333-335,337-338,344,348-350,352-353,355-378,381-382,386-392
+  s_d98a82223f1933::t_969fa31d4f08f5 331-332,383-385
+  s_d98a82223f1933::t_2d5f169e91215f 323,336,339-343,345-347,351,354,379-380
+tests/lib/egress-e2e-helpers.sh
+  s_d98a82223f1933::t_506f008e754e2e 138-139
+  s_d98a82223f1933::t_b0d0173ae893d0 15-27,130-136,140-145,150-155,162-164,172-173
+  s_d98a82223f1933::t_3193b479d6221f 12
+  s_d98a82223f1933::t_0b6803af865561 11,137,148,156-161,165-171,174-180
+  s_d98a82223f1933::t_173027e2713faa 146-147,149
+  s_d98a82223f1933::t_2a8fc9d2e187bb 181
+internal/egress/inject/vouch_e2e_test.go
+  s_d98a82223f1933::t_564df316235a65 20
+internal/egress/pod/inject_e2e_test.go
+  s_d98a82223f1933::t_50eb56fb1b51ee 25
+docs/dev/os-contract.md
+  s_d98a82223f1933::t_fe6f8ed430cf02 95
+os/centos/egress-hosts
+  s_d98a82223f1933::t_fe6f8ed430cf02 3,5
+README.md
+  s_d98a82223f1933::t_fe6f8ed430cf02 1231
+  s_d98a82223f1933::t_b32693006a5d67 1242-1245,1448-1451
+tests/egress-os.venom.yml
+  s_d98a82223f1933::t_58696df70a72e3 104-105,122-126,153
+os/centos/manifest.sh
+  s_d98a82223f1933::t_c35f07fbe862dd 8,12-15,21
+THREAT_MODEL.md
+  s_d98a82223f1933::t_34ca258732aa04 1267-1269,1389-1395
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "056bc2fb4de066d029e71fbd1d4015c342d84885",
+  "prompts": {},
+  "sessions": {
+    "s_d98a82223f1933": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bba9419-7fe8-4666-9200-e8afbf914acc",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}

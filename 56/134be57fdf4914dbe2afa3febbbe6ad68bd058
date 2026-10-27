@@ -1,0 +1,49 @@
+internal/egress/policy/resolve_test.go
+  s_d98a82223f1933::t_d705bb8047c389 34,41-42
+  s_d98a82223f1933::t_bfa18c3e4046b0 43-44
+README.md
+  s_d98a82223f1933::t_c8fb254689910c 1214,1236-1238
+  s_d98a82223f1933::t_b735cb1d7c0bb9 1239-1241
+internal/egress/policy/os_test.go
+  s_d98a82223f1933::t_d705bb8047c389 24,66-87,100-127
+  s_d98a82223f1933::t_3c1b78dd1ff806 128
+  s_d98a82223f1933::t_b735cb1d7c0bb9 88-99
+docs/dev/os-contract.md
+  s_d98a82223f1933::t_c8fb254689910c 30-34
+cmd/riotbox-core/egress_test.go
+  s_d98a82223f1933::t_58ab81f03a0ca9 982-989
+internal/egress/policy/groups.go
+  s_d98a82223f1933::t_55d0f2daad4676 73-75,80-81,101-102,113-114,146-152
+  s_d98a82223f1933::t_b735cb1d7c0bb9 78-79,103-105
+scripts/configs/egress.conf
+  s_d98a82223f1933::t_8ee691f1dea1ce 21,86-87
+  s_c570bc83c76de8::t_568bdae9e7d924 1
+docs/dev/egress.md
+  s_d98a82223f1933::t_b735cb1d7c0bb9 272-278
+internal/egress/policy/template_test.go
+  s_c570bc83c76de8::t_d888e36f66c105 37,39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "56134be57fdf4914dbe2afa3febbbe6ad68bd058",
+  "prompts": {},
+  "sessions": {
+    "s_c570bc83c76de8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a8e7cc23-8cc4-4665-b7e7-7aa559fd65b2",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    },
+    "s_d98a82223f1933": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bba9419-7fe8-4666-9200-e8afbf914acc",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
