@@ -1,0 +1,33 @@
+tests/egress-os.venom.yml
+  s_d98a82223f1933::t_1a7061b7571d98 1-70
+os/arch/egress-hosts
+  s_d98a82223f1933::t_85aa3940df9a60 1-6
+os/debian/egress-hosts
+  s_d98a82223f1933::t_85aa3940df9a60 1-7
+os/centos/egress-hosts
+  s_d98a82223f1933::t_85aa3940df9a60 1-9
+os/ubuntu/egress-hosts
+  s_d98a82223f1933::t_85aa3940df9a60 1-9
+os/fedora/egress-hosts
+  s_d98a82223f1933::t_85aa3940df9a60 1-5
+os/rhel/egress-hosts
+  s_d98a82223f1933::t_85aa3940df9a60 1-6
+os/registry.sh
+  s_d98a82223f1933::t_9815eb1d8f78e3 1-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9a9f3daa9171170e1a9d9d299be5b7b2baae9f67",
+  "prompts": {},
+  "sessions": {
+    "s_d98a82223f1933": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bba9419-7fe8-4666-9200-e8afbf914acc",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
