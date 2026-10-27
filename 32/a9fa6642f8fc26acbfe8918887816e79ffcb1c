@@ -1,0 +1,27 @@
+docs/dev/os-contract.md
+  s_d98a82223f1933::t_fe6f8ed430cf02 95
+os/centos/egress-hosts
+  s_d98a82223f1933::t_fe6f8ed430cf02 3,5
+README.md
+  s_d98a82223f1933::t_fe6f8ed430cf02 1231
+tests/egress-os.venom.yml
+  s_d98a82223f1933::t_58696df70a72e3 104-105,122-126,153
+os/centos/manifest.sh
+  s_d98a82223f1933::t_c35f07fbe862dd 8,12-15,21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "32a9fa6642f8fc26acbfe8918887816e79ffcb1c",
+  "prompts": {},
+  "sessions": {
+    "s_d98a82223f1933": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bba9419-7fe8-4666-9200-e8afbf914acc",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
