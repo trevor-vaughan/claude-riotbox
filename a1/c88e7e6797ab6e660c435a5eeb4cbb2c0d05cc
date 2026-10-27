@@ -1,0 +1,21 @@
+os/lib/dnf.sh
+  s_d98a82223f1933::t_16a41730e0d667 16-19,32-33,43-44
+tests/egress-os.venom.yml
+  s_d98a82223f1933::t_913817b3aafae7 194,200-266
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a1c88e7e6797ab6e660c435a5eeb4cbb2c0d05cc",
+  "prompts": {},
+  "sessions": {
+    "s_d98a82223f1933": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bba9419-7fe8-4666-9200-e8afbf914acc",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
