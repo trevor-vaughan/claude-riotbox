@@ -14,6 +14,7 @@ testcases:
     steps:
       - type: exec
         script: |
+          #!/bin/bash
           set -euo pipefail
           source "{{.e2e_helpers}}"
           e2e_require
@@ -33,6 +34,7 @@ testcases:
     steps:
       - type: exec
         script: |
+          #!/bin/bash
           set -euo pipefail
           source "{{.e2e_helpers}}"
           e2e_require
@@ -75,6 +77,7 @@ testcases:
     steps:
       - type: exec
         script: |
+          #!/bin/bash
           set -euo pipefail
           source "{{.e2e_helpers}}"
           e2e_require
@@ -123,6 +126,7 @@ testcases:
     steps:
       - type: exec
         script: |
+          #!/bin/bash
           set -euo pipefail
           source "{{.e2e_helpers}}"
           e2e_require
@@ -156,6 +160,7 @@ testcases:
     steps:
       - type: exec
         script: |
+          #!/bin/bash
           set -euo pipefail
           source "{{.e2e_helpers}}"
           e2e_require
@@ -181,6 +186,7 @@ testcases:
     steps:
       - type: exec
         script: |
+          #!/bin/bash
           set -euo pipefail
           source "{{.e2e_helpers}}"
           e2e_require
@@ -211,6 +217,7 @@ testcases:
     steps:
       - type: exec
         script: |
+          #!/bin/bash
           set -uo pipefail
           source "{{.e2e_helpers}}"
           e2e_require
@@ -231,6 +238,7 @@ testcases:
     steps:
       - type: exec
         script: |
+          #!/bin/bash
           set -euo pipefail
           source "{{.e2e_helpers}}"
           e2e_require
@@ -283,6 +291,7 @@ testcases:
     steps:
       - type: exec
         script: |
+          #!/bin/bash
           set -euo pipefail
           source "{{.e2e_helpers}}"
           e2e_require
@@ -328,6 +337,7 @@ testcases:
     steps:
       - type: exec
         script: |
+          #!/bin/bash
           set -euo pipefail
           source "{{.e2e_helpers}}"
           e2e_require
@@ -365,6 +375,7 @@ testcases:
     steps:
       - type: exec
         script: |
+          #!/bin/bash
           set -euo pipefail
           source "{{.e2e_helpers}}"
           e2e_require
