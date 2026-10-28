@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/trevor-vaughan/claude-riotbox/internal/display"
+	"github.com/trevor-vaughan/claude-riotbox/internal/egress/inject"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/pod"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/policy"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/state"
@@ -27,6 +28,10 @@ var egressConfOptions = []string{"--engine", "--state-root", "--system-conf", "-
 // can be read after the session ends.
 const sweepMaxAge = 7 * 24 * time.Hour
 
+// maxUpInput caps what egress-up reads on stdin: the agent's hosts and
+// variables are a few KiB, and the whole input is held in memory.
+const maxUpInput = 1 << 20
+
 // egressFailed reports a failure that ends an egress verb.
 func egressFailed(stderr io.Writer, err error) int {
 	_, _ = fmt.Fprintf(stderr, "riotbox-core: egress: %v\n", err)
@@ -34,7 +39,10 @@ func egressFailed(stderr io.Writer, err error) int {
 }
 
 // egressUp starts a session's proxy and prints the agent's engine flags,
-// one per line. The agent's egress hosts arrive on stdin.
+// one per line. Stdin holds the agent's hosts and, after a NUL, the
+// variables the agent would get from the host (inject.ParseInput); the
+// provider keys among them the proxy injects (inject.Decide), and the
+// keys that still enter the container are named on stderr.
 func egressUp(a parsedArgs, stdout, stderr io.Writer) int {
 	pid, err := strconv.Atoi(a.opts["--owner-pid"])
 	if err != nil || pid <= 0 {
@@ -45,19 +53,47 @@ func egressUp(a parsedArgs, stdout, stderr io.Writer) int {
 	if err != nil {
 		return egressFailed(stderr, err)
 	}
-	hosts, err := io.ReadAll(os.Stdin)
+	input, err := io.ReadAll(io.LimitReader(os.Stdin, maxUpInput+1))
 	if err != nil {
-		return egressFailed(stderr, fmt.Errorf("reading the agent's hosts: %w", err))
+		return egressFailed(stderr, fmt.Errorf("reading stdin: %w", err))
+	}
+	if len(input) > maxUpInput {
+		return egressFailed(stderr, errors.New("stdin holds more than 1 MiB of hosts and variables"))
+	}
+	hosts, vars, err := inject.ParseInput(input)
+	if err != nil {
+		return egressFailed(stderr, err)
+	}
+	plan := inject.Decide(vars, inject.Providers)
+	if notice := plan.Notice(); notice != "" {
+		_, _ = fmt.Fprintln(stderr, notice)
+	}
+	// The keys go only on a private tmpfs; with none to inject, a missing
+	// one changes nothing (the base is then "", and only an earlier
+	// release's secrets in the state dir are cleaned up).
+	runtime, err := state.RuntimeBase(state.HostRuntime())
+	if err != nil && len(plan.Inject) > 0 {
+		return egressFailed(stderr, err)
+	}
+	dir = dir.WithRuntime(runtime)
+	// The engine commands Up runs inherit this process's environment,
+	// which holds the injected keys when launch.sh's does: drop them, so a
+	// key reaches the proxy only through its secrets dir.
+	for _, c := range plan.Inject {
+		if err := os.Unsetenv(c.Env); err != nil {
+			return egressFailed(stderr, err)
+		}
 	}
 	flags, err := pod.NewManager(a.opts["--engine"], stderr).Up(pod.UpRequest{
-		Dir:        dir,
-		SessionKey: a.opts["--session-key"],
-		OwnerPID:   pid,
-		Image:      a.opts["--image"],
-		AgentHosts: hosts,
-		Projects:   a.multi["--project"],
-		SystemConf: a.opts["--system-conf"],
-		UserConf:   a.opts["--user-conf"],
+		Dir:         dir,
+		SessionKey:  a.opts["--session-key"],
+		OwnerPID:    pid,
+		Image:       a.opts["--image"],
+		AgentHosts:  hosts,
+		Projects:    a.multi["--project"],
+		SystemConf:  a.opts["--system-conf"],
+		UserConf:    a.opts["--user-conf"],
+		Credentials: plan.Inject,
 	})
 	if err != nil {
 		return egressFailed(stderr, err)
@@ -71,24 +107,31 @@ func egressDown(a parsedArgs, _, stderr io.Writer) int {
 	if err != nil {
 		return egressFailed(stderr, err)
 	}
-	if err := pod.NewManager(a.opts["--engine"], stderr).Down(dir, true); err != nil {
+	// Every qualifying runtime base, not just the first: the launch may
+	// have seen another $XDG_RUNTIME_DIR. With none, Down still removes
+	// the state dir's secrets.
+	runtimes := state.RuntimeBases(state.HostRuntime())
+	if err := pod.NewManager(a.opts["--engine"], stderr).Down(dir, true, runtimes...); err != nil {
 		return egressFailed(stderr, err)
 	}
 	return 0
 }
 
-// egressSweep removes orphaned egress pods and stale state dirs.
+// egressSweep removes orphaned egress pods, stale state dirs and idle
+// sessions' secrets.
 func egressSweep(a parsedArgs, _, stderr io.Writer) int {
-	if err := pod.NewManager(a.opts["--engine"], stderr).Sweep(a.opts["--state-root"], sweepMaxAge, time.Now()); err != nil {
+	// As in egressDown: every qualifying runtime base.
+	runtimes := state.RuntimeBases(state.HostRuntime())
+	if err := pod.NewManager(a.opts["--engine"], stderr).Sweep(a.opts["--state-root"], runtimes, sweepMaxAge, time.Now()); err != nil {
 		return egressFailed(stderr, err)
 	}
 	return 0
 }
 
 // egressList prints each running session with when it started, the
-// launch that owns it, its project dirs, its log, its strict setting and
-// the allowlist its proxy enforces. What the engine or an older session
-// did not record is "unknown".
+// launch that owns it, its project dirs, its log, its strict setting, the
+// keys its proxy injects and the allowlist its proxy enforces. What the
+// engine or an older session did not record is "unknown".
 func egressList(a parsedArgs, stdout, stderr io.Writer) int {
 	running, err := pod.NewManager(a.opts["--engine"], stderr).RunningSessions()
 	if err != nil {
@@ -120,6 +163,11 @@ func egressList(a parsedArgs, stdout, stderr io.Writer) int {
 		if !knownStrictLabel(strict) {
 			strict = "unknown"
 		}
+		injected, injectedErr := dir.Injected()
+		if injectedErr != nil {
+			// One session's corrupt record must not hide the others.
+			_, _ = fmt.Fprintf(stderr, "riotbox-core: egress: %s: %v\n", s.Name, injectedErr)
+		}
 		started, owner := "unknown", "unknown"
 		if !s.Started.IsZero() {
 			started = s.Started.Format("2006-01-02 15:04:05 MST")
@@ -139,6 +187,12 @@ func egressList(a parsedArgs, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(&b, "  log:     %s\n", display.Quote(dir.AccessLog()))
 		fmt.Fprintf(&b, "  strict:  %s\n", strict)
+		if injectedErr != nil {
+			b.WriteString("  inject:  unreadable\n")
+		}
+		for _, x := range injected {
+			fmt.Fprintf(&b, "  inject:  %s → %s\n", x.Env, x.Host)
+		}
 		for _, e := range entries {
 			fmt.Fprintf(&b, "  allow:   %s\n", e)
 		}

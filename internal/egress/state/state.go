@@ -9,7 +9,14 @@
 //	applied.conf   the allowlist last written to rds.json
 //	applied-strict the strict setting last applied, as riotbox egress list shows it
 //	projects.json  the launch's project dirs, for riotbox egress list
+//	ca.crt         the session CA's certificate, mounted read-only into the agent
+//	injected       each injected key's variable, host and header (never its value)
 //	.lock          serialises the commands that change the session
+//
+// The proxy's leaf certificates, keys and credentials (credential
+// injection) are not in it: they are in <runtime>/<name>/secrets, on a
+// tmpfs (RuntimeBase, SecretsDir), never written to persistent disk
+// unless the system swaps them out.
 //
 // See docs/dev/egress.md.
 package state
@@ -32,6 +39,7 @@ import (
 
 	"github.com/trevor-vaughan/claude-riotbox/internal/display"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/envoyconfig"
+	"github.com/trevor-vaughan/claude-riotbox/internal/egress/inject"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/policy"
 	"github.com/trevor-vaughan/claude-riotbox/internal/lock"
 )
@@ -53,6 +61,7 @@ func ValidName(name string) error {
 // its name is always valid.
 type Dir struct {
 	root, name string
+	runtime    string // RuntimeBase's dir, or "" when none was given
 }
 
 // Open returns the dir of session name under root. It touches nothing on
@@ -91,6 +100,250 @@ func (d Dir) SessionConf() string { return filepath.Join(d.Path(), "session.conf
 func (d Dir) appliedConf() string { return filepath.Join(d.Path(), "applied.conf") }
 
 func (d Dir) projectsFile() string { return filepath.Join(d.Path(), "projects.json") }
+
+// WithRuntime is d with its secrets under base, RuntimeBase's dir.
+func (d Dir) WithRuntime(base string) Dir {
+	d.runtime = base
+	return d
+}
+
+// SecretsDir holds what only the proxy may read: per credential host its
+// leaf certificate and key and its credential file
+// (envoyconfig.RenderCredential). It is <base>/<name>/secrets on the
+// runtime tmpfs (WithRuntime), or "" when d has no runtime base. It is
+// mounted read-only into the proxy alone and removed at teardown
+// (RemoveSecrets).
+func (d Dir) SecretsDir() string {
+	if d.runtime == "" {
+		return ""
+	}
+	return filepath.Join(d.runtime, d.name, "secrets")
+}
+
+// legacySecretsDir is where releases before the runtime tmpfs kept the
+// secrets: in the session dir. RemoveSecrets still removes it.
+func (d Dir) legacySecretsDir() string { return filepath.Join(d.Path(), "secrets") }
+
+// CACert is the session CA's certificate, mounted read-only into the
+// agent. The CA's private key is never written (inject.NewCerts). Mode
+// 0600 is enough because the agent runs as the owning uid
+// (launch.sh: --userns=keep-id with --user); a change to the agent's
+// uid mapping must revisit it.
+func (d Dir) CACert() string { return filepath.Join(d.Path(), "ca.crt") }
+
+func (d Dir) injectedFile() string { return filepath.Join(d.Path(), "injected") }
+
+// headerName is a lowercase HTTP header name, as the provider table
+// spells them.
+var headerName = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+// Injected is one key the session's proxy injects, as the record names
+// it: never its value.
+type Injected struct {
+	Env    string // the variable the agent holds a placeholder in
+	Host   string // the provider host the proxy puts the key on
+	Header string // the header it goes in
+}
+
+// validInjected reports whether env, host and header can name an
+// injected key: a variable name, a provider host (a lowercase DNS name,
+// no wildcard, port 443) and a lowercase header name. They become file
+// names in the secrets dir and lines riotbox egress list prints.
+func validInjected(env, host, header string) bool {
+	e, remove, err := policy.Parse(host)
+	return inject.IsEnvName(env) && headerName.MatchString(header) &&
+		err == nil && !remove && !strings.HasPrefix(host, "*") &&
+		(e == policy.Entry{Host: host, Port: policy.DefaultPort})
+}
+
+// WriteInjection makes the session's interception for creds: the CA and
+// a leaf per host (inject.NewCerts, valid from now), each leaf, its key
+// and its credential in SecretsDir, the CA certificate at CACert, and the
+// record Injected reads. It first removes any of these a reused session
+// dir holds, so with no creds the session intercepts nothing. A
+// credential whose variable, host or header is not valid, or whose host
+// an earlier one names, is refused before anything is written, as are
+// creds for a d without a runtime base (ErrNoRuntimeDir) and a
+// SecretsDir that is not a real directory (a link planted there would
+// redirect the keys). A failed write removes SecretsDir and CACert
+// again, so no key stays on disk without the record that names it. No
+// error shows a value.
+func (d Dir) WriteInjection(creds []inject.Credential, now time.Time) error {
+	hosts := make([]string, len(creds))
+	seen := make(map[string]bool, len(creds))
+	for i, c := range creds {
+		if !validInjected(c.Env, c.Host, c.Header) {
+			return fmt.Errorf("credential %d is not a variable, a host and a header", i+1)
+		}
+		if seen[c.Host] {
+			return fmt.Errorf("credential %d names host %s again", i+1, c.Host)
+		}
+		seen[c.Host] = true
+		hosts[i] = c.Host
+	}
+	if len(creds) > 0 && d.runtime == "" {
+		return ErrNoRuntimeDir
+	}
+	if d.runtime != "" {
+		if err := realDirOrAbsent(d.SecretsDir()); err != nil {
+			return err
+		}
+	}
+	if err := d.RemoveSecrets(); err != nil {
+		return err
+	}
+	for _, p := range []string{d.CACert(), d.injectedFile()} {
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	if len(creds) == 0 {
+		return nil
+	}
+	certs, err := inject.NewCerts(d.name, hosts, now)
+	if err != nil {
+		return err
+	}
+	if err := d.writeSecrets(creds, certs); err != nil {
+		return errors.Join(err, d.RemoveSecrets())
+	}
+	var record strings.Builder
+	for _, c := range creds {
+		record.WriteString(c.Env + " " + c.Host + " " + c.Header + "\n")
+	}
+	err = writeFile(d.CACert(), certs.CA)
+	if err == nil {
+		err = writeFile(d.injectedFile(), []byte(record.String()))
+	}
+	if err != nil {
+		rmErr := os.Remove(d.CACert())
+		if errors.Is(rmErr, fs.ErrNotExist) {
+			rmErr = nil
+		}
+		return errors.Join(err, d.RemoveSecrets(), rmErr)
+	}
+	return nil
+}
+
+// writeFile is WriteAtomic for WriteInjection's CA certificate and
+// record; specs replace it to fail one of those writes (export_test.go),
+// which no file planted beforehand can do without also failing the
+// clean-up that runs before or after it.
+var writeFile = WriteAtomic
+
+// realDirOrAbsent returns an error unless path is missing or a real
+// directory: a link there could redirect what is written under it.
+func realDirOrAbsent(path string) error {
+	info, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case !info.IsDir():
+		return fmt.Errorf("%s is not a directory (it is %s); remove it", display.Quote(path), info.Mode().Type())
+	}
+	return nil
+}
+
+// writeSecrets makes SecretsDir and the runtime dirs above it up to the
+// runtime base, each 0700, and writes into it each credential's leaf, key
+// and credential file, each 0600. An existing base or session dir must be
+// a real directory, and Mkdir of SecretsDir fails on anything already
+// there, so nothing is written through a link.
+func (d Dir) writeSecrets(creds []inject.Credential, certs inject.Certs) error {
+	for _, dir := range []string{d.runtime, filepath.Dir(d.SecretsDir())} {
+		if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		if err := realDirOrAbsent(dir); err != nil {
+			return err
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return err
+		}
+	}
+	if err := os.Mkdir(d.SecretsDir(), 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(d.SecretsDir(), 0o700); err != nil {
+		return err
+	}
+	for _, c := range creds {
+		leaf := certs.Leaves[c.Host]
+		for _, f := range []struct {
+			name string
+			data []byte
+		}{
+			{envoyconfig.CertFile(c.Host), leaf.Cert},
+			{envoyconfig.KeyFile(c.Host), leaf.Key},
+			{envoyconfig.CredentialFile(c.Host), envoyconfig.RenderCredential(c.Host, c.Value)},
+		} {
+			if err := WriteAtomic(filepath.Join(d.SecretsDir(), f.name), f.data); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// Injected is the record WriteInjection wrote: none for a session that
+// injects nothing or that an older release started. A line that is not a
+// valid variable, host and header (validInjected), or that names a host
+// an earlier line names, is an error naming it:
+// the config is rendered from the record and riotbox egress list prints
+// it.
+func (d Dir) Injected() ([]Injected, error) {
+	data, err := readOptional(d.injectedFile())
+	if err != nil || len(data) == 0 {
+		return nil, err
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	out := make([]Injected, 0, len(lines))
+	seen := make(map[string]bool, len(lines))
+	for n, line := range lines {
+		f := strings.Fields(line)
+		if len(f) != 3 || !validInjected(f[0], f[1], f[2]) {
+			return nil, fmt.Errorf("%s:%d: not a variable, a host and a header", display.Quote(d.injectedFile()), n+1)
+		}
+		if seen[f[1]] {
+			return nil, fmt.Errorf("%s:%d: names host %s again", display.Quote(d.injectedFile()), n+1, f[1])
+		}
+		seen[f[1]] = true
+		out = append(out, Injected{Env: f[0], Host: f[1], Header: f[2]})
+	}
+	return out, nil
+}
+
+// RemoveSecrets deletes SecretsDir and everything in it, then its session
+// dir in the runtime base when that is left empty, and the secrets dir an
+// earlier release kept in the session dir. A link is removed as the link
+// alone. A missing dir is not an error.
+func (d Dir) RemoveSecrets() error {
+	var errs []error
+	if d.runtime != "" {
+		errs = append(errs, os.RemoveAll(d.SecretsDir()))
+		err := os.Remove(filepath.Dir(d.SecretsDir()))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) {
+			errs = append(errs, err)
+		}
+	}
+	errs = append(errs, os.RemoveAll(d.legacySecretsDir()))
+	return errors.Join(errs...)
+}
+
+// intercepts is the record as envoyconfig takes it.
+func (d Dir) intercepts() ([]envoyconfig.Intercept, error) {
+	injected, err := d.Injected()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]envoyconfig.Intercept, len(injected))
+	for i, x := range injected {
+		out[i] = envoyconfig.Intercept{Host: x.Host, Header: x.Header}
+	}
+	return out, nil
+}
 
 // Create makes root (and any missing parents), the session dir and its
 // config and log dirs, each mode 0700, tightening any that already exist:
@@ -265,10 +518,14 @@ func (d Dir) writeOverlay(c policy.Conf) error {
 	return WriteAtomic(d.SessionConf(), []byte(b.String()))
 }
 
-// WriteConfig writes all of Envoy's config files for r, for a proxy about
-// to start.
+// WriteConfig writes all of Envoy's config files for r, intercepting the
+// hosts the injection record names, for a proxy about to start.
 func (d Dir) WriteConfig(r policy.Resolved) error {
-	files := envoyconfig.Render(d.name, r.Entries)
+	intercepts, err := d.intercepts()
+	if err != nil {
+		return err
+	}
+	files := envoyconfig.Render(d.name, r.Entries, intercepts)
 	for _, f := range []struct {
 		name string
 		data []byte
@@ -293,7 +550,11 @@ func (d Dir) Reload(systemConf, userConf string) (policy.Resolved, error) {
 	if err != nil {
 		return policy.Resolved{}, err
 	}
-	if err := WriteAtomic(filepath.Join(d.ConfigDir(), envoyconfig.RDSFile), envoyconfig.RenderRDS(r.Entries)); err != nil {
+	intercepts, err := d.intercepts()
+	if err != nil {
+		return policy.Resolved{}, err
+	}
+	if err := WriteAtomic(filepath.Join(d.ConfigDir(), envoyconfig.RDSFile), envoyconfig.RenderRDS(r.Entries, intercepts)); err != nil {
 		return policy.Resolved{}, err
 	}
 	if err := d.recordApplied(r); err != nil {

@@ -12,13 +12,15 @@ runs, and the invariants a change must keep.
 
 | Path | What it does |
 |---|---|
-| `libexec/egress-lib.sh` | The launch side: the gate (`egress_gate`), start (`egress_start`), the teardown trap, and the pinned image (`RIOTBOX_EGRESS_DEFAULT_IMAGE`) |
+| `libexec/egress-lib.sh` | The launch side: the gates (`egress_gate`, `egress_gate_mounts`, `egress_gate_env`), start (`egress_start`), the teardown trap, and the pinned image (`RIOTBOX_EGRESS_DEFAULT_IMAGE`) |
 | `libexec/egress.sh` | `riotbox egress list\|groups\|allow\|deny\|strict\|reload`: parses the command line and calls the core; `--save` always passes the user `egress.conf` as `--save-to` |
 | `cmd/riotbox-core/egress.go` | The nine `egress-*` verbs (see [riotbox-core.md](riotbox-core.md#egress-verbs)) |
 | `internal/egress/policy` | Entry grammar (`policy.go`), `egress.conf` grammar (`conf.go`), built-in groups (`groups.go`), resolution (`resolve.go`) |
-| `internal/egress/envoyconfig` | Entries → Envoy's four JSON files, including the 403 rewrite |
-| `internal/egress/state` | One session's host directory: config files, overlay, logs, lock, the stale-dir rule |
+| `internal/egress/envoyconfig` | Entries and intercepts → Envoy's four JSON files, including the 403 rewrite and the credential hosts' TLS interception; `RenderCredential`, the SDS file of one key |
+| `internal/egress/state` | One session's host directory: config files, overlay, logs, lock, the stale-dir rule, the injection's secrets, CA certificate and record |
 | `internal/egress/pod` | The engine side: create, wait for readiness, remove, list running sessions, sweep orphans |
+| `internal/egress/inject` | Credential injection: the provider table (`providers.go`), `egress-up`'s stdin framing (`input.go`), the inject/pass-through decision and notice (`plan.go`), the per-session CA and leaves (`certs.go`) |
+| `scripts/lib/egress-trust.sh` | The combined CA bundle for curl and Python (`egress_trust_apply`), called from `container/entrypoint.sh` |
 | `agents/<name>/manifest.sh` | `agent_<name>_egress_hosts`, the agent's API hosts ([agent-contract.md](agent-contract.md#agent_name_egress_hosts)) |
 | `scripts/lib/egress-prompt.sh` | The egress section of each agent's system prompt (`egress_prompt_apply`, `egress_prompt_apply_shared`), called from each manifest's `container_setup` |
 | `scripts/configs/egress.conf` | The commented template installed as the system and user `egress.conf` |
@@ -32,7 +34,7 @@ One set of objects per launch, named after the agent container `<name>`:
 | `<name>-int` | `podman network create --internal --disable-dns` | The agent's only network. No default route and no DNS server; on podman 6.1 it also has no gateway address on the host. |
 | `<name>-ext` | a normal bridge network, DNS enabled | Envoy's way out, and its only resolver (its `resolv.conf` lists this network's aardvark-dns alone). The default `podman` network has DNS disabled and the internal network has none, so without this Envoy cannot resolve upstreams (`503`, flag `DF`). |
 | `<name>-pod` | `podman pod create --infra=false` | Lifecycle only. Without an infra container the pod shares no namespaces, which is what lets its two members sit on different networks. |
-| `<name>-egress` | Envoy, digest-pinned distroless image, on both networks | Listens on `:3128`. No admin interface: nothing uses it, and an allowlisted name that resolves to loopback could reach it. Runs as the invoking user (`--userns=keep-id`), `--read-only`, `--cap-drop=ALL`, `no-new-privileges`, `--log-driver=none`. Config dir mounted read-only, log dir read-write. |
+| `<name>-egress` | Envoy, digest-pinned distroless image, on both networks | Listens on `:3128`. No admin interface: nothing uses it, and an allowlisted name that resolves to loopback could reach it. Runs as the invoking user (`--userns=keep-id`), `--read-only`, `--cap-drop=ALL`, `no-new-privileges`, `--ulimit core=0` (it holds injected keys in memory; no core file may write them out), `--log-driver=none`. Config dir mounted read-only, log dir read-write; with injected keys, the secrets dir on the runtime tmpfs read-only. |
 | `<name>` | the agent, on `<name>-int` only, in the pod | Gets `HTTP(S)_PROXY` and `http(s)_proxy` = `http://<name>-egress:3128`, `NO_PROXY=localhost,127.0.0.1` (headroom's loopback proxy), `RIOTBOX_EGRESS_SESSION=<name>` (for the [prompt section](#telling-the-agent-about-denials)), `--cap-drop=NET_ADMIN,NET_RAW`, `--dns none` (no `/etc/resolv.conf`), and `--add-host <name>-egress:<ip>`, Envoy's address on `<name>-int` as `podman container inspect` reports it once Envoy is ready, refused unless it parses as an IP literal. |
 
 Every object carries `riotbox.egress=<name>`, `riotbox.session=<key>`,
@@ -87,7 +89,10 @@ minutes would cut a quiet model stream).
      when it is absolute (a relative value is ignored, as the XDG spec
      requires). A resolved regular file is allowed anywhere, so a credential
      file a secret manager keeps under `$XDG_RUNTIME_DIR` still mounts: a
-     file cannot carry a socket.
+     file cannot carry a socket. The same rule keeps the injected keys'
+     secrets dir (under the runtime dir, see
+     [Credential injection](#credential-injection)) out of the agent,
+     whether named directly or through an ancestor such as `$HOME`.
    - `egress_gate_mounts` (run from `launch.sh` once `MOUNTS`,
      `PROJECT_VOLUME_FLAGS` and `CREDFILE_FLAGS` exist, before `egress_start`)
      applies the same `-v` check to the mounts RiotBox builds from
@@ -191,7 +196,32 @@ mode 0700 (`state.Dir.Create` refuses a link in place of the session,
 | `session.conf` | The overlay `riotbox egress allow\|deny\|strict` writes, in the `egress.conf` grammar: an optional `strict = on\|off` line, then one entry or `@group` line per change, the latest last. No sections |
 | `applied.conf` | The allowlist last written to `rds.json`; `riotbox egress list` shows this |
 | `applied-strict` | The strict setting last applied, as `list` shows it (`on (user conf)`); absent for a session an older release started, which `list` shows as `unknown`, as it does any value it does not recognise |
+| `secrets/` | Only in sessions an earlier build started: the secrets dir now lives on the runtime tmpfs (below). `RemoveSecrets`, and so `egress-down` and the sweep, still delete it |
+| `ca.crt` | The session CA's certificate (0600; the agent runs as the owning uid), mounted read-only into the agent at `/run/riotbox-egress/ca.crt`. Its key is never written |
+| `injected` | One `VARIABLE host header` line per injected key, never a value. `WriteConfig` and `Reload` render the interception from it; `list` prints it |
 | `.lock` | Serialises the commands that change the session |
+
+**The secrets dir is not here.** The proxy's per credential host
+`<host>.crt`, `<host>.key` (the leaf and its PKCS#8 EC key) and
+`<host>.credential.json` (the SDS generic secret: the whole header value,
+prefix included) live in `<runtime>/riotbox-egress/<name>/secrets/`, mode
+0700 (as are `riotbox-egress/` and `<name>/`; a link in place of either is
+refused or replaced, never written through), files 0600, mounted read-only
+into Envoy alone at `/etc/riotbox-egress-secrets`. `state.RuntimeBase`
+picks `<runtime>`: `$XDG_RUNTIME_DIR` when absolute, else
+`/run/user/<uid>`, the first that is a directory owned by the uid, mode
+0700, on tmpfs (`statfs` type `TMPFS_MAGIC`). So the keys are kept on tmpfs
+and never written to persistent disk, unless the system swaps them out (use encrypted swap), and the mount gate's runtime-dir rule keeps it from the agent. With
+keys to inject and neither qualifying, `egress-up` exits 1 before creating
+anything, saying why each was refused; with none, it needs no runtime dir.
+`state.Dir.WithRuntime` gives a `Dir` its base; `egress-up` resolves it
+afresh, and `egress-down` and `egress-sweep` clean under every candidate
+that qualifies (`state.RuntimeBases`), so a launch that saw another
+`$XDG_RUNTIME_DIR` is still cleaned up; finding none, they clean only the
+state dirs' legacy `secrets/`. The CA certificate and the
+`injected` record (public, names only) stay in the state dir. Removed by
+`egress-down`, by `Up`'s rollback, and by the sweep (see
+[Lifecycle](#lifecycle)), together with `<name>/` when that is left empty.
 
 **Why the allowlist is RDS, not part of the listener:** Envoy swaps a route
 configuration with no effect on open connections. A listener change drains
@@ -359,6 +389,123 @@ not a session name, since the name is printed into the prompt. Every
 failure is a warning and returns 1; the session still starts and the 403
 still explains itself.
 
+## Credential injection
+
+With a provider key in the agent's environment, the session's proxy holds
+the key and the agent the placeholder `riotbox-egress-placeholder`
+(`inject.Placeholder`; `EGRESS_PLACEHOLDER` in `egress-lib.sh` must equal
+it).
+
+**Flow.** `egress_start` takes the `-e NAME` words of `PASSTHROUGH_FLAGS`
+(the variables the agent would get from the host, deduplicated) and pipes
+them to `egress-up` with `RIOTBOX_HEADROOM`. Stdin framing: the agent's
+hosts as text, then one NUL, then NUL-terminated `NAME=VALUE` records,
+written with bash's `printf` builtin so no value is ever on a command line.
+No NUL means hosts only. `egress-up` reads at most 1 MiB;
+`inject.ParseInput` refuses a record without its NUL, one that is not
+`NAME=VALUE` with a shell variable name, or a repeated name, naming the
+record by number (a repeated one by its name), never by its value, before
+anything is created.
+`inject.Decide` picks the keys to inject (`inject.Providers`; the base-URL
+rule is in its comment) and `Plan.Notice` names the rest in one line on
+stderr. `egress-up` unsets the injected names in its own environment, so
+the engine commands `Up` runs never inherit a key. `pod.Up` →
+`state.Dir.WriteInjection` makes the CA and leaves (`inject.NewCerts`),
+writes the secrets dir (on the runtime tmpfs; `egress-up` has already
+failed when there is none), `ca.crt` and `injected` before any engine
+call, and
+the config is rendered from `injected`. The agent's flags gain the CA
+mount, `NODE_EXTRA_CA_CERTS` and `RIOTBOX_EGRESS_CA` naming it, and
+`-e NAME=riotbox-egress-placeholder` per key. `egress_start` then exports,
+for every `-e NAME=VALUE` flag whose name it sent, `VALUE` over `NAME`:
+the run command's later `-e NAME` from `PASSTHROUGH_FLAGS` is read from
+that environment, so egress's value wins. That covers the placeholders
+and also a user-forwarded `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` (and
+lowercase forms), always, and `NODE_EXTRA_CA_CERTS` when keys are injected
+(without them egress-up returns no such flag, so the user's value passes
+unchanged). With keys injected, `egress_trust_apply` also overwrites
+`SSL_CERT_FILE`, `CURL_CA_BUNDLE` and `REQUESTS_CA_BUNDLE`. **Known limit:**
+a corporate or TLS-inspection CA forwarded through any of those four is
+then not trusted. Envoy verifies upstream TLS only for the intercepted
+credential hosts; every other host is a tunnel the agent's own client
+verifies, against the image's roots plus the session CA. So TLS-inspecting
+networks are unsupported in egress mode with injected keys.
+
+**The gate on `RIOTBOX_EXTRA_ARGS`.** `egress_gate_env` runs after
+`egress_start` (it needs `EGRESS_INJECTED`, the names whose returned
+value is the placeholder) and fails the launch, through the EXIT trap
+that removes the pod, when `RIOTBOX_EXTRA_ARGS` holds `-e`/`--env
+NAME=…` for an injected name (every spelling `_egress_split_args` parses,
+grouped short flags included), any `--env-file`, or any `--secret` with
+`type=env` (its target defaults to the secret's name, so any could set a
+key). Each would replace the placeholder with a value of the user's
+choosing. A bare `-e NAME` is allowed: it reads the exported placeholder.
+A `--pid` other than `private` (`host`, `container:…`, `ns:…`, either
+spelling) is refused too: `launch.sh` is a host process that keeps the real keys in its
+environment for the whole session, and an agent in a shared PID namespace,
+running as the same uid, could read `/proc/<pid>/environ`. Without
+injected keys none of these is refused.
+
+**Limits of the decision and the notice.** `egress-up` sees only the
+variables `egress_start` sends: those `PASSTHROUGH_FLAGS` forwards by name.
+A variable added by a bare `-e NAME` in `RIOTBOX_EXTRA_ARGS` enters the
+container without being named in the pass-through notice, and a base URL
+set there (`-e ANTHROPIC_BASE_URL=…`) is not seen by `inject.Decide`: the
+key is injected for the provider's host and the agent sends the
+placeholder to the other URL, which then fails to authenticate.
+
+**In Envoy.** For each credential host, `lds.json` has an internal listener
+`intercept-<host>` (tls_inspector; one filter chain whose `server_names`
+is the host, so a tunnel to one credential host cannot reach another's
+chain with a different SNI; the leaf; ALPN `h2`, `http/1.1`; an HCM with
+`codec_type: AUTO` running `envoy.filters.http.credential_injector` with
+the generic credential, `overwrite: true`, reading `<host>.credential.json`
+over SDS) and `cds.json` the clusters `intercept-<host>` (the internal
+listener) and `upstream-<host>` (`LOGICAL_DNS`, the host on 443 over TLS:
+SNI the host, verified against the image's
+`/etc/ssl/certs/ca-certificates.crt`, SAN must be the host). The route
+pins `host_rewrite_literal` to the host, so a `Host:` header naming
+another domain inside the tunnel still reaches the provider (no domain
+fronting with the key). The bootstrap gains
+`envoy.bootstrap.internal_listener`. `rds.json` routes a CONNECT to
+`host:443` into `intercept-<host>`, from a virtual host of its own, only
+while the allowlist allows it (exactly or by wildcard); otherwise the host
+is denied as before, so `allow`/`deny` turn interception on and off live
+while `lds.json` and `cds.json` stay fixed. The outer listener is
+unchanged: still HTTP/1 only, still the same access log. The internal
+listeners keep no access log, so no log holds a request header and an
+upstream 403 is not counted as a denial.
+
+**Certificates.** `inject.NewCerts` makes an ECDSA P-256 CA with critical
+name constraints (`PermittedDNSDomains` = the credential hosts, every IPv4
+and IPv6 address excluded) and one leaf per host, all valid from 5 minutes
+before the start (`CertBackdate`, for clock skew) for 30 days
+(`CertValidity`), and drops the CA key: it is never written, and Envoy
+needs none because keys are read once and no leaf is signed later. A
+session older than 30 days fails TLS to its credential hosts until it is
+restarted. A subdomain of a listed host is permitted by RFC 5280, but
+nobody holds the key to sign one.
+
+**Trust.** Claude Code and opencode run on Bun, Pi on Node; both add
+`NODE_EXTRA_CA_CERTS` to their roots. curl and Python's `ssl`, requests
+and httpx take a bundle that replaces their roots, as does headroom
+(Python: `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` first, falling back to
+`NODE_EXTRA_CA_CERTS`), so `egress_trust_apply` writes the image's bundle plus the CA to
+`/tmp/riotbox-egress-ca-bundle.pem` and exports `SSL_CERT_FILE`,
+`CURL_CA_BUNDLE` and `REQUESTS_CA_BUNDLE`; a failure is a warning and the
+session still starts. The image's system store is root-owned. git is not
+pointed at the bundle: forges are tunnelled, not intercepted.
+
+**What was verified** (Envoy 1.40.1, 2026-10-26; the implementation plan
+lists the commands): the shape above validates and runs live; the injected
+value replaces the agent's header and is added when it sent none; h2 and
+HTTP/1.1 both work inside; a mismatched SNI gets no chain; an upstream
+verification failure is a 503. Claude Code 2.1.304, opencode 1.19.3 and
+Pi 1.3.0 accept the placeholder and trust the CA through
+`NODE_EXTRA_CA_CERTS`; curl, Node, Bun and Python reject a leaf for a host
+outside the CA's list. `ANTHROPIC_AUTH_TOKEN` is not a row: see
+[decisions/egress-proxy.md](decisions/egress-proxy.md#credential-injection-b-2026-10-26).
+
 ## Lifecycle
 
 - **Gate** (`launch.sh` → `egress_gate`), before any side effect.
@@ -368,14 +515,18 @@ still explains itself.
 - **Start** (`egress_start`), after every launch check that can abort, so an
   abort leaves nothing to clean up. It requires `riotbox-core` and the agent
   registry, and fails the launch when the agent is unknown or has no
-  `egress_hosts` verb. It runs `egress-sweep` (a failure is a warning), sets
+  `egress_hosts` verb. It runs `egress-sweep` (a failure is a warning) with
+  every forwarded variable unset (`env -u`) but `XDG_RUNTIME_DIR` and
+  `HOME`, which it needs, since it runs before the placeholders replace the
+  keys, sets
   the EXIT trap, then `egress-up`: create the state dir, save `agent.conf`
   and `projects.json` (from `PROJECT_DIRS`, one `--project` each), write the
-  config, empty the logs, pull the image if absent, create the
+  injection (see [Credential injection](#credential-injection); a failure
+  stops the launch before any engine call), write the config, empty the logs, pull the image if absent, create the
   networks, the pod and Envoy, wait for readiness, and print the agent's
   flags. A failed step removes what was created. Once it succeeds,
   `egress_start` prints the session's name on stderr, the name
-  `riotbox egress --session` takes.
+  `riotbox egress --session` takes. `launch.sh` then runs `egress_gate_env`.
 - **Readiness**: `egress-up` polls `envoy.log` for
   `all dependencies initialized. starting workers` (logged once CDS, LDS and
   the listener's RDS are loaded), checking each time that the container still
@@ -389,7 +540,8 @@ still explains itself.
   TERM, so a TERM still stops `egress-down` and leaves the pod for the next
   launch's sweep. `egress-down` stops Envoy with SIGTERM (so it flushes the
   access log), removes the pod, then each network if it exists
-  (`network rm --ignore` is missing from older podman), and reports denials.
+  (`network rm --ignore` is missing from older podman), then the secrets
+  dir, and reports denials.
   It carries on past a failed step and is safe to repeat.
 - **Sweep** (`egress-sweep`, each egress launch): removes the pods and
   networks of sessions whose owner PID is dead *in the sweeper's own PID
@@ -401,7 +553,20 @@ still explains itself.
   live session is never torn down. An object whose name
   does not match its `riotbox.egress` label is ignored with a warning. State
   dirs of sessions not running whose `envoy.log` (else the dir) is more than
-  7 days old are deleted.
+  7 days old are deleted, with their runtime secrets. The secrets of a
+  state dir no live session uses, on the runtime tmpfs and any legacy
+  `secrets/` in the state dir, are deleted once that dir has been idle for
+  an hour (`secretsGrace`, longer than any launch's gap between writing
+  secrets and creating its first engine object, image pull included), so a
+  session whose engine objects are gone does not keep keys for 7 days. A
+  runtime `<name>/` whose state dir is gone, not live, and an hour old is
+  deleted too.
+
+A project holding the egress state root (for example `riotbox ~`) would
+mount the session's `config/` writable into the agent; `egress_mask_data`
+hides the root there (invariant 3, issue #48). That predates credential
+injection and never reached the keys: they are on the runtime tmpfs, which
+the gate refuses.
 
 ## Testing
 
@@ -412,6 +577,11 @@ still explains itself.
 | Venom | `tests/egress-manifests.venom.yml` | every registered agent declares well-formed `egress_hosts` |
 | Venom | `tests/egress-prompt.venom.yml` | the prompt section: both forms, append once, strip, CRLF, unmatched markers, links, FIFOs, failures, each agent's `container_setup` |
 | Ginkgo (`e2e` label) and Venom, real podman | `task test:egress-e2e`; a step of CI's `test` job on the host runner | the boundary, live reload with an open tunnel, teardown, sweep, strict mode and a live `allow @pypi`, both 403 texts, `RIOTBOX_EGRESS_SESSION` in the agent, `envoy --mode validate` on a static rendering |
+| Ginkgo | `internal/egress/inject`, `internal/egress/state/injection_test.go`, `internal/egress/state/runtime_test.go`, `internal/egress/envoyconfig/intercept_test.go` | the provider table (against the agents' `env_vars`), stdin framing, the decision and notice, the CA's constraints and validity, the runtime dir's resolution (each fallback, owner, mode, tmpfs, failure), the secrets layout on it and that the CA key is written nowhere, the interception's JSON shape and that no config file or access log holds a key |
+| Ginkgo, fake engine | `internal/egress/pod`, `cmd/riotbox-core/egress_test.go` | `Up` refusing keys without a runtime dir before creating anything, `egress-up` failing so with the actionable message and starting without keys, the secrets mount from the runtime dir, `Down` and the sweep cleaning runtime and legacy secrets, the proxy's `--ulimit core=0` |
+| Venom, fake engine | `tests/egress-launch.venom.yml` (injection cases) | the key is in no engine argv, environment (the sweep's included) or the agent's env; the placeholder is, and equals `EGRESS_PLACEHOLDER`; the pass-through notice; no key → nothing intercepted and no runtime dir needed; the `RIOTBOX_EXTRA_ARGS` env and `--pid` refusals; the runtime secrets dir refused as a mount |
+| Venom | `tests/egress-trust.venom.yml` | the combined bundle, its failures, and that the entrypoint applies it before the agents |
+| Ginkgo (`e2e` label) | `internal/egress/pod/inject_e2e_test.go`, `internal/egress/inject/vouch_e2e_test.go` (part of `task test:egress-e2e`) | the key reaches a public header echo (`postman-echo.com`) in place of the placeholder (curl, Node), a fronted `Host:` still reaches the provider host, plain tunnels elsewhere, the key absent from the agent, clients refusing an out-of-list leaf |
 
 The E2E specs skip unless `RIOTBOX_EGRESS_E2E=1`, which the task sets; with
 it set, a missing prerequisite fails rather than skips. The venom test
@@ -424,4 +594,7 @@ digest, from `podman pull` then
 `podman image inspect --format '{{.Digest}}'`), and the commented default in
 `scripts/configs/config`. Run `task test:egress-e2e`: it reads the image from
 `egress-lib.sh`, validates the config with the new Envoy, and fails if the
-readiness line changed.
+readiness line changed. The validate spec also renders an interception: a
+new Envoy must still ship `envoy.filters.http.credential_injector`,
+`envoy.http.injected_credentials.generic`, the internal listener bootstrap
+extension and `/etc/ssl/certs/ca-certificates.crt`.

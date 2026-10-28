@@ -280,11 +280,23 @@ testcases:
           refused "--mount type=glob,src=${TMP}/*,dst=/g"
           refused "--volumes-from x"
           refused "--volumes-from=x"
+          # A word a flag consumes as its value (`-e -v`) is still checked as a flag.
+          refused "-e -v ${run}:/r"
+          refused "--env -v ${run}:/r"
+          refused "-e -v ${TMP}/engine.sock:/s"
           refused "-v /run/user/$(id -u):/r" ""
           refused "-v /run/user/$(id -u):/r"
           refused "-v /run/user/$(id -u):/r" run
           refused "--mount type=volume,src=pv1,dst=/x,volume-opt=type=none,volume-opt=o=bind,volume-opt=device=${run}"
           refused "--mount src=pv1,dst=/x,volume-opt=type=none,volume-opt=o=bind,volume-opt=device=${run}"
+          # The proxy's secrets live under the runtime dir (riotbox-core's
+          # state.RuntimeBase), so they are refused like the socket, not-yet
+          # created or not.
+          mkdir -p "${run}/riotbox-egress/s1/secrets"
+          refused "-v ${run}/riotbox-egress/s1/secrets:/k"
+          refused "-v ${run}/riotbox-egress/s2/secrets:/k"
+          refused "-v ${run}/riotbox-egress:/k"
+          refused "-v /run/user/$(id -u)/riotbox-egress/s1/secrets:/k"
           refused "--rootfs / sh -c id"
           refused "--rootfs=/"
           ln -s "${run}" "${TMP}/rlink"
@@ -339,6 +351,10 @@ testcases:
           done
           printf '%s\n' "${TMP}/data" >"${conf}"
           refused "refuses project mounting ${run}/podman" RIOTBOX_PROJECTS="${run}/podman"
+          # A broad project (riotbox ~) holding the runtime dir cannot expose the proxy's secrets.
+          mkdir -p "${run}/riotbox-egress/s1/secrets"
+          refused "refuses project mounting ${TMP}" RIOTBOX_PROJECTS="${TMP}"
+          refused "refuses project mounting ${run}/riotbox-egress/s1/secrets" RIOTBOX_PROJECTS="${run}/riotbox-egress/s1/secrets"
           rm -f "${CAPTURE}"
           out="$(launch GOOGLE_APPLICATION_CREDENTIALS="${run}/creds.json")" ||
             { echo "BAD: a credential file under the runtime dir refused: ${out}" >&2; exit 1; }
@@ -646,6 +662,272 @@ testcases:
           [ "${rc}" -ne 0 ] || { echo "BAD: egress_start succeeded for an unknown agent" >&2; exit 1; }
           [[ "${err}" == *"unknown agent: 'nonesuch'"* ]] || { echo "BAD: no clear message: ${err}" >&2; exit 1; }
           if grep -q '^network \|^pod ' "${FAKE_ENGINE_LOG}"; then echo "BAD: proxy started anyway" >&2; exit 1; fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: an injectable key reaches only the proxy; the agent gets a placeholder and the session CA
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}" "${XDG_RUNTIME_DIR:-}"' EXIT
+          egress_test_env "${TMP}"
+          egress_test_runtime
+          key="sk-ant-venom-$$-not-for-the-agent"
+          ANTHROPIC_API_KEY="${key}" RIOTBOX_EGRESS=1 egress_launch 2>"${TMP}/err"
+          name="$(egress_agent_name)"
+          [ -n "${name}" ] || { echo "BAD: no agent name in argv" >&2; exit 1; }
+          # pod-ps-environ is the sweep's: it runs before the key is replaced.
+          for f in "${FAKE_ENGINE_LOG}" "${FAKE_ENGINE_LOG}.proxy-environ" "${FAKE_ENGINE_LOG}.pod-ps-environ" \
+              "${CAPTURE}" "${CAPTURE}.env" "${CAPTURE}.environ" "${TMP}/err"; do
+            [ -e "${f}" ] || { echo "BAD: no ${f##*/}" >&2; exit 1; }
+            if grep -qF "${key}" "${f}"; then echo "BAD: the key is in ${f##*/}" >&2; exit 1; fi
+          done
+          grep -qxF "ANTHROPIC_API_KEY=riotbox-egress-placeholder" "${CAPTURE}.env" || { echo "BAD: no placeholder in the agent's env" >&2; exit 1; }
+          state="${EGRESS_ROOT}/${name}"
+          argv=" $(cat "${CAPTURE}") "
+          for want in "-v ${state}/ca.crt:/run/riotbox-egress/ca.crt:ro,z" \
+              "-e NODE_EXTRA_CA_CERTS=/run/riotbox-egress/ca.crt" "-e RIOTBOX_EGRESS_CA=/run/riotbox-egress/ca.crt" \
+              "-e ANTHROPIC_API_KEY=riotbox-egress-placeholder"; do
+            [[ "${argv}" == *" ${want} "* ]] || { echo "BAD: agent argv lacks: ${want}" >&2; exit 1; }
+          done
+          secrets="${XDG_RUNTIME_DIR}/riotbox-egress/${name}/secrets"
+          [[ "${argv}" != *"/secrets:"* ]] || { echo "BAD: the agent mounts the secrets dir" >&2; exit 1; }
+          grep -qF -- "-v ${secrets}:/etc/riotbox-egress-secrets:ro,z " "${FAKE_ENGINE_LOG}" || { echo "BAD: the proxy lacks the secrets mount from the runtime dir" >&2; exit 1; }
+          grep -qxF "ANTHROPIC_API_KEY api.anthropic.com x-api-key" "${state}/injected" || { echo "BAD: injection not recorded" >&2; exit 1; }
+          [ ! -e "${state}/secrets" ] || { echo "BAD: secrets in the state dir" >&2; exit 1; }
+          [ ! -e "${XDG_RUNTIME_DIR}/riotbox-egress/${name}" ] || { echo "BAD: the secrets dir outlived the session" >&2; exit 1; }
+          if grep -q 'still enter the container' "${TMP}/err"; then echo "BAD: a pass-through notice for an injected key" >&2; exit 1; fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: egress-lib.sh's EGRESS_PLACEHOLDER is the placeholder riotbox-core gives the agent
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}" "${XDG_RUNTIME_DIR:-}"' EXIT
+          egress_test_env "${TMP}"
+          egress_test_runtime
+          # egress_start marks a key injected only when egress-up's value
+          # equals EGRESS_PLACEHOLDER; were they to differ, egress_gate_env
+          # would protect nothing.
+          lib="$(bash -c 'source "$1"; printf %s "${EGRESS_PLACEHOLDER}"' _ "{{.root}}/libexec/egress-lib.sh")"
+          [ -n "${lib}" ] || { echo "BAD: no EGRESS_PLACEHOLDER" >&2; exit 1; }
+          ANTHROPIC_API_KEY=k-venom-placeholder RIOTBOX_EGRESS=1 egress_launch 2>/dev/null
+          # Every -e for the key (egress-up's NAME=VALUE, the passthrough's
+          # bare NAME) must resolve to that one value.
+          core="$(sed -n 's/^ANTHROPIC_API_KEY=//p' "${CAPTURE}.env" | sort -u)"
+          [[ "${core}" == "${lib}" ]] || { echo "BAD: riotbox-core's placeholder differs from EGRESS_PLACEHOLDER" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a key with a custom base URL, or not in the provider table, still enters the container, and the launch says so
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}" "${XDG_RUNTIME_DIR:-}"' EXIT
+          egress_test_env "${TMP}"
+          egress_test_runtime
+          # OPENAI_API_KEY is named twice (the registry's list and the extras):
+          # egress_start must send it once.
+          ANTHROPIC_API_KEY=k-anthropic ANTHROPIC_BASE_URL=https://gateway.example OPENAI_API_KEY=k-openai \
+            EXTRA_SERVICE_TOKEN=k-extra RIOTBOX_PASSTHROUGH_EXTRA_VARS=$'EXTRA_SERVICE_TOKEN\nOPENAI_API_KEY\nXDG_RUNTIME_DIR\nHOME' \
+            RIOTBOX_EGRESS=1 egress_launch 2>"${TMP}/err"
+          want='egress: these keys still enter the container: ANTHROPIC_API_KEY (not injectable: ANTHROPIC_BASE_URL is not https://api.anthropic.com), EXTRA_SERVICE_TOKEN (not injectable: not in the provider table)'
+          grep -qxF "${want}" "${TMP}/err" || { echo "BAD: notice missing; stderr was:" >&2; cat "${TMP}/err" >&2; exit 1; }
+          for want in ANTHROPIC_API_KEY=k-anthropic EXTRA_SERVICE_TOKEN=k-extra OPENAI_API_KEY=riotbox-egress-placeholder; do
+            grep -qxF "${want}" "${CAPTURE}.env" || { echo "BAD: the agent's env lacks ${want}" >&2; exit 1; }
+          done
+          if grep -qF k-openai "${CAPTURE}" "${CAPTURE}.env" "${CAPTURE}.environ"; then echo "BAD: the OpenAI key reached the agent" >&2; exit 1; fi
+          # The sweep gets no forwarded variable: injected, passed through or unknown.
+          if grep -qE '^(ANTHROPIC_API_KEY|OPENAI_API_KEY|EXTRA_SERVICE_TOKEN)=' "${FAKE_ENGINE_LOG}.pod-ps-environ"; then
+            echo "BAD: a forwarded variable reached the sweep" >&2; exit 1
+          fi
+          # ...except the two it needs to find the secrets and the engine, even when forwarded.
+          grep -qxF "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}" "${FAKE_ENGINE_LOG}.pod-ps-environ" || { echo "BAD: the sweep lost XDG_RUNTIME_DIR" >&2; exit 1; }
+          grep -qxF "HOME=${HOME}" "${FAKE_ENGINE_LOG}.pod-ps-environ" || { echo "BAD: the sweep lost HOME" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: with no key to inject, egress mode makes no CA and intercepts nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}" "${XDG_RUNTIME_DIR:-}"' EXIT
+          egress_test_env "${TMP}"
+          egress_test_runtime
+          RIOTBOX_EGRESS=1 egress_launch 2>"${TMP}/err"
+          name="$(egress_agent_name)"
+          state="${EGRESS_ROOT}/${name}"
+          argv=" $(cat "${CAPTURE}") "
+          for unwanted in /run/riotbox-egress/ca.crt NODE_EXTRA_CA_CERTS RIOTBOX_EGRESS_CA riotbox-egress-placeholder; do
+            [[ "${argv}" != *"${unwanted}"* ]] || { echo "BAD: agent argv has ${unwanted}" >&2; exit 1; }
+          done
+          if grep -q riotbox-egress-secrets "${FAKE_ENGINE_LOG}"; then echo "BAD: the proxy mounts secrets" >&2; exit 1; fi
+          for f in secrets ca.crt injected; do
+            [ ! -e "${state}/${f}" ] || { echo "BAD: ${f} exists" >&2; exit 1; }
+          done
+          [ ! -e "${XDG_RUNTIME_DIR}/riotbox-egress" ] || { echo "BAD: a runtime secrets dir with no key" >&2; exit 1; }
+          # With no key to inject, no runtime dir is needed at all.
+          rm -f "${CAPTURE}"
+          XDG_RUNTIME_DIR="${TMP}/nowhere" RIOTBOX_EGRESS=1 egress_launch 2>"${TMP}/err" || { echo "BAD: a launch with no key needed a runtime dir" >&2; exit 1; }
+          [ -s "${CAPTURE}" ] || { echo "BAD: the agent did not start" >&2; exit 1; }
+          if grep -q internal_listener "${state}/config/bootstrap.json"; then echo "BAD: the proxy is set up to intercept" >&2; exit 1; fi
+          if grep -q 'still enter the container' "${TMP}/err"; then echo "BAD: a notice with no key" >&2; exit 1; fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: without RIOTBOX_EGRESS a key enters the container as before
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          ANTHROPIC_API_KEY=k-plain egress_launch
+          grep -qxF ANTHROPIC_API_KEY=k-plain "${CAPTURE}.env" || { echo "BAD: the key did not reach the agent" >&2; exit 1; }
+          if grep -q '^network create' "${FAKE_ENGINE_LOG}"; then echo "BAD: egress ran" >&2; exit 1; fi
+          [[ " $(cat "${CAPTURE}") " != *riotbox-egress-placeholder* ]] || { echo "BAD: a placeholder outside egress mode" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: egress's value wins over a variable the user forwards by the same name
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}" "${XDG_RUNTIME_DIR:-}"' EXIT
+          egress_test_env "${TMP}"
+          egress_test_runtime
+          ANTHROPIC_API_KEY=k-venom-ca NODE_EXTRA_CA_CERTS=/host/ca.pem RIOTBOX_PASSTHROUGH_EXTRA_VARS=NODE_EXTRA_CA_CERTS \
+            RIOTBOX_EGRESS=1 egress_launch 2>/dev/null
+          grep -qxF NODE_EXTRA_CA_CERTS=/run/riotbox-egress/ca.crt "${CAPTURE}.env" || { echo "BAD: the agent lacks the session CA" >&2; exit 1; }
+          if grep -qF /host/ca.pem "${CAPTURE}.env"; then echo "BAD: the forwarded CA overrode the session CA" >&2; exit 1; fi
+          [[ " $(cat "${CAPTURE}") " == *" -e NODE_EXTRA_CA_CERTS "* ]] || { echo "BAD: the forwarded name is not passed" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: with a key injected, egress mode refuses RIOTBOX_EXTRA_ARGS that would set it, read an env file or share a host PID namespace
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}" "${XDG_RUNTIME_DIR:-}"' EXIT
+          egress_test_env "${TMP}"
+          egress_test_runtime
+          touch "${TMP}/env"
+          for extra in "-e ANTHROPIC_API_KEY=k-venom-override" "--env ANTHROPIC_API_KEY=k-venom-override" \
+              "--env=ANTHROPIC_API_KEY=k-venom-override" "-eANTHROPIC_API_KEY=k-venom-override" \
+              "-ite ANTHROPIC_API_KEY=k-venom-override" "-e=ANTHROPIC_API_KEY=k-venom-override" \
+              "--env-file ${TMP}/env" "--env-file=${TMP}/env" \
+              "--secret s,type=env,target=ANTHROPIC_API_KEY" "--secret=s,type=env" \
+              "--pid=host" "--pid host" "--pid=container:c1" "--pid container:c1" "--pid=ns:/proc/1/ns/pid" "--pid ns:/proc/1/ns/pid"; do
+            truncate -s 0 "${FAKE_ENGINE_LOG}"; rm -f "${CAPTURE}"
+            ANTHROPIC_API_KEY=k-venom-real RIOTBOX_EGRESS=1 RIOTBOX_EXTRA_ARGS="${extra}" RIOTBOX_EXTRA_ARGS_ACK=1 \
+              egress_launch 2>"${TMP}/err"; rc=$?
+            [ "${rc}" -eq 1 ] || { echo "BAD: '${extra%%=*}' exit ${rc}, want 1" >&2; exit 1; }
+            grep -q '^ERROR: RIOTBOX_EGRESS=1 refuses RIOTBOX_EXTRA_ARGS' "${TMP}/err" || { echo "BAD: '${extra%%=*}' not refused" >&2; exit 1; }
+            # extra-args.sh's notice echoes RIOTBOX_EXTRA_ARGS itself; the refusal must not.
+            if grep '^ERROR' "${TMP}/err" | grep -qF k-venom-; then echo "BAD: '${extra%%=*}': a value in the error" >&2; exit 1; fi
+            [ ! -e "${CAPTURE}" ] || { echo "BAD: '${extra%%=*}': the agent ran" >&2; exit 1; }
+            grep -q '^pod rm --force --ignore ' "${FAKE_ENGINE_LOG}" || { echo "BAD: '${extra%%=*}': pod not removed" >&2; exit 1; }
+          done
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: RIOTBOX_EXTRA_ARGS env and PID flags are allowed with no key injected, a bare injected name gets the placeholder, and a file secret and a private PID namespace are allowed
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}" "${XDG_RUNTIME_DIR:-}"' EXIT
+          egress_test_env "${TMP}"
+          egress_test_runtime
+          touch "${TMP}/env"
+          for extra in "-e ANTHROPIC_API_KEY=k-venom-mine" "--env-file ${TMP}/env" "--secret s,type=env" \
+              "--pid=host" "--pid container:c1"; do
+            RIOTBOX_EGRESS=1 RIOTBOX_EXTRA_ARGS="${extra}" RIOTBOX_EXTRA_ARGS_ACK=1 egress_launch 2>/dev/null \
+              || { echo "BAD: '${extra%%=*}' refused with no key injected" >&2; exit 1; }
+          done
+          for extra in "--pid=private" "--pid private"; do
+            ANTHROPIC_API_KEY=k-venom-real RIOTBOX_EGRESS=1 RIOTBOX_EXTRA_ARGS="${extra}" RIOTBOX_EXTRA_ARGS_ACK=1 \
+              egress_launch 2>/dev/null || { echo "BAD: '${extra}' (a private PID namespace) refused" >&2; exit 1; }
+          done
+          ANTHROPIC_API_KEY=k-venom-real RIOTBOX_EGRESS=1 RIOTBOX_EXTRA_ARGS="-e ANTHROPIC_API_KEY" RIOTBOX_EXTRA_ARGS_ACK=1 \
+            egress_launch 2>/dev/null || { echo "BAD: a bare injected name refused" >&2; exit 1; }
+          for extra in "--secret s" "--secret=s,type=mount,target=/run/s"; do
+            ANTHROPIC_API_KEY=k-venom-real RIOTBOX_EGRESS=1 RIOTBOX_EXTRA_ARGS="${extra}" RIOTBOX_EXTRA_ARGS_ACK=1 \
+              egress_launch 2>/dev/null || { echo "BAD: '${extra}' (not an env secret) refused" >&2; exit 1; }
+          done
+          if grep -qF k-venom-real "${CAPTURE}" "${CAPTURE}.env" "${CAPTURE}.environ"; then echo "BAD: the key reached the agent" >&2; exit 1; fi
+          grep -qxF ANTHROPIC_API_KEY=riotbox-egress-placeholder "${CAPTURE}.env" || { echo "BAD: no placeholder" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: egress_start fails closed on a returned flag that is not a variable, or a placeholder it cannot export
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          # launch.sh runs as plain bash, where a failed export returns 1;
+          # venom's bash is in POSIX mode, where it would end the script.
+          set +o posix
+          unset RIOTBOX_AGENT RIOTBOX_HEADROOM ANTHROPIC_API_KEY
+          source "{{.root}}/libexec/egress-lib.sh"
+          printf '%s\n' '#!/usr/bin/env bash' \
+            'if [[ "$1" == egress-up ]]; then cat >/dev/null; printf -- "-e\n%s\n" "${FAKE_FLAG}"; fi' >"${TMP}/core"
+          chmod +x "${TMP}/core"
+          riotbox_core_require() { return 0; }
+          agent_call() { echo api.anthropic.com; }
+          RIOTBOX_CORE="${TMP}/core" CONTAINER_CMD=podman CONTAINER_NAME=c SESSION_KEY=k PROJECT_DIRS=() \
+            RIOTBOX_EGRESS_ROOT="${TMP}" PASSTHROUGH_FLAGS="-e ANTHROPIC_API_KEY"
+          export ANTHROPIC_API_KEY=k-venom-real
+          # egress_start traps EXIT, INT and TERM for its pod; put the cleanup back.
+          start() {
+            local rc=0
+            FAKE_FLAG="$1" egress_start 2>"${TMP}/err" || rc=$?
+            trap 'rm -rf "${TMP}"' EXIT; trap - INT TERM
+            return "${rc}"
+          }
+          declare -F egress_start >/dev/null || { echo "BAD: no egress_start" >&2; exit 1; }
+          if start "BAD-NAME=x"; then echo "BAD: an invalid name accepted" >&2; exit 1; fi
+          grep -q '^ERROR: riotbox-core egress-up returned an -e flag without a valid variable name' "${TMP}/err" || { echo "BAD: no error for an invalid name" >&2; exit 1; }
+          start "ANTHROPIC_API_KEY=riotbox-egress-placeholder" || { echo "BAD: a valid placeholder refused" >&2; exit 1; }
+          [[ "${ANTHROPIC_API_KEY}" == riotbox-egress-placeholder && "${EGRESS_INJECTED[*]}" == ANTHROPIC_API_KEY ]] || { echo "BAD: placeholder not exported or not recorded" >&2; exit 1; }
+          EGRESS_INJECTED=()
+          readonly ANTHROPIC_API_KEY
+          if start "ANTHROPIC_API_KEY=riotbox-egress-placeholder"; then echo "BAD: a failed export accepted" >&2; exit 1; fi
+          grep -q '^ERROR: could not set ANTHROPIC_API_KEY' "${TMP}/err" || { echo "BAD: no error for a failed export" >&2; exit 1; }
           echo OK
         assertions:
           - result.code ShouldEqual 0

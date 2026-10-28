@@ -1056,7 +1056,12 @@ RIOTBOX_EGRESS=1 riotbox run "<task>"
 
 The first egress launch pulls the Envoy image (pinned by digest;
 `RIOTBOX_EGRESS_IMAGE` overrides it). Inside the session, `HTTPS_PROXY` and
-`HTTP_PROXY` (and their lowercase forms) point at the proxy.
+`HTTP_PROXY` (and their lowercase forms) point at the proxy. If you forward
+your own `HTTP_PROXY`, `HTTPS_PROXY` or `NO_PROXY` by name, the session gets
+egress's value instead. When the proxy injects keys (see
+[API keys](#api-keys)), the same goes for `NODE_EXTRA_CA_CERTS`,
+`SSL_CERT_FILE`, `CURL_CA_BUNDLE` and `REQUESTS_CA_BUNDLE` (see
+[Known limits](#known-limits)).
 
 ### What the launch refuses
 
@@ -1103,6 +1108,15 @@ It also stops when the agent's manifest has no `egress_hosts` verb (see
 [docs/dev/agent-contract.md](docs/dev/agent-contract.md#agent_name_egress_hosts)):
 a proxy that blocks the agent's own API is no use. Nested mode
 (`RIOTBOX_NESTED=1`) is allowed.
+
+When the proxy injects API keys (see [API keys](#api-keys)), the launch also
+stops, once the proxy is up (it then removes it), when `RIOTBOX_EXTRA_ARGS`
+would put a value of its own in an injected variable: `-e`/`--env` setting
+one with `NAME=…`, any `--env-file`, or any `--secret` with `type=env`. So it
+does for a `--pid` other than `private` (`--pid=host`, `--pid container:…`,
+`--pid ns:…`, either spelling): the launcher keeps the real keys in its own
+environment for the session, and an agent sharing the host's PID namespace
+could read them there.
 
 ### What is allowed
 
@@ -1203,7 +1217,7 @@ only when you accept that.
 restarting it:
 
 ```bash
-riotbox egress list                     # running sessions: start, owner, projects, log, strict, allowlist
+riotbox egress list                     # running sessions: start, owner, projects, log, strict, injected keys, allowlist
 riotbox egress groups                   # every group, its hosts and where it is defined
 riotbox egress allow api.example.com    # allowed now
 riotbox egress allow @pypi              # every host of a group
@@ -1256,13 +1270,16 @@ riotbox-proj-1a2b3c4d
   project: /home/me/proj
   log:     /home/me/.local/share/riotbox-egress/riotbox-proj-1a2b3c4d/log/access.log
   strict:  off (default)
+  inject:  ANTHROPIC_API_KEY → api.anthropic.com
   allow:   api.anthropic.com
 ```
 
 `strict:` says whether strict mode is on and where that comes from:
 `session`, `user conf`, `system conf` or `default` (`unknown` for a session
-an older release started). A project record that cannot be read shows as
-`project: unreadable`, with the reason on stderr.
+an older release started). `inject:` names each key the proxy injects and
+its host, never its value (see [API keys](#api-keys)). A project or
+injection record that cannot be read shows as `project: unreadable` or
+`inject:  unreadable`, with the reason on stderr.
 
 `reload` without `--session` reloads every running session.
 `riotbox egress --help` has the details; a command with wrong arguments
@@ -1293,6 +1310,98 @@ before you allow it. Most clients drop the body for HTTPS (curl prints only
 not the network, and to ask you to allow the host instead of looking for a
 way around it.
 
+### API keys
+
+In egress mode an API key RiotBox knows does not enter the container. There
+is nothing to turn on: export the key as you do today. The agent sees the
+placeholder `riotbox-egress-placeholder` in its variable, and the session's
+proxy puts the real key on each request to that provider's API host,
+replacing whatever the agent sent:
+
+| Variable | Host |
+|---|---|
+| `ANTHROPIC_API_KEY` | `api.anthropic.com` |
+| `OPENAI_API_KEY` | `api.openai.com` |
+| `OPENROUTER_API_KEY` | `openrouter.ai` |
+| `GEMINI_API_KEY` | `generativelanguage.googleapis.com` |
+| `GROQ_API_KEY` | `api.groq.com` |
+| `MISTRAL_API_KEY` | `api.mistral.ai` |
+| `DEEPSEEK_API_KEY` | `api.deepseek.com` |
+| `XAI_API_KEY` | `api.x.ai` |
+
+The agent can still *use* a key through the proxy (and spend its quota), but
+it cannot read it or copy it out. A host must still be allowed: denying it
+refuses it, key or not. `riotbox egress list` names each injected variable
+and its host.
+
+To do this the proxy terminates TLS for those hosts, and only those, with
+certificates from a CA made for the session: valid for 30 days, able to
+vouch for nothing but those hosts, and whose private key is never written
+anywhere. The CA's certificate is at `/run/riotbox-egress/ca.crt` in the
+session. `NODE_EXTRA_CA_CERTS` makes Claude Code, opencode and Pi trust
+it, and `SSL_CERT_FILE`, `CURL_CA_BUNDLE` and `REQUESTS_CA_BUNDLE` point
+curl and Python, headroom included, at the image's CA bundle plus the
+session CA. git is
+not pointed at it; it does not need it. Every other host stays a tunnel the
+proxy cannot read.
+
+A key still enters the container, and the launch names it, when no row
+above knows it (any other forwarded variable whose name ends in `KEY`,
+`TOKEN`, `SECRET` or `PASSWORD`), when its base URL (`ANTHROPIC_BASE_URL`,
+`OPENAI_BASE_URL`) is set to anything but `https://<the provider's host>`,
+or when it is not visible ASCII:
+
+```text
+egress: these keys still enter the container: ANTHROPIC_AUTH_TOKEN (not injectable: not in the provider table)
+```
+
+That line covers the variables RiotBox forwards. One you add yourself
+with a bare `-e NAME` in `RIOTBOX_EXTRA_ARGS` also enters the container, but
+is not named.
+
+With `RIOTBOX_HEADROOM=1`, an `ANTHROPIC_BASE_URL` on `localhost` or a
+loopback address does not count as elsewhere: headroom replaces it in the
+session and sends requests on to Anthropic through the proxy. A base URL set
+in an agent's own config file, or with `-e` in `RIOTBOX_EXTRA_ARGS` (not in
+the environment RiotBox forwards), is not seen at launch: the key is still
+injected for the provider's host, and the agent sends the placeholder to the
+other URL and fails to authenticate there.
+OAuth logins (Claude Code's `/login`, opencode's and Pi's `auth.json`) are
+unchanged and still live in the container.
+
+Keys are read once, when the session starts: `riotbox egress reload` does
+not re-read them, so to rotate a key, start a new session. The session's
+certificates expire after 30 days, so a session running longer loses its
+provider APIs until it is restarted. Claude Code asks once, in an
+interactive session, whether to use the API key it finds in its
+environment: that is the placeholder; approve it.
+
+The keys are kept, for the proxy alone, in
+`<runtime>/riotbox-egress/<session>/secrets/` (mode 0700, files 0600), where
+`<runtime>` is `$XDG_RUNTIME_DIR`, or else `/run/user/<uid>`: whichever is
+first a directory you own, mode 0700, on tmpfs. So they are kept on tmpfs
+and never written to persistent disk, unless the system swaps them out (use encrypted swap), and the egress launch refuses any agent mount of that
+directory or of one holding it, so a broad project such as `riotbox ~`
+cannot expose them. It is deleted
+when the session ends; if RiotBox is killed, the next egress launch deletes
+it once the session has been idle for an hour, and tmpfs empties at logout
+or reboot anyway. The proxy runs with core dumps off, so a crash does not
+write them out either.
+
+A login session provides that directory. Without one (for example under
+`su`, `sudo -i` or a cron job), a launch with a key to inject stops before
+creating anything:
+
+```text
+riotbox-core: egress: credential injection needs a private tmpfs runtime dir ($XDG_RUNTIME_DIR or /run/user/<uid>) so keys never reach disk; none found — unset the keys to run without injection, or start the session from a login session (…why each was refused…)
+```
+
+With no key to inject, egress mode needs no runtime directory.
+
+The launcher itself keeps the real keys in its environment for the session:
+it is a host process, and the agent cannot see it (see the `--pid` refusal
+above).
+
 ### Known limits
 
 - Tools that ignore `HTTPS_PROXY` get no network at all.
@@ -1311,10 +1420,22 @@ way around it.
   checks names, not addresses. The agent can then reach whatever the proxy's
   network can: your LAN, the host itself, link-local metadata addresses.
   Keep wildcards narrow.
-- The proxy does not look inside HTTPS, so data can still be sent to any
-  allowed host.
-- Credentials still enter the agent container as they do without egress
-  mode.
+- The proxy does not look inside HTTPS, except to the injected keys' hosts,
+  so data can still be sent to any allowed host.
+- Credentials other than the injected API keys (see [API keys](#api-keys))
+  still enter the agent container as they do without egress mode.
+- When the proxy injects keys, a CA of your own forwarded through
+  `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE` or
+  `REQUESTS_CA_BUNDLE` (a corporate or TLS-inspection CA) is replaced by the
+  session's, so it is not trusted: networks that inspect TLS are not
+  supported in that mode. Without injected keys those variables reach the
+  session unchanged.
+- A project that holds the egress state root
+  (`${XDG_DATA_HOME:-~/.local/share}/riotbox-egress`, for example
+  `riotbox ~`) gets an empty mask over that root (see
+  [Egress proxy](#egress-proxy)), so the agent cannot rewrite a session's
+  allowlist through it. The injected keys are not under that root in any
+  case: they are on the runtime tmpfs.
 - `RIOTBOX_EXTRA_ARGS` is your own configuration and is trusted. The checks
   above catch mistakes; they are not a sandbox for it. Two gaps are known: a
   mounted directory that happens to contain a Unix socket elsewhere than

@@ -166,6 +166,8 @@ var _ = Describe("sessions", func() {
 			// inPod is the engine's `ps --filter pod=<key>` answer: the
 			// containers running in that pod.
 			inPod map[string]string
+			// rt is the runtime base the sessions' secrets are under.
+			rt string
 		)
 		pods := func(entries ...string) {
 			engine.respond = func(args []string) ([]byte, error) {
@@ -187,14 +189,152 @@ var _ = Describe("sessions", func() {
 			ExpectWithOffset(1, d.Create()).To(Succeed())
 			t := now.Add(-age)
 			ExpectWithOffset(1, os.Chtimes(d.Path(), t, t)).To(Succeed())
-			return d
+			return d.WithRuntime(rt)
+		}
+		// runtimeSecrets makes name's secrets dir under rt, its session
+		// dir there last changed age ago.
+		runtimeSecrets := func(name string, age time.Duration) string {
+			secrets := filepath.Join(rt, name, "secrets")
+			ExpectWithOffset(1, os.MkdirAll(secrets, 0o700)).To(Succeed())
+			t := now.Add(-age)
+			ExpectWithOffset(1, os.Chtimes(filepath.Join(rt, name), t, t)).To(Succeed())
+			return secrets
 		}
 
-		BeforeEach(func() { networks, inPod = nil, nil })
+		BeforeEach(func() {
+			networks, inPod = nil, nil
+			rt = filepath.Join(GinkgoT().TempDir(), "riotbox-egress")
+		})
+
+		It("removes the secrets of a session no launch owns once it is an hour idle, keeping its logs", func() {
+			pods()
+			for name, age := range map[string]time.Duration{"idle": 2 * time.Hour, "starting": time.Minute} {
+				d := oldDir(name, 0)
+				Expect(os.MkdirAll(d.SecretsDir(), 0o700)).To(Succeed())
+				t := now.Add(-age)
+				Expect(os.Chtimes(d.Path(), t, t)).To(Succeed())
+			}
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+			Expect(filepath.Join(rt, "idle")).NotTo(BeAnExistingFile())
+			Expect(filepath.Join(root, "idle", "log")).To(BeADirectory())
+			Expect(filepath.Join(rt, "starting", "secrets")).To(BeADirectory())
+		})
+
+		It("removes the secrets an earlier release kept in an idle state dir, keeping a starting one's", func() {
+			pods()
+			for name, age := range map[string]time.Duration{"idle": 2 * time.Hour, "starting": time.Minute} {
+				d := oldDir(name, 0)
+				Expect(os.Mkdir(filepath.Join(d.Path(), "secrets"), 0o700)).To(Succeed())
+				t := now.Add(-age)
+				Expect(os.Chtimes(d.Path(), t, t)).To(Succeed())
+			}
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+			Expect(filepath.Join(root, "idle", "secrets")).NotTo(BeAnExistingFile())
+			Expect(filepath.Join(root, "starting", "secrets")).To(BeADirectory())
+		})
+
+		It("removes the runtime secrets of a state dir it deletes as stale", func() {
+			pods()
+			oldDir("old", 8*24*time.Hour)
+			secrets := runtimeSecrets("old", 8*24*time.Hour)
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+			Expect(filepath.Join(root, "old")).NotTo(BeAnExistingFile())
+			Expect(secrets).NotTo(BeAnExistingFile())
+		})
+
+		It("removes runtime secrets whose state dir is gone once they are an hour old", func() {
+			pods()
+			gone := runtimeSecrets("gone", 2*time.Hour)
+			young := runtimeSecrets("young", time.Minute)
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+			Expect(filepath.Dir(gone)).NotTo(BeAnExistingFile())
+			Expect(young).To(BeADirectory())
+		})
+
+		It("sweeps the secrets under every runtime base it is given", func() {
+			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
+			rt2 := filepath.Join(GinkgoT().TempDir(), "riotbox-egress")
+			oldDir("idle", 2*time.Hour)
+			oldDir("orphan", time.Minute)
+			var made []string
+			for _, base := range []string{rt, rt2} {
+				for _, name := range []string{"idle", "gone", "orphan"} {
+					secrets := filepath.Join(base, name, "secrets")
+					Expect(os.MkdirAll(secrets, 0o700)).To(Succeed())
+					old := now.Add(-2 * time.Hour)
+					Expect(os.Chtimes(filepath.Join(base, name), old, old)).To(Succeed())
+					made = append(made, secrets)
+				}
+			}
+			Expect(m.Sweep(root, []string{rt, rt2}, week, now)).To(Succeed())
+			for _, secrets := range made {
+				Expect(secrets).NotTo(BeAnExistingFile())
+			}
+		})
+
+		It("keeps the runtime secrets of a live session whose state dir is gone", func() {
+			secrets := runtimeSecrets("busy", 30*24*time.Hour)
+			pods(podJSON("busy", fmt.Sprint(os.Getpid()), pod.PIDNamespace()))
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+			Expect(secrets).To(BeADirectory())
+		})
+
+		It("leaves runtime secrets to the idle check while their state dir shows recent use", func() {
+			pods()
+			oldDir("recent", time.Minute)
+			secrets := runtimeSecrets("recent", 2*time.Hour)
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+			Expect(secrets).To(BeADirectory())
+		})
+
+		It("sweeps only the state dirs' secrets when there is no runtime base", func() {
+			pods()
+			d := oldDir("idle", 2*time.Hour)
+			Expect(os.Mkdir(filepath.Join(d.Path(), "secrets"), 0o700)).To(Succeed())
+			Expect(os.Chtimes(d.Path(), now.Add(-2*time.Hour), now.Add(-2*time.Hour))).To(Succeed())
+			Expect(m.Sweep(root, nil, week, now)).To(Succeed())
+			Expect(filepath.Join(d.Path(), "secrets")).NotTo(BeAnExistingFile())
+		})
+
+		It("keeps a live session's secrets however long it has run", func() {
+			d := oldDir("busy", 30*24*time.Hour)
+			Expect(os.MkdirAll(d.SecretsDir(), 0o700)).To(Succeed())
+			Expect(os.Chtimes(d.Path(), now.Add(-30*24*time.Hour), now.Add(-30*24*time.Hour))).To(Succeed())
+			pods(podJSON("busy", fmt.Sprint(os.Getpid()), pod.PIDNamespace()))
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+			Expect(d.SecretsDir()).To(BeADirectory())
+		})
+
+		It("keeps the secrets of a session whose agent runs, though its owner is gone", func() {
+			d := oldDir("orphan", 0)
+			Expect(os.MkdirAll(d.SecretsDir(), 0o700)).To(Succeed())
+			Expect(os.Chtimes(d.Path(), now.Add(-2*time.Hour), now.Add(-2*time.Hour))).To(Succeed())
+			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
+			inPod = map[string]string{"orphan-pod": `[{"Names":["orphan-egress"]},{"Names":["orphan"]}]`}
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+			Expect(d.SecretsDir()).To(BeADirectory())
+		})
+
+		It("keeps the secrets of a session whose owner is in another PID namespace", func() {
+			d := oldDir("elsewhere", 0)
+			Expect(os.MkdirAll(d.SecretsDir(), 0o700)).To(Succeed())
+			Expect(os.Chtimes(d.Path(), now.Add(-2*time.Hour), now.Add(-2*time.Hour))).To(Succeed())
+			pods(podJSON("elsewhere", fmt.Sprint(deadPID()), "pid:[1]"))
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+			Expect(d.SecretsDir()).To(BeADirectory())
+		})
+
+		It("removes an orphaned pod's secrets when it tears the pod down", func() {
+			d := oldDir("orphan", time.Minute)
+			Expect(os.MkdirAll(d.SecretsDir(), 0o700)).To(Succeed())
+			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+			Expect(d.SecretsDir()).NotTo(BeAnExistingFile())
+		})
 
 		It("tears down a pod whose owner is gone from this PID namespace", func() {
 			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
-			Expect(m.Sweep(root, week, now)).To(Succeed())
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(engine.index("stop --ignore --time 10 orphan-egress")).To(BeNumerically(">", 0))
 			Expect(engine.index("pod rm --force --ignore orphan-pod")).To(BeNumerically(">", 0))
 		})
@@ -202,7 +342,7 @@ var _ = Describe("sessions", func() {
 		It("leaves a session alone while its agent runs, though its owner is gone", func() {
 			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
 			inPod = map[string]string{"orphan-pod": `[{"Names":["orphan-egress"]},{"Names":["orphan"]}]`}
-			Expect(m.Sweep(root, week, now)).To(Succeed())
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(engine.lines()).To(ContainElement("ps --filter pod=orphan-pod --format json"))
 			Expect(engine.index("stop")).To(Equal(-1))
 			Expect(engine.index("pod rm")).To(Equal(-1))
@@ -211,7 +351,7 @@ var _ = Describe("sessions", func() {
 		It("tears down a session whose pod runs only its proxy, or a container not named as its agent", func() {
 			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
 			inPod = map[string]string{"orphan-pod": `[{"Names":["orphan-egress"]},{"Names":["orphan-x"]}]`}
-			Expect(m.Sweep(root, week, now)).To(Succeed())
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(engine.index("pod rm --force --ignore orphan-pod")).To(BeNumerically(">", 0))
 		})
 
@@ -224,7 +364,7 @@ var _ = Describe("sessions", func() {
 				}
 				return base(args)
 			}
-			err := m.Sweep(root, week, now)
+			err := m.Sweep(root, []string{rt}, week, now)
 			Expect(err).To(MatchError(ContainSubstring("ps: boom")))
 			Expect(err).To(MatchError(ContainSubstring("orphan")))
 			Expect(engine.index("stop")).To(Equal(-1))
@@ -233,14 +373,14 @@ var _ = Describe("sessions", func() {
 		It("leaves a session alone when its pod's container list is not JSON", func() {
 			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
 			inPod = map[string]string{"orphan-pod": `nope`}
-			Expect(m.Sweep(root, week, now)).To(MatchError(ContainSubstring("orphan")))
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(MatchError(ContainSubstring("orphan")))
 			Expect(engine.index("stop")).To(Equal(-1))
 		})
 
 		DescribeTable("leaves a pod alone when its owner cannot be judged dead",
 			func(pid func() string, pidns func() string) {
 				pods(podJSON("keep", pid(), pidns()))
-				Expect(m.Sweep(root, week, now)).To(Succeed())
+				Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 				Expect(engine.index("stop")).To(Equal(-1))
 			},
 			Entry("its owner is alive", func() string { return fmt.Sprint(os.Getpid()) }, pod.PIDNamespace),
@@ -266,7 +406,7 @@ var _ = Describe("sessions", func() {
 				t := now.Add(-age)
 				Expect(os.Chtimes(d.Path(), t, t)).To(Succeed())
 			}
-			Expect(m.Sweep(root, week, now)).To(Succeed())
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(filepath.Join(root, "old")).NotTo(BeADirectory())
 			Expect(filepath.Join(root, "fresh")).To(BeADirectory())
 		})
@@ -274,7 +414,7 @@ var _ = Describe("sessions", func() {
 		It("keeps the state of a live pod even when it is older than maxAge", func() {
 			d := oldDir("busy", 30*24*time.Hour)
 			pods(podJSON("busy", fmt.Sprint(os.Getpid()), pod.PIDNamespace()))
-			Expect(m.Sweep(root, week, now)).To(Succeed())
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(d.Path()).To(BeADirectory())
 		})
 
@@ -283,7 +423,7 @@ var _ = Describe("sessions", func() {
 				podJSON("victim", fmt.Sprint(os.Getpid()), pod.PIDNamespace()),
 				namedPodJSON("junk", "victim", fmt.Sprint(deadPID()), pod.PIDNamespace()),
 			)
-			Expect(m.Sweep(root, week, now)).To(Succeed())
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(engine.index("stop")).To(Equal(-1))
 			Expect(engine.index("pod rm")).To(Equal(-1))
 			Expect(stderr.String()).To(ContainSubstring("junk"))
@@ -298,7 +438,7 @@ var _ = Describe("sessions", func() {
 				} else {
 					pods(dead, live)
 				}
-				Expect(m.Sweep(root, week, now)).To(Succeed())
+				Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 				Expect(engine.index("stop")).To(Equal(-1))
 			},
 			Entry("live entry first", true),
@@ -313,7 +453,7 @@ var _ = Describe("sessions", func() {
 				}
 				return nil, nil
 			}
-			Expect(m.Sweep(root, week, now)).To(MatchError(ContainSubstring("listing egress pods: ")))
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(MatchError(ContainSubstring("listing egress pods: ")))
 			Expect(engine.index("stop")).To(Equal(-1))
 			Expect(engine.index("pod rm")).To(Equal(-1))
 			Expect(d.Path()).To(BeADirectory())
@@ -327,7 +467,7 @@ var _ = Describe("sessions", func() {
 				}
 				return []byte("[]"), nil
 			}
-			Expect(m.Sweep(root, week, now)).To(MatchError(ContainSubstring("listing egress networks: ")))
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(MatchError(ContainSubstring("listing egress networks: ")))
 			Expect(engine.index("stop")).To(Equal(-1))
 			Expect(d.Path()).To(BeADirectory())
 		})
@@ -338,7 +478,7 @@ var _ = Describe("sessions", func() {
 				networkJSON("orphan-int", "orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()),
 				networkJSON("orphan-ext", "orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()),
 			}
-			Expect(m.Sweep(root, week, now)).To(Succeed())
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(engine.index("network rm orphan-int")).To(BeNumerically(">", 0))
 			Expect(engine.index("network rm orphan-ext")).To(BeNumerically(">", 0))
 		})
@@ -346,7 +486,7 @@ var _ = Describe("sessions", func() {
 		It("leaves the networks of a live owner alone", func() {
 			pods()
 			networks = []string{networkJSON("busy-int", "busy", fmt.Sprint(os.Getpid()), pod.PIDNamespace())}
-			Expect(m.Sweep(root, week, now)).To(Succeed())
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(engine.index("network rm")).To(Equal(-1))
 			Expect(engine.index("stop")).To(Equal(-1))
 		})
@@ -354,7 +494,7 @@ var _ = Describe("sessions", func() {
 		It("skips, and warns about, a network whose name does not match its label", func() {
 			pods()
 			networks = []string{networkJSON("junk", "victim", fmt.Sprint(deadPID()), pod.PIDNamespace())}
-			Expect(m.Sweep(root, week, now)).To(Succeed())
+			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(engine.index("stop")).To(Equal(-1))
 			Expect(stderr.String()).To(ContainSubstring("junk"))
 		})
@@ -375,7 +515,7 @@ var _ = Describe("sessions", func() {
 			Expect(d.Create()).To(Succeed())
 			old := now.Add(-30 * 24 * time.Hour)
 			Expect(os.Chtimes(d.Path(), old, old)).To(Succeed())
-			err = m.Sweep(root, week, now)
+			err = m.Sweep(root, []string{rt}, week, now)
 			Expect(err).To(MatchError(ContainSubstring("tearing down the orphaned egress session orphan")))
 			Expect(d.Path()).To(BeADirectory())
 		})

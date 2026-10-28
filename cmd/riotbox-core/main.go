@@ -63,18 +63,27 @@ verbs:
             --user-conf <file> --image <ref> --session-key <key>
             --owner-pid <pid> [--project <dir>]... <name>
                          start the session's egress proxy pod, reading the
-                         agent's hosts on stdin and recording the project
-                         dirs for egress-list; print the agent's engine
-                         flags, one per line; exit 1 on failure
+                         agent's hosts on stdin, then optionally a NUL and
+                         the agent's variables as NUL-terminated NAME=VALUE
+                         records (1 MiB in all), whose provider keys the
+                         proxy injects, keeping them in
+                         $XDG_RUNTIME_DIR/riotbox-egress (else
+                         /run/user/<uid>/riotbox-egress), which must be a
+                         private tmpfs when there are any; record the
+                         project dirs for egress-list; print the agent's
+                         engine flags, one per line; exit 1 on failure
   egress-down --engine <engine> --state-root <dir> <name>
-                         remove the session's egress pod and networks and
-                         report denied requests; exit 1 if a step failed
+                         remove the session's egress pod, networks and
+                         secrets and report denied requests; exit 1 if a
+                         step failed
   egress-sweep --engine <engine> --state-root <dir>
-                         remove egress pods whose launch is gone and state
-                         dirs unused for 7 days
+                         remove egress pods whose launch is gone, their
+                         secrets after an hour unused, and state dirs
+                         unused for 7 days
   egress-list --engine <engine> --state-root <dir>
                          print each running egress session's start, owner
-                         PID, projects, log, strict setting and allowlist
+                         PID, projects, log, strict setting, injected keys
+                         and allowlist
   egress-allow --engine <engine> --state-root <dir> --system-conf <file>
                --user-conf <file> [--session <name>] [--save-to <file>]
                <entry | @group>

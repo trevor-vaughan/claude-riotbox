@@ -12,6 +12,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/trevor-vaughan/claude-riotbox/internal/egress/inject"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/pod"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/state"
 )
@@ -57,6 +58,7 @@ var _ = Describe("Manager", func() {
 		var err error
 		dir, err = state.Open(root, "s1")
 		Expect(err).NotTo(HaveOccurred())
+		dir = dir.WithRuntime(filepath.Join(GinkgoT().TempDir(), "riotbox-egress"))
 		engine = &fakeEngine{}
 		stderr = &bytes.Buffer{}
 		m = pod.Manager{Engine: engine, Stderr: stderr, ReadyTimeout: time.Second, PollInterval: time.Millisecond}
@@ -80,7 +82,7 @@ var _ = Describe("Manager", func() {
 			Expect(lines[2]).To(Equal("network create " + labels + " s1-ext"))
 			Expect(lines[3]).To(Equal("pod create --infra=false --name s1-pod " + labels))
 			Expect(lines[4]).To(HavePrefix("run -d --pod s1-pod --name s1-egress " + labels + " --label riotbox.egress-role=gateway"))
-			Expect(lines[4]).To(ContainSubstring(fmt.Sprintf(" --network s1-int,s1-ext --userns=keep-id --user %d:%d --read-only --cap-drop=ALL --security-opt no-new-privileges --log-driver=none ", os.Getuid(), os.Getgid())))
+			Expect(lines[4]).To(ContainSubstring(fmt.Sprintf(" --network s1-int,s1-ext --userns=keep-id --user %d:%d --read-only --cap-drop=ALL --security-opt no-new-privileges --ulimit core=0 --log-driver=none ", os.Getuid(), os.Getgid())))
 			Expect(lines[4]).To(ContainSubstring(" -v " + dir.ConfigDir() + ":/etc/riotbox-egress:ro,z "))
 			Expect(lines[4]).To(ContainSubstring(" -v " + dir.LogDir() + ":/var/log/riotbox-egress:rw,z "))
 			Expect(lines[4]).To(HaveSuffix(" --entrypoint /usr/local/bin/envoy " + image + " -c /etc/riotbox-egress/bootstrap.json --log-path /var/log/riotbox-egress/envoy.log --file-flush-interval-msec 1000"))
@@ -364,9 +366,184 @@ var _ = Describe("Manager", func() {
 			Expect(err).To(MatchError(ContainSubstring("pod create: boom")))
 			Expect(err).To(MatchError(ContainSubstring("stop: wedged")))
 		})
+
+		Describe("with keys to inject", func() {
+			const key = "sk-ant-s3cret-for-pod-specs"
+
+			BeforeEach(func() {
+				req.Credentials = []inject.Credential{{Env: "ANTHROPIC_API_KEY", Host: "api.anthropic.com", Header: "x-api-key", Value: key}}
+			})
+
+			It("mounts the secrets dir into the proxy alone, and gives the agent the CA and a placeholder", func() {
+				engine.respond = healthy(dir)
+				flags, err := m.Up(req)
+				Expect(err).NotTo(HaveOccurred())
+				run := engine.lines()[engine.index("run -d ")]
+				Expect(run).To(ContainSubstring(" -v " + dir.SecretsDir() + ":/etc/riotbox-egress-secrets:ro,z "))
+				Expect(run).To(HaveSuffix(" --entrypoint /usr/local/bin/envoy " + image + " -c /etc/riotbox-egress/bootstrap.json --log-path /var/log/riotbox-egress/envoy.log --file-flush-interval-msec 1000"))
+				Expect(run).NotTo(ContainSubstring(dir.CACert()))
+				Expect(flags).To(HaveLen(31))
+				Expect(flags[23:]).To(Equal([]string{
+					"-v", dir.CACert() + ":/run/riotbox-egress/ca.crt:ro,z",
+					"-e", "NODE_EXTRA_CA_CERTS=/run/riotbox-egress/ca.crt",
+					"-e", "RIOTBOX_EGRESS_CA=/run/riotbox-egress/ca.crt",
+					"-e", "ANTHROPIC_API_KEY=riotbox-egress-placeholder",
+				}))
+				Expect(pod.AgentCACert).To(Equal("/run/riotbox-egress/ca.crt"))
+				Expect(strings.Join(flags, " ")).NotTo(ContainSubstring(dir.SecretsDir()))
+				Expect(filepath.Join(dir.SecretsDir(), "api.anthropic.com.credential.json")).To(BeARegularFile())
+				Expect(dir.CACert()).To(BeARegularFile())
+				lds, err := os.ReadFile(filepath.Join(dir.ConfigDir(), "lds.json"))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(lds)).To(ContainSubstring(`"intercept-api.anthropic.com"`))
+			})
+
+			It("never puts the key on an engine command line or in the agent's flags", func() {
+				engine.respond = healthy(dir)
+				flags, err := m.Up(req)
+				Expect(err).NotTo(HaveOccurred())
+				for _, l := range engine.lines() {
+					Expect(strings.Contains(l, key)).To(BeFalse(), "an engine call holds the key")
+				}
+				Expect(strings.Contains(strings.Join(flags, " "), key)).To(BeFalse(), "the agent's flags hold the key")
+			})
+
+			It("removes the secrets dir when a later step fails", func() {
+				engine.respond = func(args []string) ([]byte, error) {
+					if args[0] == "pod" && args[1] == "create" {
+						return nil, errors.New("pod create failed")
+					}
+					return healthy(dir)(args)
+				}
+				_, err := m.Up(req)
+				Expect(err).To(MatchError(ContainSubstring("pod create failed")))
+				Expect(strings.Contains(err.Error(), key)).To(BeFalse(), "the error holds the key")
+				Expect(dir.SecretsDir()).NotTo(BeAnExistingFile())
+			})
+
+			DescribeTable("removes the secrets dir when a step before the engine objects fails",
+				func(breakIt func()) {
+					breakIt()
+					_, err := m.Up(req)
+					Expect(err).To(HaveOccurred())
+					Expect(strings.Contains(err.Error(), key)).To(BeFalse(), "the error holds the key")
+					Expect(dir.SecretsDir()).NotTo(BeAnExistingFile())
+					Expect(engine.index("network create")).To(Equal(-1))
+				},
+				Entry("a broken conf file", func() {
+					req.UserConf = filepath.Join(GinkgoT().TempDir(), "user.conf")
+					Expect(os.WriteFile(req.UserConf, []byte("[bogus]\n"), 0o600)).To(Succeed())
+				}),
+				Entry("an image check that fails", func() {
+					engine.respond = func(args []string) ([]byte, error) {
+						if args[0] == "image" {
+							return nil, errors.New("image exists: boom")
+						}
+						return nil, nil
+					}
+				}),
+				Entry("a pull that fails", func() {
+					engine.respond = func(args []string) ([]byte, error) {
+						switch args[0] {
+						case "image":
+							return []byte("absent"), nil
+						case "pull":
+							return nil, errors.New("pull: boom")
+						}
+						return nil, nil
+					}
+				}),
+			)
+
+			It("refuses a session dir without a runtime base before creating anything", func() {
+				bare, err := state.Open(root, "s1")
+				Expect(err).NotTo(HaveOccurred())
+				req.Dir = bare
+				_, err = m.Up(req)
+				Expect(err).To(MatchError(state.ErrNoRuntimeDir))
+				Expect(engine.calls).To(BeEmpty())
+				Expect(root).NotTo(BeAnExistingFile())
+			})
+
+			It("fails before any engine call when the secrets cannot be written", func() {
+				if os.Getuid() == 0 {
+					Skip("root ignores directory permissions")
+				}
+				Expect(dir.Create()).To(Succeed())
+				Expect(os.MkdirAll(filepath.Join(dir.SecretsDir(), "sub"), 0o700)).To(Succeed())
+				Expect(os.Chmod(dir.SecretsDir(), 0o500)).To(Succeed())
+				DeferCleanup(os.Chmod, dir.SecretsDir(), os.FileMode(0o700))
+				_, err := m.Up(req)
+				Expect(err).To(HaveOccurred())
+				Expect(engine.calls).To(BeEmpty())
+			})
+		})
+
+		It("mounts no secrets and gives no CA when there is no key", func() {
+			engine.respond = healthy(dir)
+			flags, err := m.Up(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(engine.lines()[engine.index("run -d ")]).NotTo(ContainSubstring("riotbox-egress-secrets"))
+			Expect(strings.Join(flags, " ")).NotTo(ContainSubstring("riotbox-egress/ca.crt"))
+			Expect(dir.SecretsDir()).NotTo(BeAnExistingFile())
+			Expect(dir.CACert()).NotTo(BeAnExistingFile())
+		})
+
+		It("drops a reused session dir's secrets and CA when there is no key", func() {
+			Expect(dir.Create()).To(Succeed())
+			Expect(dir.WriteInjection([]inject.Credential{{Env: "K", Host: "api.anthropic.com", Header: "x-api-key", Value: "v"}}, time.Now())).To(Succeed())
+			engine.respond = healthy(dir)
+			_, err := m.Up(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(engine.lines()[engine.index("run -d ")]).NotTo(ContainSubstring("riotbox-egress-secrets"))
+			Expect(dir.SecretsDir()).NotTo(BeAnExistingFile())
+			Expect(dir.CACert()).NotTo(BeAnExistingFile())
+		})
 	})
 
 	Describe("Down", func() {
+		It("removes the session's secrets under every runtime base it is given", func() {
+			bases := []string{filepath.Join(GinkgoT().TempDir(), "riotbox-egress"), filepath.Join(GinkgoT().TempDir(), "riotbox-egress")}
+			for _, b := range bases {
+				Expect(os.MkdirAll(filepath.Join(b, "s1", "secrets"), 0o700)).To(Succeed())
+			}
+			other := filepath.Join(bases[1], "s2", "secrets")
+			Expect(os.MkdirAll(other, 0o700)).To(Succeed())
+			Expect(m.Down(dir, false, bases...)).To(Succeed())
+			for _, b := range bases {
+				Expect(filepath.Join(b, "s1")).NotTo(BeAnExistingFile())
+			}
+			Expect(other).To(BeADirectory())
+		})
+
+		It("removes the secrets dir an earlier release kept in the state dir", func() {
+			Expect(dir.Create()).To(Succeed())
+			legacy := filepath.Join(dir.Path(), "secrets")
+			Expect(os.Mkdir(legacy, 0o700)).To(Succeed())
+			Expect(m.Down(dir, false)).To(Succeed())
+			Expect(legacy).NotTo(BeAnExistingFile())
+		})
+
+		It("removes the secrets dir after the pod, keeping the logs", func() {
+			Expect(dir.Create()).To(Succeed())
+			Expect(dir.WriteInjection([]inject.Credential{{Env: "K", Host: "api.anthropic.com", Header: "x-api-key", Value: "v"}}, time.Now())).To(Succeed())
+			engine.respond = func(args []string) ([]byte, error) {
+				if args[0] == "pod" && args[1] == "rm" {
+					Expect(dir.SecretsDir()).To(BeADirectory(), "secrets removed before the pod")
+				}
+				return nil, nil
+			}
+			Expect(m.Down(dir, false)).To(Succeed())
+			Expect(dir.SecretsDir()).NotTo(BeAnExistingFile())
+			Expect(dir.LogDir()).To(BeADirectory())
+		})
+
+		It("succeeds when there is no secrets dir, or no state dir at all", func() {
+			Expect(m.Down(dir, false)).To(Succeed())
+			Expect(dir.Create()).To(Succeed())
+			Expect(m.Down(dir, false)).To(Succeed())
+		})
+
 		It("stops the proxy first, then removes the pod and each network that exists", func() {
 			engine.respond = func(args []string) ([]byte, error) {
 				if args[0] == "network" && args[1] == "exists" && args[2] == "s1-ext" {

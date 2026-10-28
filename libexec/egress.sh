@@ -20,7 +20,8 @@ omitted); @group is every host of a group (see `riotbox egress groups`).
 
   list     each running session: when it started, its launch's PID,
            its project dirs, its access log, whether strict mode is on
-           and where that comes from, and what it allows
+           and where that comes from, the keys its proxy injects, and
+           what it allows
   groups   every group: where it is defined, and its hosts
   allow    allow <entry> or @group in the session, now
   deny     stop allowing <entry> or @group in the session, now;
