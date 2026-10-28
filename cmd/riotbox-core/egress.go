@@ -93,6 +93,7 @@ func egressUp(a parsedArgs, stdout, stderr io.Writer) int {
 		Projects:    a.multi["--project"],
 		SystemConf:  a.opts["--system-conf"],
 		UserConf:    a.opts["--user-conf"],
+		OSDir:       a.opts["--os-dir"],
 		Credentials: plan.Inject,
 	})
 	if err != nil {
@@ -556,7 +557,8 @@ func egressStrict(a parsedArgs, stdout, stderr io.Writer) int {
 // @agent differs per session, so it is listed once per running session
 // with that session's agent hosts, or as "(per session)" when none runs; a
 // session whose agent.conf cannot be read shows "(unreadable)" and the
-// reason goes to stderr. It fails on a conf file the launch would refuse.
+// reason goes to stderr. It fails on a conf file the launch would refuse, and
+// on a broken OS plugin in --os-dir.
 func egressGroups(a parsedArgs, stdout, stderr io.Writer) int {
 	var s policy.Sources
 	var err error
@@ -564,6 +566,9 @@ func egressGroups(a parsedArgs, stdout, stderr io.Writer) int {
 		return egressFailed(stderr, err)
 	}
 	if s.User, err = state.ReadConf(a.opts["--user-conf"]); err != nil {
+		return egressFailed(stderr, err)
+	}
+	if s.OS, err = state.LoadOS(a.opts["--os-dir"]); err != nil {
 		return egressFailed(stderr, err)
 	}
 	r, err := policy.Resolve(s)
@@ -604,7 +609,7 @@ func egressGroups(a parsedArgs, stdout, stderr io.Writer) int {
 				b.WriteString("  (unreadable)\n")
 				continue
 			}
-			for _, e := range policy.Groups(hosts, s.System, s.User)[policy.AgentGroup].Members {
+			for _, e := range policy.Groups(hosts, s.OS, s.System, s.User)[policy.AgentGroup].Members {
 				fmt.Fprintf(&b, "  %s\n", e)
 			}
 		}

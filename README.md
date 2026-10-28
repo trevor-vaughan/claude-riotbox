@@ -1126,7 +1126,10 @@ Unless strict mode is on, the allowlist is the union of:
   `@crates` and `@github` (see [Groups](#groups)).
 - `@agent`: the running agent's own API hosts, and only that agent's.
   Claude: `api.anthropic.com`, `claude.ai`, `platform.claude.com`,
-  `console.anthropic.com`. opencode and Pi: the API host of each provider
+  `console.anthropic.com`, and `mcp-proxy.anthropic.com`, which carries the
+  connectors you added on claude.ai (Gmail, Drive and the like) and so lets
+  the agent use those accounts; put `-mcp-proxy.anthropic.com` in your
+  `egress.conf` to keep them out. opencode and Pi: the API host of each provider
   whose key they pass through (opencode also `models.dev`). Vertex and
   Bedrock hosts are not included; add them yourself if you use them.
 - What `/etc/riotbox/egress.conf` (system) and
@@ -1170,7 +1173,7 @@ own API. When strict mode leaves out any of the agent's hosts, the launch
 warns, without refusing, after the proxy is up:
 
 ```text
-WARNING: strict mode does not allow the agent's own API hosts (api.anthropic.com, claude.ai, console.anthropic.com, platform.claude.com); add @agent
+WARNING: strict mode does not allow the agent's own API hosts (api.anthropic.com, claude.ai, console.anthropic.com, mcp-proxy.anthropic.com, platform.claude.com); add @agent
 ```
 
 `strict = off` in your file turns off a `strict` in the system file. A
@@ -1185,31 +1188,68 @@ built-in group of that name (yours beats the system file's), and every
 `@NAME` in either file uses the result. `@registries` follows too, so a
 `[group pypi]` pointing at your mirror replaces pypi in the default
 allowlist. A group you define lists hosts, not other groups. `@agent` is
-reserved. The built-in groups:
+reserved. The built-in groups, and the OS groups (from `os/<ID>/`, source
+`os` in `riotbox egress groups`):
 
 | Group | Hosts |
 |---|---|
 | `@npm` | registry.npmjs.org |
 | `@pypi` | pypi.org, files.pythonhosted.org |
-| `@go` | proxy.golang.org, sum.golang.org |
+| `@go` | proxy.golang.org, sum.golang.org, vuln.go.dev |
 | `@crates` | index.crates.io, static.crates.io |
 | `@github` | github.com, api.github.com, codeload.github.com, `*.githubusercontent.com` |
 | `@registries` | `@npm`, `@pypi`, `@go`, `@crates`, `@github` |
 | `@agent` | the running agent's API hosts (above) |
 | `@search` | www.google.com, www.bing.com, duckduckgo.com, search.brave.com, api.search.brave.com |
-| `@docs` | developer.mozilla.org, docs.python.org, pkg.go.dev, docs.rs, stackoverflow.com, `*.stackexchange.com`, `*.readthedocs.io` |
+| `@docs` | developer.mozilla.org, docs.python.org, go.dev, pkg.go.dev, docs.github.com, docs.rs, stackoverflow.com, `*.stackexchange.com`, `*.readthedocs.io` |
 | `@wikipedia` | `*.wikipedia.org`, `*.wikimedia.org` |
 | `@rubygems` | rubygems.org |
 | `@maven` | repo.maven.apache.org, repo1.maven.org |
 | `@gitlab` | gitlab.com, registry.gitlab.com |
 | `@containers` | registry-1.docker.io, auth.docker.io, production.cloudfront.docker.com, quay.io, `*.quay.io`, ghcr.io, pkg-containers.githubusercontent.com |
-| `@centos` | mirrors.centos.org, mirror.stream.centos.org |
+| `@forges` | `@github`, `@gitlab`, bitbucket.org, api.bitbucket.org, codeberg.org, gitea.com, git.sr.ht, hg.sr.ht, dev.azure.com, git.launchpad.net, code.launchpad.net |
+| `@centos` (os) | mirror.stream.centos.org, dl.fedoraproject.org (EPEL) |
+| `@fedora` (os) | dl.fedoraproject.org |
+| `@rhel` (os) | cdn-ubi.redhat.com, cdn.redhat.com |
+| `@debian` (os) | deb.debian.org, security.debian.org |
+| `@ubuntu` (os) | archive.ubuntu.com, security.ubuntu.com, ports.ubuntu.com |
+| `@arch` (os) | geo.mirror.pkgbuild.com, fastly.mirror.pkgbuild.com |
+| `@os` | every OS group above in one name (opt-in; empty when no OS plugin is installed) |
 | `@huggingface` | huggingface.co, `*.hf.co` |
 
 Built-in groups can change between releases as vendors move their hosts;
 if you need a fixed set, define your own group. `@search` and `@docs` let
 the agent send data out through search queries and Q&A sites: allow them
-only when you accept that.
+only when you accept that. `@forges` is not part of `@registries`: allow it
+to clone from or push to those forges over HTTPS.
+
+#### Package managers in a session
+
+Stock package-manager configs do not work behind the proxy: dnf's mirror
+lists hand out third-party mirrors, many over plain HTTP, and Debian and
+Ubuntu fetch over plain HTTP. So when an egress session starts, RiotBox
+points the distro's package manager at that distro's own HTTPS mirrors, the
+hosts of its OS group. Allow the group, and `sudo dnf install` works:
+
+```bash
+riotbox egress allow @centos     # the RiotBox image: CentOS Stream 10, with CRB and EPEL
+```
+
+(or uncomment `@centos` in your `egress.conf`). `@fedora`, `@rhel`,
+`@debian`, `@ubuntu` and `@arch` do the same for those distros, and `@os`
+allows every distro's mirrors at once (the union of the OS groups; opt-in,
+like each of them, and not part of `@registries`; with no OS plugin installed
+it is empty and allows nothing). Debian and Ubuntu also need
+`ca-certificates` in the image, or the rewrite is refused and apt keeps its
+plain-HTTP sources. If a rewrite fails, the session still
+starts and prints a `WARNING: egress:` line. A distro with no plugin
+(Rocky, Alma, Mint) keeps its stock mirrors, which the proxy may refuse.
+Outside egress mode nothing is changed. How plugins work and how to add one:
+[docs/dev/os-contract.md](docs/dev/os-contract.md).
+`@centos` is no longer built in: a session saves the OS groups when it
+starts, so restart any egress session started before this release, or
+`riotbox egress reload` fails for it while its own allowlist or your
+`egress.conf` names `@centos`.
 
 ### Changing a running session
 
@@ -1411,8 +1451,14 @@ above).
   (`RIOTBOX_NESTED=1`) starts inherit no working resolver either: they can
   use the proxy, but cannot resolve names themselves.
 - `sudo dnf install` works once `@centos` is allowed (the template has it,
-  commented out): the image's sudoers keeps the proxy variables across
-  `sudo`. Containers built before this need a rebuild.
+  commented out; see [Package managers in a session](#package-managers-in-a-session)):
+  the image's sudoers keeps the proxy variables across `sudo`. An image
+  built before this release has neither that nor the OS rewrite, so dnf
+  keeps its stock mirrors, which the proxy refuses, and nothing warns:
+  rebuild it.
+- dnf in a session no longer checks repository metadata against its mirror
+  list's checksum; packages are still GPG-checked, and fetched over TLS from
+  the distro's own mirror.
 - Git over SSH does not work; use HTTPS remotes.
 - Nested podman (`RIOTBOX_NESTED=1`) needs `@containers` (or your
   registries) allowed; the template has it, commented out.

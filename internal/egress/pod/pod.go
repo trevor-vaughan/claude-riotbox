@@ -151,6 +151,7 @@ type UpRequest struct {
 	Image      string   // the Envoy image, by digest
 	AgentHosts []byte   // the agent's egress_hosts output, saved as agent.conf
 	Projects   []string // the launch's project dirs, saved for riotbox egress list
+	OSDir      string   // the OS plugins (state.LoadOS), saved as os.conf; "" for none
 	SystemConf string
 	UserConf   string
 	// Credentials are the keys the proxy injects (inject.Decide); none
@@ -185,6 +186,10 @@ type UpRequest struct {
 // object that already carries the session's name would be removed too,
 // which the random suffix on session names makes
 // improbable.
+//
+// Up loads the OS plugins (UpRequest.OSDir) before it creates anything, so a
+// broken plugin stops the launch with no engine call and no state dir, and
+// saves them as os.conf after agent.conf.
 func (m Manager) Up(r UpRequest) (_ []string, err error) {
 	// The image is a positional engine argument and the state paths are
 	// part of a -v src:dst:opts argument, so neither may be able to change
@@ -200,10 +205,17 @@ func (m Manager) Up(r UpRequest) (_ []string, err error) {
 			return nil, fmt.Errorf("the egress state path %q contains ':' or ','", p)
 		}
 	}
+	osGroups, err := state.LoadOS(r.OSDir)
+	if err != nil {
+		return nil, err
+	}
 	if err := r.Dir.Create(); err != nil {
 		return nil, err
 	}
 	if err := state.WriteAtomic(r.Dir.AgentConf(), r.AgentHosts); err != nil {
+		return nil, err
+	}
+	if err := r.Dir.WriteOSGroups(osGroups); err != nil {
 		return nil, err
 	}
 	if err := r.Dir.WriteProjects(r.Projects); err != nil {

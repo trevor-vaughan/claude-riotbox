@@ -23,6 +23,7 @@ testcases:
           test -d "${XDG_DATA_HOME}/riotbox/libexec"
           test -d "${XDG_DATA_HOME}/riotbox/scripts"
           test -d "${XDG_DATA_HOME}/riotbox/agents"
+          test -f "${XDG_DATA_HOME}/riotbox/os/registry.sh"
           test -f "${XDG_DATA_HOME}/riotbox/Containerfile"
           # riotbox-core placed, executable, and matching this checkout
           test -x "${XDG_DATA_HOME}/riotbox/libexec/riotbox-core"

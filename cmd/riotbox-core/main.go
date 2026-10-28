@@ -184,6 +184,7 @@ var verbs = map[string]verb{
 	},
 	"egress-up": {
 		options:  []string{"--engine", "--state-root", "--system-conf", "--user-conf", "--image", "--session-key", "--owner-pid"},
+		optional: []string{"--os-dir"},
 		repeated: []string{"--project"},
 		minArgs:  1, maxArgs: 1,
 		run: egressUp,
@@ -194,7 +195,7 @@ var verbs = map[string]verb{
 	"egress-allow":  {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressEdit("egress-allow", false)},
 	"egress-deny":   {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressEdit("egress-deny", true)},
 	"egress-strict": {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressStrict},
-	"egress-groups": {options: egressConfOptions, run: egressGroups},
+	"egress-groups": {options: egressConfOptions, optional: []string{"--os-dir"}, run: egressGroups},
 	"egress-reload": {options: egressConfOptions, optional: []string{"--session"}, run: egressReload},
 }
 

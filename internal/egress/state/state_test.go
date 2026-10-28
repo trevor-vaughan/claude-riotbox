@@ -140,7 +140,7 @@ var _ = Describe("Dir", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(got.StrictLabel()).To(Equal("off (default)"))
 			Expect(got.Entries).To(ContainElements(policy.Entry{Host: "api.agent.example", Port: 443}, policy.Entry{Host: "pypi.org", Port: 443}))
-			Expect(got.Entries).To(HaveLen(12))
+			Expect(got.Entries).To(HaveLen(13))
 		})
 
 		It("merges agent, system and user files, then applies the session overlay on top", func() {
@@ -162,6 +162,7 @@ var _ = Describe("Dir", func() {
 				{Host: "proxy.golang.org", Port: 443},
 				{Host: "registry.npmjs.org", Port: 443},
 				{Host: "sys.example", Port: 443},
+				{Host: "vuln.go.dev", Port: 443},
 			}
 			got, err := d.Policy(sys, user)
 			Expect(err).NotTo(HaveOccurred())

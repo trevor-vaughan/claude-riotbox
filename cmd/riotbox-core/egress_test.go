@@ -101,6 +101,19 @@ var _ = Describe("egress verbs", func() {
 			return append(confArgs("egress-up"), "--image", "img", "--session-key", "k", "--owner-pid", pid, "--", name)
 		}
 
+		It("refuses a broken OS plugin in --os-dir before touching the engine", func() {
+			osDir := GinkgoT().TempDir()
+			Expect(os.MkdirAll(filepath.Join(osDir, "pypi"), 0o755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(osDir, "pypi", "egress-hosts"), []byte("a.example\n"), 0o644)).To(Succeed())
+			args := append(confArgs("egress-up"), "--os-dir", osDir,
+				"--image", "img", "--session-key", "k", "--owner-pid", "1", "--", "s1")
+			s := runEgressIn("\x00", args...)
+			Expect(s.ExitCode()).To(Equal(1))
+			Expect(string(s.Err.Contents())).To(ContainSubstring("@pypi is already a group"))
+			Expect(log).NotTo(BeAnExistingFile())
+			Expect(filepath.Join(root, "s1")).NotTo(BeAnExistingFile())
+		})
+
 		It("is a usage error when --owner-pid is not a process ID", func() {
 			s := runEgress(upArgs("x", "s1")...)
 			Expect(s.ExitCode()).To(Equal(2))
@@ -960,6 +973,29 @@ var _ = Describe("egress verbs", func() {
 	Describe("egress-groups", func() {
 		groupsArgs := func() []string { return confArgs("egress-groups") }
 
+		It("lists the OS plugins' groups from --os-dir with source os", func() {
+			s := runEgress(append(groupsArgs(), "--os-dir", filepath.Join("..", "..", "os"))...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Out.Contents())).To(ContainSubstring("@centos (os)\n  dl.fedoraproject.org\n  mirror.stream.centos.org\n"))
+		})
+
+		It("lists @os as a built-in holding every OS plugin's hosts", func() {
+			s := runEgress(append(groupsArgs(), "--os-dir", filepath.Join("..", "..", "os"))...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			out := string(s.Out.Contents())
+			Expect(out).To(MatchRegexp(`(?m)^@os \(built-in\)\n(  \S+\n)*  dl\.fedoraproject\.org\n`))
+			Expect(out).To(ContainSubstring("  mirror.stream.centos.org\n"))
+		})
+
+		It("fails on a broken OS plugin", func() {
+			osDir := GinkgoT().TempDir()
+			Expect(os.MkdirAll(filepath.Join(osDir, "pypi"), 0o755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(osDir, "pypi", "egress-hosts"), []byte("a.example\n"), 0o644)).To(Succeed())
+			s := runEgress(append(groupsArgs(), "--os-dir", osDir)...)
+			Expect(s.ExitCode()).NotTo(Equal(0))
+			Expect(string(s.Err.Contents())).To(ContainSubstring("@pypi is already a group"))
+		})
+
 		It("lists every group with its source and hosts, and @agent as per session when none runs", func() {
 			Expect(os.WriteFile(sys, []byte("[group corp]\ncorp.sys.example\n"), 0o600)).To(Succeed())
 			Expect(os.MkdirAll(filepath.Dir(user), 0o700)).To(Succeed())
@@ -967,7 +1003,7 @@ var _ = Describe("egress verbs", func() {
 			s := runEgress(groupsArgs()...)
 			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
 			out := string(s.Out.Contents())
-			Expect(out).To(HavePrefix("@agent (per session)\n@centos (built-in)\n"))
+			Expect(out).To(HavePrefix("@agent (per session)\n@containers (built-in)\n"))
 			Expect(out).To(ContainSubstring("@corp (system conf)\n  corp.sys.example\n"))
 			Expect(out).To(ContainSubstring("@pypi (user conf)\n  pypi.corp.example\n@registries (built-in)\n"))
 			Expect(out).To(ContainSubstring("@npm (built-in)\n  registry.npmjs.org\n"))
@@ -990,7 +1026,7 @@ var _ = Describe("egress verbs", func() {
 			env = append(env, gatewaysJSON("s1"))
 			s := runEgress(groupsArgs()...)
 			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
-			Expect(string(s.Out.Contents())).To(HavePrefix("@agent (s1)\n  a.agent.example\n  z.agent.example\n@centos (built-in)\n"))
+			Expect(string(s.Out.Contents())).To(HavePrefix("@agent (s1)\n  a.agent.example\n  z.agent.example\n@containers (built-in)\n"))
 		})
 
 		It("lists @agent once per running session, with that session's agent hosts", func() {
@@ -1000,7 +1036,7 @@ var _ = Describe("egress verbs", func() {
 			env = append(env, gatewaysJSON("s1", "s2"))
 			s := runEgress(groupsArgs()...)
 			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
-			Expect(string(s.Out.Contents())).To(HavePrefix("@agent (s1)\n  api.one.example\n@agent (s2)\n  api.two.example\n@centos (built-in)\n"))
+			Expect(string(s.Out.Contents())).To(HavePrefix("@agent (s1)\n  api.one.example\n@agent (s2)\n  api.two.example\n@containers (built-in)\n"))
 		})
 
 		It("lists the other sessions, and says why, when one session's agent hosts cannot be read", func() {
@@ -1010,7 +1046,7 @@ var _ = Describe("egress verbs", func() {
 			env = append(env, gatewaysJSON("s1", "s2"))
 			s := runEgress(groupsArgs()...)
 			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
-			Expect(string(s.Out.Contents())).To(HavePrefix("@agent (s1)\n  (unreadable)\n@agent (s2)\n  api.two.example\n@centos (built-in)\n"))
+			Expect(string(s.Out.Contents())).To(HavePrefix("@agent (s1)\n  (unreadable)\n@agent (s2)\n  api.two.example\n@containers (built-in)\n"))
 			Expect(string(s.Err.Contents())).To(ContainSubstring("riotbox-core: egress: s1: cannot read " + display.Quote(d1.AgentConf()) + ": is a directory\n"))
 		})
 

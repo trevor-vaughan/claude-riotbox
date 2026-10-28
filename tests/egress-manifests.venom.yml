@@ -41,6 +41,7 @@ testcases:
           has() { agent_call "$1" egress_hosts | grep -qx "$2" || { echo "BAD: $1 lacks $2" >&2; exit 1; }; }
           has claude api.anthropic.com
           has claude platform.claude.com
+          has claude mcp-proxy.anthropic.com
           has opencode api.openai.com
           has opencode models.dev
           has pi api.anthropic.com

@@ -188,3 +188,32 @@ which keys are injected; the EXIT trap removes the pod.
 bearer API key and Claude Code reports "Not logged in" with it alone, so
 it serves gateways, which a base URL points at. `GOOGLE_GENERATIVE_AI_API_KEY`:
 no agent's `env_vars` passes it.
+
+## OS package mirrors, 2026-10-27
+
+`sudo dnf install` failed in every egress session even with `@centos`
+allowed. The image's repos use metalinks; `mirrors.centos.org` (allowed)
+answered with ~27 third-party mirrors chosen by location, none in the
+group, and `mirror.stream.centos.org` appeared only as `http://`, which
+the proxy never forwards. EPEL's metalink behaves the same way.
+
+**Chosen:** in an egress session, rewrite the distro's repos to its own
+HTTPS mirrors, which its group lists. Each distro is a plugin, `os/<ID>/`
+(CentOS, RHEL, Fedora, Debian, Ubuntu, Arch), holding its hosts and its
+rewrite together, discovered like `agents/`. `riotbox-core` snapshots the
+groups as `os.conf` at `egress-up`, as it does `agent.conf`, rather than
+take a new option on every command.
+
+**Turned down:** listing the third-party mirrors (they vary by location and
+over time, and number ~30 unvetted hosts per distro); documentation only
+(`@centos` stays useless); proxying plain HTTP for the OS hosts (reverses
+the rule that plain HTTP is never forwarded); and, for Debian and Ubuntu
+images without `ca-certificates`, turning off apt's TLS verification for
+their hosts. apt's signed `InRelease` would still protect integrity, but the
+rewrite refuses instead: a Debian-based dev image ships `ca-certificates`.
+
+**Cost:** dnf no longer checks `repomd.xml` against the metalink's checksum;
+TLS to the project's own mirror and GPG-checked packages stand in.
+
+`@forges` was added at the same time: one name for git over HTTPS to the
+common forges, opt-in and not part of `@registries`.

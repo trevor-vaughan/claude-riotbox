@@ -7,19 +7,20 @@ import (
 )
 
 // builtinGroups are the groups every egress.conf can name. A member is an
-// entry, or "@" and another built-in group (only registries nests, one
-// level); a file's [group NAME] replaces the built-in of that name. Every
-// host is one its vendor documents (the Source lines); a host no vendor
-// page names was left out, not guessed. Contents may change between
-// releases (README "Egress proxy"), so a user who needs a fixed set
+// entry, or "@" and another built-in group of hosts only (registries and
+// forges nest, one level); a file's [group NAME] replaces the built-in of
+// that name. Every host is one its vendor documents (the Source lines); a
+// host no vendor page names was left out, not guessed. Contents may change
+// between releases (README "Egress proxy"), so a user who needs a fixed set
 // defines their own group.
 var builtinGroups = map[string][]string{
 	// Source: https://docs.npmjs.com/cli/v11/using-npm/registry
 	"npm": {"registry.npmjs.org"},
 	// Source: https://docs.pypi.org/api/index-api/ (the index, and files.pythonhosted.org for the files it lists)
 	"pypi": {"pypi.org", "files.pythonhosted.org"},
-	// Source: https://go.dev/ref/mod#environment-variables (GOPROXY and GOSUMDB defaults)
-	"go": {"proxy.golang.org", "sum.golang.org"},
+	// Source: https://go.dev/ref/mod#environment-variables (GOPROXY and GOSUMDB defaults);
+	// https://go.dev/doc/security/vuln/database (vuln.go.dev, the database govulncheck reads)
+	"go": {"proxy.golang.org", "sum.golang.org", "vuln.go.dev"},
 	// Source: https://doc.rust-lang.org/cargo/reference/registry-index.html (sparse index);
 	// https://index.crates.io/config.json ("dl")
 	"crates": {"index.crates.io", "static.crates.io"},
@@ -35,10 +36,11 @@ var builtinGroups = map[string][]string{
 	// html.duckduckgo.com is left out: DuckDuckGo's help pages do not name it.
 	"search": {"www.google.com", "www.bing.com", "duckduckgo.com", "search.brave.com", "api.search.brave.com"},
 	// Source: https://developer.mozilla.org/en-US/about; https://docs.python.org/3/about.html;
-	// https://pkg.go.dev/about; https://docs.rs/about; https://stackexchange.com/sites (stackoverflow.com
-	// and the *.stackexchange.com sites); https://docs.readthedocs.io/en/stable/custom-domains.html
+	// https://go.dev/doc/; https://pkg.go.dev/about; https://docs.github.com/en/contributing;
+	// https://docs.rs/about; https://stackexchange.com/sites (stackoverflow.com and the
+	// *.stackexchange.com sites); https://docs.readthedocs.io/en/stable/custom-domains.html
 	// (<project>.readthedocs.io)
-	"docs": {"developer.mozilla.org", "docs.python.org", "pkg.go.dev", "docs.rs", "stackoverflow.com", "*.stackexchange.com", "*.readthedocs.io"},
+	"docs": {"developer.mozilla.org", "docs.python.org", "go.dev", "pkg.go.dev", "docs.github.com", "docs.rs", "stackoverflow.com", "*.stackexchange.com", "*.readthedocs.io"},
 	// Source: https://meta.wikimedia.org/wiki/Special:SiteMatrix (every <lang>.wikipedia.org and
 	// *.wikimedia.org wiki); https://meta.wikimedia.org/wiki/Wikimedia_servers
 	"wikipedia": {"*.wikipedia.org", "*.wikimedia.org"},
@@ -50,24 +52,38 @@ var builtinGroups = map[string][]string{
 	"maven": {"repo.maven.apache.org", "repo1.maven.org"},
 	// Source: https://docs.gitlab.com/user/gitlab_com/ (container registry domain name)
 	"gitlab": {"gitlab.com", "registry.gitlab.com"},
+	// Source: https://support.atlassian.com/bitbucket-cloud/docs/what-are-the-bitbucket-cloud-ip-addresses-i-should-use-to-configure-my-corporate-firewall/
+	// (bitbucket.org, api.bitbucket.org); https://docs.codeberg.org/git/clone-commit-via-cli/ (codeberg.org);
+	// https://docs.gitea.com/usage/repo-mirror (gitea.com); https://man.sr.ht/git.sr.ht/ (git.sr.ht);
+	// https://man.sr.ht/hg.sr.ht/ (hg.sr.ht);
+	// https://learn.microsoft.com/en-us/azure/devops/organizations/security/allow-list-ip-url (dev.azure.com);
+	// https://documentation.ubuntu.com/launchpad/user/explanation/working-with-code/git-hosting/
+	// (git.launchpad.net, code.launchpad.net). bbuseruploads.s3.amazonaws.com is left out: Atlassian's
+	// page does not name it. Opt-in: not part of @registries.
+	"forges": {"@github", "@gitlab", "bitbucket.org", "api.bitbucket.org", "codeberg.org", "gitea.com",
+		"git.sr.ht", "hg.sr.ht", "dev.azure.com", "git.launchpad.net", "code.launchpad.net"},
 	// Source: https://docs.docker.com/desktop/setup/allow-list/ (registry-1.docker.io, auth.docker.io,
 	// production.cloudfront.docker.com); https://docs.quay.io/ (quay.io);
 	// https://access.redhat.com/articles/7084334 (the cdn*.quay.io hosts, covered by *.quay.io);
 	// https://docs.github.com/en/actions/reference/runners/github-hosted-runners
 	// (ghcr.io, pkg-containers.githubusercontent.com)
 	"containers": {"registry-1.docker.io", "auth.docker.io", "production.cloudfront.docker.com", "quay.io", "*.quay.io", "ghcr.io", "pkg-containers.githubusercontent.com"},
-	// Source: the metalink URLs in /etc/yum.repos.d/centos.repo in quay.io/centos/centos:stream10
-	// (mirrors.centos.org); https://mirror.stream.centos.org/ (the CentOS Stream mirror)
-	"centos": {"mirrors.centos.org", "mirror.stream.centos.org"},
 	// Source: https://huggingface.co/docs/hub/en/models-downloading#downloading-behind-a-proxy-or-firewall
 	// (huggingface.co and the *.hf.co storage and CDN hosts). cdn-lfs.huggingface.co is left out:
 	// Hugging Face's firewall list names only the *.hf.co CDN hosts.
 	"huggingface": {"huggingface.co", "*.hf.co"},
+	// Every OS plugin's mirrors: Groups fills it from the OS groups it is given (no hosts are
+	// listed here, so none is named without a plugin). Opt-in: not part of @registries.
+	osGroup: {},
 }
+
+// osGroup is the built-in @os: the union of every OS plugin's group. It is
+// listed in builtinGroups with no hosts; Groups fills it.
+const osGroup = "os"
 
 // Group is one group of the table @ references resolve against: its
 // hosts, expanded and sorted, and where its definition comes from
-// (SourceBuiltin, SourceSystem, SourceUser or SourceAgent).
+// (SourceBuiltin, SourceOS, SourceSystem, SourceUser or SourceAgent).
 type Group struct {
 	Name    string
 	Source  string
@@ -81,20 +97,23 @@ type groupDef struct {
 	refs    []string
 }
 
-// Groups returns the group table: the built-ins, replaced by the system
-// file's definitions, replaced in turn by the user file's, and the agent's
-// hosts as @agent, which no file can define. A built-in that names other
-// groups (@registries) is expanded against this final table, so a user's
-// [group pypi] changes @registries too.
-func Groups(agent []Entry, system, user Conf) map[string]Group {
+// Groups returns the group table: the built-ins, then the OS plugins'
+// groups (os), replaced by the system file's definitions, replaced in turn
+// by the user file's, and the agent's hosts as @agent, which no file can
+// define. The built-in @os is the union of the OS groups' members in that
+// final table (a conf's [group centos] shows in it), empty without OS
+// plugins; a file's [group os] replaces it. A built-in that names other
+// groups (@registries, @forges) is expanded against this final table, so a
+// user's [group pypi] changes @registries too.
+func Groups(agent []Entry, osGroups []GroupDef, system, user Conf) map[string]Group {
 	defs := map[string]groupDef{}
 	for name, raw := range builtinGroups {
 		d := groupDef{source: SourceBuiltin}
 		for _, m := range raw {
 			if ref, isRef := strings.CutPrefix(m, "@"); isRef {
 				target, exists := builtinGroups[ref]
-				if !exists || slices.ContainsFunc(target, func(t string) bool { return strings.HasPrefix(t, "@") }) {
-					panic(fmt.Sprintf("policy: built-in group %s: @%s must name a built-in group of hosts only (exists=%t)", name, ref, exists))
+				if !exists || ref == osGroup || slices.ContainsFunc(target, func(t string) bool { return strings.HasPrefix(t, "@") }) {
+					panic(fmt.Sprintf("policy: built-in group %s: @%s must name a built-in group of hosts only, not @os (exists=%t)", name, ref, exists))
 				}
 				d.refs = append(d.refs, ref)
 				continue
@@ -106,6 +125,9 @@ func Groups(agent []Entry, system, user Conf) map[string]Group {
 			d.members = append(d.members, e)
 		}
 		defs[name] = d
+	}
+	for _, g := range osGroups {
+		defs[g.Name] = groupDef{source: SourceOS, members: g.Members}
 	}
 	for _, f := range []struct {
 		conf   Conf
@@ -124,5 +146,34 @@ func Groups(agent []Entry, system, user Conf) map[string]Group {
 		}
 		table[name] = Group{Name: name, Source: d.source, Members: merge(members, nil)}
 	}
+	if d := defs[osGroup]; d.source == SourceBuiltin {
+		var members []Entry
+		for _, g := range osGroups {
+			members = append(members, table[g.Name].Members...)
+		}
+		table[osGroup] = Group{Name: osGroup, Source: SourceBuiltin, Members: merge(members, nil)}
+	}
 	return table
+}
+
+// OSGroup reads data, the egress-hosts file at path of the OS plugin name
+// (docs/dev/os-contract.md), as the group name: one entry per line, as
+// agent.conf holds (ParseList). It fails, naming path, on a name that is
+// not a group name or is already a group (@agent, a built-in), on an
+// invalid line, and on a file that lists no hosts.
+func OSGroup(name, path string, data []byte) (GroupDef, error) {
+	if !groupName.MatchString(name) {
+		return GroupDef{}, fmt.Errorf("%s: %q is not a group name: use lowercase letters, digits and -, at most 63", path, name)
+	}
+	if _, builtin := builtinGroups[name]; builtin || name == AgentGroup {
+		return GroupDef{}, fmt.Errorf("%s: @%s is already a group; an OS plugin cannot redefine it", path, name)
+	}
+	members, err := ParseList(path, data)
+	if err != nil {
+		return GroupDef{}, err
+	}
+	if len(members) == 0 {
+		return GroupDef{}, fmt.Errorf("%s: lists no hosts", path)
+	}
+	return GroupDef{Name: name, Members: members}, nil
 }

@@ -1,0 +1,6 @@
+# @rhel: Red Hat's content delivery hosts. Stock RHEL and UBI repos already
+# use them over HTTPS, so this plugin has no rewrite. docs/dev/os-contract.md.
+# Source: the baseurl in /etc/yum.repos.d/ubi.repo of registry.access.redhat.com/ubi9/ubi
+cdn-ubi.redhat.com
+# Source: https://access.redhat.com/articles/1525183 (cdn.redhat.com, subscribed RHEL content)
+cdn.redhat.com

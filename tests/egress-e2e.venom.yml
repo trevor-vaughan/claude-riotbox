@@ -6,7 +6,8 @@ vars:
 # Proves the network boundary on a real engine. Skipped unless
 # RIOTBOX_EGRESS_E2E=1 (task test:egress-e2e, and a CI step on the host
 # runner). Needs the internet: example.com, www.wikipedia.org, pypi.org
-# and speed.cloudflare.com are the hosts allowed or refused.
+# and speed.cloudflare.com are the hosts allowed or refused, and the OS
+# plugin cases reach each distro's mirrors (os/<ID>/egress-hosts).
 
 testcases:
   - name: allows a listed host, refuses others, never proxies plain HTTP, and leaves no direct route
@@ -314,6 +315,77 @@ testcases:
           done
           [ "$(sha256sum <"${rds}")" = "${before}" ] || { echo "BAD: rds.json changed" >&2; exit 1; }
           [ ! -e "${E2E_ROOT}/rbx" ] || { echo "BAD: a write reached the host" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: dnf reaches CentOS Stream, CRB and EPEL through @centos alone, and only after the rewrite
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          # Not -q: it hides the curl error that shows the proxy's refusal.
+          dnf="dnf --setopt=retries=0 --setopt=timeout=15"
+          printf '@centos\n' >"${E2E_TMP}/user.conf"
+          e2e_up "rbx-e2e-centos-$$" $$
+          # The original failure: stock metalinks, @centos allowed.
+          if out="$(e2e_agent --user 0 "${E2E_AGENT_IMAGE}" ${dnf} makecache 2>&1)"; then
+            echo "BAD: stock dnf worked, so this case proves nothing" >&2; exit 1
+          fi
+          e2e_refused "${out}" || { echo "${out}" >&2; echo "BAD: stock dnf failed, but not on a proxy refusal" >&2; exit 1; }
+          # The image's repo set: dnf-plugins-core, then epel-release (which
+          # ships /usr/bin/crb), then `crb enable` (Containerfile), then the
+          # entrypoint's rewrite again, now that crb and epel are enabled.
+          out="$(e2e_os_run centos "${E2E_AGENT_IMAGE}" "${dnf} -y install dnf-plugins-core && ${dnf} -y install epel-release && /usr/bin/crb enable && egress_os_apply /os/registry.sh && ${dnf} makecache && dnf -q repolist --enabled")" ||
+            { echo "${out}" >&2; echo "BAD: dnf failed through @centos after the rewrite" >&2; exit 1; }
+          for repo in baseos appstream crb extras-common epel; do
+            grep -qE "^${repo}[[:space:]]" <<<"${out}" || { echo "${out}" >&2; echo "BAD: ${repo} not enabled" >&2; exit 1; }
+          done
+          # Control: the rewrite alone, without @centos, is refused.
+          : >"${E2E_TMP}/user.conf"
+          e2e_up "rbx-e2e-centos-none-$$" $$
+          if out="$(e2e_os_run centos "${E2E_AGENT_IMAGE}" "${dnf} makecache")"; then
+            echo "BAD: dnf worked without @centos" >&2; exit 1
+          fi
+          e2e_refused "${out}" || { echo "${out}" >&2; echo "BAD: dnf failed without @centos, but not on a proxy refusal" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: each other distro's package manager works through its own group alone
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          debian="$(e2e_with_ca "${E2E_DEBIAN_IMAGE}")"
+          ubuntu="$(e2e_with_ca "${E2E_UBUNTU_IMAGE}")"
+          # apt-get update exits 0 when an index fails; a W:/E: line is the failure.
+          apt='out="$(apt-get update 2>&1)"; echo "${out}"; ! grep -qE "^(W|E):" <<<"${out}"'
+          check() {
+            local plugin="$1" image="$2" cmd="$3" out
+            printf '@%s\n' "${plugin}" >"${E2E_TMP}/user.conf"
+            e2e_up "rbx-e2e-${plugin}-$$" $$
+            out="$(e2e_os_run "${plugin}" "${image}" "${cmd}")" || { echo "${out}" >&2; echo "BAD: ${plugin} failed through @${plugin}" >&2; exit 1; }
+            : >"${E2E_TMP}/user.conf"
+            e2e_up "rbx-e2e-${plugin}-none-$$" $$
+            if out="$(e2e_os_run "${plugin}" "${image}" "${cmd}")"; then echo "BAD: ${plugin} worked without @${plugin}" >&2; exit 1; fi
+            e2e_refused "${out}" || { echo "${out}" >&2; echo "BAD: ${plugin} failed without @${plugin}, but not on a proxy refusal" >&2; exit 1; }
+            echo "${plugin}: ok"
+          }
+          # dnf without -q, which would hide the proxy's refusal.
+          check fedora "${E2E_FEDORA_IMAGE}" "dnf --setopt=retries=0 makecache"
+          check rhel "${E2E_UBI_IMAGE}" "dnf --setopt=retries=0 makecache"
+          check debian "${debian}" "${apt}"
+          check ubuntu "${ubuntu}" "${apt}"
+          check arch "${E2E_ARCH_IMAGE}" "pacman -Sy --noconfirm"
           echo OK
         assertions:
           - result.code ShouldEqual 0

@@ -70,6 +70,28 @@ var _ = Describe("Manager", func() {
 	})
 
 	Describe("Up", func() {
+		It("saves the OS plugins' groups as os.conf before the proxy starts", func() {
+			osDir := GinkgoT().TempDir()
+			Expect(os.MkdirAll(filepath.Join(osDir, "fedora"), 0o755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(osDir, "fedora", "egress-hosts"), []byte("dl.fedoraproject.org\n"), 0o644)).To(Succeed())
+			req.OSDir = osDir
+			engine.respond = healthy(dir)
+			_, err := m.Up(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(os.ReadFile(dir.OSConf())).To(Equal([]byte("[group fedora]\ndl.fedoraproject.org\n")))
+		})
+
+		It("refuses a broken OS plugin before creating anything", func() {
+			osDir := GinkgoT().TempDir()
+			Expect(os.MkdirAll(filepath.Join(osDir, "fedora"), 0o755)).To(Succeed())
+			Expect(os.WriteFile(filepath.Join(osDir, "fedora", "manifest.sh"), nil, 0o644)).To(Succeed())
+			req.OSDir = osDir
+			_, err := m.Up(req)
+			Expect(err).To(MatchError(ContainSubstring("an OS plugin needs egress-hosts")))
+			Expect(engine.lines()).To(BeEmpty())
+			Expect(dir.Path()).NotTo(BeADirectory())
+		})
+
 		It("creates the networks, the pod and the proxy in order, and returns the agent's flags", func() {
 			engine.respond = healthy(dir)
 			flags, err := m.Up(req)

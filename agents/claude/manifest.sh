@@ -156,10 +156,13 @@ EOF
 # agent_claude_egress_hosts — the hosts Claude Code must reach through the
 # RIOTBOX_EGRESS=1 proxy, one egress.conf entry per line
 # (docs/dev/agent-contract.md):
-#   api.anthropic.com      the Messages API
-#   claude.ai              subscription (OAuth) login and account calls
-#   platform.claude.com    OAuth token exchange and refresh
-#   console.anthropic.com  the older OAuth token endpoint
+#   api.anthropic.com        the Messages API
+#   claude.ai                subscription (OAuth) login and account calls
+#   platform.claude.com      OAuth token exchange and refresh
+#   console.anthropic.com    the older OAuth token endpoint
+#   mcp-proxy.anthropic.com  the connectors added on claude.ai (MCP_PROXY_URL
+#                            in the CLI), with the access to those accounts
+#                            that each connector holds
 # Vertex and Bedrock hosts are not listed: a user routing through them adds
 # them to egress.conf.
 agent_claude_egress_hosts() {
@@ -168,5 +171,6 @@ api.anthropic.com
 claude.ai
 platform.claude.com
 console.anthropic.com
+mcp-proxy.anthropic.com
 EOF
 }

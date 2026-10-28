@@ -1,0 +1,580 @@
+name: egress — OS plugins (os/<ID>/), their repo rewrites and the entrypoint helper
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# os/registry.sh discovers os/<ID>/egress-hosts; riotbox-core reads each as
+# the group @<ID> (internal/egress/state/os.go). The rewrites run as root in
+# the container (scripts/lib/egress-os.sh); here they run against fixture
+# trees under OS_ROOT. docs/dev/os-contract.md is the contract.
+
+testcases:
+  - name: the six plugins are registered, each with sourced hosts
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.riotbox_dir}}/os/registry.sh"
+          [ "${OS_REGISTRY[*]}" = "arch centos debian fedora rhel ubuntu" ] || { echo "BAD: registry: ${OS_REGISTRY[*]}" >&2; exit 1; }
+          for os in "${OS_REGISTRY[@]}"; do
+            mapfile -t hosts < <(os_hosts "${os}")
+            [ "${#hosts[@]}" -gt 0 ] || { echo "BAD: ${os} lists no hosts" >&2; exit 1; }
+            # Every host line has a "# Source:" comment above it, possibly
+            # with other comment lines between.
+            awk -v os="${os}" '
+              /^# Source: / { sourced = 1; next }
+              /^#/ || /^[ \t]*$/ { next }
+              { if (!sourced) { print "BAD: " os ": no # Source: above " $0; bad = 1 } sourced = 0 }
+              END { exit bad }' "{{.riotbox_dir}}/os/${os}/egress-hosts"
+          done
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: os_detect matches os-release's ID exactly, quoted or not, and ignores ID_LIKE
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/os/registry.sh"
+          mkdir -p "${T}/etc"
+          check() { printf '%s\n' "$1" >"${T}/etc/os-release"; got="$(OS_ROOT="${T}" os_detect)"; [ "${got}" = "$2" ] || { echo "BAD: '$1' -> '${got}', want '$2'" >&2; exit 1; }; }
+          check 'ID=fedora' fedora
+          check 'ID="centos"' centos
+          check "ID='debian'" debian
+          check $'NAME="Rocky Linux"\nID="rocky"\nID_LIKE="rhel centos fedora"' ''
+          check $'ID=linuxmint\nID_LIKE=ubuntu' ''
+          check 'VERSION_ID=1' ''
+          printf 'ID=arch' >"${T}/etc/os-release"
+          [ "$(OS_ROOT="${T}" os_detect)" = arch ] || { echo "BAD: last line without newline" >&2; exit 1; }
+          rm "${T}/etc/os-release"
+          got="$(OS_ROOT="${T}" os_detect)"; rc=$?
+          [ "${rc}" = 0 ] && [ -z "${got}" ] || { echo "BAD: no file must match nothing and exit 0, got ${rc} '${got}'" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: os_call runs a verb and fails with 127 on a plugin or verb that does not exist
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.riotbox_dir}}/os/registry.sh"
+          out="$(os_call nosuch repo_rewrite 2>&1)"; rc=$?
+          [ "${rc}" = 127 ] && [[ "${out}" == *"nosuch has no repo_rewrite"* ]] || { echo "BAD: ${rc} ${out}" >&2; exit 1; }
+          out="$(os_call rhel repo_rewrite 2>&1)"; rc=$?
+          [ "${rc}" = 127 ] && [[ "${out}" == *"rhel has no repo_rewrite"* ]] || { echo "BAD: rhel has no rewrite, got ${rc} ${out}" >&2; exit 1; }
+          os_fake_ping() { echo "ran $*"; return 3; }
+          out="$(os_call fake ping x)"; rc=$?
+          [ "${rc}" = 3 ] && [ "${out}" = "ran x" ] || { echo "BAD: defined verb: ${rc} '${out}'" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: os_hosts trims whitespace and trailing comments and reads a final line without newline
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/os/zz"
+          cp "{{.riotbox_dir}}/os/registry.sh" "${T}/os/registry.sh"
+          printf '# c\n\n  a.example  # c\nb.example' >"${T}/os/zz/egress-hosts"
+          source "${T}/os/registry.sh"
+          [ "$(os_hosts zz)" = $'a.example\nb.example' ] || { echo "BAD: $(os_hosts zz)" >&2; exit 1; }
+          printf 'a.example b.example\n' >"${T}/os/zz/egress-hosts"
+          [ "$(os_hosts zz)" = 'a.example b.example' ] || { echo "BAD: interior whitespace must survive: $(os_hosts zz)" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the centos rewrite points every repo at its own mirror, drops metalinks, and is idempotent
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/etc/yum.repos.d"
+          # Trimmed copies of the stock CentOS Stream 10 files (epel.repo
+          # from epel-release; crb enabled, as the image's `crb enable`
+          # leaves it), each with a disabled section that must stay.
+          cat >"${T}/etc/yum.repos.d/centos.repo" <<'EOF'
+          [baseos]
+          name=CentOS Stream $releasever - BaseOS
+          metalink=https://mirrors.centos.org/metalink?repo=centos-baseos-$stream&arch=$basearch&protocol=https,http
+          gpgcheck=1
+          enabled=1
+
+          [baseos-debuginfo]
+          metalink=https://mirrors.centos.org/metalink?repo=centos-baseos-debug-$stream&arch=$basearch&protocol=https,http
+          enabled=0
+
+          [appstream]
+          name=CentOS Stream $releasever - AppStream
+          #baseurl=https://example/
+          metalink=https://mirrors.centos.org/metalink?repo=centos-appstream-$stream&arch=$basearch&protocol=https,http
+          enabled=1
+
+          [crb]
+          name=CentOS Stream $releasever - CRB
+          metalink=https://mirrors.centos.org/metalink?repo=centos-crb-$stream&arch=$basearch&protocol=https,http
+          enabled=1
+          EOF
+          cat >"${T}/etc/yum.repos.d/centos-addons.repo" <<'EOF'
+          [extras-common]
+          metalink=https://mirrors.centos.org/metalink?repo=centos-extras-sig-extras-common-$stream&arch=$basearch&protocol=https,http
+          enabled=1
+          EOF
+          cat >"${T}/etc/yum.repos.d/epel.repo" <<'EOF'
+          [epel]
+          #baseurl=https://download.example/pub/epel/$releasever${stream:+s}/Everything/$basearch/
+          metalink=https://mirrors.fedoraproject.org/metalink?repo=epel-$releasever${stream:+s}&arch=$basearch
+          enabled=1
+          EOF
+          chmod 0644 "${T}"/etc/yum.repos.d/*.repo
+          source "{{.riotbox_dir}}/os/registry.sh"
+          OS_ROOT="${T}" os_call centos repo_rewrite
+          cp -r "${T}/etc/yum.repos.d" "${T}/first"
+          OS_ROOT="${T}" os_call centos repo_rewrite
+          diff -r "${T}/first" "${T}/etc/yum.repos.d" || { echo "BAD: not idempotent" >&2; exit 1; }
+          section() { awk -v h="[$2]" '/^\[/{on=($0==h)} on' "${T}/etc/yum.repos.d/$1"; }
+          want_url() {
+            local s; s="$(section "$1" "$2")"
+            [ "$(grep -c '^baseurl=' <<<"${s}")" = 1 ] && grep -qxF "baseurl=$3" <<<"${s}" || { echo "BAD: [$2]:"; echo "${s}"; exit 1; } >&2
+            ! grep -q '^metalink=' <<<"${s}" || { echo "BAD: [$2] keeps a metalink" >&2; exit 1; }
+          }
+          want_url centos.repo baseos 'https://mirror.stream.centos.org/$stream/BaseOS/$basearch/os/'
+          want_url centos.repo appstream 'https://mirror.stream.centos.org/$stream/AppStream/$basearch/os/'
+          want_url centos.repo crb 'https://mirror.stream.centos.org/$stream/CRB/$basearch/os/'
+          want_url centos-addons.repo extras-common 'https://mirror.stream.centos.org/SIGs/$stream/extras/$basearch/extras-common/'
+          want_url epel.repo epel 'https://dl.fedoraproject.org/pub/epel/$releasever${stream:+s}/Everything/$basearch/'
+          section centos.repo appstream | grep -qxF '#baseurl=https://example/' || { echo "BAD: a comment was dropped" >&2; exit 1; }
+          section centos.repo baseos-debuginfo | grep -q '^metalink=' || { echo "BAD: another section was touched" >&2; exit 1; }
+          section centos.repo baseos | grep -qx 'gpgcheck=1' || { echo "BAD: other keys were dropped" >&2; exit 1; }
+          for f in "${T}"/etc/yum.repos.d/*.repo; do [ "$(stat -c %a "${f}")" = 644 ] || { echo "BAD: mode of ${f}" >&2; exit 1; }; done
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the centos rewrite works without EPEL or extras, and fails without baseos
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/etc/yum.repos.d"
+          printf '[baseos]\nmetalink=x\n\n[appstream]\nmetalink=y\n' >"${T}/etc/yum.repos.d/centos.repo"
+          source "{{.riotbox_dir}}/os/registry.sh"
+          OS_ROOT="${T}" os_call centos repo_rewrite || { echo "BAD: optional repos must not be required" >&2; exit 1; }
+          printf '[appstream]\nmetalink=y\n' >"${T}/etc/yum.repos.d/centos.repo"
+          out="$(OS_ROOT="${T}" os_call centos repo_rewrite 2>&1)"; rc=$?
+          [ "${rc}" != 0 ] && [[ "${out}" == *"no [baseos] repo"* ]] || { echo "BAD: ${rc} ${out}" >&2; exit 1; }
+          rm -r "${T}/etc/yum.repos.d"
+          out="$(OS_ROOT="${T}" os_call centos repo_rewrite 2>&1)"; rc=$?
+          [ "${rc}" != 0 ] || { echo "BAD: no repo dir must fail" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the fedora rewrite points fedora and updates at dl.fedoraproject.org and leaves openh264 alone
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/etc/yum.repos.d"
+          printf '[fedora]\nmetalink=https://mirrors.fedoraproject.org/metalink?repo=fedora-$releasever&arch=$basearch\nenabled=1\n' >"${T}/etc/yum.repos.d/fedora.repo"
+          printf '[updates]\nmetalink=https://mirrors.fedoraproject.org/metalink?repo=updates-released-f$releasever&arch=$basearch\nenabled=1\n' >"${T}/etc/yum.repos.d/fedora-updates.repo"
+          printf '[fedora-cisco-openh264]\nmetalink=https://mirrors.fedoraproject.org/metalink?repo=fedora-cisco-openh264-$releasever&arch=$basearch\nskip_if_unavailable=True\n' >"${T}/etc/yum.repos.d/fedora-cisco-openh264.repo"
+          cp "${T}/etc/yum.repos.d/fedora-cisco-openh264.repo" "${T}/openh264.before"
+          source "{{.riotbox_dir}}/os/registry.sh"
+          OS_ROOT="${T}" os_call fedora repo_rewrite
+          grep -qxF 'baseurl=https://dl.fedoraproject.org/pub/fedora/linux/releases/$releasever/Everything/$basearch/os/' "${T}/etc/yum.repos.d/fedora.repo"
+          grep -qxF 'baseurl=https://dl.fedoraproject.org/pub/fedora/linux/updates/$releasever/Everything/$basearch/' "${T}/etc/yum.repos.d/fedora-updates.repo"
+          ! grep -q '^metalink=' "${T}/etc/yum.repos.d/fedora.repo" "${T}/etc/yum.repos.d/fedora-updates.repo" || { echo "BAD: metalink kept" >&2; exit 1; }
+          cmp "${T}/openh264.before" "${T}/etc/yum.repos.d/fedora-cisco-openh264.repo"
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the dnf rewrite matches headers with trailing blanks or CR, drops mirrorlist and continuation lines, and keeps a symlink
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          D="${T}/etc/yum.repos.d"; mkdir -p "${D}" "${T}/real"
+          printf '[baseos] \r\nmetalink=x\nenabled=1\n\n[appstream]\nmirrorlist=http://m/\nbaseurl=http://a/\n  http://b/\n\tcontinued\nkeep=1\n' >"${D}/centos.repo"
+          printf '[epel]\t\nmetalink=y\n' >"${D}/epel.repo"
+          printf '[extras-common]\r\nmetalink=z\n' >"${T}/real/addons.repo"
+          ln -s ../../real/addons.repo "${D}/centos-addons.repo"
+          source "{{.riotbox_dir}}/os/registry.sh"
+          OS_ROOT="${T}" os_call centos repo_rewrite
+          b="$(awk '/^\[/{on=($0 ~ /^\[baseos\]/)} on' "${D}/centos.repo")"
+          grep -qxF 'baseurl=https://mirror.stream.centos.org/$stream/BaseOS/$basearch/os/' <<<"${b}" || { echo "BAD: CR/blank header missed" >&2; exit 1; }
+          ! grep -q '^metalink=' <<<"${b}" || { echo "BAD: baseos metalink kept" >&2; exit 1; }
+          ! grep -q '^metalink=' "${D}/epel.repo" || { echo "BAD: optional repo with blank header skipped" >&2; exit 1; }
+          grep -qxF 'baseurl=https://dl.fedoraproject.org/pub/epel/$releasever${stream:+s}/Everything/$basearch/' "${D}/epel.repo" || { echo "BAD: epel baseurl" >&2; exit 1; }
+          s="$(awk '/^\[/{on=($0=="[appstream]")} on' "${D}/centos.repo")"
+          ! grep -qE 'mirrorlist=|http://|continued' <<<"${s}" || { echo "BAD: mirrorlist or continuation kept: ${s}" >&2; exit 1; }
+          grep -qx 'keep=1' <<<"${s}" || { echo "BAD: line after the dropped ones lost" >&2; exit 1; }
+          [ -L "${D}/centos-addons.repo" ] || { echo "BAD: symlink replaced" >&2; exit 1; }
+          grep -q '^baseurl=https://mirror.stream.centos.org/SIGs/' "${T}/real/addons.repo" || { echo "BAD: symlink target not rewritten" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the dnf rewrite writes the URL as given, without backslash escapes
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/etc/yum.repos.d"
+          printf '[r]\nmetalink=x\n' >"${T}/etc/yum.repos.d/r.repo"
+          source "{{.riotbox_dir}}/os/registry.sh"
+          OS_ROOT="${T}" os_dnf_set_baseurl r 'https://h/a\tb\n$x'
+          grep -qxF 'baseurl=https://h/a\tb\n$x' "${T}/etc/yum.repos.d/r.repo" || { echo "BAD: escapes interpreted" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: each required dnf repo is checked, and the error names the missing one
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          D="${T}/etc/yum.repos.d"; mkdir -p "${D}"
+          source "{{.riotbox_dir}}/os/registry.sh"
+          expect_fail() { # OS, MESSAGE
+            local out rc
+            out="$(OS_ROOT="${T}" os_call "$1" repo_rewrite 2>&1)"; rc=$?
+            [ "${rc}" != 0 ] && [[ "${out}" == *"$2"* ]] || { echo "BAD: $1 want '$2': ${rc} ${out}" >&2; exit 1; }
+          }
+          printf '[baseos]\nmetalink=x\n' >"${D}/centos.repo"
+          expect_fail centos 'no [appstream] repo'
+          rm "${D}/centos.repo"
+          printf '[fedora]\nmetalink=x\n' >"${D}/fedora.repo"
+          expect_fail fedora 'no [updates] repo'
+          printf '[updates]\nmetalink=x\n' >"${D}/fedora.repo"
+          expect_fail fedora 'no [fedora] repo'
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the debian and ubuntu rewrites switch their own hosts to HTTPS in every sources format, idempotently
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/os/registry.sh"
+          for os in debian ubuntu; do
+            R="${T}/${os}"
+            mkdir -p "${R}/etc/apt/sources.list.d" "${R}/etc/ssl/certs"
+            printf 'CA\n' >"${R}/etc/ssl/certs/ca-certificates.crt"
+            mapfile -t hosts < <(os_hosts "${os}")
+            : >"${R}/etc/apt/sources.list.d/${os}.sources"
+            for h in "${hosts[@]}"; do printf 'URIs: http://%s/x\nSuites: s\n\n' "${h}" >>"${R}/etc/apt/sources.list.d/${os}.sources"; done
+            printf 'deb http://%s/x s main\n' "${hosts[0]}" >"${R}/etc/apt/sources.list"
+            printf 'deb http://%s/x s main\ndeb http://other.example/x s main\n' "${hosts[0]}" >"${R}/etc/apt/sources.list.d/extra.list"
+            OS_ROOT="${R}" os_call "${os}" repo_rewrite
+            cp -r "${R}/etc/apt" "${R}/first"
+            OS_ROOT="${R}" os_call "${os}" repo_rewrite
+            diff -r "${R}/first" "${R}/etc/apt" || { echo "BAD: ${os} not idempotent" >&2; exit 1; }
+            for h in "${hosts[@]}"; do grep -qxF "URIs: https://${h}/x" "${R}/etc/apt/sources.list.d/${os}.sources" || { echo "BAD: ${os} ${h}" >&2; exit 1; }; done
+            grep -qxF "deb https://${hosts[0]}/x s main" "${R}/etc/apt/sources.list" || { echo "BAD: ${os} sources.list" >&2; exit 1; }
+            grep -qxF "deb https://${hosts[0]}/x s main" "${R}/etc/apt/sources.list.d/extra.list" || { echo "BAD: ${os} extra.list" >&2; exit 1; }
+            grep -qxF 'deb http://other.example/x s main' "${R}/etc/apt/sources.list.d/extra.list" || { echo "BAD: ${os} rewrote another host" >&2; exit 1; }
+          done
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the apt rewrite changes nothing without a CA bundle, and fails with no sources
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/os/registry.sh"
+          mkdir -p "${T}/etc/apt/sources.list.d"
+          printf 'URIs: http://deb.debian.org/debian\n' >"${T}/etc/apt/sources.list.d/debian.sources"
+          printf 'deb http://deb.debian.org/debian s main\n' >"${T}/etc/apt/sources.list"
+          cp -r "${T}/etc/apt" "${T}/before"
+          out="$(OS_ROOT="${T}" os_call debian repo_rewrite 2>&1)"; rc=$?
+          [ "${rc}" != 0 ] && [[ "${out}" == *"install ca-certificates in the image"* ]] || { echo "BAD: ${rc} ${out}" >&2; exit 1; }
+          diff -r "${T}/before" "${T}/etc/apt" || { echo "BAD: changed without a CA bundle" >&2; exit 1; }
+          mkdir -p "${T}/etc/ssl/certs"; : >"${T}/etc/ssl/certs/ca-certificates.crt"
+          out="$(OS_ROOT="${T}" os_call debian repo_rewrite 2>&1)"; rc=$?
+          [ "${rc}" != 0 ] || { echo "BAD: empty CA bundle accepted" >&2; exit 1; }
+          diff -r "${T}/before" "${T}/etc/apt" || { echo "BAD: changed with an empty CA bundle" >&2; exit 1; }
+          printf 'CA\n' >"${T}/etc/ssl/certs/ca-certificates.crt"
+          rm -r "${T}/etc/apt"
+          out="$(OS_ROOT="${T}" os_call debian repo_rewrite 2>&1)"; rc=$?
+          [ "${rc}" != 0 ] && [[ "${out}" == *"no apt sources"* ]] || { echo "BAD: ${rc} ${out}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the apt rewrite keeps a symlinked sources file and rewrites its target
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/etc/apt/sources.list.d" "${T}/etc/ssl/certs" "${T}/real"
+          printf 'CA\n' >"${T}/etc/ssl/certs/ca-certificates.crt"
+          printf 'URIs: http://deb.debian.org/debian\n' >"${T}/real/debian.sources"
+          chmod 640 "${T}/real/debian.sources"
+          ln -s ../../../real/debian.sources "${T}/etc/apt/sources.list.d/debian.sources"
+          ln -s ../../real/missing.list "${T}/etc/apt/sources.list.d/dangling.list"
+          source "{{.riotbox_dir}}/os/registry.sh"
+          OS_ROOT="${T}" os_call debian repo_rewrite
+          [ -L "${T}/etc/apt/sources.list.d/debian.sources" ] || { echo "BAD: symlink replaced" >&2; exit 1; }
+          grep -qxF 'URIs: https://deb.debian.org/debian' "${T}/real/debian.sources" || { echo "BAD: target not rewritten" >&2; exit 1; }
+          [ "$(stat -c %a "${T}/real/debian.sources")" = 640 ] || { echo "BAD: mode changed" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the apt rewrite treats hosts literally on both sides of the substitution
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/etc/apt" "${T}/etc/ssl/certs"
+          printf 'CA\n' >"${T}/etc/ssl/certs/ca-certificates.crt"
+          printf 'deb http://a.b/x s\ndeb http://aXb/x s\ndeb http://m&n#o\\p/x s\n' >"${T}/etc/apt/sources.list"
+          source "{{.riotbox_dir}}/os/registry.sh"
+          OS_ROOT="${T}" os_apt_https 'a.b' 'm&n#o\p'
+          grep -qxF 'deb https://a.b/x s' "${T}/etc/apt/sources.list" || { echo "BAD: a.b" >&2; exit 1; }
+          grep -qxF 'deb http://aXb/x s' "${T}/etc/apt/sources.list" || { echo "BAD: dot matched any char" >&2; exit 1; }
+          grep -qxF 'deb https://m&n#o\p/x s' "${T}/etc/apt/sources.list" || { echo "BAD: metacharacters not literal" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the OS rewrites refuse a symlink that leaves OS_ROOT, and still follow a relative one inside
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/os/registry.sh"
+          R="${T}/root"; O="${T}/outside"
+          mkdir -p "${R}/etc/yum.repos.d" "${R}/etc/apt/sources.list.d" "${R}/etc/ssl/certs" "${R}/real" "${O}"
+          printf 'CA\n' >"${R}/etc/ssl/certs/ca-certificates.crt"
+          printf '[baseos]\nmetalink=x\n' >"${O}/out.repo"
+          printf 'deb http://deb.debian.org/debian s main\n' >"${O}/out.list"
+          cp "${O}/out.repo" "${O}/repo.before"; cp "${O}/out.list" "${O}/list.before"
+          ln -s "${O}/out.repo" "${R}/etc/yum.repos.d/out.repo"
+          ln -s "${O}/out.list" "${R}/etc/apt/sources.list.d/out.list"
+          out="$(OS_ROOT="${R}" os_call centos repo_rewrite 2>&1)"; rc=$?
+          [ "${rc}" != 0 ] && [[ "${out}" == *"outside"* ]] || { echo "BAD: dnf ${rc} ${out}" >&2; exit 1; }
+          out="$(OS_ROOT="${R}" os_call debian repo_rewrite 2>&1)"; rc=$?
+          [ "${rc}" != 0 ] && [[ "${out}" == *"outside"* ]] || { echo "BAD: apt ${rc} ${out}" >&2; exit 1; }
+          cmp "${O}/repo.before" "${O}/out.repo" && cmp "${O}/list.before" "${O}/out.list" || { echo "BAD: outside file changed" >&2; exit 1; }
+          rm "${R}/etc/yum.repos.d/out.repo" "${R}/etc/apt/sources.list.d/out.list"
+          printf 'deb http://deb.debian.org/debian s main\n' >"${R}/real/in.list"
+          ln -s ../../../real/in.list "${R}/etc/apt/sources.list.d/in.list"
+          OS_ROOT="${R}" os_call debian repo_rewrite || { echo "BAD: relative link inside refused" >&2; exit 1; }
+          grep -qxF 'deb https://deb.debian.org/debian s main' "${R}/real/in.list" || { echo "BAD: inside target not rewritten" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the apt rewrite checks the resolved CA bundle, not a link onto the host's
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/os/registry.sh"
+          R="${T}/root"; mkdir -p "${R}/etc/apt" "${R}/etc/ssl/certs"
+          printf 'deb http://deb.debian.org/debian s main\n' >"${R}/etc/apt/sources.list"
+          cp "${R}/etc/apt/sources.list" "${T}/before"
+          printf 'HOSTCA\n' >"${T}/hostca.crt"
+          ln -s "${T}/hostca.crt" "${R}/etc/ssl/certs/ca-certificates.crt"
+          out="$(OS_ROOT="${R}" os_call debian repo_rewrite 2>&1)"; rc=$?
+          [ "${rc}" != 0 ] && [[ "${out}" == *"outside"* ]] || { echo "BAD: ${rc} ${out}" >&2; exit 1; }
+          cmp "${T}/before" "${R}/etc/apt/sources.list" || { echo "BAD: changed" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the apt rewrite refuses an empty host list and an empty host, and the manifests refuse a hostless plugin
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/os/registry.sh"
+          mkdir -p "${T}/etc/apt" "${T}/etc/ssl/certs"
+          printf 'CA\n' >"${T}/etc/ssl/certs/ca-certificates.crt"
+          printf 'deb http://deb.debian.org/debian s main\n' >"${T}/etc/apt/sources.list"
+          cp "${T}/etc/apt/sources.list" "${T}/before"
+          export OS_ROOT="${T}"
+          out="$(os_apt_https 2>&1)"; rc=$?
+          [ "${rc}" != 0 ] && [[ "${out}" == *"no host given"* ]] || { echo "BAD: no host: ${rc} ${out}" >&2; exit 1; }
+          out="$(os_apt_https '' deb.debian.org 2>&1)"; rc=$?
+          [ "${rc}" != 0 ] && [[ "${out}" == *"empty host"* ]] || { echo "BAD: empty host: ${rc} ${out}" >&2; exit 1; }
+          os_hosts() { :; }
+          for os in debian ubuntu; do
+            out="$(os_call "${os}" repo_rewrite 2>&1)"; rc=$?
+            [ "${rc}" != 0 ] && [[ "${out}" == *"no hosts"* ]] || { echo "BAD: ${os} ${rc} ${out}" >&2; exit 1; }
+          done
+          cmp "${T}/before" "${T}/etc/apt/sources.list" || { echo "BAD: file changed" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the apt rewrite refuses a symlink into a sibling directory sharing the OS_ROOT prefix
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          source "{{.riotbox_dir}}/os/registry.sh"
+          R="${T}/root"; mkdir -p "${R}/etc/apt/sources.list.d" "${R}/etc/ssl/certs" "${T}/rootX"
+          printf 'CA\n' >"${R}/etc/ssl/certs/ca-certificates.crt"
+          printf 'deb http://deb.debian.org/debian s main\n' >"${R}/etc/apt/sources.list"
+          printf 'deb http://deb.debian.org/debian s main\n' >"${T}/rootX/x.list"
+          ln -s "${T}/rootX/x.list" "${R}/etc/apt/sources.list.d/x.list"
+          cp "${R}/etc/apt/sources.list" "${T}/list.before"; cp "${T}/rootX/x.list" "${T}/x.before"
+          out="$(OS_ROOT="${R}" os_call debian repo_rewrite 2>&1)"; rc=$?
+          [ "${rc}" != 0 ] && [[ "${out}" == *"outside"* ]] || { echo "BAD: ${rc} ${out}" >&2; exit 1; }
+          cmp "${T}/x.before" "${T}/rootX/x.list" || { echo "BAD: sibling file changed" >&2; exit 1; }
+          cmp "${T}/list.before" "${R}/etc/apt/sources.list" || { echo "BAD: sources.list changed" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the entrypoint helper does nothing outside an egress session
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/bin"; printf '#!/bin/sh\necho SUDO >&2; exit 1\n' >"${T}/bin/sudo"; chmod +x "${T}/bin/sudo"
+          unset RIOTBOX_EGRESS_SESSION
+          source "{{.riotbox_dir}}/scripts/lib/egress-os.sh"
+          out="$(PATH="${T}/bin:${PATH}" egress_os_apply "{{.riotbox_dir}}/os/registry.sh" 2>&1)"
+          [ -z "${out}" ] || { echo "BAD: ${out}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: in an egress session it runs the matching plugin's rewrite as root, and skips one without a rewrite
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          # A sudo stub that records the call and runs the command, as the
+          # image's passwordless sudo does (this test does not run as root).
+          # As uid 0 the helper must not call sudo at all, so there the stub fails.
+          mkdir -p "${T}/bin"
+          if [ "$(id -u)" = 0 ]; then
+            printf '#!/bin/bash\nexit 9\n' >"${T}/bin/sudo"
+          else
+            printf '#!/bin/bash\n[ "$1" = -n ] || exit 9\nshift\necho "$*" >>"%s/sudo.log"\nexec "$@"\n' "${T}" >"${T}/bin/sudo"
+          fi
+          chmod +x "${T}/bin/sudo"
+          mkdir -p "${T}/root/etc/yum.repos.d"
+          printf 'ID="fedora"\n' >"${T}/root/etc/os-release"
+          printf '[fedora]\nmetalink=x\n' >"${T}/root/etc/yum.repos.d/fedora.repo"
+          printf '[updates]\nmetalink=y\n' >"${T}/root/etc/yum.repos.d/fedora-updates.repo"
+          source "{{.riotbox_dir}}/scripts/lib/egress-os.sh"
+          RIOTBOX_EGRESS_SESSION=s1 OS_ROOT="${T}/root" PATH="${T}/bin:${PATH}" egress_os_apply "{{.riotbox_dir}}/os/registry.sh"
+          grep -q '^baseurl=https://dl.fedoraproject.org/' "${T}/root/etc/yum.repos.d/fedora.repo" || { echo "BAD: not rewritten" >&2; exit 1; }
+          [ "$(id -u)" = 0 ] || grep -q 'repo_rewrite' "${T}/sudo.log" || { echo "BAD: not run through sudo -n" >&2; exit 1; }
+          printf 'ID=arch\n' >"${T}/root/etc/os-release"
+          out="$(RIOTBOX_EGRESS_SESSION=s1 OS_ROOT="${T}/root" PATH="${T}/bin:${PATH}" egress_os_apply "{{.riotbox_dir}}/os/registry.sh" 2>&1)"
+          [ -z "${out}" ] || { echo "BAD: arch has nothing to rewrite, said: ${out}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: it warns and continues on an unknown distro, and warns and returns 1 on a failed rewrite
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/bin" "${T}/root/etc"
+          printf '#!/bin/bash\nshift\nexec "$@"\n' >"${T}/bin/sudo"; chmod +x "${T}/bin/sudo"
+          source "{{.riotbox_dir}}/scripts/lib/egress-os.sh"
+          printf 'ID=rocky\nID_LIKE="rhel centos fedora"\n' >"${T}/root/etc/os-release"
+          out="$(RIOTBOX_EGRESS_SESSION=s1 OS_ROOT="${T}/root" PATH="${T}/bin:${PATH}" egress_os_apply "{{.riotbox_dir}}/os/registry.sh" 2>&1)"; rc=$?
+          [ "${rc}" = 0 ] && [[ "${out}" == *"no OS plugin for ID=rocky"* ]] || { echo "BAD: ${rc} ${out}" >&2; exit 1; }
+          rm "${T}/root/etc/os-release"
+          out="$(RIOTBOX_EGRESS_SESSION=s1 OS_ROOT="${T}/root" PATH="${T}/bin:${PATH}" egress_os_apply "{{.riotbox_dir}}/os/registry.sh" 2>&1)"; rc=$?
+          [ "${rc}" = 0 ] && [[ "${out}" == "WARNING: egress: no OS plugin for ID=unknown;"* ]] || { echo "BAD: missing os-release: ${rc} ${out}" >&2; exit 1; }
+          printf 'ID=debian\n' >"${T}/root/etc/os-release"
+          out="$(RIOTBOX_EGRESS_SESSION=s1 OS_ROOT="${T}/root" PATH="${T}/bin:${PATH}" egress_os_apply "{{.riotbox_dir}}/os/registry.sh" 2>&1)"; rc=$?
+          [ "${rc}" = 1 ] && [[ "${out}" == *"WARNING: egress: the debian repo rewrite failed"* && "${out}" == *"install ca-certificates"* ]] || { echo "BAD: ${rc} ${out}" >&2; exit 1; }
+          out="$(RIOTBOX_EGRESS_SESSION=s1 egress_os_apply "${T}/nope/registry.sh" 2>&1)"; rc=$?
+          [ "${rc}" = 1 ] && [[ "${out}" == *"no OS plugin registry"* ]] || { echo "BAD: ${rc} ${out}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a sudo that refuses makes the rewrite fail with a warning, not hang
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          if [ "$(id -u)" = 0 ]; then echo "OK (root: sudo is never called)"; exit 0; fi
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/bin" "${T}/root/etc"
+          printf '#!/bin/bash\necho "sudo: a password is required" >&2\nexit 1\n' >"${T}/bin/sudo"; chmod +x "${T}/bin/sudo"
+          printf 'ID=fedora\n' >"${T}/root/etc/os-release"
+          source "{{.riotbox_dir}}/scripts/lib/egress-os.sh"
+          out="$(RIOTBOX_EGRESS_SESSION=s1 OS_ROOT="${T}/root" PATH="${T}/bin:${PATH}" egress_os_apply "{{.riotbox_dir}}/os/registry.sh" 2>&1)"; rc=$?
+          [ "${rc}" = 1 ] && [[ "${out}" == *"WARNING: egress: the fedora repo rewrite failed"* ]] || { echo "BAD: ${rc} ${out}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the entrypoint applies the OS rewrite after the CA bundle, before any agent's setup runs
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          ep="{{.riotbox_dir}}/container/entrypoint.sh"
+          src="$(grep -nF 'source "${RIOTBOX_SCRIPT_DIR}/lib/egress-os.sh"' "${ep}" | cut -d: -f1)"
+          trust="$(grep -nx 'egress_trust_apply' "${ep}" | cut -d: -f1)"
+          call="$(grep -nxF 'egress_os_apply "${RIOTBOX_SCRIPT_DIR}/os/registry.sh"' "${ep}" | cut -d: -f1)"
+          loop="$(grep -nF 'agent_call "${_agent}" container_setup' "${ep}" | cut -d: -f1)"
+          [ -n "${src}" ] && [ -n "${trust}" ] && [ -n "${call}" ] && [ -n "${loop}" ] || { echo "BAD: a line is missing (${src:-?} ${trust:-?} ${call:-?} ${loop:-?})" >&2; exit 1; }
+          [ "${trust}" -lt "${src}" ] && [ "${src}" -lt "${call}" ] && [ "${call}" -lt "${loop}" ] || { echo "BAD: wrong order" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK

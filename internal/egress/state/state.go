@@ -5,6 +5,7 @@
 //	config/        Envoy's config files, mounted read-only into the proxy
 //	log/           access.log and envoy.log, mounted read-write
 //	agent.conf     the active agent's egress_hosts, saved at start
+//	os.conf        the OS plugins' groups, saved at start
 //	session.conf   the session's allow/deny overlay (riotbox egress)
 //	applied.conf   the allowlist last written to rds.json
 //	applied-strict the strict setting last applied, as riotbox egress list shows it
@@ -389,7 +390,7 @@ func (d Dir) Lock(w io.Writer) (release func() error, err error) {
 }
 
 // Policy resolves the session's allowlist as the files now say
-// (policy.Resolve): agent.conf as @agent, the system and user conf files
+// (policy.Resolve): agent.conf as @agent, os.conf as the OS groups, the system and user conf files
 // (each optional) and, on top, session.conf. A session.conf line naming a
 // group no file defines any more fails it, as it fails every reload, with
 // the command that drops the line (Dangles).
@@ -413,7 +414,11 @@ func (d Dir) sources(systemConf, userConf string) (policy.Sources, error) {
 	if err != nil {
 		return policy.Sources{}, err
 	}
-	s := policy.Sources{Agent: agent}
+	osGroups, err := d.OSGroups()
+	if err != nil {
+		return policy.Sources{}, err
+	}
+	s := policy.Sources{Agent: agent, OS: osGroups}
 	for _, f := range []struct {
 		path string
 		conf *policy.Conf
@@ -426,7 +431,7 @@ func (d Dir) sources(systemConf, userConf string) (policy.Sources, error) {
 }
 
 // Dangles reports whether session.conf names @group, with either sign,
-// though neither agent.conf nor a conf file defines group any more: the
+// though neither agent.conf, an OS plugin nor a conf file defines group any more: the
 // user deleted its [group] section. Such a line fails every Policy until
 // DropOverlayGroup removes it; it is never skipped, as skipping a -@group
 // would widen the allowlist unasked.
@@ -435,7 +440,7 @@ func (d Dir) Dangles(systemConf, userConf, group string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if _, known := policy.Groups(s.Agent, s.System, s.User)[group]; known {
+	if _, known := policy.Groups(s.Agent, s.OS, s.System, s.User)[group]; known {
 		return false, nil
 	}
 	return slices.ContainsFunc(s.Overlay.Items, func(it policy.Item) bool { return it.Group == group }), nil
