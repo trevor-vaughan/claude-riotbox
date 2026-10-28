@@ -80,18 +80,24 @@ var _ = Describe("credential injection, against real podman and Envoy", Label("e
 	})
 
 	// agent runs a throwaway agent container in the session, for at most
-	// 90 s, and returns its stdout and stderr together with the injected
-	// value replaced by injected. The value is fake, but Gomega prints what
-	// it matched, and a failure message must never carry an injected key.
-	agent := func(args ...string) (string, error) {
+	// 90 s, and returns its stdout alone (to parse: a retried curl writes
+	// an error per failed attempt to stderr) and its stdout then stderr
+	// (to match and print), both with the injected value replaced by
+	// injected. The value is fake, but Gomega prints what it matched, and
+	// a failure message must never carry an injected key.
+	agent := func(args ...string) (stdout, out string, err error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, "podman", slices.Concat([]string{"run", "--rm"}, flags, args)...).CombinedOutput()
-		return strings.ReplaceAll(string(out), key, injected), err
+		var so, se strings.Builder
+		cmd := exec.CommandContext(ctx, "podman", slices.Concat([]string{"run", "--rm"}, flags, args)...)
+		cmd.Stdout, cmd.Stderr = &so, &se
+		err = cmd.Run()
+		stdout = strings.ReplaceAll(so.String(), key, injected)
+		return stdout, stdout + strings.ReplaceAll(se.String(), key, injected), err
 	}
 	// trustedCurl runs curl in the agent image after the container's trust
 	// setup, as an agent's own curl would run.
-	trustedCurl := func(args ...string) (string, error) {
+	trustedCurl := func(args ...string) (stdout, out string, err error) {
 		return agent(slices.Concat([]string{"-v", trustDir + ":/t:ro,z", curlImage, "bash", "-c", trustCurl, "curl"}, args)...)
 	}
 	// echoed decodes the echo's answer: the headers the upstream received.
@@ -104,24 +110,24 @@ var _ = Describe("credential injection, against real podman and Envoy", Label("e
 	connectStatus := func(url string) string {
 		// curl exits non-zero on a refused CONNECT; the status is the
 		// result under test.
-		out, _ := agent("-e", "CURL_CA_BUNDLE="+pod.AgentCACert, curlImage, "curl", "-s", "-o", "/dev/null",
+		out, _, _ := agent("-e", "CURL_CA_BUNDLE="+pod.AgentCACert, curlImage, "curl", "-s", "-o", "/dev/null",
 			"-w", "%{http_connect}", "--max-time", "20", url)
 		return out
 	}
 
 	It("puts the key on curl's request to the credential host, in place of the placeholder", func() {
-		out, err := trustedCurl(slices.Concat([]string{"-sS", "--fail", "--max-time", "20"}, retry,
+		body, out, err := trustedCurl(slices.Concat([]string{"-sS", "--fail", "--max-time", "20"}, retry,
 			[]string{"-H", "x-api-key: " + inject.Placeholder, "https://" + echoHost + "/headers"})...)
 		Expect(err).NotTo(HaveOccurred(), out)
-		Expect(echoed(out)).To(HaveKeyWithValue("x-api-key", injected))
+		Expect(echoed(body)).To(HaveKeyWithValue("x-api-key", injected))
 		Expect(out).NotTo(ContainSubstring(inject.Placeholder))
 	})
 
 	It("sends the provider host upstream even when the client names another inside the tunnel", func() {
-		out, err := trustedCurl(slices.Concat([]string{"-sS", "--fail", "--max-time", "20"}, retry,
+		body, out, err := trustedCurl(slices.Concat([]string{"-sS", "--fail", "--max-time", "20"}, retry,
 			[]string{"-H", "Host: evil.example", "-H", "x-api-key: " + inject.Placeholder, "https://" + echoHost + "/headers"})...)
 		Expect(err).NotTo(HaveOccurred(), out)
-		headers := echoed(out)
+		headers := echoed(body)
 		Expect(headers).To(HaveKeyWithValue("host", echoHost))
 		Expect(headers).To(HaveKeyWithValue("x-api-key", injected))
 		Expect(out).NotTo(ContainSubstring("evil.example"))
@@ -139,23 +145,23 @@ for (let i = 0; i < 3; i++) {
 }
 console.log("failed", last?.cause?.code ?? last?.message);
 process.exit(1);`
-		out, err := agent("-e", "NODE_USE_ENV_PROXY=1", nodeImage, "node", "--input-type=module", "-e", script)
+		stdout, out, err := agent("-e", "NODE_USE_ENV_PROXY=1", nodeImage, "node", "--input-type=module", "-e", script)
 		Expect(err).NotTo(HaveOccurred(), out)
-		body, ok := strings.CutPrefix(strings.TrimSpace(out), "200 ")
+		body, ok := strings.CutPrefix(strings.TrimSpace(stdout), "200 ")
 		Expect(ok).To(BeTrue(), out)
 		Expect(echoed(body)).To(HaveKeyWithValue("x-api-key", injected))
 		Expect(out).NotTo(ContainSubstring(inject.Placeholder))
 	})
 
 	It("is not trusted for the credential host by a client without the session CA", func() {
-		out, err := agent(curlImage, "curl", "-sS", "--max-time", "20", "https://"+echoHost+"/headers")
+		_, out, err := agent(curlImage, "curl", "-sS", "--max-time", "20", "https://"+echoHost+"/headers")
 		Expect(err).To(HaveOccurred(), out)
 		Expect(out).To(ContainSubstring("SSL certificate problem"))
 		Expect(out).NotTo(ContainSubstring(injected))
 	})
 
 	It("leaves a host without a credential a plain tunnel, with the site's own certificate", func() {
-		out, err := trustedCurl(slices.Concat([]string{"-sS", "-v", "-o", "/dev/null", "--fail", "--max-time", "20"}, retry,
+		_, out, err := trustedCurl(slices.Concat([]string{"-sS", "-v", "-o", "/dev/null", "--fail", "--max-time", "20"}, retry,
 			[]string{"https://example.com/"})...)
 		Expect(err).NotTo(HaveOccurred(), out)
 		Expect(out).To(ContainSubstring("issuer:"))
@@ -163,14 +169,14 @@ process.exit(1);`
 	})
 
 	It("does not let the session CA vouch for the tunnelled host", func() {
-		out, err := agent("-e", "CURL_CA_BUNDLE="+pod.AgentCACert, curlImage,
+		_, out, err := agent("-e", "CURL_CA_BUNDLE="+pod.AgentCACert, curlImage,
 			"curl", "-sS", "-o", "/dev/null", "--max-time", "20", "https://example.com/")
 		Expect(err).To(HaveOccurred(), out)
 		Expect(out).To(ContainSubstring("SSL certificate problem"))
 	})
 
 	It("keeps the key out of the agent: not in its environment, not in its mounts", func() {
-		out, err := agent(curlImage, "sh", "-c", "env; cat /run/riotbox-egress/ca.crt; ls /etc/riotbox-egress-secrets")
+		_, out, err := agent(curlImage, "sh", "-c", "env; cat /run/riotbox-egress/ca.crt; ls /etc/riotbox-egress-secrets")
 		Expect(err).To(HaveOccurred(), "the secrets dir must not exist in the agent")
 		Expect(out).To(ContainSubstring("RIOTBOX_E2E_KEY=" + inject.Placeholder))
 		Expect(out).To(ContainSubstring("BEGIN CERTIFICATE"))
