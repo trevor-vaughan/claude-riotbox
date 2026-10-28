@@ -30,6 +30,10 @@ The bash functions these replaced keep their names as adapters. Overlay apply,
 `record_projects` (which bash runs under the session's `.migrate.lock`), the
 other locks and the rest of `mount-projects.sh` are still bash.
 
+The egress proxy (`RIOTBOX_EGRESS=1`) was written in Go from the start; only
+its launch gate, start-up glue, teardown trap and command-line parsing are bash
+([egress.md](egress.md)).
+
 ## Layout
 
 | Path | What it is |
@@ -41,6 +45,7 @@ other locks and the rest of `mount-projects.sh` are still bash.
 | `internal/lock/` | `Acquire`: the `flock(2)` lock on a `.migrate.lock`, with the wait message |
 | `internal/realpath/` | `Canonical` and `Lexical`, ports of GNU `realpath -m` and `realpath -ms` |
 | `internal/engine/` | `Scan` (every live container's read-write mounts), `Reaches`, `Overlaps`, `RefuseIfRunning`, `OverlayUsers` |
+| `internal/egress/policy/`, `envoyconfig/`, `state/`, `pod/` | The egress proxy: the `egress.conf` grammar, groups and resolution, Envoy's JSON, one session's host directory, and the engine side. See [egress.md](egress.md#where-the-code-is) |
 | `internal/migrate/` | `SessionState`, `FailedState`, `AllSessions`, `HeadroomNotice`, `SessionKey`, and the `.migrated` marker. The list of migration pairs, which the bash kept in `SESSION_STATE_MIGRATIONS`, is `entries` in `migrate.go` |
 | `scripts/build-core.sh` | The one definition of a local build, shared by `task go:build` and `install.sh --build` |
 | `scripts/lib/riotbox-core.sh` | Locates the binary and refuses a missing or mismatched one (`riotbox_core_require`, `riotbox_core_problem`) |
@@ -58,7 +63,9 @@ Every verb parses its arguments the same way (`parseArgs` in
 
 - Options come first. Each takes the next argument as its value verbatim,
   whatever it starts with. A verb's options must each be given exactly once,
-  except `migrate-key`'s `--legacy-key`, which may repeat.
+  except `migrate-key`'s `--legacy-key`, which may repeat, and the options a
+  verb marks optional (the `egress-*` verbs' `--session` and `--save-to`),
+  which may be left out but not repeated.
 - The positionals start at the first argument that does not start with `-`,
   or after `--`. An argument that starts with `-` before them is read as an
   option, so a positional that may start with `-` needs the `--`.
@@ -79,6 +86,13 @@ Every verb parses its arguments the same way (`parseArgs` in
 | `migrate-all` | `--lib-dir` | `<data-dir> <state-root>` |
 | `headroom-notice` | `--lib-dir` | `<project-dir> <state-dir>` |
 | `migrate-key` | `--lib-dir`, `--engine`, `--data-dir`, `--state-root`, `--legacy-key` (repeatable) | `<dir>...` (at least one) |
+| `egress-up` | `--engine`, `--state-root`, `--system-conf`, `--user-conf`, `--image`, `--session-key`, `--owner-pid`, `--os-dir` (optional), `--project` (repeatable, optional) | `<name>` |
+| `egress-down` | `--engine`, `--state-root` | `<name>` |
+| `egress-sweep`, `egress-list` | `--engine`, `--state-root` | none |
+| `egress-allow`, `egress-deny` | `--engine`, `--state-root`, `--system-conf`, `--user-conf`, `--session` (optional), `--save-to` (optional) | `<entry>` or `@group` |
+| `egress-strict` | `--engine`, `--state-root`, `--system-conf`, `--user-conf`, `--session` (optional), `--save-to` (optional) | `on`, `off` or `clear` |
+| `egress-groups` | `--engine`, `--state-root`, `--system-conf`, `--user-conf`, `--os-dir` (optional) | none |
+| `egress-reload` | `--engine`, `--state-root`, `--system-conf`, `--user-conf`, `--session` (optional) | none |
 
 Three exit codes hold for every verb:
 
@@ -161,6 +175,29 @@ A container "can write" a path when its mount source is the path or inside it.
 For a container with the `riotbox.session` label, a source above the path
 counts too. A name is the container's name, or the first 12 characters of its
 ID when it has none.
+
+### Egress verbs
+
+The verbs behind `RIOTBOX_EGRESS=1` and `riotbox egress`. `libexec/egress-lib.sh`
+and `libexec/egress.sh` call them; [egress.md](egress.md) has the topology,
+the state dir and the invariants. `--state-root` is `RIOTBOX_EGRESS_ROOT`
+(`${XDG_DATA_HOME}/riotbox-egress`), `<name>` the agent container's name, and
+`--system-conf`/`--user-conf` the two `egress.conf` paths. Failures print
+`riotbox-core: egress: <error>` on stderr and exit 1. `--save-to` must name
+the `--system-conf` or `--user-conf` file (compared after `filepath.Clean`),
+the only files checked before anything changes; any other path is a usage
+error (exit 2). `libexec/egress.sh` always passes the user file.
+
+| Invocation | Behaviour |
+|---|---|
+| `riotbox-core egress-up … [--os-dir <dir>] [--project <dir>]... <name>` | Reads on stdin, at most 1 MiB, the agent's `egress_hosts`, then optionally a NUL and the variables the agent would get from the host as NUL-terminated `NAME=VALUE` records (`inject.ParseInput`; a record without its NUL, one that is not `NAME=VALUE`, or a repeated name is exit 1 before anything is created, and the error names the record by number, a repeated one also by its name, never its value). Injects the provider keys among them (`internal/egress/inject`), prints `egress: these keys still enter the container: …` on stderr for the rest, and drops the injected names from its own environment. With a key to inject it needs a private tmpfs runtime dir (`$XDG_RUNTIME_DIR`, else `/run/user/<uid>`: a 0700 dir the user owns on tmpfs; `state.RuntimeBase`) and exits 1 before creating anything when there is none, saying why each was refused. Loads the OS plugins in `--os-dir` (`state.LoadOS`, [os-contract.md](os-contract.md)) and exits 1 before creating anything when one is invalid; none when the option is left out. Saves their groups as the session's `os.conf`. Records the `--project` dirs in `projects.json` for `egress-list`, writes the session's secrets (in `<runtime>/riotbox-egress/<name>/secrets`), CA certificate and injection record, starts the session's networks and Envoy, waits for readiness, and prints the agent's engine flags, one per line (with injected keys also the CA mount, `NODE_EXTRA_CA_CERTS`, `RIOTBOX_EGRESS_CA` and `-e NAME=riotbox-egress-placeholder` per key). Removes what it created, secrets included, when a step fails. A `--owner-pid` that is not a positive integer is a usage error (exit 2). |
+| `riotbox-core egress-down --engine <engine> --state-root <dir> <name>` | Removes the session's agent and proxy containers and its networks, each only if present, then its secrets dir under every qualifying runtime dir (and any an earlier build left in the state dir), and prints `egress: N denied request(s), see <log>` when any were. Carries on past a failed step; exit 1 if any failed. |
+| `riotbox-core egress-sweep --engine <engine> --state-root <dir>` | Removes the egress objects of sessions whose launch is gone, the secrets (on the runtime tmpfs and in the state dir) of any session no running one uses once it has been idle for an hour, and state dirs unused for 7 days. It cleans under every qualifying runtime dir (`$XDG_RUNTIME_DIR` and `/run/user/<uid>`); without one, the state dirs' secrets only. Leaves alone anything it cannot prove orphaned. |
+| `riotbox-core egress-list --engine <engine> --state-root <dir>` | For each running session: its name, then `started:` (its proxy's start, local time), `owner:` (`PID <n>` of the launch), one `project:` line per recorded project dir, `log:` and the access log path, `strict:` and the strict setting it enforces with its source (`on (user conf)`, `off (default)`; `unknown` for a session an older release started or an unrecognised record), one `inject:` line per injected key (`VARIABLE → host`, never a value), and one `allow:` line per entry it enforces. Each value is `unknown` when the engine or the session did not record it; paths are quoted as `printf %q` would when they hold unsafe bytes. `No egress sessions are running.` when none. A `projects.json` or injection record that cannot be read shows `project: unreadable` or `inject:  unreadable`, says why on stderr, and does not fail the list. |
+| `riotbox-core egress-allow\|egress-deny … [--session <name>] [--save-to <file>] [--] <entry \| @group>` | Records the entry or group in the session overlay (a group as its reference, re-resolved at every reload; the changed line goes last, so the latest command wins) and applies it live, under the session's lock, undoing the overlay change if the reload fails. Without `--session` it acts on the only running session, and fails when there are none or several. An `@group` no file or built-in defines is refused before anything changes. `--save-to` also writes it into that conf file's last `[allow]` section, replacing any line for it. `deny` notes each host (each member, for a group) a wildcard still allows. An empty `--session` is a usage error (exit 2); a leading `-` is refused. |
+| `riotbox-core egress-reload … [--session <name>]` | Re-reads the conf files into the named session, or into every running one. Exit 1 if any failed; the others are still reloaded. |
+| `riotbox-core egress-strict … [--session <name>] [--save-to <file>] [--] on\|off\|clear` | Sets (`on`, `off`) or removes (`clear`) the session overlay's strict setting and applies it live, as `egress-allow` does, printing `egress: <name>: strict <on\|off> (<source>)`. Prints the lock-out warning on stderr whenever the session is left strict without all of `@agent`, `clear` falling back to a strict conf file included. `--save-to` writes `strict = on\|off` into that file's preamble, replacing any strict line, or with `clear` removes it. Any other positional is a usage error (exit 2). |
+| `riotbox-core egress-groups --engine <engine> --state-root <dir> --system-conf <file> --user-conf <file> [--os-dir <dir>]` | Prints every group, sorted, as `@name (<source>)` (`built-in`, `os`, `system conf`, `user conf`) and one indented host per line, references expanded; `@agent` once per running session as `@agent (<session>)` with that session's agent hosts, or `@agent (per session)` when none runs. Exit 1 when a conf file does not resolve, an OS plugin in `--os-dir` is invalid, or the engine cannot list sessions. |
 
 ## Calling it from bash
 

@@ -82,7 +82,9 @@ run_venom() {
 		--var shared_helpers="${RIOTBOX_DIR}/tests/lib/wrapper-shared.sh" \
 		--var sync_helpers="${RIOTBOX_DIR}/tests/lib/sync-settings-test-helpers.sh" \
 		--var startup_helpers="${RIOTBOX_DIR}/tests/lib/startup-scripts-test-helpers.sh" \
-		--var release_helpers="${RIOTBOX_DIR}/tests/lib/release-test-helpers.sh"
+		--var release_helpers="${RIOTBOX_DIR}/tests/lib/release-test-helpers.sh" \
+		--var egress_helpers="${RIOTBOX_DIR}/tests/lib/egress-test-helpers.sh" \
+		--var e2e_helpers="${RIOTBOX_DIR}/tests/lib/egress-e2e-helpers.sh"
 }
 
 filter="${*:-}"

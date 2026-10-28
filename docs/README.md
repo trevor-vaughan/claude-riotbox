@@ -12,7 +12,9 @@ they are the way they are.
 |---|---|
 | Add a new CLI agent (aider, goose, codex, …) | [dev/adding-an-agent.md](dev/adding-an-agent.md) |
 | Look up what a manifest verb must do | [dev/agent-contract.md](dev/agent-contract.md) |
+| Add or change an OS plugin (a distro's package mirrors in egress mode) | [dev/os-contract.md](dev/os-contract.md) |
 | Understand how Context Mode is wired | [dev/context-mode.md](dev/context-mode.md) |
+| Change how egress mode (`RIOTBOX_EGRESS=1`) builds, enforces or updates its proxy | [dev/egress.md](dev/egress.md) |
 | Change `scripts/mount-projects.sh` without breaking it | [dev/mount-projects.md](dev/mount-projects.md) |
 | Build, test or release `riotbox-core`, or change how session keys are computed | [dev/riotbox-core.md](dev/riotbox-core.md) |
 | Find out *why* something was built this way | [dev/decisions/](dev/decisions/) |
@@ -25,6 +27,8 @@ docs/
     adding-an-agent.md   how-to      — the three steps, with a worked example
     agent-contract.md    reference   — every manifest verb, in detail
     context-mode.md      explanation — how the Context Mode integration works today
+    egress.md            reference   — the egress proxy: topology, security argument, reloads
+    os-contract.md       reference   — OS plugins: each distro's mirrors and repo rewrite
     mount-projects.md    reference   — invariants you must not break
     riotbox-core.md      reference   — the Go binary: verbs, build, tests, release
     decisions/           records     — why we adopted, rejected, or abandoned things

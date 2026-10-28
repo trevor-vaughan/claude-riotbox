@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Fake podman for tests/egress-launch.venom.yml and tests/egress-cli.venom.yml.
+# It appends each call's argv, one line per call, to ${FAKE_ENGINE_LOG}, and
+# answers just enough for launch.sh and riotbox-core's egress verbs:
+#   network exists                 exit 0 (exit 1 with FAKE_NETWORK_ABSENT=1)
+#   container inspect … Networks … <name>-egress
+#                                  prints the proxy's networks: 10.89.0.1
+#                                  on <name>-int
+#   container inspect              prints "true": the proxy is running
+#   network ls                     prints [], and writes its own environment
+#                                  (the sweep's) to
+#                                  ${FAKE_ENGINE_LOG}.sweep-environ
+#   ps … label=riotbox.egress-role=gateway
+#                                  prints ${FAKE_GATEWAYS_JSON:-[]}
+#   run -d … (the Envoy proxy)     writes Envoy's readiness line into the host
+#                                  dir mounted at /var/log/riotbox-egress, and
+#                                  its own environment to
+#                                  ${FAKE_ENGINE_LOG}.proxy-environ
+#   run … (the agent)              writes its argv to ${CAPTURE}, the agent's
+#                                  environment as podman would set it from -e
+#                                  (NAME=VALUE as given, a bare NAME from this
+#                                  process's environment) to ${CAPTURE}.env,
+#                                  its own environment to ${CAPTURE}.environ,
+#                                  sleeps ${FAKE_AGENT_SLEEP:-0}s, exits
+#                                  ${FAKE_AGENT_EXIT:-0}
+#   anything else (image exists, network create, stop, rm, the
+#   container-name probe `ps`, the sweep's `ps --filter name=…`)
+#                                  exit 0, no output: no agent runs
+# With FAKE_FAIL_ON set, a call whose argv starts with it fails (exit 125).
+# Named podman because egress mode refuses any other engine.
+set -euo pipefail
+printf '%s\n' "$*" >>"${FAKE_ENGINE_LOG}"
+if [[ -n "${FAKE_FAIL_ON:-}" && "$*" == "${FAKE_FAIL_ON}"* ]]; then
+	echo "fake engine: ${FAKE_FAIL_ON} failed" >&2
+	exit 125
+fi
+case "${1:-} ${2:-}" in
+"network exists")
+	[[ "${FAKE_NETWORK_ABSENT:-}" != 1 ]] || exit 1
+	exit 0
+	;;
+"container inspect")
+	if [[ "${4:-}" == *NetworkSettings.Networks* ]]; then
+		printf '{"%s-int":{"IPAddress":"10.89.0.1"}}\n' "${5%-egress}"
+		exit 0
+	fi
+	echo true
+	exit 0
+	;;
+"network ls")
+	env >"${FAKE_ENGINE_LOG}.sweep-environ"
+	echo '[]'
+	exit 0
+	;;
+*) ;;
+esac
+case "${1:-}" in
+ps)
+	if [[ " $* " == *" label=riotbox.egress-role=gateway "* ]]; then
+		printf '%s\n' "${FAKE_GATEWAYS_JSON:-[]}"
+	fi
+	;;
+run)
+	if [[ "${2:-}" == -d ]]; then
+		prev=""
+		for arg in "$@"; do
+			if [[ "${prev}" == -v && "${arg}" == *:/var/log/riotbox-egress:rw,z ]]; then
+				echo "[info] all dependencies initialized. starting workers" >>"${arg%%:*}/envoy.log"
+			fi
+			prev="${arg}"
+		done
+		env >"${FAKE_ENGINE_LOG}.proxy-environ"
+		exit 0
+	fi
+	printf '%s\n' "$*" >"${CAPTURE}"
+	prev=""
+	for arg in "$@"; do
+		if [[ "${prev}" == -e ]]; then
+			if [[ "${arg}" == *=* ]]; then
+				printf '%s\n' "${arg}"
+			else
+				printf '%s=%s\n' "${arg}" "${!arg:-}"
+			fi
+		fi
+		prev="${arg}"
+	done >"${CAPTURE}.env"
+	env >"${CAPTURE}.environ"
+	sleep "${FAKE_AGENT_SLEEP:-0}"
+	exit "${FAKE_AGENT_EXIT:-0}"
+	;;
+*) ;;
+esac
+exit 0

@@ -82,6 +82,26 @@ source "${RIOTBOX_SCRIPT_DIR}/lib/overlay-ignore.sh"
 # neither can own the writer.
 # shellcheck source=../scripts/lib/json-write.sh disable=SC1091
 source "${RIOTBOX_SCRIPT_DIR}/lib/json-write.sh"
+# The egress prompt section (RIOTBOX_EGRESS=1), sourced ahead of the agent
+# loop below: each agent's container_setup calls egress_prompt_apply or
+# egress_prompt_apply_shared on the prompt file that agent reads.
+# shellcheck source=../scripts/lib/egress-prompt.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/lib/egress-prompt.sh"
+# Credential injection (RIOTBOX_EGRESS=1 with a key the proxy injects): give
+# curl and Python a CA bundle that also holds the session CA. Exported here,
+# before any agent starts, so every agent and its children inherit it. It
+# warns and returns 1 when it cannot; the agents still trust the CA through
+# NODE_EXTRA_CA_CERTS, so the session starts either way.
+# shellcheck source=../scripts/lib/egress-trust.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/lib/egress-trust.sh"
+egress_trust_apply
+# In an egress session, point the distro's package manager at its own HTTPS
+# mirror (os/<ID>/), which the @<ID> group allows: stock repo configs use
+# metalinks or plain HTTP, which the proxy refuses. It warns and returns 1
+# when it cannot; the session starts either way.
+# shellcheck source=../scripts/lib/egress-os.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/lib/egress-os.sh"
+egress_os_apply "${RIOTBOX_SCRIPT_DIR}/os/registry.sh"
 # Elapsed-time reporting for slow startup steps. Sourced ahead of
 # plugin-setup.sh, which is the only caller today; it lives here rather than in
 # that file for the same reason json-write.sh does — the entrypoint composes all

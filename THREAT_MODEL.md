@@ -69,7 +69,7 @@ _No tool data recorded_
 
 | Area                                                                     | Reason                                                                                                                                                                                                                                                                                                                                                                                  | Gap Type | Recommended Action |
 |--------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|--------------------|
-| Runtime and dynamic behaviour                                            | Static analysis only -- cannot assess runtime container escape, memory corruption, or dynamic network behaviour                                                                                                                                                                                                                                                                         |          |                    |
+| Runtime and dynamic behaviour                                            | Static analysis only -- cannot assess runtime container escape, memory corruption, or dynamic network behaviour (the egress proxy's boundary is exercised dynamically by tests/egress-e2e.venom.yml; see "Egress proxy (opt-in feature)")                                                                                                                                               |          |                    |
 | Social engineering and physical vectors                                  | Out of scope for static code-level threat modelling                                                                                                                                                                                                                                                                                                                                     |          |                    |
 | Third-party and vendor code not in the repository                        | Claude Code npm package internals, podman/docker runtime, and CentOS base image vulnerabilities are not assessed                                                                                                                                                                                                                                                                        |          |                    |
 | Anthropic API authentication flow                                        | OAuth token refresh logic is inside the Claude Code npm binary; only the credential file handling is assessed                                                                                                                                                                                                                                                                           |          |                    |
@@ -133,6 +133,10 @@ flowchart LR
     HOST_PODMAN_SOCK["User podman.socket (XDG_RUNTIME_DIR/podman/podman.sock)"]
   end
 
+  subgraph EGRESSPOD["Egress proxy (RIOTBOX_EGRESS=1 only)"]
+    EGRESSPROXY["Envoy egress proxy"]
+  end
+
   subgraph CONTAINER["Rootless Container (podman/docker)"]
     ENTRY["entrypoint.sh"]
     WRAPPER["agent-wrapper.sh"]
@@ -168,6 +172,8 @@ flowchart LR
   ENTRY -->|"calls"| SBRANCH
   WRAPPER -->|"exec --dangerously-skip-permissions"| CLAUDE
   CLAUDE -->|"HTTPS API calls"| ANTHROPIC
+  CLAUDE -->|"egress mode: HTTPS CONNECT only"| EGRESSPROXY
+  EGRESSPROXY -->|"allowlisted host:port only"| ANTHROPIC
   CLAUDE -->|"reads/writes"| PROJ
   BUILDSH -->|"generates build args"| DOCKERFILE
   DOCKERFILE -->|"fetches tools via"| CURLSH
@@ -1206,6 +1212,189 @@ above `publish` is the authoritative list.
 can publish a validly signed bad binary. The build provenance attestation
 (`gh attestation verify`) records which workflow run built each artifact; it
 does not prevent this.
+
+## Egress proxy (opt-in feature)
+
+With `RIOTBOX_EGRESS=1` the agent container is attached only to a per-session
+podman `--internal` network and reaches the network through a per-session
+Envoy proxy that allows HTTPS CONNECT to an allowlist of `host:port` pairs
+(unless strict mode is on, the built-in `@registries` group and the active
+agent's API hosts; the system and user `egress.conf`, which can name
+built-in or user-defined host groups; and a live per-session overlay) and answers everything else
+`403`, plain HTTP included. Design and evidence: `docs/dev/egress.md`,
+`docs/dev/decisions/egress-proxy.md`. In the data flow diagram this is the
+egress proxy; without the flag the agent's HTTPS goes out directly.
+
+- **Boundary.** `--internal` is enforced by routing only; a process with
+  `CAP_NET_ADMIN` could add a route around the proxy. The agent runs with
+  `--cap-drop=NET_ADMIN,NET_RAW`, its normal and nested capability sets lack
+  `NET_ADMIN`, and the launch refuses, before any side effect: docker; socket
+  mode; `RIOTBOX_NETWORK=none`; `RIOTBOX_EXTRA_ARGS` that could re-grant
+  capabilities, change networks or expose a host root (`--privileged`,
+  `--cap-add`, `--network`, `--net`, `--pod`, `--userns`, `--rootfs`,
+  `--volumes-from`), or mount a host file unchecked (`--init-path`); and `RIOTBOX_EXTRA_ARGS` mounts whose host source is a
+  Unix socket, or a directory (or a path that does not exist yet) that is,
+  lies under, or is an ancestor of the user runtime dir (`/run/user/<uid>`,
+  and `$XDG_RUNTIME_DIR` when absolute), where the rootless podman socket
+  lives. A regular file there is allowed: it cannot carry a socket. A `--mount` with `volume-opt=` (which can bind
+  any host path), `type=glob` or a quoted value is refused as uncheckable.
+  The same mount check covers `mounts.conf` entries, project directories and
+  credential files, so a `mounts.conf` line naming a socket or the runtime
+  dir stops the launch.
+  Verified by `tests/egress-e2e.venom.yml` on real podman, with a positive
+  control, and by `tests/egress-launch.venom.yml` for the gate.
+- **No DNS channel.** The internal network is created with `--disable-dns`
+  and the agent runs with `--dns none`, so it has no resolver to send a
+  query to (some aardvark-dns and CNI versions forward an internal network's
+  queries upstream, which would carry data past the proxy). It reaches the
+  proxy by name through an `--add-host` entry holding the proxy's address,
+  read from the engine and accepted only as an IP literal. Only Envoy
+  resolves names, through its external network. Verified by
+  `tests/egress-e2e.venom.yml`: no `resolv.conf`, no outside name resolves,
+  and no nameserver the agent could try answers, with a positive control.
+- **Policy integrity.** Allowlist files are host-side, mounted read-only into
+  the proxy only; the user config dir reaches the agent read-only. The
+  per-session state root (`riotbox-egress/`, every session's live-reloaded
+  `rds.json` and access logs) is writable by the host user, whom the agent
+  runs as; wherever an agent mount reaches it (`riotbox ~`, a `mounts.conf`
+  entry for `~/.local/share`, `RIOTBOX_EXTRA_ARGS`), the launch mounts an
+  empty, root-owned tmpfs over it at that container path (`notmpcopyup`, so
+  nothing is copied in), and refuses a mount of a file inside it or a `:O`
+  `upperdir=`/`workdir=` in or above it (issue #48). With `RIOTBOX_NESTED=1`
+  the agent holds `CAP_SYS_ADMIN` in a namespace where the mask is not
+  locked and could unmount it, so there any mount that would need a mask is
+  refused instead. With that, the agent cannot widen its running session's
+  allowlist; the OS groups a later launch reads come from the install tree,
+  which has its own exposure (see OS package mirrors). Verified by
+  `tests/egress-e2e.venom.yml` on real podman. Entries are validated (RFC 1123 names, ASCII
+  checked before case folding, no IP literals in any resolver-readable form)
+  before being serialised to Envoy JSON with `encoding/json`.
+- **Strict mode and groups.** `strict` in either `egress.conf`, or
+  `riotbox egress strict --enable` for one session, drops the implicit
+  registries and agent hosts, so a session reaches only what is listed; the
+  launch warns, without refusing, when that leaves out the agent's own API.
+  Groups are named host lists resolved on the host before any value reaches
+  Envoy, with the same validation as entries. Built-in group contents can
+  change between releases. `@search` and `@docs` widen the reach of
+  exfiltration the proxy cannot see into: a search query or a Q&A post
+  carries whatever the agent writes in it. Claude's `@agent` includes
+  `mcp-proxy.anthropic.com`, which carries the connectors the user added
+  on claude.ai, so a session can read and act on those accounts (mail,
+  files, calendars); `-mcp-proxy.anthropic.com` in `egress.conf` removes it.
+- **Denial text.** Every 403 the proxy sends carries a `text/plain` body and
+  an `x-riotbox-egress: denied <authority>` header; a refused CONNECT's body
+  names the session and the `riotbox egress allow` command, and the agent's
+  system prompt says the same. The authority is chosen by the agent, the
+  untrusted party, and reflected in the header and the body, so a
+  prompt-injected agent can make the command it relays name a host of its
+  choosing. The listener speaks HTTP/1 only (`codec_type: HTTP1`): with
+  Envoy's default it also took cleartext HTTP/2, whose CONNECT passed
+  `; $ ( ) ' &` and the other RFC 3986 sub-delimiters into the body's
+  `riotbox egress allow` line. Checked against the pinned Envoy (1.40.1),
+  an HTTP/2 connection is now refused with a bare 400, and an HTTP/1.1
+  CONNECT whose target holds anything but letters, digits, `-`, `.` and
+  `:` is refused with a bare 400 too, so a refused CONNECT's text holds
+  only those. A plain-HTTP 403 still reflects the `Host` header, which may
+  hold such characters, but its body holds no command. The text tells the
+  user to check the host before running it.
+  Neither holds a secret, and neither widens the allowlist by itself: only
+  the user, on the host, can run the command. The prompt section names the session only after checking it is a
+  session name, so it cannot carry forged prompt text.
+- **Proxy hardening.** Digest-pinned upstream distroless image, non-root
+  (keep-id), read-only rootfs, all capabilities dropped, no-new-privileges,
+  no admin interface. Its log files are treated as untrusted by the host:
+  opened without following links, regular files only, bounded reads.
+- **Lifecycle.** The proxy is removed when the launch exits; INT and HUP are
+  ignored during teardown. A proxy left by a killed launch is removed by the
+  next egress launch's sweep, which spares any session whose owner is alive,
+  in another PID namespace, or not provably dead, and any whose agent
+  container still runs.
+- **Credential injection.** A key in the provider table
+  (`internal/egress/inject/providers.go`) reaches `riotbox-core` only over
+  a pipe, is dropped from its environment before it runs the engine (and
+  from the orphan sweep's, which runs before the placeholders are
+  exported), and lives only in the 0600 files of a 0700 secrets dir on
+  tmpfs, `<runtime>/riotbox-egress/<session>/secrets` (`$XDG_RUNTIME_DIR`,
+  else `/run/user/<uid>`, each only when it is a 0700 directory the user
+  owns on tmpfs; `state.RuntimeBase`), so it is kept on tmpfs and never
+  written to persistent disk, unless the system swaps them out (use encrypted swap). With a key to inject and no such directory, the launch fails
+  before creating anything. The directory is mounted read-only into the
+  proxy alone, which runs with `--ulimit core=0` so a crash cannot dump the
+  keys, and is deleted at teardown, on a failed start and by the sweep
+  (after an hour idle when the session is gone; the sweep also removes
+  secrets an earlier build left in the persistent state dir). The mount
+  gate refuses any agent mount of the runtime dirs or an ancestor of them,
+  so a broad project (`riotbox ~`) cannot expose the keys. The agent holds
+  `riotbox-egress-placeholder`; the proxy terminates TLS for those hosts
+  alone, while the allowlist allows them, with a per-session CA (30 days,
+  critical name constraints for those hosts, every IP address excluded,
+  private key never written) and overwrites the key's header. The
+  upstream `Host` is pinned to the provider, so the key cannot be fronted
+  to another domain. No log records request headers. The launch names
+  every key that still enters the container, and refuses
+  `RIOTBOX_EXTRA_ARGS` that would set an injected key (`-e`/`--env
+  NAME=…`, any `--env-file`, any `--secret` with `type=env`) or share a
+  PID namespace (any `--pid` but `private`): `launch.sh`, a host process,
+  keeps the real keys in its environment for the session, which an agent
+  in the host's PID namespace could read from `/proc/<pid>/environ`. Keys
+  are read once at launch. Verified by `tests/egress-launch.venom.yml` (no key
+  on any engine argv or environment, or in the agent), the
+  `internal/egress` specs, and `task test:egress-e2e` against real
+  podman and Envoy.
+- **Residual risks.** Exfiltration to an allowed host remains possible (the
+  proxy does not inspect TLS, except to the credential hosts). An allowed
+  name, especially under a wildcard, can resolve to a loopback or private
+  address (DNS rebinding, `*.nip.io` style names, a subdomain whose DNS
+  someone else controls); Envoy then connects to it from its own network
+  namespace, so the agent can reach whatever that namespace can route to:
+  the host's LAN, pasta's mapping of the host itself, and link-local cloud
+  metadata addresses, on any port the allowlist's name accepts. Name
+  validation cannot prevent this; keep wildcards narrow. API keys in the
+  provider table no longer enter the agent container (CT-012); other keys,
+  keys whose base URL points elsewhere, and OAuth logins still do, and a
+  hijacked agent can still spend an injected key's quota through the proxy.
+  The launch's pass-through notice names the forwarded variables only: a
+  key added by a bare `-e NAME` in `RIOTBOX_EXTRA_ARGS` enters unnamed, and
+  a base URL set there is not seen by the injection decision (the agent
+  sends the placeholder to it). A project that holds the egress state root
+  (`riotbox ~`) gets a tmpfs mask over it (see Policy integrity), and the
+  keys are not under that root in any case.
+  A provider that reflected request headers in its responses would show the
+  agent the real key; Anthropic and OpenAI, the two checked, do not reveal
+  it (OpenAI echoes `sk-…****`); the other providers were not checked.
+  Forwarded `HTTP(S)_PROXY` and `NO_PROXY` are always replaced by egress's
+  values. With injected keys, a forwarded `NODE_EXTRA_CA_CERTS` is replaced
+  too (`libexec/egress-lib.sh`) and `SSL_CERT_FILE`, `CURL_CA_BUNDLE` and
+  `REQUESTS_CA_BUNDLE` are overwritten (`scripts/lib/egress-trust.sh`), so a
+  corporate or TLS-inspection CA forwarded through any of them is not
+  trusted: TLS-inspecting networks are unsupported in that mode. Envoy
+  verifies upstream TLS only for the intercepted credential hosts; every
+  other host is a tunnel the agent's own client verifies.
+  `RIOTBOX_EXTRA_ARGS` is trusted user configuration and the gate guards
+  against mistakes, not a hostile author; two gaps are known and accepted: a
+  mounted directory outside the runtime dir that contains a Unix socket, and
+  a pre-existing named volume created with a bind option, would each give
+  the agent that socket's or path's reach undetected. Request logs
+  (`access.log`) record requested hostnames and are kept, in a 0700
+  directory, for at least 7 days after last use; the next egress launch
+  after that deletes them.
+- **OS package mirrors.** At session start the entrypoint, as root, rewrites
+  the distro's repo config to its own HTTPS mirrors (`os/<ID>/`,
+  `docs/dev/os-contract.md`), so the OS group (`@centos`, ...) can allow
+  them. A rewritten dnf repo is no longer checked against its metalink's
+  checksum; packages stay GPG-checked and TLS to the project's mirror stands
+  in. apt sources are switched to HTTPS only when the image has a CA bundle;
+  otherwise the rewrite is refused, never TLS verification disabled. The
+  plugins run from the image's `~/.riotbox/os/`, which the agent's user owns,
+  but they run before any agent starts, and that user already has
+  passwordless `sudo`. Every rewrite refuses a file that resolves outside
+  its root. On the host, each egress launch defines `@<ID>` from
+  `${ROOT_DIR}/os/*/egress-hosts`, which lives in the install tree beside
+  `libexec/` and has the same exposure: a session that can write that tree
+  (`riotbox ~` over a rootless install in `~/.local/share/riotbox`, or a
+  RiotBox checkout run on itself) can add hosts to an OS group for later
+  launches that allow it. A running session keeps the `os.conf` snapshot
+  taken at its launch, in the masked state root.
 
 ## Findings
 
@@ -3129,7 +3318,7 @@ excluded from open findings._
 | CT-009 | Non-git-tracked files not covered by git-based backup mechanism                                                                              | libexec/checkpoint.sh                                      | 🟡 Medium   | 🟡 Medium | ⚠️ Risk Accepted     | libexec/checkpoint.sh builds each snapshot in a throwaway index (GIT_INDEX_FILE, seeded by copying the project index) and seals it with git commit-tree, so refs/riotbox/checkpoints/<timestamp> captures tracked, staged, unstaged AND untracked files; The snapshot writes no branch, no tag, and no worktree or index state, so nothing about the capture depends on the repository being quiescent; That ref plus every branch and tag is pushed to the bare store under ~/.local/share/riotbox/backups/; Residual gap: paths excluded by .gitignore or by the managed .git/info/exclude block are still not captured, by design -- the block lists runtime artifacts only, so a secret the project ignores is not backed up either; The container is disposable (--rm); ignored build artifacts can be regenerated                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | code_review |
 | CT-010 | Predictable session directory key enables pre-population attack                                                                              | scripts/mount-projects.sh                                  | 🟢 Low      | 🟢 Low    | 🚫 Not Applicable    | Session directory (~/.local/share/riotbox/<key>) is on the host filesystem, outside the container; mkdir -p + chmod 700 ensures correct ownership and permissions (mount-projects.sh lines 163-164); The session key is deterministic from project paths but pre-population requires host-level write access to ~/.local/share/riotbox/; A malicious project file inside the container cannot write to the host session directory                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | code_review |
 | CT-011 | LLM modifies or deletes host project files via read-write bind mount                                                                         | scripts/mount-projects.sh, container/agent-wrapper.sh      | 🟠 High     | 🟡 Medium | ⚠️ Risk Accepted     | Local bare backup outside the container mount tree, cloned with --no-hardlinks --dissociate so it shares no object files with the project and borrows none through objects/info/alternates (libexec/checkpoint.sh); Pre-session snapshot of tracked, staged, unstaged and untracked files at refs/riotbox/checkpoints/<timestamp>, built in a throwaway index and sealed with git commit-tree, so the user's branch, tag set, worktree, index and HEAD are untouched; riotbox checkpoints / checkpoint-tag / checkpoint-prune are the discovery and management surface, since git tag, git describe and git push never see the namespace and git log --all shows the commits without naming them; Session branches offered for interactive shell sessions; Container isolation from host credentials (.ssh, .gnupg, .kube, .aws); Non-git-repo warning when checkpoint protection is unavailable; RIOTBOX_READONLY=1 option for audit/read-only sessions; LIMITATION: the snapshot refs live INSIDE the read-write bind mount and are agent-writable -- the agent can delete or rewrite them like any other ref. Only the bare backup is beyond its reach, and only for stores cloned with --no-hardlinks --dissociate: a store created by an earlier RiotBox was hardlinked to the project, so writing an object under <project>/.git/objects corrupted the backup in place without ever touching the store directory, and that isolation guarantee was false until this change. See README 'Upgrading from checkpoint tags' for forcing a fresh clone                                                                                                                                                                                                                                                                                                                                                                                                                                         | code_review |
-| CT-012 | API key exposed to all container processes via environment variable                                                                          | libexec/launch.sh                                          | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Container is disposable (--rm) and single-purpose; API key only accessible within the container boundary; OAuth token alternative documented and supported; Container cannot access host network credentials                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | code_review |
+| CT-012 | API key exposed to all container processes via environment variable                                                                          | libexec/launch.sh, libexec/egress-lib.sh, internal/egress/inject | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Container is disposable (--rm) and single-purpose; API key only accessible within the container boundary; OAuth token alternative documented and supported; Container cannot access host network credentials; MITIGATED IN EGRESS MODE for keys in the provider table (internal/egress/inject/providers.go): with RIOTBOX_EGRESS=1 the agent holds the placeholder riotbox-egress-placeholder and the session's Envoy proxy overwrites the key's header on requests to that provider's host (upstream Host pinned to it), terminating TLS for those hosts only with a per-session CA (30 days, critical X.509 name constraints for those hosts, IP addresses excluded, private key never written) whose certificate alone is mounted into the agent; keys reach riotbox-core only over a pipe, are dropped from its environment before it runs the engine, and live only in the 0600 files of a 0700 secrets dir on tmpfs ($XDG_RUNTIME_DIR, else /run/user/<uid>, each only when a 0700 dir the user owns on tmpfs; a launch with keys and neither fails before creating anything), kept on tmpfs and never written to persistent disk unless the system swaps them out (use encrypted swap), mounted read-only into the proxy alone (core dumps off), deleted at teardown, on rollback and by the sweep (under every qualifying runtime dir); the mount gate refuses agent mounts of the runtime dirs and their ancestors; the launch refuses RIOTBOX_EXTRA_ARGS that would set an injected key (-e/--env NAME=..., --env-file, --secret type=env) or share a PID namespace (--pid other than private), as launch.sh keeps the keys in its environment for the session; RESIDUAL: keys not in the table, keys whose base URL points elsewhere, and every key outside egress mode still enter the container (the egress launch names them, except a key added by a bare -e NAME in RIOTBOX_EXTRA_ARGS; a base URL set there is not seen by the injection decision); OAuth logins (Claude .credentials.json, opencode and Pi auth.json) are unchanged; a hijacked agent can still spend an injected key's quota through the proxy; a provider that reflected request headers would show the agent the key (Anthropic and OpenAI, the two checked, do not reveal it; OpenAI echoes sk-…****; the other providers were not checked); with injected keys a corporate or TLS-inspection CA forwarded in NODE_EXTRA_CA_CERTS, SSL_CERT_FILE, CURL_CA_BUNDLE or REQUESTS_CA_BUNDLE is replaced, so TLS-inspecting networks are unsupported in that mode                                                                                                            | tests/egress-launch.venom.yml, internal/egress/inject, internal/egress/state, internal/egress/pod (e2e) |
 | CT-013 | Reduced isolation in nested container mode                                                                                                   | libexec/launch.sh, container/nested-podman-setup.sh        | 🟠 High     | 🟡 Medium | ⚠️ Risk Accepted     | Opt-in only via explicit RIOTBOX_NESTED=1 or nested-run/nested-shell commands; README documents the privileged trust model; Rootless podman still enforces user namespace isolation; No --privileged flag, but the flag set is broad. Outer launch passes: `--userns=keep-id:uid=$(id -u),gid=$(id -g),size=65536` and `--user $(id -u):$(id -g)` (the userns flag widens keep-id's 1-uid mapping so the inner has subordinate uids to subdivide; bind-mounted host paths still keep their host ownership. Both knobs are required for accounts where host uid != gid: the userns flag sets the kernel id_map, and the `--user` flag bypasses podman's `/etc/passwd` rewrite that otherwise stamps `llm:x:host_uid:host_uid` and starts the process with egid=host_uid, which silently breaks nested mode), `--device /dev/fuse` (storage), `--device /dev/net/tun` (pasta networking — host /dev/net/tun perms still gate access), `--security-opt label=disable` (SELinux off — container_t-to-container_t transitions are denied by default policy), `--security-opt unmask=ALL` (removes every default OCI mask AND readonly path on /proc and /sys; verified that narrower targets like `unmask=/proc/sys` or `unmask=…ping_group_range` do NOT work — inner crun fails on EROFS or `mount proc to proc`), `--cap-add=SYS_ADMIN` (inner crun's sethostname/mount calls; bounded by the outer userns). Inside the container nested-podman-setup.sh: (1) writes v3 file caps on newuidmap/newgidmap via `setcap -n $(id -u)` — v2 caps silently no-op when the process is not root in the host userns, which is the keep-id case; (2) writes /etc/sub{u,g}id as ranges that cover the outer's mapped uids minus uid 0 (kernel restriction) and minus the user's own uid (newuidmap restriction); (3) overrides ~/.config/containers/storage.conf to vfs (nested overlay/fuse-overlayfs makes inner crun fail on `mkdir /run/secrets`) | code_review |
 | CT-014 | LLM can bypass git guardrails via local operations not covered by receive.deny*                                                              | Dockerfile (git config), container/session-branch.sh       | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Local bare backup outside container mount tree (the LLM cannot access it); Pre-session snapshots at refs/riotbox/checkpoints/* survive history rewrites: they sit outside refs/heads and refs/tags, which is all that git reset --hard, rebase, commit --amend, branch -D and tag -d can move, so no ordinary destructive git operation touches them; A whole-repo rewrite tool that walks every ref under refs/ (git filter-repo, git filter-branch --all -- 'git rev-list --all' does include refs/riotbox) can still rewrite the local copy, which is why the backup copy is pushed without --force and cannot be overwritten by one (see CT-017); README documents: "The agent can rewrite git history. Force-pushes, rebases, and git reset --hard are all available"; README documents: "RiotBox includes several layers of protection, but none are foolproof"                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | code_review |
 | CT-015 | Runtime package installation by LLM including potentially malicious packages                                                                 | container/AGENTS.md (system prompt)                        | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Container isolation — packages cannot affect host; Container is disposable (--rm) — packages do not persist outside named cache volumes; System prompt: "You have FULL permission to install packages...Do not ask"; README: "The agent can install arbitrary packages...These run inside the container and can't affect the host"; Named cache volumes can be pruned (podman volume rm)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | code_review |

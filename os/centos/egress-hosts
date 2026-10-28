@@ -1,0 +1,9 @@
+# @centos: the mirrors dnf uses in a CentOS Stream egress session, once
+# os/centos/manifest.sh has pointed the repos at them. The RiotBox image is
+# CentOS Stream 10 with CRB and EPEL enabled. docs/dev/os-contract.md.
+# Source: https://mirror.stream.centos.org/ (the CentOS Stream mirror; the baseurl of baseos,
+# appstream, crb and extras-common)
+mirror.stream.centos.org
+# Source: https://fedoraproject.org/wiki/Infrastructure/Mirroring (dl.fedoraproject.org, the
+# master mirror; the baseurl os/centos/manifest.sh sets for epel)
+dl.fedoraproject.org

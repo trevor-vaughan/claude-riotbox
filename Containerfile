@@ -345,6 +345,10 @@ RUN (groupadd -g ${HOST_GID} llm && \
     useradd -l -m -s /bin/bash llm && \
     mkdir -p /workspace && chown llm /workspace && \
     echo "llm ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/llm && \
+    # env_reset would drop the egress proxy variables, so keep them for
+    # `sudo dnf install` under RIOTBOX_EGRESS=1.
+    echo 'Defaults:llm env_keep += "http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY"' >> /etc/sudoers.d/llm && \
+    visudo -cf /etc/sudoers.d/llm && \
     # /etc/subuid and /etc/subgid are rewritten at runtime by
     # container/nested-podman-setup.sh based on /proc/self/uid_map. Any
     # static range we bake here would point to outer UIDs that aren't
@@ -692,6 +696,9 @@ RUN if [ "${RIOTBOX_DIAGRAMS}" = "1" ]; then \
 # entries in /home/llm/.riotbox/bin/ are symlinks created from the
 # registry. Adding a new agent is a manifest edit, not a Containerfile edit.
 COPY --chown=llm:llm agents/ /home/llm/.riotbox/agents/
+# OS plugins (os/<ID>/): in an egress session the entrypoint points the
+# distro's package manager at its own mirror (scripts/lib/egress-os.sh).
+COPY --chown=llm:llm os/ /home/llm/.riotbox/os/
 COPY --chown=llm:llm container/find-real-bin.sh /home/llm/.riotbox/find-real-bin.sh
 COPY --chown=llm:llm container/agent-wrapper.sh /home/llm/.riotbox/agent-wrapper.sh
 RUN chmod +x /home/llm/.riotbox/agent-wrapper.sh \

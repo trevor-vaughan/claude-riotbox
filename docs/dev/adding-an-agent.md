@@ -56,7 +56,10 @@ are agent-private — the rest of the system never references them.
 ## The contract
 
 Every `agents/<name>/manifest.sh` must define eight functions, and may define
-optional ones for headroom and Context Mode.
+optional ones for headroom, Context Mode, git-ai and egress. Define
+`egress_hosts` too: egress mode (`RIOTBOX_EGRESS=1`) will not launch an agent
+without it, and `tests/egress-manifests.venom.yml` checks every registered
+agent for it.
 
 **→ [The agent contract](agent-contract.md)** documents each verb: its signature,
 what it must print, and the rules it has to honour.

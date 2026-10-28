@@ -101,6 +101,10 @@ setup_opencode_setup_test() {
 	local prompt_mode="${2:-noprompt}"
 
 	TEST_DIR="$(mktemp -d)"
+	# container/entrypoint.sh sources this before any container_setup.
+	: "${RIOTBOX_DIR:?RIOTBOX_DIR must be set by the caller}"
+	# shellcheck source=../../scripts/lib/egress-prompt.sh
+	source "${RIOTBOX_DIR}/scripts/lib/egress-prompt.sh"
 	export HOME="${TEST_DIR}/home"
 	mkdir -p "${HOME}/.riotbox" "${HOME}/.config/opencode"
 

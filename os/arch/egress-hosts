@@ -1,0 +1,6 @@
+# @arch: the mirrors pacman uses. The stock mirrorlist already lists only
+# these, over HTTPS, so this plugin has no rewrite. docs/dev/os-contract.md.
+# Source: /etc/pacman.d/mirrorlist of docker.io/library/archlinux
+geo.mirror.pkgbuild.com
+# Source: the same file
+fastly.mirror.pkgbuild.com

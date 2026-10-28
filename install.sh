@@ -74,7 +74,7 @@ BIN_DIR="${BIN_DIR:-${HOME}/.local/bin}"
 # that is NOT in this list (notably session dirs, backups/, and any user
 # additions) is preserved across upgrades — wiping DATA_DIR wholesale would
 # destroy the safety backups described in README and silently lose work.
-APP_PATHS=(bin libexec scripts agents container Containerfile .dockerignore VERSION)
+APP_PATHS=(bin libexec scripts agents os container Containerfile .dockerignore VERSION)
 APP_MARKER=".riotbox-app"
 
 echo "Installing RiotBox ${VERSION} → ${DATA_DIR}"
@@ -266,7 +266,7 @@ echo "  Entrypoint: ${BIN_DIR}/riotbox -> ${DATA_DIR}/bin/riotbox"
 # Seed commented stubs into the user's XDG config. Never overwrite existing
 # files. Warn if a newer riotbox-config-version ships than is installed.
 STUBS_DIR="${SRC_DIR}/scripts/configs"
-for stub in config mounts.conf plugins.conf; do
+for stub in config mounts.conf plugins.conf egress.conf; do
 	src="${STUBS_DIR}/${stub}"
 	dst="${CONFIG_DIR}/${stub}"
 	[[ -f "${src}" ]] || continue
@@ -310,7 +310,7 @@ for stub in config mounts.conf plugins.conf; do
 	# shell running this installer. `install -m` sets the mode as the file
 	# is created, so it is never briefly readable the way cp-then-chmod
 	# would leave it; config.new gets the same treatment because users
-	# merge it into (or rename it over) config. mounts.conf and plugins.conf
+	# merge it into (or rename it over) config. mounts.conf, plugins.conf and egress.conf
 	# carry no credentials, so their mode is left to the user's umask:
 	# tightening them too would be scope creep, not defence. Both paths
 	# replace whatever sits at the target (a leftover .new from an earlier

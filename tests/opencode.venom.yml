@@ -908,10 +908,17 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           # Place a stale AGENTS.md that the override must replace
           printf 'STALE_CONTENT\n' > "${AGENTS_TARGET}"
+          chmod 0640 "${AGENTS_TARGET}"
+          ino="$(stat -c %i "${AGENTS_TARGET}")"
           source "${RIOTBOX_DIR}/agents/opencode/setup.sh"
           opencode_setup
           if grep -F "STALE_CONTENT" "${AGENTS_TARGET}"; then echo "FAIL: the stale AGENTS.md survived RIOTBOX_PROMPT"; exit 1; fi
           grep -F "Custom prompt content." "${AGENTS_TARGET}"
+          # Another session sharing the file must never read it half-written:
+          # it is replaced by a rename, not truncated and rewritten in place.
+          [ "$(stat -c %i "${AGENTS_TARGET}")" != "${ino}" ] || { echo "FAIL: AGENTS.md was rewritten in place"; exit 1; }
+          [ "$(stat -c %a "${AGENTS_TARGET}")" = 640 ] || { echo "FAIL: mode $(stat -c %a "${AGENTS_TARGET}"), want 640"; exit 1; }
+          if compgen -G "${AGENTS_TARGET}.?*" >/dev/null; then echo "FAIL: a temporary file was left: $(ls -A "${HOME}/.config/opencode")"; exit 1; fi
         assertions:
           - result.code ShouldEqual 0
 
