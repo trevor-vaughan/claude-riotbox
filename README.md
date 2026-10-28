@@ -176,6 +176,11 @@ riotbox shell
 riotbox reown
 ```
 
+Start from the main checkout, not a linked `git worktree`. A worktree's `.git`
+file points at the main repository, which is not mounted into the container, so
+git does not work there. RiotBox warns and asks `Continue in the current
+directory? [y/N]` (default No); without a TTY it warns and continues.
+
 ## Using opencode
 
 RiotBox ships with [opencode](https://opencode.ai/) installed alongside Claude Code. Pick the agent per command with the `--agent` flag:
@@ -324,6 +329,7 @@ The image comes with a broad set of tools pre-installed so the agent can start w
 - [`context-mode`](https://github.com/mksglu/context-mode) — context-window optimization (opt-in per session, see [Context Mode](#context-mode-opt-in))
 - [`git-ai`](https://github.com/git-ai-project/git-ai) v1.7.5 — AI-authorship attribution via git notes, pinned per-arch and SHA256-verified (**on by default**, see [AI-authorship attribution](#ai-authorship-attribution-git-ai))
 - [`bun`](https://github.com/oven-sh/bun) — JS/TS runtime, pinned and SHA256-verified. It is here for Context Mode's `ctx_execute` sandbox, which cannot run TypeScript snippets without it; it is on `PATH` and usable directly. Context Mode's Claude hooks do **not** use it — they run the image's pinned Node.
+- [`jsonschema`](https://github.com/sourcemeta/jsonschema) — JSON Schema validator, linter and formatter CLI, pinned and SHA256-verified. It replaces the `python3-jsonschema` library the image used to carry.
 
 **Diagram validation:**
 

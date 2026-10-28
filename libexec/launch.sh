@@ -79,6 +79,12 @@ if [[ "${RIOTBOX_EGRESS:-}" = "1" ]]; then
 	egress_gate || exit 1
 fi
 
+# A linked git worktree has no usable .git inside the container. Ask before any
+# session state is created, so declining leaves nothing behind.
+# shellcheck source=./worktree-prompt.sh disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/worktree-prompt.sh"
+worktree_prompt || exit 1
+
 source "${ROOT_DIR}/scripts/mount-projects.sh"
 
 # Overlay guard, part 1: an overlay-accept's snapshot holds reviewed changes
