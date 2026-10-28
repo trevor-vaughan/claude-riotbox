@@ -76,6 +76,7 @@ testcases:
           grep -q '^# riotbox-config-version:' "${XDG_CONFIG_HOME}/riotbox/config"
           grep -q '^# riotbox-config-version:' "${XDG_CONFIG_HOME}/riotbox/mounts.conf"
           grep -q '^# riotbox-config-version:' "${XDG_CONFIG_HOME}/riotbox/plugins.conf"
+          grep -q '^# riotbox-config-version:' "${XDG_CONFIG_HOME}/riotbox/egress.conf"
         assertions:
           - result.code ShouldEqual 0
 

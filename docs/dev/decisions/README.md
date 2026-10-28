@@ -21,6 +21,7 @@ they turned out to be wrong.
 | [How should RiotBox add Pi as a third agent?](pi-support.md) | 2026-10-13 | **Natively** — floating core, pinned extensions; memory/QMD deferred |
 | [Where should the state RiotBox mounts into a session live?](session-state-dir.md) | 2026-10-13 | **Beside the session dir**, in a never-mounted `riotbox-state/<key>/` |
 | [Should the session-state and overlay core stay in bash?](session-core-language.md) | 2026-10-22 | **No** — port the core to a Go binary, one subsystem at a time; Ginkgo for its tests |
+| [How should a session's egress be confined?](egress-proxy.md) | 2026-10-23 | **Envoy per session**, agent on an internal network only; credentials later |
 
 For how the Context Mode integration actually behaves today, read
 [../context-mode.md](../context-mode.md) instead of any of the four records

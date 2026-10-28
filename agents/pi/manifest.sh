@@ -86,11 +86,16 @@ agent_pi_wrapper_inject() {
 }
 
 # Container-side runtime setup. setup.sh places AGENTS.md and rewrites
-# settings.json with RiotBox's forced keys on every container start.
+# settings.json with RiotBox's forced keys on every container start. AGENTS.md
+# then gets the egress prompt section at every start, egress or not, in its
+# session-agnostic form: every session of the project shares the file
+# (scripts/lib/egress-prompt.sh).
 agent_pi_container_setup() {
 	# shellcheck source=./setup.sh
 	source "${_AGENT_PI_DIR}/setup.sh"
 	pi_setup
+	# From scripts/lib/egress-prompt.sh, which container/entrypoint.sh sources.
+	egress_prompt_apply_shared "${HOME}/.pi/agent/AGENTS.md"
 }
 
 # Host-side config sync. Pi itself reads PI_CODING_AGENT_DIR when the user
@@ -129,5 +134,21 @@ GROQ_API_KEY
 MISTRAL_API_KEY
 DEEPSEEK_API_KEY
 XAI_API_KEY
+EOF
+}
+
+# agent_pi_egress_hosts — the hosts Pi must reach through the
+# RIOTBOX_EGRESS=1 proxy (docs/dev/agent-contract.md): the API host of each
+# provider whose key env_vars passes through, in the same order.
+agent_pi_egress_hosts() {
+	cat <<'EOF'
+api.anthropic.com
+api.openai.com
+openrouter.ai
+generativelanguage.googleapis.com
+api.groq.com
+api.mistral.ai
+api.deepseek.com
+api.x.ai
 EOF
 }

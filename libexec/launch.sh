@@ -3,7 +3,7 @@ set -euo pipefail
 # Set up mounts and launch a container with the given command.
 # Required env: CONTAINER_CMD, IMAGE_NAME, ROOT_DIR
 # Optional env: RIOTBOX_PROJECTS, RIOTBOX_NETWORK, RIOTBOX_NESTED, RIOTBOX_SOCKET,
-#               RIOTBOX_HEADROOM, RIOTBOX_CONTEXT_MODE
+#               RIOTBOX_HEADROOM, RIOTBOX_CONTEXT_MODE, RIOTBOX_EGRESS
 # Arguments: command and args to run inside the container
 
 # Source config for persistent defaults (e.g. RIOTBOX_NETWORK=none). These
@@ -60,6 +60,23 @@ ERROR: RIOTBOX_CONTEXT_MODE=1 and RIOTBOX_HEADROOM=1 are mutually exclusive.
 Pick one. See README "Context Mode" for trade-offs.
 EOF
 	exit 1
+fi
+
+# RIOTBOX_EGRESS=1 refuses, before any side effect, the settings that would
+# let the agent route around its egress proxy. See libexec/egress-lib.sh.
+# Any other value is an error: a security switch must not fail open.
+case "${RIOTBOX_EGRESS:-}" in
+"" | 0 | 1) ;;
+*)
+	printf 'ERROR: RIOTBOX_EGRESS must be 0 or 1 (got %q)\n' "${RIOTBOX_EGRESS}" >&2
+	exit 1
+	;;
+esac
+if [[ "${RIOTBOX_EGRESS:-}" = "1" ]]; then
+	# shellcheck source=./egress-lib.sh disable=SC1091
+	source "$(dirname "${BASH_SOURCE[0]}")/egress-lib.sh"
+	# shellcheck disable=SC2310 # it has already said why it failed
+	egress_gate || exit 1
 fi
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
@@ -301,12 +318,29 @@ extra_args_gate || exit 1
 source "$(dirname "${BASH_SOURCE[0]}")/credfile-vars.sh"
 CREDFILE_FLAGS="$(credfile_flags)"
 
+# RIOTBOX_EGRESS=1: start this launch's proxy pod last, after every check
+# that can abort, so an abort leaves nothing to clean up. egress_start sets
+# EGRESS_FLAGS and an EXIT trap that removes the pod when the agent exits.
+# egress_mask_data hides the egress root (every session's proxy config) from
+# the agent wherever its mounts reach it, e.g. `riotbox ~`.
+EGRESS_FLAGS=()
+EGRESS_MASK_FLAGS=()
+if [[ "${RIOTBOX_EGRESS:-}" = "1" ]]; then
+	# shellcheck disable=SC2310 # it has already said why it failed
+	egress_gate_mounts || exit 1
+	# shellcheck disable=SC2310 # it has already said why it failed
+	egress_mask_data || exit 1
+	# shellcheck disable=SC2310 # it has already said why it failed
+	egress_start || exit 1
+fi
+
 # shellcheck disable=SC2086,SC2248  # intentional word splitting for multi-flag vars
 # shellcheck disable=SC2154  # IMAGE_NAME is required env — set by the caller (riotbox CLI)
 ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${USER_FLAG} ${INIT_FLAG} \
 	--name "${CONTAINER_NAME}" \
 	--label "riotbox.session=${SESSION_KEY}" \
 	${NET_FLAG} \
+	"${EGRESS_FLAGS[@]}" \
 	${NESTED_FLAGS} \
 	${OVERLAY_FLAGS} \
 	${SOCKET_FLAGS} \
@@ -325,6 +359,7 @@ ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${USER_FLAG} ${IN
 	${RIOTBOX_CONTEXT_MODE:+-e RIOTBOX_SESSION_KEY="${SESSION_KEY}"} \
 	${RIOTBOX_HEADROOM_PROXY_TIMEOUT:+-e RIOTBOX_HEADROOM_PROXY_TIMEOUT="${RIOTBOX_HEADROOM_PROXY_TIMEOUT}"} \
 	${RIOTBOX_EXTRA_ARGS:-} \
+	"${EGRESS_MASK_FLAGS[@]}" \
 	-w "${WORKDIR}" \
 	"${IMAGE_NAME}" \
 	"$@"

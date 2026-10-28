@@ -1,0 +1,68 @@
+name: egress — agent manifests declare their egress hosts
+vars:
+  root: "."
+
+# RIOTBOX_EGRESS=1 allows each agent's own API hosts through the proxy, from
+# the optional agent_<name>_egress_hosts verb (docs/dev/agent-contract.md).
+# riotbox-core validates the entries at launch; this suite pins that every
+# shipped agent declares a non-empty, well-formed list and the hosts each
+# needs most.
+
+testcases:
+  - name: every registered agent declares well-formed egress hosts
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          source agents/registry.sh
+          entry='^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?$'
+          for agent in "${AGENT_REGISTRY[@]}"; do
+            declare -F "agent_${agent}_egress_hosts" >/dev/null \
+              || { echo "BAD: agent ${agent} has no egress_hosts verb" >&2; exit 1; }
+            hosts="$(agent_call "${agent}" egress_hosts)"
+            [ -n "${hosts}" ] || { echo "BAD: ${agent} declares no hosts" >&2; exit 1; }
+            while IFS= read -r h; do
+              [[ "${h}" =~ ${entry} ]] || { echo "BAD: ${agent}: malformed entry '${h}'" >&2; exit 1; }
+            done <<<"${hosts}"
+          done
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: each agent declares the hosts it cannot work without
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          source agents/registry.sh
+          has() { agent_call "$1" egress_hosts | grep -qx "$2" || { echo "BAD: $1 lacks $2" >&2; exit 1; }; }
+          has claude api.anthropic.com
+          has claude platform.claude.com
+          has opencode api.openai.com
+          has opencode models.dev
+          has pi api.anthropic.com
+          if agent_call pi egress_hosts | grep -qx models.dev; then
+            echo "BAD: pi does not use models.dev" >&2; exit 1
+          fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: resolve_data_roots puts the egress root beside the state root
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          source scripts/mount-projects.sh
+          XDG_DATA_HOME=/x/share resolve_data_roots
+          [ "${RIOTBOX_EGRESS_ROOT}" = /x/share/riotbox-egress ] \
+            || { echo "BAD: RIOTBOX_EGRESS_ROOT=${RIOTBOX_EGRESS_ROOT:-unset}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK

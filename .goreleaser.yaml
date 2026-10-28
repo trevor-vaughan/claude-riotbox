@@ -91,10 +91,12 @@ nfpms:
         type: symlink
       # System-default config (XDG user config overrides these). Only the files
       # the host-side launcher actually reads are shipped: launch.sh sources
-      # `config` and detect-mounts.sh reads `mounts.conf`, both with
-      # env > XDG > /etc precedence. plugins.conf is intentionally NOT shipped to
-      # /etc — it is consumed container-side (plugin-setup.sh) where host /etc is
-      # not visible, so a system plugins.conf would silently do nothing. Plugins
+      # `config`, detect-mounts.sh reads `mounts.conf` and riotbox-core reads
+      # `egress.conf` (config and mounts.conf with env > XDG > /etc precedence;
+      # egress.conf unions the /etc and XDG files). plugins.conf is
+      # intentionally NOT shipped to /etc — it is consumed container-side
+      # (plugin-setup.sh) where host /etc is not visible, so a system
+      # plugins.conf would silently do nothing. Plugins
       # are configured per-user ($XDG_CONFIG_HOME/riotbox/plugins.conf) or via the
       # RIOTBOX_PLUGINS env var.
       - src: ./scripts/configs/config
@@ -102,6 +104,9 @@ nfpms:
         type: "config|noreplace"
       - src: ./scripts/configs/mounts.conf
         dst: /etc/riotbox/mounts.conf
+        type: "config|noreplace"
+      - src: ./scripts/configs/egress.conf
+        dst: /etc/riotbox/egress.conf
         type: "config|noreplace"
     scripts:
       postinstall: ./packaging/postinstall.sh

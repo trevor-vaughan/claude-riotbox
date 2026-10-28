@@ -1,0 +1,320 @@
+name: egress — end to end against real podman and Envoy
+vars:
+  root: "."
+  e2e_helpers: "{{.root}}/tests/lib/egress-e2e-helpers.sh"
+
+# Proves the network boundary on a real engine. Skipped unless
+# RIOTBOX_EGRESS_E2E=1 (task test:egress-e2e, and a CI step on the host
+# runner). Needs the internet: example.com, www.wikipedia.org, pypi.org
+# and speed.cloudflare.com are the hosts allowed or refused.
+
+testcases:
+  - name: allows a listed host, refuses others, never proxies plain HTTP, and leaves no direct route
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          e2e_up "rbx-e2e-basic-$$" $$ example.com
+          check() { local got; got="$(e2e_codes "$@")"; echo "$* -> ${got}"; [ "${got}" = "${want}" ] || { echo "BAD: want ${want}" >&2; exit 1; }; }
+          want="200 200" check https://example.com
+          want="403 000" check https://www.wikipedia.org
+          want="000 403" check http://example.com
+          want="000 000" check https://example.com --noproxy '*'
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the agent cannot add a route around the proxy, as root or with nested-mode flags
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          name="rbx-e2e-route-$$"
+          e2e_up "${name}" $$
+          # Route via the internal network's gateway where it has one, else
+          # by device: either way only a missing NET_ADMIN stops the route.
+          gw="$(e2e_int_gateway "${name}")"
+          route="dev eth0"
+          [ -z "${gw}" ] || route="via ${gw}"
+          echo "route: default ${route}"
+          probe="ip route add default ${route} 2>&1 && echo ROUTED; nc -w 5 1.1.1.1 443 </dev/null && echo REACHED || echo BLOCKED"
+          out="$(e2e_agent --user 0 "${E2E_BUSYBOX_IMAGE}" sh -c "${probe}")"
+          echo "root: ${out}"
+          [[ "${out}" == *"Operation not permitted"* && "${out}" == *BLOCKED* ]] || { echo "BAD: root could route" >&2; exit 1; }
+          out="$(e2e_agent --user 0 --cap-add=SYS_ADMIN --security-opt label=disable --security-opt unmask=ALL \
+            --device /dev/net/tun "${E2E_BUSYBOX_IMAGE}" sh -c "${probe}")"
+          echo "nested: ${out}"
+          [[ "${out}" == *"Operation not permitted"* && "${out}" == *BLOCKED* ]] || { echo "BAD: nested flags could route" >&2; exit 1; }
+          # Positive control: granted NET_ADMIN, the same probe adds the
+          # route, so the refusals above come from the dropped capability.
+          # With a gateway (podman 4.9 may assign one) that route reaches the
+          # internet, so the capability is the whole boundary there; without
+          # one (podman 6.1) the network has no way out to route through.
+          out="$(podman run --rm --pod "${name}-pod" --network "${name}-int" --user 0 --cap-add=NET_ADMIN \
+            "${E2E_BUSYBOX_IMAGE}" sh -c "${probe}")"
+          echo "control: ${out}"
+          [[ "${out}" == *ROUTED* ]] ||
+            { echo "BAD: control could not add the route, so the refusals above prove nothing" >&2; exit 1; }
+          if [ -n "${gw}" ] && [[ "${out}" != *REACHED* ]]; then
+            echo "BAD: control routed via ${gw} but reached nothing, so the refusals above prove nothing" >&2; exit 1
+          fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the agent has no resolver, so no name lookup can leave it, while the proxy still resolves
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          name="rbx-e2e-dns-$$"
+          e2e_up "${name}" $$ example.com
+          # JSON, not --format: a Go template here would collide with venom's own templating.
+          podman network inspect "${name}-int" | python3 -c '
+          import json, sys
+          sys.exit("BAD: the internal network has DNS enabled" if json.load(sys.stdin)[0].get("dns_enabled") else 0)'
+          int_gw="$(e2e_int_gateway "${name}")"
+          gw_ip="$(podman container inspect "${name}-egress" | python3 -c '
+          import json, sys
+          print(json.load(sys.stdin)[0]["NetworkSettings"]["Networks"][sys.argv[1]]["IPAddress"])' "${name}-int")"
+          ext_gw="$(podman network inspect "${name}-ext" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["subnets"][0]["gateway"])')"
+          # Every server the agent might try: what podman would have copied
+          # from the host, the external network's aardvark-dns, the proxy,
+          # and the internal network's gateway where it has one.
+          servers="$(awk '/^nameserver/ {print $2}' /etc/resolv.conf | tr '\n' ' ')${ext_gw} ${gw_ip} ${int_gw}"
+          out="$(e2e_agent "${E2E_AGENT_IMAGE}" sh -c '
+            [ -e /etc/resolv.conf ] && echo "RESOLV: $(cat /etc/resolv.conf)"
+            getent hosts example.com && echo RESOLVED
+            getent hosts "$1-egress" || echo "PROXY UNKNOWN"
+          ' sh "${name}")"
+          echo "agent: ${out}"
+          [[ "${out}" != *RESOLV* && "${out}" != *"PROXY UNKNOWN"* && "${out}" == *"${gw_ip}"* ]] ||
+            { echo "BAD: the agent has a resolver, resolved an outside name, or cannot find the proxy" >&2; exit 1; }
+          for ns in ${servers}; do
+            if out="$(e2e_agent "${E2E_BUSYBOX_IMAGE}" nslookup -timeout=3 example.com "${ns}" 2>&1)"; then
+              echo "BAD: ${ns} answered the agent: ${out}" >&2; exit 1
+            fi
+            echo "${ns}: no answer"
+          done
+          # Positive control: the same query answers on the proxy's
+          # external network, which is where Envoy resolves upstream names.
+          podman run --rm --network "${name}-ext" "${E2E_BUSYBOX_IMAGE}" nslookup -timeout=3 example.com "${ext_gw}" >/dev/null ||
+            { echo "BAD: the control query failed, so the refusals above prove nothing" >&2; exit 1; }
+          got="$(e2e_codes https://example.com)"
+          [ "${got}" = "200 200" ] || { echo "BAD: the proxy no longer reaches example.com: ${got}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: allow and deny apply live, and a tunnel opened before them stays up
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          name="rbx-e2e-live-$$"
+          e2e_up "${name}" $$ example.com speed.cloudflare.com
+          # list reads the start and the owner off the real engine.
+          entry="$(e2e_core egress-list | grep -A2 -xF "${name}")"
+          [[ "${entry}" == *"  started: 20"* && "${entry}" == *"  owner:   PID $$"* ]] || { echo "BAD: list entry: ${entry}" >&2; exit 1; }
+          # About 10 s at 50 KB/s: open across both reloads below.
+          podman run -d --name "${name}-dl" --log-driver k8s-file "${E2E_FLAGS[@]}" "${E2E_AGENT_IMAGE}" \
+            curl -s -o /dev/null -w '%{http_code} %{size_download}' --limit-rate 50k --max-time 90 \
+            'https://speed.cloudflare.com/__down?bytes=500000' >/dev/null
+          sleep 2
+          e2e_core egress-allow --session "${name}" -- www.wikipedia.org
+          e2e_eventually 200 https://www.wikipedia.org
+          e2e_core egress-deny --session "${name}" -- example.com
+          e2e_eventually 403 https://example.com
+          podman wait "${name}-dl" >/dev/null
+          got="$(podman logs "${name}-dl")"
+          podman rm "${name}-dl" >/dev/null
+          # The status tells an upstream refusal (e.g. a rate limit) apart
+          # from a tunnel the reloads cut short.
+          [ "${got}" = "200 500000" ] || { echo "BAD: download got '<status> <bytes>' ${got}, want 200 500000" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: teardown removes everything, reports denials, and is safe to repeat
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          name="rbx-e2e-down-$$"
+          e2e_up "${name}" $$
+          e2e_codes https://www.wikipedia.org >/dev/null
+          err="$(e2e_core egress-down -- "${name}" 2>&1)"
+          echo "${err}"
+          [[ "${err}" == *"1 denied request(s)"* ]] || { echo "BAD: no denial report" >&2; exit 1; }
+          for obj in "pod exists ${name}-pod" "container exists ${name}-egress" \
+              "network exists ${name}-int" "network exists ${name}-ext"; do
+            # shellcheck disable=SC2086 # split on purpose
+            if podman ${obj}; then echo "BAD: left behind: ${obj}" >&2; exit 1; fi
+          done
+          e2e_core egress-down -- "${name}" || { echo "BAD: second teardown failed" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: the sweep removes a pod whose launch died and spares a live one, or one whose agent still runs
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          dead="$(bash -c 'echo $$')"
+          e2e_up "rbx-e2e-orphan-$$" "${dead}"
+          e2e_up "rbx-e2e-alive-$$" $$
+          # A launch killed with SIGKILL: its owner is dead, its agent runs on.
+          killed="rbx-e2e-killed-$$"
+          e2e_up "${killed}" "${dead}"
+          podman run -d --name "${killed}" "${E2E_FLAGS[@]}" "${E2E_BUSYBOX_IMAGE}" sleep 300 >/dev/null
+          e2e_core egress-sweep
+          if podman pod exists "rbx-e2e-orphan-$$-pod"; then echo "BAD: orphan kept" >&2; exit 1; fi
+          podman pod exists "rbx-e2e-alive-$$-pod" || { echo "BAD: live session swept" >&2; exit 1; }
+          # JSON, not --format: a Go template here would collide with venom's own templating.
+          [ "$(podman container inspect "${killed}" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["State"]["Running"])')" = True ] ||
+            { echo "BAD: the sweep stopped a running agent" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: an image that cannot be pulled leaves nothing behind
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          name="rbx-e2e-nopull-$$"
+          E2E_SESSIONS+=("${name}")
+          out="$(printf '' | e2e_core egress-up --system-conf "${E2E_TMP}/none" --user-conf "${E2E_TMP}/none" \
+            --image localhost/riotbox-no-such-image:0 --session-key e2e --owner-pid $$ -- "${name}" 2>&1)"; rc=$?
+          [ "${rc}" -eq 1 ] || { echo "BAD: exit ${rc}" >&2; exit 1; }
+          [[ "${out}" == *"pulling the egress proxy image"* ]] || { echo "BAD: ${out}" >&2; exit 1; }
+          if podman network exists "${name}-int"; then echo "BAD: network created" >&2; exit 1; fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: strict mode refuses a registry until allow @pypi opens it live, and each denial says why
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          name="rbx-e2e-strict-$$"
+          printf 'strict\n@agent\n' >"${E2E_TMP}/user.conf"
+          e2e_up "${name}" $$ example.com
+          check() { local got; got="$(e2e_codes "$@")"; echo "$* -> ${got}"; [ "${got}" = "${want}" ] || { echo "BAD: want ${want}" >&2; exit 1; }; }
+          want="200 200" check https://example.com
+          want="403 000" check https://pypi.org/
+          e2e_core egress-list | grep -qxF '  strict:  on (user conf)' || { echo "BAD: list lacks the strict line" >&2; exit 1; }
+          # curl drops a refused CONNECT's body, so send the CONNECT by hand
+          # to read the whole reply. Connection: close makes Envoy end it.
+          raw_connect='p="${https_proxy#http://}"; p="${p%/}"
+            exec 3<>"/dev/tcp/${p%:*}/${p##*:}"
+            printf "CONNECT %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n" "$1" "$1" >&3
+            timeout 20 cat <&3'
+          reply="$(e2e_agent "${E2E_AGENT_IMAGE}" bash -c "${raw_connect}" bash pypi.org:443 | tr -d '\r')"
+          echo "${reply}"
+          [[ "${reply}" == "HTTP/1.1 403 "* ]] || { echo "BAD: CONNECT was not refused with 403" >&2; exit 1; }
+          # Header checks match whole lines, so the body cannot satisfy them.
+          grep -qxF 'x-riotbox-egress: denied pypi.org:443' <<<"${reply}" || { echo "BAD: no denial header on the CONNECT" >&2; exit 1; }
+          [[ "${reply}" == *"riotbox egress allow --session ${name} pypi.org:443"* ]] || { echo "BAD: no allow command in the CONNECT body" >&2; exit 1; }
+          # Control: with strict off for the session, the default
+          # @registries reaches pypi.org, so strict is what refused it.
+          e2e_core egress-strict --session "${name}" -- off
+          e2e_eventually 200 https://pypi.org/
+          e2e_core egress-strict --session "${name}" -- on
+          e2e_eventually 403 https://pypi.org/
+          e2e_core egress-allow --session "${name}" -- @pypi
+          e2e_eventually 200 https://pypi.org/
+          # Plain HTTP is never proxied, so its 403 says to use HTTPS and
+          # does not offer an allow command that could not help.
+          reply="$(e2e_agent "${E2E_AGENT_IMAGE}" curl -sS -i --max-time 20 http://www.wikipedia.org/ | tr -d '\r')"
+          echo "${reply}"
+          [[ "${reply}" == "HTTP/1.1 403 "* ]] || { echo "BAD: plain HTTP was not refused with 403" >&2; exit 1; }
+          grep -qxF 'x-riotbox-egress: denied www.wikipedia.org' <<<"${reply}" || { echo "BAD: no denial header on plain HTTP" >&2; exit 1; }
+          [[ "${reply}" == *"plain HTTP is never proxied"* && "${reply}" == *"Use HTTPS"* ]] || { echo "BAD: the plain-HTTP body does not say to use HTTPS" >&2; exit 1; }
+          if [[ "${reply}" == *"riotbox egress allow"* ]]; then echo "BAD: the plain-HTTP body offers an allow command" >&2; exit 1; fi
+          got="$(e2e_agent "${E2E_AGENT_IMAGE}" printenv RIOTBOX_EGRESS_SESSION)"
+          [ "${got}" = "${name}" ] || { echo "BAD: RIOTBOX_EGRESS_SESSION is '${got}', want ${name}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  # Issue #48: with the egress root under a mounted project (`riotbox ~`),
+  # the agent, the host user, could rewrite its own proxy's rds.json.
+  - name: an agent whose project holds the egress root sees an empty dir there and cannot reach the proxy's config
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          e2e_up "rbx-e2e-mask-$$" $$
+          rds="${E2E_ROOT}/rbx-e2e-mask-$$/config/rds.json"
+          [ -f "${rds}" ] || { echo "BAD: no ${rds}" >&2; exit 1; }
+          before="$(sha256sum <"${rds}")"
+          source "{{.root}}/libexec/egress-lib.sh"
+          RIOTBOX_EGRESS_ROOT="${E2E_ROOT}" PROJECT_VOLUME_FLAGS="-v ${E2E_TMP}:/workspace:z"
+          MOUNTS="" CREDFILE_FLAGS="" RIOTBOX_EXTRA_ARGS=""
+          # The mask, not the nested-mode refusal, is under test; a
+          # developer's own session may export RIOTBOX_NESTED=1.
+          unset RIOTBOX_NESTED
+          egress_mask_data
+          echo "mask: ${EGRESS_MASK_FLAGS[*]}"
+          # The probe checks the mask is mounted, lists what it can (podman
+          # gives the tmpfs the hidden dir's mode, so under keep-id the
+          # agent cannot even list it), then tries to unmount the mask and
+          # to plant a session config under it.
+          probe='grep -q " /workspace/riotbox-egress [^-]* - tmpfs " /proc/self/mountinfo && echo MASKED
+            ls -A /workspace/riotbox-egress 2>/dev/null
+            umount /workspace/riotbox-egress 2>/dev/null && echo UNMOUNTED
+            mkdir -p /workspace/riotbox-egress/rbx/config 2>/dev/null &&
+              echo pwned 2>/dev/null >/workspace/riotbox-egress/rbx/config/rds.json && echo WROTE'
+          for user in "--userns=keep-id:uid=$(id -u),gid=$(id -g)" "--user=0"; do
+            # Positive control: without the mask the agent lists the session.
+            out="$(e2e_agent "${user}" -v "${E2E_TMP}:/workspace:z" "${E2E_BUSYBOX_IMAGE}" ls -A /workspace/riotbox-egress)"
+            [[ "${out}" == "rbx-e2e-mask-$$" ]] || { echo "BAD: ${user}: control did not list the session: ${out}" >&2; exit 1; }
+            out="$(e2e_agent "${user}" -v "${E2E_TMP}:/workspace:z" "${EGRESS_MASK_FLAGS[@]}" "${E2E_BUSYBOX_IMAGE}" sh -c "${probe}")" || :
+            echo "${user}: ${out}" | tr '\n' ' '; echo
+            [[ "${out}" == MASKED* && "${out}" != *rbx-e2e-mask* && "${out}" != *UNMOUNTED* ]] ||
+              { echo "BAD: ${user}: the agent reached the egress root" >&2; exit 1; }
+          done
+          [ "$(sha256sum <"${rds}")" = "${before}" ] || { echo "BAD: rds.json changed" >&2; exit 1; }
+          [ ! -e "${E2E_ROOT}/rbx" ] || { echo "BAD: a write reached the host" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK

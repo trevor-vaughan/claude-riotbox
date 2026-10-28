@@ -83,6 +83,26 @@ jobs:
       - name: Run the Context Mode doctor suite as uid 0
         run: task test:as-root -- tests/doctor-context-mode.venom.yml
 
+      # The egress E2E suite needs podman networks, which the venom test
+      # container `task test` runs in cannot create, so it runs here on the
+      # runner. Unlike tests/Containerfile.test, this pins venom: GitHub
+      # publishes a sha256 digest for each release asset, verified here.
+      - name: Install venom
+        env:
+          VENOM_VERSION: v1.3.0
+          VENOM_SHA256: 89832ec25e820c605cf0d3c09122e60bad43d13c1724aa6d375ef7109fbfe201
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSfL -o /tmp/venom \
+            "https://github.com/ovh/venom/releases/download/${VENOM_VERSION}/venom.linux-amd64"
+          echo "${VENOM_SHA256}  /tmp/venom" | sha256sum -c -
+          sudo install -m 0755 /tmp/venom /usr/local/bin/venom
+          rm -f /tmp/venom
+          venom version
+
+      - name: Egress proxy end-to-end (host podman)
+        run: task test:egress-e2e MODE=llm
+
       - name: Run Go suites (LLM-readable copy of failures)
         if: failure() && steps.tests.outcome == 'failure'
         run: task go:test MODE=llm

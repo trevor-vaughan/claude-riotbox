@@ -76,8 +76,18 @@ opencode_setup() {
 			# shellcheck disable=SC1091
 			os_pretty="$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-Linux}")"
 		fi
-		awk -v os="${os_pretty}" '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
-			"${RIOTBOX_PROMPT}" >"${agents_md}"
+		# Other sessions of the project share this file: render beside it and
+		# rename, keeping its mode, so a concurrent start never reads it
+		# half-written.
+		local tmp=""
+		if ! tmp="$(mktemp "${agents_md}.XXXXXX")" ||
+			! awk -v os="${os_pretty}" '{gsub(/\{\{OS_PRETTY_NAME\}\}/, os); print}' \
+				"${RIOTBOX_PROMPT}" >"${tmp}" ||
+			{ [[ -f "${agents_md}" ]] && ! chmod --reference="${agents_md}" -- "${tmp}"; } ||
+			! mv -fT -- "${tmp}" "${agents_md}"; then
+			[[ -z "${tmp}" ]] || rm -f -- "${tmp}"
+			echo "  [opencode] WARN: could not write ${agents_md} from RIOTBOX_PROMPT." >&2
+		fi
 	elif [[ ! -f "${agents_md}" ]] && [[ -f "${template}" ]]; then
 		cp "${template}" "${agents_md}"
 	fi

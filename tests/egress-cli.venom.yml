@@ -1,0 +1,349 @@
+name: egress — riotbox egress list|groups|allow|deny|strict|reload
+vars:
+  root: "."
+  egress_helpers: "{{.root}}/tests/lib/egress-test-helpers.sh"
+
+# bin/riotbox runs against the fake engine on PATH (it finds podman there)
+# and the real riotbox-core. egress_seed_session builds a session's state dir
+# as launch.sh would; egress_running makes the fake report it as running.
+
+testcases:
+  - name: usage and argument errors
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          rb() { bash "{{.root}}/bin/riotbox" egress "$@"; }
+          rb --help | grep -q '^usage: riotbox egress list' || { echo "BAD: --help" >&2; exit 1; }
+          for args in "" "bogus" "allow" "allow a.example b.example" "list --save" "list --session x" "allow --session= a.example" "allow --session" "reload --save" "allow --nope a.example" \
+              "strict" "strict --enable --disable" "strict --enable --enable" "strict --enable a.example" "strict --clear --nope" \
+              "groups --save" "groups --session x" "groups x" "groups --enable" "list --clear" "reload --disable" "allow --enable a.example"; do
+            # shellcheck disable=SC2086 # split on purpose
+            rb ${args} >/dev/null 2>&1; rc=$?
+            [ "${rc}" -eq 2 ] || { echo "BAD: 'egress ${args}' exited ${rc}, want 2" >&2; exit 1; }
+          done
+          rb allow --help | grep -q '^usage: riotbox egress list' || { echo "BAD: allow --help" >&2; exit 1; }
+          err="$(rb allow --session 2>&1 >/dev/null)"
+          [[ "${err}" == *"ERROR: --session needs a session name"* ]] || { echo "BAD: bare --session: ${err}" >&2; exit 1; }
+          err="$(rb allow --session= a.example 2>&1 >/dev/null)"
+          [[ "${err}" == *"ERROR: --session needs a session name"* ]] || { echo "BAD: empty --session: ${err}" >&2; exit 1; }
+          err="$(rb strict 2>&1 >/dev/null)"
+          [[ "${err}" == *"ERROR: strict needs one of --enable, --disable and --clear"* ]] || { echo "BAD: bare strict: ${err}" >&2; exit 1; }
+          err="$(rb strict --enable --clear 2>&1 >/dev/null)"
+          [[ "${err}" == *"ERROR: give only one of --enable, --disable and --clear"* ]] || { echo "BAD: two strict flags: ${err}" >&2; exit 1; }
+          err="$(rb groups x 2>&1 >/dev/null)"
+          [[ "${err}" == *"ERROR: wrong arguments or options for groups"* ]] || { echo "BAD: groups x: ${err}" >&2; exit 1; }
+          rb --help | grep -q '^       riotbox egress strict --enable|--disable|--clear' || { echo "BAD: help lacks strict" >&2; exit 1; }
+          rb --help | grep -q '^       riotbox egress groups$' || { echo "BAD: help lacks groups" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: allow and deny change the only running session live, and --save keeps the change
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          egress_seed_session riotbox-proj-11111111 api.anthropic.com
+          egress_running riotbox-proj-11111111
+          rds="${EGRESS_ROOT}/riotbox-proj-11111111/config/rds.json"
+          out="$(bash "{{.root}}/bin/riotbox" egress allow --save example.org)"
+          echo "${out}"
+          grep -q '"example.org:443"' "${rds}" || { echo "BAD: allow not applied" >&2; exit 1; }
+          grep -qx 'example.org' "${XDG_CONFIG_HOME}/riotbox/egress.conf" || { echo "BAD: --save not written" >&2; exit 1; }
+          bash "{{.root}}/bin/riotbox" egress deny example.org
+          if grep -q '"example.org:443"' "${rds}"; then echo "BAD: deny not applied" >&2; exit 1; fi
+          bash "{{.root}}/bin/riotbox" egress list | grep -qx '  allow:   api.anthropic.com' || { echo "BAD: list" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - 'result.systemout ShouldContainSubstring "egress: riotbox-proj-11111111: allowed example.org"'
+          - result.systemout ShouldContainSubstring OK
+
+  - name: with several sessions running, allow needs --session
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          egress_seed_session riotbox-a-11111111
+          egress_seed_session riotbox-b-22222222
+          egress_running riotbox-a-11111111 riotbox-b-22222222
+          out="$(bash "{{.root}}/bin/riotbox" egress allow example.org 2>&1)"; rc=$?
+          [ "${rc}" -eq 1 ] || { echo "BAD: exit ${rc}" >&2; exit 1; }
+          [[ "${out}" == *"pick one with --session: riotbox-a-11111111 riotbox-b-22222222"* ]] || { echo "BAD: ${out}" >&2; exit 1; }
+          bash "{{.root}}/bin/riotbox" egress allow --session=riotbox-b-22222222 example.org >/dev/null || { echo "BAD: --session=" >&2; exit 1; }
+          grep -q '"example.org:443"' "${EGRESS_ROOT}/riotbox-b-22222222/config/rds.json" || { echo "BAD: wrong session" >&2; exit 1; }
+          if grep -q '"example.org:443"' "${EGRESS_ROOT}/riotbox-a-11111111/config/rds.json"; then echo "BAD: both changed" >&2; exit 1; fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: list tells same-project sessions apart by start, owner and projects
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          mkdir "${HOME}/other"
+          egress_seed_session --project "${HOME}/proj" riotbox-proj-11111111
+          egress_seed_session --project "${HOME}/proj" --project "${HOME}/other" riotbox-proj-22222222
+          egress_seed_session riotbox-old-33333333
+          rm "${EGRESS_ROOT}/riotbox-old-33333333/projects.json"
+          gw() { printf '{"Names":["%s-egress"],"Labels":{"riotbox.egress":"%s","riotbox.egress-role":"gateway","riotbox.owner-pid":"%s"},"StartedAt":%s}' "$1" "$1" "$2" "$3"; }
+          export FAKE_GATEWAYS_JSON="[$(gw riotbox-proj-11111111 4242 1792811831),$(gw riotbox-proj-22222222 4343 1792815431),$(gw riotbox-old-33333333 4444 1792819031)]"
+          TZ=UTC bash "{{.root}}/bin/riotbox" egress list >"${TMP}/out"
+          cat "${TMP}/out"
+          for want in 'riotbox-proj-11111111' '  started: 2026-10-24 03:17:11 UTC' '  owner:   PID 4242' \
+              'riotbox-proj-22222222' '  started: 2026-10-24 04:17:11 UTC' '  owner:   PID 4343' \
+              "  project: ${HOME}/other" '  project: unknown'; do
+            grep -qxF -- "${want}" "${TMP}/out" || { echo "BAD: list lacks: ${want}" >&2; exit 1; }
+          done
+          [ "$(grep -cxF "  project: ${HOME}/proj" "${TMP}/out")" -eq 2 ] || { echo "BAD: proj not listed for both" >&2; exit 1; }
+          [ "$(grep -cxE '  strict:  (on|off) \((default|system conf|user conf|session)\)' "${TMP}/out")" -eq 3 ] || { echo "BAD: not every session lists its strict setting" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - 'result.systemout ShouldContainSubstring "  log:     "'
+          - result.systemout ShouldContainSubstring OK
+
+  - name: an invalid entry is refused with the reason
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          egress_seed_session riotbox-proj-11111111
+          egress_running riotbox-proj-11111111
+          out="$(bash "{{.root}}/bin/riotbox" egress allow 10.0.0.1 2>&1)"; rc=$?
+          [ "${rc}" -eq 1 ] || { echo "BAD: exit ${rc}" >&2; exit 1; }
+          [[ "${out}" == *'invalid egress entry "10.0.0.1"'* ]] || { echo "BAD: ${out}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: reload applies an edited egress.conf, and list says when nothing runs
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          bash "{{.root}}/bin/riotbox" egress list | grep -qx 'No egress sessions are running.' || { echo "BAD: empty list" >&2; exit 1; }
+          egress_seed_session riotbox-proj-11111111
+          egress_running riotbox-proj-11111111
+          echo 'new.example' >"${XDG_CONFIG_HOME}/riotbox/egress.conf"
+          bash "{{.root}}/bin/riotbox" egress reload
+          grep -q '"new.example:443"' "${EGRESS_ROOT}/riotbox-proj-11111111/config/rds.json" || { echo "BAD: reload" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - 'result.systemout ShouldContainSubstring "egress: riotbox-proj-11111111: reloaded"'
+          - result.systemout ShouldContainSubstring OK
+
+  - name: reload --session reloads only the named session
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          egress_seed_session riotbox-a-11111111
+          egress_seed_session riotbox-b-22222222
+          egress_running riotbox-a-11111111 riotbox-b-22222222
+          echo 'new.example' >"${XDG_CONFIG_HOME}/riotbox/egress.conf"
+          bash "{{.root}}/bin/riotbox" egress reload --session riotbox-b-22222222
+          grep -q '"new.example:443"' "${EGRESS_ROOT}/riotbox-b-22222222/config/rds.json" || { echo "BAD: named not reloaded" >&2; exit 1; }
+          if grep -q '"new.example:443"' "${EGRESS_ROOT}/riotbox-a-11111111/config/rds.json"; then echo "BAD: other reloaded" >&2; exit 1; fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - 'result.systemout ShouldContainSubstring "egress: riotbox-b-22222222: reloaded"'
+          - result.systemout ShouldContainSubstring OK
+
+  - name: deny --save rewrites the saved allow line rather than appending
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          egress_seed_session riotbox-proj-11111111
+          egress_running riotbox-proj-11111111
+          conf="${XDG_CONFIG_HOME}/riotbox/egress.conf"
+          bash "{{.root}}/bin/riotbox" egress allow --save example.org >/dev/null
+          grep -qx 'example.org' "${conf}" || { echo "BAD: allow not saved" >&2; exit 1; }
+          bash "{{.root}}/bin/riotbox" egress deny --save example.org >/dev/null
+          [ "$(grep -c 'example.org' "${conf}")" -eq 1 ] || { echo "BAD: not rewritten: $(cat "${conf}")" >&2; exit 1; }
+          grep -qx -- '-example.org' "${conf}" || { echo "BAD: deny line missing: $(cat "${conf}")" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: allow and deny take a group, live, and refuse one no file defines
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          conf="${XDG_CONFIG_HOME}/riotbox/egress.conf"
+          printf 'strict\n' >"${conf}"
+          egress_seed_session riotbox-proj-11111111 api.anthropic.com
+          egress_running riotbox-proj-11111111
+          rds="${EGRESS_ROOT}/riotbox-proj-11111111/config/rds.json"
+          if grep -q '"pypi.org:443"' "${rds}"; then echo "BAD: strict session allows pypi.org" >&2; exit 1; fi
+          out="$(bash "{{.root}}/bin/riotbox" egress allow --save @pypi)" || { echo "BAD: allow @pypi failed" >&2; exit 1; }
+          [[ "${out}" == *"egress: riotbox-proj-11111111: allowed @pypi"* ]] || { echo "BAD: ${out}" >&2; exit 1; }
+          grep -q '"pypi.org:443"' "${rds}" && grep -q '"files.pythonhosted.org:443"' "${rds}" || { echo "BAD: @pypi not applied" >&2; exit 1; }
+          [ "$(cat "${conf}")" = "$(printf 'strict\n@pypi')" ] || { echo "BAD: --save: $(cat "${conf}")" >&2; exit 1; }
+          bash "{{.root}}/bin/riotbox" egress deny @pypi >/dev/null || { echo "BAD: deny @pypi failed" >&2; exit 1; }
+          if grep -q '"pypi.org:443"' "${rds}"; then echo "BAD: deny @pypi not applied" >&2; exit 1; fi
+          out="$(bash "{{.root}}/bin/riotbox" egress allow @nosuch 2>&1)"; rc=$?
+          [ "${rc}" -eq 1 ] || { echo "BAD: allow @nosuch exited ${rc}" >&2; exit 1; }
+          [[ "${out}" == *"no group named @nosuch"* ]] || { echo "BAD: ${out}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a session's group deleted from egress.conf fails every change until deny drops it
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          conf="${XDG_CONFIG_HOME}/riotbox/egress.conf"
+          printf '[group corp]\ncorp.example\n' >"${conf}"
+          egress_seed_session riotbox-proj-11111111 api.anthropic.com
+          egress_running riotbox-proj-11111111
+          rds="${EGRESS_ROOT}/riotbox-proj-11111111/config/rds.json"
+          rb() { bash "{{.root}}/bin/riotbox" egress "$@"; }
+          rb deny @corp >/dev/null || { echo "BAD: deny @corp failed" >&2; exit 1; }
+          printf 'kept.example\n' >"${conf}"
+          hint='no group named @corp; run riotbox egress deny --session riotbox-proj-11111111 @corp to drop it from the session'
+          for args in "reload" "allow other.example" "strict --enable"; do
+            # shellcheck disable=SC2086 # split on purpose
+            out="$(rb ${args} 2>&1)"; rc=$?
+            [ "${rc}" -eq 1 ] || { echo "BAD: '${args}' exited ${rc}, want 1" >&2; exit 1; }
+            [[ "${out}" == *"${hint}"* ]] || { echo "BAD: '${args}' lacks the hint: ${out}" >&2; exit 1; }
+          done
+          if grep -q '"kept.example:443"' "${rds}"; then echo "BAD: a failed change was applied" >&2; exit 1; fi
+          out="$(rb deny --save @corp 2>&1)"; rc=$?
+          [ "${rc}" -eq 1 ] || { echo "BAD: deny --save exited ${rc}, want 1" >&2; exit 1; }
+          [[ "${out}" == *"nothing was changed"* ]] || { echo "BAD: deny --save: ${out}" >&2; exit 1; }
+          [ "$(cat "${conf}")" = "kept.example" ] || { echo "BAD: deny --save wrote: $(cat "${conf}")" >&2; exit 1; }
+          out="$(rb deny @corp)" || { echo "BAD: deny @corp did not recover" >&2; exit 1; }
+          [ "${out}" = "egress: riotbox-proj-11111111: dropped @corp from the session (no group named @corp any more)" ] || { echo "BAD: ${out}" >&2; exit 1; }
+          grep -q '"kept.example:443"' "${rds}" || { echo "BAD: recovery not applied" >&2; exit 1; }
+          rb reload >/dev/null || { echo "BAD: reload after recovery failed" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: strict turns on, off and back to the conf file's choice, live, and list shows where it comes from
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          egress_seed_session riotbox-proj-11111111 api.anthropic.com
+          egress_running riotbox-proj-11111111
+          rds="${EGRESS_ROOT}/riotbox-proj-11111111/config/rds.json"
+          rb() { bash "{{.root}}/bin/riotbox" egress "$@"; }
+          rb list | grep -qxF '  strict:  off (default)' || { echo "BAD: list before" >&2; exit 1; }
+          out="$(rb strict --enable 2>"${TMP}/err")"
+          [ "${out}" = "egress: riotbox-proj-11111111: strict on (session)" ] || { echo "BAD: ${out}" >&2; exit 1; }
+          grep -qF "WARNING: strict mode does not allow the agent's own API hosts (api.anthropic.com); add @agent" "${TMP}/err" || { echo "BAD: no lock-out warning" >&2; exit 1; }
+          if grep -q '"pypi.org:443"' "${rds}"; then echo "BAD: strict not applied" >&2; exit 1; fi
+          rb list | grep -qxF '  strict:  on (session)' || { echo "BAD: list after enable" >&2; exit 1; }
+          rb strict --disable 2>"${TMP}/err" >/dev/null
+          [ ! -s "${TMP}/err" ] || { echo "BAD: disable printed: $(cat "${TMP}/err")" >&2; exit 1; }
+          grep -q '"pypi.org:443"' "${rds}" || { echo "BAD: disable not applied" >&2; exit 1; }
+          printf 'strict\n@agent\n' >"${XDG_CONFIG_HOME}/riotbox/egress.conf"
+          out="$(rb strict --clear 2>"${TMP}/err")"
+          [ "${out}" = "egress: riotbox-proj-11111111: strict on (user conf)" ] || { echo "BAD: clear: ${out}" >&2; exit 1; }
+          [ ! -s "${TMP}/err" ] || { echo "BAD: clear warned: $(cat "${TMP}/err")" >&2; exit 1; }
+          rb list | grep -qxF '  strict:  on (user conf)' || { echo "BAD: list after clear" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: strict --save writes, replaces and removes the setting in your egress.conf
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          conf="${XDG_CONFIG_HOME}/riotbox/egress.conf"
+          printf '# mine\n@agent\n' >"${conf}"
+          egress_seed_session riotbox-proj-11111111 api.anthropic.com
+          egress_running riotbox-proj-11111111
+          rb() { bash "{{.root}}/bin/riotbox" egress "$@"; }
+          rb strict --enable --save >"${TMP}/out"
+          grep -qxF "egress: saved strict = on to ${conf}" "${TMP}/out" || { echo "BAD: $(cat "${TMP}/out")" >&2; exit 1; }
+          [ "$(cat "${conf}")" = "$(printf '# mine\nstrict = on\n@agent')" ] || { echo "BAD: enable --save: $(cat "${conf}")" >&2; exit 1; }
+          rb strict --disable --save >/dev/null
+          [ "$(cat "${conf}")" = "$(printf '# mine\nstrict = off\n@agent')" ] || { echo "BAD: disable --save: $(cat "${conf}")" >&2; exit 1; }
+          rb strict --clear --save >"${TMP}/out"
+          grep -qxF "egress: removed the strict setting from ${conf}" "${TMP}/out" || { echo "BAD: $(cat "${TMP}/out")" >&2; exit 1; }
+          [ "$(cat "${conf}")" = "$(printf '# mine\n@agent')" ] || { echo "BAD: clear --save: $(cat "${conf}")" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: groups lists every group with its source and hosts, and fails on a broken egress.conf
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          conf="${XDG_CONFIG_HOME}/riotbox/egress.conf"
+          printf '[group corp]\nmirror.corp.example\n' >"${conf}"
+          out="$(bash "{{.root}}/bin/riotbox" egress groups)" || { echo "BAD: groups failed" >&2; exit 1; }
+          for want in '@agent (per session)' '@pypi (built-in)' '  pypi.org' '@corp (user conf)' '  mirror.corp.example'; do
+            grep -qxF -- "${want}" <<<"${out}" || { echo "BAD: groups lacks: ${want}" >&2; exit 1; }
+          done
+          egress_seed_session riotbox-proj-11111111 api.anthropic.com
+          egress_running riotbox-proj-11111111
+          out="$(bash "{{.root}}/bin/riotbox" egress groups)" || { echo "BAD: groups failed" >&2; exit 1; }
+          grep -qxF '@agent (riotbox-proj-11111111)' <<<"${out}" && grep -qxF '  api.anthropic.com' <<<"${out}" || { echo "BAD: @agent of the running session missing" >&2; exit 1; }
+          printf '@nosuch\n' >"${conf}"
+          out="$(bash "{{.root}}/bin/riotbox" egress groups 2>&1)"; rc=$?
+          [ "${rc}" -eq 1 ] || { echo "BAD: broken conf exited ${rc}" >&2; exit 1; }
+          [[ "${out}" == *"${conf}:1: no group named @nosuch"* ]] || { echo "BAD: ${out}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK

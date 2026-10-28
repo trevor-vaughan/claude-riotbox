@@ -98,11 +98,15 @@ agent_claude_headroom_argv() {
 # (managed policy /etc/claude-code/CLAUDE.md is rendered at build time);
 # it only does work when RIOTBOX_PROMPT overrides or the build-time render
 # is missing. The forge MCP strip then takes back any GitHub/GitLab server
-# entry an earlier image left in the persisted .claude.json.
+# entry an earlier image left in the persisted .claude.json. In egress mode
+# the managed policy also gets the egress prompt section
+# (scripts/lib/egress-prompt.sh).
 agent_claude_container_setup() {
 	# shellcheck source=./setup.sh
 	source "${_AGENT_CLAUDE_DIR}/setup.sh"
 	claude_setup
+	# From scripts/lib/egress-prompt.sh, which container/entrypoint.sh sources.
+	egress_prompt_apply "${RIOTBOX_MANAGED_POLICY_DIR:-/etc/claude-code}/CLAUDE.md"
 	claude_strip_forge_mcp_entries
 }
 
@@ -146,5 +150,23 @@ VERTEX_LOCATION
 CLOUD_ML_REGION
 AWS_REGION
 AWS_PROFILE
+EOF
+}
+
+# agent_claude_egress_hosts — the hosts Claude Code must reach through the
+# RIOTBOX_EGRESS=1 proxy, one egress.conf entry per line
+# (docs/dev/agent-contract.md):
+#   api.anthropic.com      the Messages API
+#   claude.ai              subscription (OAuth) login and account calls
+#   platform.claude.com    OAuth token exchange and refresh
+#   console.anthropic.com  the older OAuth token endpoint
+# Vertex and Bedrock hosts are not listed: a user routing through them adds
+# them to egress.conf.
+agent_claude_egress_hosts() {
+	cat <<'EOF'
+api.anthropic.com
+claude.ai
+platform.claude.com
+console.anthropic.com
 EOF
 }
