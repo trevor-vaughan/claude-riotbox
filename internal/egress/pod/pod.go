@@ -1,9 +1,10 @@
 // Package pod runs the container-engine side of a RIOTBOX_EGRESS=1
 // session: an internal network without DNS for the agent, a DNS-enabled
-// external one, a pod grouping them (--infra=false: lifecycle only, no
-// shared namespaces), and the Envoy proxy container on both networks
-// (Up); their removal (Down); and the lookups the egress CLI and the
-// orphan sweep need (sessions.go). See docs/dev/egress.md for the topology
+// external one, and the Envoy proxy container on both networks (Up); their
+// removal, with the agent's container (Down); and the lookups the egress
+// CLI and the orphan sweep need (sessions.go). There is no pod: podman
+// before 6.0 refuses --userns on a pod's member, and both containers need
+// their own keep-id mapping. See docs/dev/egress.md for the topology
 // and the security argument.
 package pod
 
@@ -129,14 +130,15 @@ func NewManager(engine string, stderr io.Writer) Manager {
 	}
 }
 
-// names are the engine objects of one session, named after it.
+// names are the engine objects of one session, named after it. The agent's
+// container is the session's own name (launch.sh).
 type names struct {
-	pod, gateway, internal, external string
+	agent, gateway, internal, external string
 }
 
 func namesFor(session string) names {
 	return names{
-		pod:      session + "-pod",
+		agent:    session,
 		gateway:  session + "-egress",
 		internal: session + "-int",
 		external: session + "-ext",
@@ -161,7 +163,7 @@ type UpRequest struct {
 }
 
 // Up starts the session's proxy and returns the flags the agent's engine
-// run needs to join it: the pod, the internal network only, no
+// run needs to join it: the internal network only, no
 // NET_ADMIN/NET_RAW (with NET_ADMIN a process could route around the
 // proxy), no resolver, the proxy's name mapped to its address in
 // /etc/hosts, the proxy env vars and the session's name
@@ -271,8 +273,7 @@ func (m Manager) Up(r UpRequest) (_ []string, err error) {
 	steps := [][]string{
 		slices.Concat([]string{"network", "create", "--internal", "--disable-dns"}, labels, []string{n.internal}),
 		slices.Concat([]string{"network", "create"}, labels, []string{n.external}),
-		slices.Concat([]string{"pod", "create", "--infra=false", "--name", n.pod}, labels),
-		slices.Concat([]string{"run", "-d", "--pod", n.pod, "--name", n.gateway}, labels, []string{
+		slices.Concat([]string{"run", "-d", "--name", n.gateway}, labels, []string{
 			"--label", LabelRole + "=" + roleGateway,
 			"--network", n.internal + "," + n.external,
 			"--userns=keep-id", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
@@ -310,7 +311,6 @@ func (m Manager) Up(r UpRequest) (_ []string, err error) {
 		_, _ = fmt.Fprintln(m.Stderr, w)
 	}
 	flags := []string{
-		"--pod", n.pod,
 		"--network", n.internal,
 		"--cap-drop=NET_ADMIN,NET_RAW",
 		"--dns", "none", "--add-host", n.gateway + ":" + ip,
@@ -432,10 +432,10 @@ func printable(s string) string {
 	return string(b)
 }
 
-// Down removes the session's proxy, pod and networks, each only if
-// present, and then its secrets: under each of runtimes (runtime bases,
-// state.RuntimeBases) or, with none given, under dir's own; and any an
-// earlier release kept in the state dir. So it is safe to repeat. The proxy
+// Down removes the session's agent and proxy containers and its networks,
+// each only if present, and then its secrets: under each of runtimes
+// (runtime bases, state.RuntimeBases) or, with none given, under dir's own;
+// and any an earlier release kept in the state dir. So it is safe to repeat. The proxy
 // is stopped first, with SIGTERM, so Envoy flushes its access log; with
 // report, Down then says how many requests were denied. It carries on
 // past a failed step and returns every failure. Networks are checked
@@ -447,7 +447,9 @@ func (m Manager) Down(dir state.Dir, report bool, runtimes ...string) error {
 	if _, err := m.Engine.Output("stop", "--ignore", "--time", "10", n.gateway); err != nil {
 		errs = append(errs, err)
 	}
-	if _, err := m.Engine.Output("pod", "rm", "--force", "--ignore", n.pod); err != nil {
+	// The agent normally exited (launch.sh runs it with --rm) before
+	// Down; one still running would hold the internal network.
+	if _, err := m.Engine.Output("rm", "--force", "--ignore", n.agent, n.gateway); err != nil {
 		errs = append(errs, err)
 	}
 	for _, network := range []string{n.internal, n.external} {

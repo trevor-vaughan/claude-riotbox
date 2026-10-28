@@ -7,9 +7,9 @@
 #                                  prints the proxy's networks: 10.89.0.1
 #                                  on <name>-int
 #   container inspect              prints "true": the proxy is running
-#   pod ps                         prints ${FAKE_PODS_JSON:-[]}, and writes
-#                                  its own environment (the sweep's) to
-#                                  ${FAKE_ENGINE_LOG}.pod-ps-environ
+#   network ls                     prints [], and writes its own environment
+#                                  (the sweep's) to
+#                                  ${FAKE_ENGINE_LOG}.sweep-environ
 #   ps … label=riotbox.egress-role=gateway
 #                                  prints ${FAKE_GATEWAYS_JSON:-[]}
 #   run -d … (the Envoy proxy)     writes Envoy's readiness line into the host
@@ -23,8 +23,8 @@
 #                                  its own environment to ${CAPTURE}.environ,
 #                                  sleeps ${FAKE_AGENT_SLEEP:-0}s, exits
 #                                  ${FAKE_AGENT_EXIT:-0}
-#   anything else (image exists, network/pod create, stop, rm, the
-#   container-name probe `ps`, the sweep's `ps --filter pod=…`)
+#   anything else (image exists, network create, stop, rm, the
+#   container-name probe `ps`, the sweep's `ps --filter name=…`)
 #                                  exit 0, no output: no agent runs
 # With FAKE_FAIL_ON set, a call whose argv starts with it fails (exit 125).
 # Named podman because egress mode refuses any other engine.
@@ -47,9 +47,9 @@ case "${1:-} ${2:-}" in
 	echo true
 	exit 0
 	;;
-"pod ps")
-	env >"${FAKE_ENGINE_LOG}.pod-ps-environ"
-	printf '%s\n' "${FAKE_PODS_JSON:-[]}"
+"network ls")
+	env >"${FAKE_ENGINE_LOG}.sweep-environ"
+	echo '[]'
 	exit 0
 	;;
 *) ;;

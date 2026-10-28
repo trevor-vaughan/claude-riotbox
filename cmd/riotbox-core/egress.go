@@ -102,7 +102,7 @@ func egressUp(a parsedArgs, stdout, stderr io.Writer) int {
 	return printLines(flags, stdout, stderr)
 }
 
-// egressDown removes a session's proxy pod and reports denied requests.
+// egressDown removes a session's proxy and reports denied requests.
 func egressDown(a parsedArgs, _, stderr io.Writer) int {
 	dir, err := state.Open(a.opts["--state-root"], a.args[0])
 	if err != nil {
@@ -118,7 +118,7 @@ func egressDown(a parsedArgs, _, stderr io.Writer) int {
 	return 0
 }
 
-// egressSweep removes orphaned egress pods, stale state dirs and idle
+// egressSweep removes orphaned egress sessions, stale state dirs and idle
 // sessions' secrets.
 func egressSweep(a parsedArgs, _, stderr io.Writer) int {
 	// As in egressDown: every qualifying runtime base.

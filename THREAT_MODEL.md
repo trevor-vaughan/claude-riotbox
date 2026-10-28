@@ -1223,8 +1223,7 @@ agent's API hosts; the system and user `egress.conf`, which can name
 built-in or user-defined host groups; and a live per-session overlay) and answers everything else
 `403`, plain HTTP included. Design and evidence: `docs/dev/egress.md`,
 `docs/dev/decisions/egress-proxy.md`. In the data flow diagram this is the
-egress proxy (its pod, which the agent also joins, groups their lifecycle
-only); without the flag the agent's HTTPS goes out directly.
+egress proxy; without the flag the agent's HTTPS goes out directly.
 
 - **Boundary.** `--internal` is enforced by routing only; a process with
   `CAP_NET_ADMIN` could add a route around the proxy. The agent runs with
@@ -1305,8 +1304,8 @@ only); without the flag the agent's HTTPS goes out directly.
   (keep-id), read-only rootfs, all capabilities dropped, no-new-privileges,
   no admin interface. Its log files are treated as untrusted by the host:
   opened without following links, regular files only, bounded reads.
-- **Lifecycle.** The pod is removed when the launch exits; INT and HUP are
-  ignored during teardown. A pod left by a killed launch is removed by the
+- **Lifecycle.** The proxy is removed when the launch exits; INT and HUP are
+  ignored during teardown. A proxy left by a killed launch is removed by the
   next egress launch's sweep, which spares any session whose owner is alive,
   in another PID namespace, or not provably dead, and any whose agent
   container still runs.

@@ -1065,7 +1065,7 @@ egress's value instead. When the proxy injects keys (see
 
 ### What the launch refuses
 
-Egress mode needs podman: the agent and its proxy run as a podman pod. The
+Egress mode needs podman: the agent and its proxy run on podman networks. The
 launch stops, before creating anything, with a message naming the conflict
 when egress mode is combined with:
 
@@ -1334,9 +1334,9 @@ When a session ends, RiotBox removes its proxy and prints
 `egress: N denied request(s), see <log>` if anything was refused. A later
 egress launch deletes a session's logs once they have gone 7 days unused.
 
-If RiotBox itself is killed, its proxy pod is left behind until the next
+If RiotBox itself is killed, its proxy is left behind until the next
 egress launch removes it; that cleanup never touches a session that is
-still running. Pressing Ctrl-C while the pod is being removed does not
+still running. Pressing Ctrl-C while the proxy is being removed does not
 interrupt the removal.
 
 A refused request's `403` carries an `x-riotbox-egress: denied <host[:port]>`

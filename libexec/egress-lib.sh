@@ -13,7 +13,7 @@
 #   EGRESS_SYSTEM_CONF            the system egress.conf
 #   EGRESS_USER_CONF              the user egress.conf
 #   EGRESS_FLAGS                  set by egress_start: the agent's extra
-#                                 engine flags (pod, network, proxy env,
+#                                 engine flags (network, proxy env,
 #                                 RIOTBOX_EGRESS_SESSION, and, when the
 #                                 proxy injects keys, the session CA and a
 #                                 placeholder per key)
@@ -43,12 +43,12 @@
 #                 after egress_start, the same for RIOTBOX_EXTRA_ARGS that
 #                 would put an injected key in the agent, or let it read
 #                 one from a host process. Requires: EGRESS_INJECTED.
-#   egress_start  sweep orphaned egress pods, start this launch's pod
+#   egress_start  sweep orphaned egress sessions, start this launch's proxy
 #                 (sending egress-up the agent's variables, whose provider
 #                 keys the proxy injects), export each injected key's
 #                 placeholder over the key, set EGRESS_FLAGS, say on stderr
 #                 which session to name to `riotbox egress`, and trap EXIT
-#                 (and INT/TERM, through it) to remove the pod. Requires:
+#                 (and INT/TERM, through it) to remove it. Requires:
 #                 CONTAINER_CMD, CONTAINER_NAME, SESSION_KEY, PROJECT_DIRS,
 #                 PASSTHROUGH_FLAGS, RIOTBOX_EGRESS_ROOT, ROOT_DIR (its os/ is
 #                 passed as --os-dir), RIOTBOX_CORE and
@@ -438,17 +438,17 @@ egress_gate() {
 	return 1
 }
 
-# _egress_on_exit — the EXIT trap: remove this launch's egress pod, keeping
+# _egress_on_exit — the EXIT trap: remove this launch's egress proxy, keeping
 # launch.sh's exit status. INT, TERM and HUP are ignored first; INT and HUP
 # stay ignored in egress-down, so a second Ctrl-C cannot cut the teardown
 # short. Go does not keep an inherited ignored TERM, so a TERM still stops
-# egress-down and leaves the pod for the next launch's sweep.
+# egress-down and leaves the proxy for the next launch's sweep.
 # shellcheck disable=SC2154 # set by launch.sh, which sources this file
 _egress_on_exit() {
 	local rc=$?
 	trap '' INT TERM HUP
 	if ! "${RIOTBOX_CORE}" egress-down --engine "${CONTAINER_CMD}" --state-root "${RIOTBOX_EGRESS_ROOT}" -- "${CONTAINER_NAME}"; then
-		echo "WARNING: the egress pod of ${CONTAINER_NAME} was not fully removed; the next launch retries." >&2
+		echo "WARNING: the egress proxy of ${CONTAINER_NAME} was not fully removed; the next launch retries." >&2
 	fi
 	exit "${rc}"
 }
@@ -483,9 +483,9 @@ egress_start() {
 	# but for XDG_RUNTIME_DIR and HOME, which it and rootless podman need
 	# to find the runtime secrets and the engine's storage.
 	if ! env "${unsent[@]}" "${RIOTBOX_CORE}" egress-sweep --engine "${CONTAINER_CMD}" --state-root "${RIOTBOX_EGRESS_ROOT}"; then
-		echo "WARNING: could not remove every orphaned egress pod; continuing." >&2
+		echo "WARNING: could not remove every orphaned egress session; continuing." >&2
 	fi
-	# Trapped before the pod exists, so an interrupt during startup still
+	# Trapped before the proxy exists, so an interrupt during startup still
 	# removes whatever egress-up created. INT and TERM leave through EXIT.
 	trap _egress_on_exit EXIT
 	trap 'exit 130' INT

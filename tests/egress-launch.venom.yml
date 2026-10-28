@@ -1,4 +1,4 @@
-name: egress — launch.sh gating, proxy pod and teardown (RIOTBOX_EGRESS=1)
+name: egress — launch.sh gating, proxy and teardown (RIOTBOX_EGRESS=1)
 vars:
   root: "."
   egress_helpers: "{{.root}}/tests/lib/egress-test-helpers.sh"
@@ -9,7 +9,7 @@ vars:
 # to do. tests/egress-e2e.venom.yml proves the same against real podman.
 
 testcases:
-  - name: egress mode puts the agent in a proxy pod, off the internet, and removes the pod at exit
+  - name: egress mode puts the agent behind a proxy, off the internet, and removes the proxy at exit
     steps:
       - type: exec
         script: |
@@ -21,21 +21,23 @@ testcases:
           name="$(egress_agent_name)"
           [ -n "${name}" ] || { echo "BAD: no agent name in argv" >&2; exit 1; }
           argv=" $(cat "${CAPTURE}") "
-          for want in "--pod ${name}-pod" "--network ${name}-int" "--cap-drop=NET_ADMIN,NET_RAW" \
+          for want in "--network ${name}-int" "--cap-drop=NET_ADMIN,NET_RAW" \
               "--dns none" "--add-host ${name}-egress:10.89.0.1" \
               "-e HTTP_PROXY=http://${name}-egress:3128" "-e HTTPS_PROXY=http://${name}-egress:3128" \
               "-e NO_PROXY=localhost,127.0.0.1"; do
             [[ "${argv}" == *" ${want} "* ]] || { echo "BAD: agent argv lacks: ${want}" >&2; exit 1; }
           done
+          # podman before 6.0 refuses --userns on a pod's member.
+          [[ "${argv}" != *" --pod"* ]] || { echo "BAD: the agent joins a pod" >&2; exit 1; }
           log="${FAKE_ENGINE_LOG}"
           grep -q "^network create --internal --disable-dns .* ${name}-int\$" "${log}" || { echo "BAD: no DNS-less internal network" >&2; exit 1; }
           grep -q "^network create --label .* ${name}-ext\$" "${log}" || { echo "BAD: no external network" >&2; exit 1; }
-          grep -q "^pod create --infra=false --name ${name}-pod " "${log}" || { echo "BAD: no pod" >&2; exit 1; }
-          grep -q "^run -d --pod ${name}-pod --name ${name}-egress " "${log}" || { echo "BAD: no proxy" >&2; exit 1; }
+          if grep -q '^pod \|--pod' "${log}"; then echo "BAD: a pod is used" >&2; exit 1; fi
+          grep -q "^run -d --name ${name}-egress " "${log}" || { echo "BAD: no proxy" >&2; exit 1; }
           grep -qx "stop --ignore --time 10 ${name}-egress" "${log}" || { echo "BAD: proxy not stopped" >&2; exit 1; }
-          grep -qx "pod rm --force --ignore ${name}-pod" "${log}" || { echo "BAD: pod not removed" >&2; exit 1; }
+          grep -qx "rm --force --ignore ${name} ${name}-egress" "${log}" || { echo "BAD: containers not removed" >&2; exit 1; }
           grep -qx "network rm ${name}-int" "${log}" || { echo "BAD: internal network not removed" >&2; exit 1; }
-          sweep="$(grep -n '^pod ps ' "${log}" | head -1 | cut -d: -f1)"
+          sweep="$(grep -n '^network ls ' "${log}" | head -1 | cut -d: -f1)"
           create="$(grep -n '^network create --internal' "${log}" | head -1 | cut -d: -f1)"
           [ -n "${sweep}" ] && [ "${sweep}" -lt "${create}" ] || { echo "BAD: no sweep before start" >&2; exit 1; }
           grep -qx "api.anthropic.com" "${EGRESS_ROOT}/${name}/agent.conf" || { echo "BAD: claude's hosts not saved" >&2; exit 1; }
@@ -128,7 +130,7 @@ testcases:
             [ ! -e "${CAPTURE}" ] || { echo "BAD: the agent ran" >&2; exit 1; }
             # The launch's orphan sweep and exit-trap teardown still query and
             # remove-if-present; nothing may be created, pulled or run.
-            if grep -qE '^(network create|pod create|run|pull) ' "${FAKE_ENGINE_LOG}"; then echo "BAD: the engine was asked to create: $(cat "${FAKE_ENGINE_LOG}")" >&2; exit 1; fi
+            if grep -qE '^(network create|run|pull) ' "${FAKE_ENGINE_LOG}"; then echo "BAD: the engine was asked to create: $(cat "${FAKE_ENGINE_LOG}")" >&2; exit 1; fi
             rm -f "${FAKE_ENGINE_LOG}"; touch "${FAKE_ENGINE_LOG}"
           done
           echo OK
@@ -146,7 +148,7 @@ testcases:
           egress_test_env "${TMP}"
           egress_launch 2>"${TMP}/err"
           if grep -q -- '--pod\|HTTPS_PROXY\|NET_ADMIN' "${CAPTURE}"; then echo "BAD: egress flags without egress mode" >&2; exit 1; fi
-          if grep -q '^network \|^pod ' "${FAKE_ENGINE_LOG}"; then echo "BAD: egress engine calls without egress mode" >&2; exit 1; fi
+          if grep -q '^network \|^rm ' "${FAKE_ENGINE_LOG}"; then echo "BAD: egress engine calls without egress mode" >&2; exit 1; fi
           if grep -q '^egress: ' "${TMP}/err"; then echo "BAD: egress output without egress mode" >&2; exit 1; fi
           echo OK
         assertions:
@@ -551,7 +553,7 @@ testcases:
           egress_test_env "${TMP}"
           FAKE_AGENT_EXIT=3 RIOTBOX_EGRESS=1 egress_launch; rc=$?
           [ "${rc}" -eq 3 ] || { echo "BAD: exit ${rc}, want 3" >&2; exit 1; }
-          grep -q '^pod rm --force --ignore ' "${FAKE_ENGINE_LOG}" || { echo "BAD: no teardown" >&2; exit 1; }
+          grep -q '^rm --force --ignore ' "${FAKE_ENGINE_LOG}" || { echo "BAD: no teardown" >&2; exit 1; }
           echo OK
         assertions:
           - result.code ShouldEqual 0
@@ -565,9 +567,9 @@ testcases:
           source "{{.egress_helpers}}"
           TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
           egress_test_env "${TMP}"
-          out="$(FAKE_FAIL_ON="pod rm" FAKE_AGENT_EXIT=3 RIOTBOX_EGRESS=1 egress_launch 2>&1)"; rc=$?
+          out="$(FAKE_FAIL_ON="rm --force" FAKE_AGENT_EXIT=3 RIOTBOX_EGRESS=1 egress_launch 2>&1)"; rc=$?
           [ "${rc}" -eq 3 ] || { echo "BAD: exit ${rc}, want 3" >&2; exit 1; }
-          [[ "${out}" == *"WARNING: the egress pod of "*" was not fully removed; the next launch retries."* ]] \
+          [[ "${out}" == *"WARNING: the egress proxy of "*" was not fully removed; the next launch retries."* ]] \
             || { echo "BAD: no warning: ${out}" >&2; exit 1; }
           echo OK
         assertions:
@@ -582,18 +584,18 @@ testcases:
           source "{{.egress_helpers}}"
           TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
           egress_test_env "${TMP}"
-          out="$(FAKE_FAIL_ON="pod create" RIOTBOX_EGRESS=1 egress_launch 2>&1)"; rc=$?
+          out="$(FAKE_FAIL_ON="run -d" RIOTBOX_EGRESS=1 egress_launch 2>&1)"; rc=$?
           [ "${rc}" -eq 1 ] || { echo "BAD: exit ${rc}, want 1" >&2; exit 1; }
-          [[ "${out}" == *"pod create failed"* ]] || { echo "BAD: cause not shown: ${out}" >&2; exit 1; }
+          [[ "${out}" == *"run -d failed"* ]] || { echo "BAD: cause not shown: ${out}" >&2; exit 1; }
           [ ! -e "${CAPTURE}" ] || { echo "BAD: agent started" >&2; exit 1; }
           grep -q '^network rm .*-int$' "${FAKE_ENGINE_LOG}" || { echo "BAD: networks left behind" >&2; exit 1; }
-          grep -q '^pod rm --force --ignore ' "${FAKE_ENGINE_LOG}" || { echo "BAD: pod not removed" >&2; exit 1; }
+          grep -q '^rm --force --ignore ' "${FAKE_ENGINE_LOG}" || { echo "BAD: containers not removed" >&2; exit 1; }
           echo OK
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring OK
 
-  - name: TERM and INT tear the pod down and exit 143 and 130
+  - name: TERM and INT tear the proxy down and exit 143 and 130
     steps:
       - type: exec
         script: |
@@ -619,7 +621,7 @@ testcases:
             kill "-${sig}" -- "-${pid}"
             wait "${pid}"; rc=$?
             [ "${rc}" -eq "${want}" ] || { echo "BAD: ${sig}: exit ${rc}, want ${want}" >&2; exit 1; }
-            grep -q '^pod rm --force --ignore ' "${FAKE_ENGINE_LOG}" || { echo "BAD: ${sig}: no teardown" >&2; exit 1; }
+            grep -q '^rm --force --ignore ' "${FAKE_ENGINE_LOG}" || { echo "BAD: ${sig}: no teardown" >&2; exit 1; }
           done
           echo OK
         assertions:
@@ -640,7 +642,7 @@ testcases:
           rc=0; err="$(egress_start 2>&1)" || rc=$?
           [ "${rc}" -ne 0 ] || { echo "BAD: egress_start succeeded without the registry" >&2; exit 1; }
           [[ "${err}" == *"ERROR: "*agent_call* ]] || { echo "BAD: no clear message: ${err}" >&2; exit 1; }
-          if grep -q '^network \|^pod ' "${FAKE_ENGINE_LOG}"; then echo "BAD: proxy started anyway" >&2; exit 1; fi
+          if grep -q '^network create \|^run -d ' "${FAKE_ENGINE_LOG}"; then echo "BAD: proxy started anyway" >&2; exit 1; fi
           echo OK
         assertions:
           - result.code ShouldEqual 0
@@ -661,7 +663,7 @@ testcases:
           rc=0; err="$(RIOTBOX_AGENT=nonesuch egress_start 2>&1)" || rc=$?
           [ "${rc}" -ne 0 ] || { echo "BAD: egress_start succeeded for an unknown agent" >&2; exit 1; }
           [[ "${err}" == *"unknown agent: 'nonesuch'"* ]] || { echo "BAD: no clear message: ${err}" >&2; exit 1; }
-          if grep -q '^network \|^pod ' "${FAKE_ENGINE_LOG}"; then echo "BAD: proxy started anyway" >&2; exit 1; fi
+          if grep -q '^network create \|^run -d ' "${FAKE_ENGINE_LOG}"; then echo "BAD: proxy started anyway" >&2; exit 1; fi
           echo OK
         assertions:
           - result.code ShouldEqual 0
@@ -680,8 +682,8 @@ testcases:
           ANTHROPIC_API_KEY="${key}" RIOTBOX_EGRESS=1 egress_launch 2>"${TMP}/err"
           name="$(egress_agent_name)"
           [ -n "${name}" ] || { echo "BAD: no agent name in argv" >&2; exit 1; }
-          # pod-ps-environ is the sweep's: it runs before the key is replaced.
-          for f in "${FAKE_ENGINE_LOG}" "${FAKE_ENGINE_LOG}.proxy-environ" "${FAKE_ENGINE_LOG}.pod-ps-environ" \
+          # sweep-environ is the sweep's: it runs before the key is replaced.
+          for f in "${FAKE_ENGINE_LOG}" "${FAKE_ENGINE_LOG}.proxy-environ" "${FAKE_ENGINE_LOG}.sweep-environ" \
               "${CAPTURE}" "${CAPTURE}.env" "${CAPTURE}.environ" "${TMP}/err"; do
             [ -e "${f}" ] || { echo "BAD: no ${f##*/}" >&2; exit 1; }
             if grep -qF "${key}" "${f}"; then echo "BAD: the key is in ${f##*/}" >&2; exit 1; fi
@@ -752,12 +754,12 @@ testcases:
           done
           if grep -qF k-openai "${CAPTURE}" "${CAPTURE}.env" "${CAPTURE}.environ"; then echo "BAD: the OpenAI key reached the agent" >&2; exit 1; fi
           # The sweep gets no forwarded variable: injected, passed through or unknown.
-          if grep -qE '^(ANTHROPIC_API_KEY|OPENAI_API_KEY|EXTRA_SERVICE_TOKEN)=' "${FAKE_ENGINE_LOG}.pod-ps-environ"; then
+          if grep -qE '^(ANTHROPIC_API_KEY|OPENAI_API_KEY|EXTRA_SERVICE_TOKEN)=' "${FAKE_ENGINE_LOG}.sweep-environ"; then
             echo "BAD: a forwarded variable reached the sweep" >&2; exit 1
           fi
           # ...except the two it needs to find the secrets and the engine, even when forwarded.
-          grep -qxF "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}" "${FAKE_ENGINE_LOG}.pod-ps-environ" || { echo "BAD: the sweep lost XDG_RUNTIME_DIR" >&2; exit 1; }
-          grep -qxF "HOME=${HOME}" "${FAKE_ENGINE_LOG}.pod-ps-environ" || { echo "BAD: the sweep lost HOME" >&2; exit 1; }
+          grep -qxF "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}" "${FAKE_ENGINE_LOG}.sweep-environ" || { echo "BAD: the sweep lost XDG_RUNTIME_DIR" >&2; exit 1; }
+          grep -qxF "HOME=${HOME}" "${FAKE_ENGINE_LOG}.sweep-environ" || { echo "BAD: the sweep lost HOME" >&2; exit 1; }
           echo OK
         assertions:
           - result.code ShouldEqual 0
@@ -855,7 +857,7 @@ testcases:
             # extra-args.sh's notice echoes RIOTBOX_EXTRA_ARGS itself; the refusal must not.
             if grep '^ERROR' "${TMP}/err" | grep -qF k-venom-; then echo "BAD: '${extra%%=*}': a value in the error" >&2; exit 1; fi
             [ ! -e "${CAPTURE}" ] || { echo "BAD: '${extra%%=*}': the agent ran" >&2; exit 1; }
-            grep -q '^pod rm --force --ignore ' "${FAKE_ENGINE_LOG}" || { echo "BAD: '${extra%%=*}': pod not removed" >&2; exit 1; }
+            grep -q '^rm --force --ignore ' "${FAKE_ENGINE_LOG}" || { echo "BAD: '${extra%%=*}': containers not removed" >&2; exit 1; }
           done
           echo OK
         assertions:
@@ -913,7 +915,7 @@ testcases:
           ROOT_DIR="{{.root}}" RIOTBOX_CORE="${TMP}/core" CONTAINER_CMD=podman CONTAINER_NAME=c SESSION_KEY=k PROJECT_DIRS=() \
             RIOTBOX_EGRESS_ROOT="${TMP}" PASSTHROUGH_FLAGS="-e ANTHROPIC_API_KEY"
           export ANTHROPIC_API_KEY=k-venom-real
-          # egress_start traps EXIT, INT and TERM for its pod; put the cleanup back.
+          # egress_start traps EXIT, INT and TERM for its proxy; put the cleanup back.
           start() {
             local rc=0
             FAKE_FLAG="$1" egress_start 2>"${TMP}/err" || rc=$?

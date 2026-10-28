@@ -58,7 +58,7 @@ testcases:
           # With a gateway (podman 4.9 may assign one) that route reaches the
           # internet, so the capability is the whole boundary there; without
           # one (podman 6.1) the network has no way out to route through.
-          out="$(podman run --rm --pod "${name}-pod" --network "${name}-int" --user 0 --cap-add=NET_ADMIN \
+          out="$(podman run --rm --network "${name}-int" --user 0 --cap-add=NET_ADMIN \
             "${E2E_BUSYBOX_IMAGE}" sh -c "${probe}")"
           echo "control: ${out}"
           [[ "${out}" == *ROUTED* ]] ||
@@ -166,7 +166,7 @@ testcases:
           err="$(e2e_core egress-down -- "${name}" 2>&1)"
           echo "${err}"
           [[ "${err}" == *"1 denied request(s)"* ]] || { echo "BAD: no denial report" >&2; exit 1; }
-          for obj in "pod exists ${name}-pod" "container exists ${name}-egress" \
+          for obj in "container exists ${name}-egress" \
               "network exists ${name}-int" "network exists ${name}-ext"; do
             # shellcheck disable=SC2086 # split on purpose
             if podman ${obj}; then echo "BAD: left behind: ${obj}" >&2; exit 1; fi
@@ -177,7 +177,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring OK
 
-  - name: the sweep removes a pod whose launch died and spares a live one, or one whose agent still runs
+  - name: the sweep removes a session whose launch died and spares a live one, or one whose agent still runs
     steps:
       - type: exec
         script: |
@@ -193,8 +193,12 @@ testcases:
           e2e_up "${killed}" "${dead}"
           podman run -d --name "${killed}" "${E2E_FLAGS[@]}" "${E2E_BUSYBOX_IMAGE}" sleep 300 >/dev/null
           e2e_core egress-sweep
-          if podman pod exists "rbx-e2e-orphan-$$-pod"; then echo "BAD: orphan kept" >&2; exit 1; fi
-          podman pod exists "rbx-e2e-alive-$$-pod" || { echo "BAD: live session swept" >&2; exit 1; }
+          for obj in "container exists rbx-e2e-orphan-$$-egress" "network exists rbx-e2e-orphan-$$-int"; do
+            # shellcheck disable=SC2086 # split on purpose
+            if podman ${obj}; then echo "BAD: orphan kept: ${obj}" >&2; exit 1; fi
+          done
+          podman container exists "rbx-e2e-alive-$$-egress" || { echo "BAD: live session swept" >&2; exit 1; }
+          podman container exists "${killed}-egress" || { echo "BAD: the sweep removed the proxy of a running agent" >&2; exit 1; }
           # JSON, not --format: a Go template here would collide with venom's own templating.
           [ "$(podman container inspect "${killed}" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["State"]["Running"])')" = True ] ||
             { echo "BAD: the sweep stopped a running agent" >&2; exit 1; }

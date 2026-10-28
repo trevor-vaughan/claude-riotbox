@@ -17,16 +17,12 @@ import (
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/state"
 )
 
-// fakeEngineScript answers `ps` with $FAKE_GATEWAYS and `pod ps` with
-// $FAKE_PODS (both default "[]"), succeeds silently at everything else,
-// logs each call's argv to $FAKE_LOG and, when $FAKE_ENVIRON is set, its
-// environment to that file.
+// fakeEngineScript answers `ps` with $FAKE_GATEWAYS (default "[]"),
+// succeeds silently at everything else, logs each call's argv to $FAKE_LOG
+// and, when $FAKE_ENVIRON is set, its environment to that file.
 const fakeEngineScript = `#!/bin/sh
 printf '%s\n' "$*" >>"$FAKE_LOG"
 if [ -n "$FAKE_ENVIRON" ]; then env >>"$FAKE_ENVIRON"; fi
-case "$1 $2" in
-"pod ps") printf '%s\n' "${FAKE_PODS:-[]}"; exit 0 ;;
-esac
 [ "$1" = ps ] && printf '%s\n' "${FAKE_GATEWAYS:-[]}"
 exit 0
 `
@@ -1073,7 +1069,7 @@ var _ = Describe("egress verbs", func() {
 			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
 			calls, err := os.ReadFile(log)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(string(calls)).To(HavePrefix("stop --ignore --time 10 s1-egress\npod rm --force --ignore s1-pod\n"))
+			Expect(string(calls)).To(HavePrefix("stop --ignore --time 10 s1-egress\nrm --force --ignore s1 s1-egress\n"))
 		})
 
 		It("sweeps with nothing to do", func() {

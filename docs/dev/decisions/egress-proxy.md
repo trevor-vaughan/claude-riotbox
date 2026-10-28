@@ -217,3 +217,18 @@ TLS to the project's own mirror and GPG-checked packages stand in.
 
 `@forges` was added at the same time: one name for git over HTTPS to the
 common forges, opt-in and not part of `@registries`.
+
+## No pod, 2026-10-28
+
+The `--infra=false` pod was dropped. Podman before 6.0 refuses `--userns`
+on a container that joins a pod (`--userns and --pod cannot be set
+together`), and both Envoy and the agent run with their own keep-id
+mapping, so egress mode failed at launch on podman 4.x and 5.x (Ubuntu
+24.04's 4.9 in CI). The pod only grouped lifecycle: `egress-down` now
+removes the agent's and Envoy's containers by name, and the sweep finds
+sessions by their networks and the agent by its exact name.
+
+**Turned down:** requiring podman 6.0 (excludes most distributions'
+packaged podman); setting `--userns` on the pod instead (with no infra
+container nothing passes it on, and the two containers need different
+mappings: nested mode widens the agent's).

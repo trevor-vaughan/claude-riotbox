@@ -54,7 +54,7 @@ e2e_cleanup() {
 	local name
 	for name in "${E2E_SESSIONS[@]}"; do
 		"${E2E_CORE}" egress-down --engine podman --state-root "${E2E_ROOT}" -- "${name}" >/dev/null 2>&1 ||
-			echo "WARNING: teardown of ${name} failed; remove it with: podman pod rm -f ${name}-pod" >&2
+			echo "WARNING: teardown of ${name} failed; remove it with: podman rm -f ${name}-egress; podman network rm ${name}-int ${name}-ext" >&2
 	done
 	rm -rf "${E2E_TMP}"
 }
@@ -73,7 +73,7 @@ e2e_core() {
 }
 
 # e2e_up <name> <owner-pid> [host...]
-#   Start session <name>'s proxy pod, allowing the hosts as the agent's.
+#   Start session <name>'s proxy, allowing the hosts as the agent's.
 #   Sets E2E_FLAGS to the agent's engine flags.
 e2e_up() {
 	local name="$1" owner="$2" out

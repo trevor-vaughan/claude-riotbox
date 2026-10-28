@@ -318,11 +318,11 @@ extra_args_gate || exit 1
 source "$(dirname "${BASH_SOURCE[0]}")/credfile-vars.sh"
 CREDFILE_FLAGS="$(credfile_flags)"
 
-# RIOTBOX_EGRESS=1: start this launch's proxy pod last, after every check
+# RIOTBOX_EGRESS=1: start this launch's proxy last, after every check
 # that can abort, so an abort leaves nothing to clean up. The one exception
 # is egress_gate_env, which needs the injected names egress_start returns;
-# when it refuses, the EXIT trap removes the pod. egress_start sets
-# EGRESS_FLAGS and an EXIT trap that removes the pod when the agent exits,
+# when it refuses, the EXIT trap removes the proxy. egress_start sets
+# EGRESS_FLAGS and an EXIT trap that removes the proxy when the agent exits,
 # and exports a placeholder over each key the proxy injects, which
 # PASSTHROUGH_FLAGS (set above) then passes instead of the key.
 # egress_mask_data hides the egress root (every session's proxy config) from

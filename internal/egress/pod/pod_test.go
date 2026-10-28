@@ -92,7 +92,7 @@ var _ = Describe("Manager", func() {
 			Expect(dir.Path()).NotTo(BeADirectory())
 		})
 
-		It("creates the networks, the pod and the proxy in order, and returns the agent's flags", func() {
+		It("creates the networks and the proxy in order, and returns the agent's flags", func() {
 			engine.respond = healthy(dir)
 			flags, err := m.Up(req)
 			Expect(err).NotTo(HaveOccurred())
@@ -102,18 +102,18 @@ var _ = Describe("Manager", func() {
 			Expect(lines[0]).To(Equal("image exists " + image))
 			Expect(lines[1]).To(Equal("network create --internal --disable-dns " + labels + " s1-int"))
 			Expect(lines[2]).To(Equal("network create " + labels + " s1-ext"))
-			Expect(lines[3]).To(Equal("pod create --infra=false --name s1-pod " + labels))
-			Expect(lines[4]).To(HavePrefix("run -d --pod s1-pod --name s1-egress " + labels + " --label riotbox.egress-role=gateway"))
-			Expect(lines[4]).To(ContainSubstring(fmt.Sprintf(" --network s1-int,s1-ext --userns=keep-id --user %d:%d --read-only --cap-drop=ALL --security-opt no-new-privileges --ulimit core=0 --log-driver=none ", os.Getuid(), os.Getgid())))
-			Expect(lines[4]).To(ContainSubstring(" -v " + dir.ConfigDir() + ":/etc/riotbox-egress:ro,z "))
-			Expect(lines[4]).To(ContainSubstring(" -v " + dir.LogDir() + ":/var/log/riotbox-egress:rw,z "))
-			Expect(lines[4]).To(HaveSuffix(" --entrypoint /usr/local/bin/envoy " + image + " -c /etc/riotbox-egress/bootstrap.json --log-path /var/log/riotbox-egress/envoy.log --file-flush-interval-msec 1000"))
+			// No pod: podman before 6.0 refuses --userns on a pod's member.
+			Expect(lines[3]).To(HavePrefix("run -d --name s1-egress " + labels + " --label riotbox.egress-role=gateway"))
+			Expect(lines[3]).To(ContainSubstring(fmt.Sprintf(" --network s1-int,s1-ext --userns=keep-id --user %d:%d --read-only --cap-drop=ALL --security-opt no-new-privileges --ulimit core=0 --log-driver=none ", os.Getuid(), os.Getgid())))
+			Expect(lines[3]).To(ContainSubstring(" -v " + dir.ConfigDir() + ":/etc/riotbox-egress:ro,z "))
+			Expect(lines[3]).To(ContainSubstring(" -v " + dir.LogDir() + ":/var/log/riotbox-egress:rw,z "))
+			Expect(lines[3]).To(HaveSuffix(" --entrypoint /usr/local/bin/envoy " + image + " -c /etc/riotbox-egress/bootstrap.json --log-path /var/log/riotbox-egress/envoy.log --file-flush-interval-msec 1000"))
 
 			Expect(lines[len(lines)-1]).To(Equal("container inspect --format " + networksFormat + " s1-egress"))
 
 			proxy := "http://s1-egress:3128"
 			Expect(flags).To(Equal([]string{
-				"--pod", "s1-pod", "--network", "s1-int", "--cap-drop=NET_ADMIN,NET_RAW",
+				"--network", "s1-int", "--cap-drop=NET_ADMIN,NET_RAW",
 				"--dns", "none", "--add-host", "s1-egress:10.89.0.1",
 				"-e", "HTTP_PROXY=" + proxy, "-e", "HTTPS_PROXY=" + proxy,
 				"-e", "http_proxy=" + proxy, "-e", "https_proxy=" + proxy,
@@ -200,16 +200,16 @@ var _ = Describe("Manager", func() {
 
 		It("tears down what it created when a step fails", func() {
 			engine.respond = func(args []string) ([]byte, error) {
-				if args[0] == "pod" && args[1] == "create" {
-					return nil, errors.New("pod create: boom")
+				if args[0] == "network" && args[1] == "create" && args[len(args)-1] == "s1-ext" {
+					return nil, errors.New("network create: boom")
 				}
 				return nil, nil
 			}
 			_, err := m.Up(req)
-			Expect(err).To(MatchError(ContainSubstring("pod create: boom")))
+			Expect(err).To(MatchError(ContainSubstring("network create: boom")))
 			Expect(engine.index("run -d")).To(Equal(-1))
 			Expect(engine.index("stop --ignore --time 10 s1-egress")).To(BeNumerically(">", 0))
-			Expect(engine.index("pod rm --force --ignore s1-pod")).To(BeNumerically(">", 0))
+			Expect(engine.index("rm --force --ignore s1 s1-egress")).To(BeNumerically(">", 0))
 			Expect(engine.index("network rm s1-int")).To(BeNumerically(">", 0))
 			Expect(engine.index("network rm s1-ext")).To(BeNumerically(">", 0))
 		})
@@ -236,7 +236,7 @@ var _ = Describe("Manager", func() {
 			Expect(stderr.String()).To(ContainSubstring("  line 7\n"))
 			Expect(stderr.String()).To(ContainSubstring("  evil ?]0;pwned? end\n"))
 			Expect(stderr.String()).NotTo(ContainSubstring("\x1b"))
-			Expect(engine.index("pod rm --force --ignore s1-pod")).To(BeNumerically(">", 0))
+			Expect(engine.index("rm --force --ignore s1 s1-egress")).To(BeNumerically(">", 0))
 		})
 
 		It("gives up after ReadyTimeout when Envoy never reports ready", func() {
@@ -249,7 +249,7 @@ var _ = Describe("Manager", func() {
 			}
 			_, err := m.Up(req)
 			Expect(err).To(MatchError(ContainSubstring("the egress proxy was not ready after 20ms")))
-			Expect(engine.index("pod rm --force --ignore s1-pod")).To(BeNumerically(">", 0))
+			Expect(engine.index("rm --force --ignore s1 s1-egress")).To(BeNumerically(">", 0))
 		})
 
 		It("does not take a stale ready line or stale denials from a reused session dir", func() {
@@ -323,7 +323,7 @@ var _ = Describe("Manager", func() {
 			}
 			_, err := m.Up(req)
 			Expect(err).To(MatchError(ContainSubstring("inspect: boom")))
-			Expect(engine.index("pod rm --force --ignore s1-pod")).To(BeNumerically(">", 0))
+			Expect(engine.index("rm --force --ignore s1 s1-egress")).To(BeNumerically(">", 0))
 		})
 
 		It("maps the proxy's name to its IPv6 address when it has no IPv4 one", func() {
@@ -351,7 +351,7 @@ var _ = Describe("Manager", func() {
 				flags, err := m.Up(req)
 				Expect(err).To(MatchError(ContainSubstring(want)))
 				Expect(flags).To(BeNil())
-				Expect(engine.index("pod rm --force --ignore s1-pod")).To(BeNumerically(">", 0))
+				Expect(engine.index("rm --force --ignore s1 s1-egress")).To(BeNumerically(">", 0))
 			},
 			Entry("not on the internal network", `{"s1-ext":{"IPAddress":"10.89.1.2"}}`, "has no address on s1-int"),
 			Entry("no address", `{"s1-int":{"IPAddress":"","GlobalIPv6Address":""}}`, "has no address on s1-int"),
@@ -371,21 +371,21 @@ var _ = Describe("Manager", func() {
 			}
 			_, err := m.Up(req)
 			Expect(err).To(MatchError(ContainSubstring("inspect: gone")))
-			Expect(engine.index("pod rm --force --ignore s1-pod")).To(BeNumerically(">", 0))
+			Expect(engine.index("rm --force --ignore s1 s1-egress")).To(BeNumerically(">", 0))
 		})
 
 		It("returns both the cause and the teardown failure when rollback also fails", func() {
 			engine.respond = func(args []string) ([]byte, error) {
-				switch {
-				case args[0] == "pod" && args[1] == "create":
-					return nil, errors.New("pod create: boom")
-				case args[0] == "stop":
+				switch args[0] {
+				case "run":
+					return nil, errors.New("run: boom")
+				case "stop":
 					return nil, errors.New("stop: wedged")
 				}
 				return nil, nil
 			}
 			_, err := m.Up(req)
-			Expect(err).To(MatchError(ContainSubstring("pod create: boom")))
+			Expect(err).To(MatchError(ContainSubstring("run: boom")))
 			Expect(err).To(MatchError(ContainSubstring("stop: wedged")))
 		})
 
@@ -404,8 +404,8 @@ var _ = Describe("Manager", func() {
 				Expect(run).To(ContainSubstring(" -v " + dir.SecretsDir() + ":/etc/riotbox-egress-secrets:ro,z "))
 				Expect(run).To(HaveSuffix(" --entrypoint /usr/local/bin/envoy " + image + " -c /etc/riotbox-egress/bootstrap.json --log-path /var/log/riotbox-egress/envoy.log --file-flush-interval-msec 1000"))
 				Expect(run).NotTo(ContainSubstring(dir.CACert()))
-				Expect(flags).To(HaveLen(31))
-				Expect(flags[23:]).To(Equal([]string{
+				Expect(flags).To(HaveLen(29))
+				Expect(flags[21:]).To(Equal([]string{
 					"-v", dir.CACert() + ":/run/riotbox-egress/ca.crt:ro,z",
 					"-e", "NODE_EXTRA_CA_CERTS=/run/riotbox-egress/ca.crt",
 					"-e", "RIOTBOX_EGRESS_CA=/run/riotbox-egress/ca.crt",
@@ -432,13 +432,13 @@ var _ = Describe("Manager", func() {
 
 			It("removes the secrets dir when a later step fails", func() {
 				engine.respond = func(args []string) ([]byte, error) {
-					if args[0] == "pod" && args[1] == "create" {
-						return nil, errors.New("pod create failed")
+					if args[0] == "run" {
+						return nil, errors.New("run failed")
 					}
 					return healthy(dir)(args)
 				}
 				_, err := m.Up(req)
-				Expect(err).To(MatchError(ContainSubstring("pod create failed")))
+				Expect(err).To(MatchError(ContainSubstring("run failed")))
 				Expect(strings.Contains(err.Error(), key)).To(BeFalse(), "the error holds the key")
 				Expect(dir.SecretsDir()).NotTo(BeAnExistingFile())
 			})
@@ -546,12 +546,12 @@ var _ = Describe("Manager", func() {
 			Expect(legacy).NotTo(BeAnExistingFile())
 		})
 
-		It("removes the secrets dir after the pod, keeping the logs", func() {
+		It("removes the secrets dir after the containers, keeping the logs", func() {
 			Expect(dir.Create()).To(Succeed())
 			Expect(dir.WriteInjection([]inject.Credential{{Env: "K", Host: "api.anthropic.com", Header: "x-api-key", Value: "v"}}, time.Now())).To(Succeed())
 			engine.respond = func(args []string) ([]byte, error) {
-				if args[0] == "pod" && args[1] == "rm" {
-					Expect(dir.SecretsDir()).To(BeADirectory(), "secrets removed before the pod")
+				if args[0] == "rm" {
+					Expect(dir.SecretsDir()).To(BeADirectory(), "secrets removed before the containers")
 				}
 				return nil, nil
 			}
@@ -566,7 +566,7 @@ var _ = Describe("Manager", func() {
 			Expect(m.Down(dir, false)).To(Succeed())
 		})
 
-		It("stops the proxy first, then removes the pod and each network that exists", func() {
+		It("stops the proxy first, then removes the agent, the proxy and each network that exists", func() {
 			engine.respond = func(args []string) ([]byte, error) {
 				if args[0] == "network" && args[1] == "exists" && args[2] == "s1-ext" {
 					return []byte("absent"), nil
@@ -576,7 +576,7 @@ var _ = Describe("Manager", func() {
 			Expect(m.Down(dir, false)).To(Succeed())
 			Expect(engine.lines()).To(Equal([]string{
 				"stop --ignore --time 10 s1-egress",
-				"pod rm --force --ignore s1-pod",
+				"rm --force --ignore s1 s1-egress",
 				"network exists s1-int",
 				"network rm s1-int",
 				"network exists s1-ext",
@@ -597,7 +597,7 @@ var _ = Describe("Manager", func() {
 			Expect(err).To(MatchError(ContainSubstring("stop failed")))
 			Expect(err).To(MatchError(ContainSubstring("network rm failed: s1-int")))
 			Expect(err).To(MatchError(ContainSubstring("network rm failed: s1-ext")))
-			Expect(engine.index("pod rm")).To(Equal(1))
+			Expect(engine.index("rm --force")).To(Equal(1))
 		})
 
 		It("treats a network that vanished between exists and rm as removed", func() {

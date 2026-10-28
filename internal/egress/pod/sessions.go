@@ -95,44 +95,36 @@ func (m Manager) Target(root, name string) (state.Dir, error) {
 	return state.Open(root, name)
 }
 
-// session is one egress pod or network the engine knows of.
+// session is one egress network the engine knows of.
 type session struct {
 	name       string
 	ownerPID   int // 0 when the label is missing or not in 1..MaxInt32
 	ownerPIDNS string
 }
 
-// sessions lists every egress pod and network that is named as its
-// session's object. podman prints pods with capitalised JSON keys and
-// networks with lowercase ones; encoding/json matches either.
+// sessions lists every egress network that is named as its session's
+// object. Up creates both networks before the proxy and Down removes them
+// after it, so every session with an engine object has one. podman prints
+// networks with lowercase JSON keys; encoding/json matches them.
 func (m Manager) sessions() ([]session, error) {
+	out, err := m.Engine.Output("network", "ls", "--filter", "label="+LabelEgress, "--format", "json")
+	if err != nil {
+		return nil, fmt.Errorf("listing egress networks: %w", err)
+	}
+	var objects []struct {
+		Name   string
+		Labels map[string]string
+	}
+	if err := decodeList(out, &objects); err != nil {
+		return nil, fmt.Errorf("reading the engine's networks list: %w", err)
+	}
 	var found []session
-	for _, kind := range []struct {
-		noun     string
-		args     []string
-		suffixes []string
-	}{
-		{"pods", []string{"pod", "ps"}, []string{"-pod"}},
-		{"networks", []string{"network", "ls"}, []string{"-int", "-ext"}},
-	} {
-		out, err := m.Engine.Output(append(kind.args, "--filter", "label="+LabelEgress, "--format", "json")...)
-		if err != nil {
-			return nil, fmt.Errorf("listing egress %s: %w", kind.noun, err)
+	for _, o := range objects {
+		name, ok := m.sessionName(o.Labels, []string{o.Name}, "-int", "-ext")
+		if !ok {
+			continue
 		}
-		var objects []struct {
-			Name   string
-			Labels map[string]string
-		}
-		if err := decodeList(out, &objects); err != nil {
-			return nil, fmt.Errorf("reading the engine's %s list: %w", kind.noun, err)
-		}
-		for _, o := range objects {
-			name, ok := m.sessionName(o.Labels, []string{o.Name}, kind.suffixes...)
-			if !ok {
-				continue
-			}
-			found = append(found, session{name: name, ownerPID: ownerPID(o.Labels), ownerPIDNS: o.Labels[LabelOwnerPIDNS]})
-		}
+		found = append(found, session{name: name, ownerPID: ownerPID(o.Labels), ownerPIDNS: o.Labels[LabelOwnerPIDNS]})
 	}
 	return found, nil
 }
@@ -144,7 +136,7 @@ func (m Manager) sessions() ([]session, error) {
 // include pulling the proxy image.
 const secretsGrace = time.Hour
 
-// Sweep tears down the egress pods and networks whose launch is gone (its
+// Sweep tears down the egress sessions whose launch is gone (its
 // owner PID no longer exists in this PID namespace) and whose agent no
 // longer runs, then deletes the state dirs under root that no session uses
 // and that saw no use for maxAge. Nothing is touched when the engine
@@ -152,8 +144,8 @@ const secretsGrace = time.Hour
 // an owner that is in another PID namespace, has a missing or malformed
 // owner label, or is alive, the session is left alone, because a
 // concurrent session must never be torn down. So is a session whose agent
-// container still runs in its pod, or whose pod's containers cannot be
-// listed: a launch killed with SIGKILL leaves its agent running.
+// container still runs, or when the running containers cannot be listed:
+// a launch killed with SIGKILL leaves its agent running.
 //
 // It also deletes the secrets of every state dir no live session uses
 // that saw no use for secretsGrace, so a session whose engine objects are
@@ -276,9 +268,12 @@ func sweepRuntime(root, runtime string, live map[string]bool, now time.Time) err
 }
 
 // agentRunning reports whether the session's agent container, which
-// launch.sh names after the session, runs in the session's pod.
+// launch.sh names after the session, runs. The name filter is a regex
+// whose direction varies across podman versions; a session name's only
+// metacharacter is ".", which matches itself, so either way the agent is
+// listed, and only an exact name counts.
 func (m Manager) agentRunning(session string) (bool, error) {
-	out, err := m.Engine.Output("ps", "--filter", "pod="+namesFor(session).pod, "--format", "json")
+	out, err := m.Engine.Output("ps", "--filter", "name="+namesFor(session).agent, "--format", "json")
 	if err != nil {
 		return false, err
 	}

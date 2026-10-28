@@ -26,13 +26,10 @@ func gateways(names ...string) []byte {
 	return []byte("[" + strings.Join(parts, ",") + "]\n")
 }
 
-func podJSON(name, pid, pidns string) string {
-	return namedPodJSON(name+"-pod", name, pid, pidns)
-}
-
-// namedPodJSON is a pod called podName that claims to belong to session.
-func namedPodJSON(podName, session, pid, pidns string) string {
-	return fmt.Sprintf(`{"Name":%q,"Labels":{"riotbox.egress":%q,"riotbox.owner-pid":%q,"riotbox.owner-pidns":%q}}`, podName, session, pid, pidns)
+// sessionJSON is the internal network of session name, which records its
+// owner.
+func sessionJSON(name, pid, pidns string) string {
+	return networkJSON(name+"-int", name, pid, pidns)
 }
 
 // networkJSON is a network as podman lists it: lowercase keys.
@@ -163,21 +160,21 @@ var _ = Describe("sessions", func() {
 
 		var (
 			networks []string
-			// inPod is the engine's `ps --filter pod=<key>` answer: the
-			// containers running in that pod.
-			inPod map[string]string
+			// agents is the engine's `ps --filter name=<session>` answer:
+			// the running containers whose name matches.
+			agents map[string]string
 			// rt is the runtime base the sessions' secrets are under.
 			rt string
 		)
-		pods := func(entries ...string) {
+		// listed has the engine list entries, and then networks, as the
+		// egress networks.
+		listed := func(entries ...string) {
 			engine.respond = func(args []string) ([]byte, error) {
 				switch {
-				case args[0] == "pod" && args[1] == "ps":
-					return []byte("[" + strings.Join(entries, ",") + "]"), nil
 				case args[0] == "network" && args[1] == "ls":
-					return []byte("[" + strings.Join(networks, ",") + "]"), nil
+					return []byte("[" + strings.Join(append(entries, networks...), ",") + "]"), nil
 				case args[0] == "ps" && args[1] == "--filter":
-					return []byte(inPod[strings.TrimPrefix(args[2], "pod=")]), nil
+					return []byte(agents[strings.TrimPrefix(args[2], "name=")]), nil
 				}
 				return nil, nil
 			}
@@ -202,12 +199,12 @@ var _ = Describe("sessions", func() {
 		}
 
 		BeforeEach(func() {
-			networks, inPod = nil, nil
+			networks, agents = nil, nil
 			rt = filepath.Join(GinkgoT().TempDir(), "riotbox-egress")
 		})
 
 		It("removes the secrets of a session no launch owns once it is an hour idle, keeping its logs", func() {
-			pods()
+			listed()
 			for name, age := range map[string]time.Duration{"idle": 2 * time.Hour, "starting": time.Minute} {
 				d := oldDir(name, 0)
 				Expect(os.MkdirAll(d.SecretsDir(), 0o700)).To(Succeed())
@@ -221,7 +218,7 @@ var _ = Describe("sessions", func() {
 		})
 
 		It("removes the secrets an earlier release kept in an idle state dir, keeping a starting one's", func() {
-			pods()
+			listed()
 			for name, age := range map[string]time.Duration{"idle": 2 * time.Hour, "starting": time.Minute} {
 				d := oldDir(name, 0)
 				Expect(os.Mkdir(filepath.Join(d.Path(), "secrets"), 0o700)).To(Succeed())
@@ -234,7 +231,7 @@ var _ = Describe("sessions", func() {
 		})
 
 		It("removes the runtime secrets of a state dir it deletes as stale", func() {
-			pods()
+			listed()
 			oldDir("old", 8*24*time.Hour)
 			secrets := runtimeSecrets("old", 8*24*time.Hour)
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
@@ -243,7 +240,7 @@ var _ = Describe("sessions", func() {
 		})
 
 		It("removes runtime secrets whose state dir is gone once they are an hour old", func() {
-			pods()
+			listed()
 			gone := runtimeSecrets("gone", 2*time.Hour)
 			young := runtimeSecrets("young", time.Minute)
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
@@ -252,7 +249,7 @@ var _ = Describe("sessions", func() {
 		})
 
 		It("sweeps the secrets under every runtime base it is given", func() {
-			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
+			listed(sessionJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
 			rt2 := filepath.Join(GinkgoT().TempDir(), "riotbox-egress")
 			oldDir("idle", 2*time.Hour)
 			oldDir("orphan", time.Minute)
@@ -274,13 +271,13 @@ var _ = Describe("sessions", func() {
 
 		It("keeps the runtime secrets of a live session whose state dir is gone", func() {
 			secrets := runtimeSecrets("busy", 30*24*time.Hour)
-			pods(podJSON("busy", fmt.Sprint(os.Getpid()), pod.PIDNamespace()))
+			listed(sessionJSON("busy", fmt.Sprint(os.Getpid()), pod.PIDNamespace()))
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(secrets).To(BeADirectory())
 		})
 
 		It("leaves runtime secrets to the idle check while their state dir shows recent use", func() {
-			pods()
+			listed()
 			oldDir("recent", time.Minute)
 			secrets := runtimeSecrets("recent", 2*time.Hour)
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
@@ -288,7 +285,7 @@ var _ = Describe("sessions", func() {
 		})
 
 		It("sweeps only the state dirs' secrets when there is no runtime base", func() {
-			pods()
+			listed()
 			d := oldDir("idle", 2*time.Hour)
 			Expect(os.Mkdir(filepath.Join(d.Path(), "secrets"), 0o700)).To(Succeed())
 			Expect(os.Chtimes(d.Path(), now.Add(-2*time.Hour), now.Add(-2*time.Hour))).To(Succeed())
@@ -300,7 +297,7 @@ var _ = Describe("sessions", func() {
 			d := oldDir("busy", 30*24*time.Hour)
 			Expect(os.MkdirAll(d.SecretsDir(), 0o700)).To(Succeed())
 			Expect(os.Chtimes(d.Path(), now.Add(-30*24*time.Hour), now.Add(-30*24*time.Hour))).To(Succeed())
-			pods(podJSON("busy", fmt.Sprint(os.Getpid()), pod.PIDNamespace()))
+			listed(sessionJSON("busy", fmt.Sprint(os.Getpid()), pod.PIDNamespace()))
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(d.SecretsDir()).To(BeADirectory())
 		})
@@ -309,8 +306,8 @@ var _ = Describe("sessions", func() {
 			d := oldDir("orphan", 0)
 			Expect(os.MkdirAll(d.SecretsDir(), 0o700)).To(Succeed())
 			Expect(os.Chtimes(d.Path(), now.Add(-2*time.Hour), now.Add(-2*time.Hour))).To(Succeed())
-			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
-			inPod = map[string]string{"orphan-pod": `[{"Names":["orphan-egress"]},{"Names":["orphan"]}]`}
+			listed(sessionJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
+			agents = map[string]string{"orphan": `[{"Names":["orphan-egress"]},{"Names":["orphan"]}]`}
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(d.SecretsDir()).To(BeADirectory())
 		})
@@ -319,44 +316,44 @@ var _ = Describe("sessions", func() {
 			d := oldDir("elsewhere", 0)
 			Expect(os.MkdirAll(d.SecretsDir(), 0o700)).To(Succeed())
 			Expect(os.Chtimes(d.Path(), now.Add(-2*time.Hour), now.Add(-2*time.Hour))).To(Succeed())
-			pods(podJSON("elsewhere", fmt.Sprint(deadPID()), "pid:[1]"))
+			listed(sessionJSON("elsewhere", fmt.Sprint(deadPID()), "pid:[1]"))
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(d.SecretsDir()).To(BeADirectory())
 		})
 
-		It("removes an orphaned pod's secrets when it tears the pod down", func() {
+		It("removes an orphaned session's secrets when it tears the session down", func() {
 			d := oldDir("orphan", time.Minute)
 			Expect(os.MkdirAll(d.SecretsDir(), 0o700)).To(Succeed())
-			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
+			listed(sessionJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(d.SecretsDir()).NotTo(BeAnExistingFile())
 		})
 
-		It("tears down a pod whose owner is gone from this PID namespace", func() {
-			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
+		It("tears down a session whose owner is gone from this PID namespace", func() {
+			listed(sessionJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(engine.index("stop --ignore --time 10 orphan-egress")).To(BeNumerically(">", 0))
-			Expect(engine.index("pod rm --force --ignore orphan-pod")).To(BeNumerically(">", 0))
+			Expect(engine.index("rm --force --ignore orphan orphan-egress")).To(BeNumerically(">", 0))
 		})
 
 		It("leaves a session alone while its agent runs, though its owner is gone", func() {
-			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
-			inPod = map[string]string{"orphan-pod": `[{"Names":["orphan-egress"]},{"Names":["orphan"]}]`}
+			listed(sessionJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
+			agents = map[string]string{"orphan": `[{"Names":["orphan-egress"]},{"Names":["orphan"]}]`}
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
-			Expect(engine.lines()).To(ContainElement("ps --filter pod=orphan-pod --format json"))
+			Expect(engine.lines()).To(ContainElement("ps --filter name=orphan --format json"))
 			Expect(engine.index("stop")).To(Equal(-1))
-			Expect(engine.index("pod rm")).To(Equal(-1))
+			Expect(engine.index("rm ")).To(Equal(-1))
 		})
 
-		It("tears down a session whose pod runs only its proxy, or a container not named as its agent", func() {
-			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
-			inPod = map[string]string{"orphan-pod": `[{"Names":["orphan-egress"]},{"Names":["orphan-x"]}]`}
+		It("tears down a session whose agent does not run, though a container with a similar name does", func() {
+			listed(sessionJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
+			agents = map[string]string{"orphan": `[{"Names":["orphan-egress"]},{"Names":["orphan-x"]}]`}
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
-			Expect(engine.index("pod rm --force --ignore orphan-pod")).To(BeNumerically(">", 0))
+			Expect(engine.index("rm --force --ignore orphan orphan-egress")).To(BeNumerically(">", 0))
 		})
 
-		It("leaves a session alone, and reports, when its pod's containers cannot be listed", func() {
-			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
+		It("leaves a session alone, and reports, when the running containers cannot be listed", func() {
+			listed(sessionJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
 			base := engine.respond
 			engine.respond = func(args []string) ([]byte, error) {
 				if args[0] == "ps" {
@@ -370,16 +367,16 @@ var _ = Describe("sessions", func() {
 			Expect(engine.index("stop")).To(Equal(-1))
 		})
 
-		It("leaves a session alone when its pod's container list is not JSON", func() {
-			pods(podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
-			inPod = map[string]string{"orphan-pod": `nope`}
+		It("leaves a session alone when the running container list is not JSON", func() {
+			listed(sessionJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()))
+			agents = map[string]string{"orphan": `nope`}
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(MatchError(ContainSubstring("orphan")))
 			Expect(engine.index("stop")).To(Equal(-1))
 		})
 
-		DescribeTable("leaves a pod alone when its owner cannot be judged dead",
+		DescribeTable("leaves a session alone when its owner cannot be judged dead",
 			func(pid func() string, pidns func() string) {
-				pods(podJSON("keep", pid(), pidns()))
+				listed(sessionJSON("keep", pid(), pidns()))
 				Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 				Expect(engine.index("stop")).To(Equal(-1))
 			},
@@ -397,8 +394,8 @@ var _ = Describe("sessions", func() {
 			}, pod.PIDNamespace),
 		)
 
-		It("deletes state dirs no pod uses that are older than maxAge, and keeps fresh ones", func() {
-			pods()
+		It("deletes state dirs no session uses that are older than maxAge, and keeps fresh ones", func() {
+			listed()
 			for name, age := range map[string]time.Duration{"old": 8 * 24 * time.Hour, "fresh": time.Hour} {
 				d, err := state.Open(root, name)
 				Expect(err).NotTo(HaveOccurred())
@@ -411,32 +408,32 @@ var _ = Describe("sessions", func() {
 			Expect(filepath.Join(root, "fresh")).To(BeADirectory())
 		})
 
-		It("keeps the state of a live pod even when it is older than maxAge", func() {
+		It("keeps the state of a live session even when it is older than maxAge", func() {
 			d := oldDir("busy", 30*24*time.Hour)
-			pods(podJSON("busy", fmt.Sprint(os.Getpid()), pod.PIDNamespace()))
+			listed(sessionJSON("busy", fmt.Sprint(os.Getpid()), pod.PIDNamespace()))
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(d.Path()).To(BeADirectory())
 		})
 
-		It("does not touch a session when a pod with another name claims it with a dead owner", func() {
-			pods(
-				podJSON("victim", fmt.Sprint(os.Getpid()), pod.PIDNamespace()),
-				namedPodJSON("junk", "victim", fmt.Sprint(deadPID()), pod.PIDNamespace()),
+		It("does not touch a session when a network with another name claims it with a dead owner", func() {
+			listed(
+				sessionJSON("victim", fmt.Sprint(os.Getpid()), pod.PIDNamespace()),
+				networkJSON("junk", "victim", fmt.Sprint(deadPID()), pod.PIDNamespace()),
 			)
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(engine.index("stop")).To(Equal(-1))
-			Expect(engine.index("pod rm")).To(Equal(-1))
+			Expect(engine.index("rm ")).To(Equal(-1))
 			Expect(stderr.String()).To(ContainSubstring("junk"))
 		})
 
 		DescribeTable("never tears a session down while any entry of it has a live owner",
 			func(liveFirst bool) {
-				live := podJSON("dup", fmt.Sprint(os.Getpid()), pod.PIDNamespace())
-				dead := podJSON("dup", fmt.Sprint(deadPID()), pod.PIDNamespace())
+				live := sessionJSON("dup", fmt.Sprint(os.Getpid()), pod.PIDNamespace())
+				dead := sessionJSON("dup", fmt.Sprint(deadPID()), pod.PIDNamespace())
 				if liveFirst {
-					pods(live, dead)
+					listed(live, dead)
 				} else {
-					pods(dead, live)
+					listed(dead, live)
 				}
 				Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 				Expect(engine.index("stop")).To(Equal(-1))
@@ -444,20 +441,6 @@ var _ = Describe("sessions", func() {
 			Entry("live entry first", true),
 			Entry("dead entry first", false),
 		)
-
-		It("fails, touching nothing, when the pods cannot be listed", func() {
-			d := oldDir("old", 30*24*time.Hour)
-			engine.respond = func(args []string) ([]byte, error) {
-				if args[0] == "pod" && args[1] == "ps" {
-					return nil, fmt.Errorf("engine down")
-				}
-				return nil, nil
-			}
-			Expect(m.Sweep(root, []string{rt}, week, now)).To(MatchError(ContainSubstring("listing egress pods: ")))
-			Expect(engine.index("stop")).To(Equal(-1))
-			Expect(engine.index("pod rm")).To(Equal(-1))
-			Expect(d.Path()).To(BeADirectory())
-		})
 
 		It("fails, touching nothing, when the networks cannot be listed", func() {
 			d := oldDir("old", 30*24*time.Hour)
@@ -472,8 +455,8 @@ var _ = Describe("sessions", func() {
 			Expect(d.Path()).To(BeADirectory())
 		})
 
-		It("removes the networks of a session whose pod is gone, when its owner is gone", func() {
-			pods()
+		It("removes both networks of a session whose owner is gone", func() {
+			listed()
 			networks = []string{
 				networkJSON("orphan-int", "orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()),
 				networkJSON("orphan-ext", "orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()),
@@ -484,7 +467,7 @@ var _ = Describe("sessions", func() {
 		})
 
 		It("leaves the networks of a live owner alone", func() {
-			pods()
+			listed()
 			networks = []string{networkJSON("busy-int", "busy", fmt.Sprint(os.Getpid()), pod.PIDNamespace())}
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(engine.index("network rm")).To(Equal(-1))
@@ -492,7 +475,7 @@ var _ = Describe("sessions", func() {
 		})
 
 		It("skips, and warns about, a network whose name does not match its label", func() {
-			pods()
+			listed()
 			networks = []string{networkJSON("junk", "victim", fmt.Sprint(deadPID()), pod.PIDNamespace())}
 			Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
 			Expect(engine.index("stop")).To(Equal(-1))
@@ -502,11 +485,12 @@ var _ = Describe("sessions", func() {
 		It("keeps an orphan's state, and reports, when its teardown fails", func() {
 			engine.respond = func(args []string) ([]byte, error) {
 				switch args[0] {
-				case "pod":
-					if args[1] == "ps" {
-						return []byte("[" + podJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()) + "]"), nil
+				case "network":
+					if args[1] == "ls" {
+						return []byte("[" + sessionJSON("orphan", fmt.Sprint(deadPID()), pod.PIDNamespace()) + "]"), nil
 					}
-					return nil, fmt.Errorf("pod rm: engine down")
+				case "rm":
+					return nil, fmt.Errorf("rm: engine down")
 				}
 				return nil, nil
 			}

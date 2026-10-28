@@ -35,11 +35,15 @@ One set of objects per launch, named after the agent container `<name>`:
 |---|---|---|
 | `<name>-int` | `podman network create --internal --disable-dns` | The agent's only network. No default route and no DNS server; on podman 6.1 it also has no gateway address on the host. |
 | `<name>-ext` | a normal bridge network, DNS enabled | Envoy's way out, and its only resolver (its `resolv.conf` lists this network's aardvark-dns alone). The default `podman` network has DNS disabled and the internal network has none, so without this Envoy cannot resolve upstreams (`503`, flag `DF`). |
-| `<name>-pod` | `podman pod create --infra=false` | Lifecycle only. Without an infra container the pod shares no namespaces, which is what lets its two members sit on different networks. |
 | `<name>-egress` | Envoy, digest-pinned distroless image, on both networks | Listens on `:3128`. No admin interface: nothing uses it, and an allowlisted name that resolves to loopback could reach it. Runs as the invoking user (`--userns=keep-id`), `--read-only`, `--cap-drop=ALL`, `no-new-privileges`, `--ulimit core=0` (it holds injected keys in memory; no core file may write them out), `--log-driver=none`. Config dir mounted read-only, log dir read-write; with injected keys, the secrets dir on the runtime tmpfs read-only. |
-| `<name>` | the agent, on `<name>-int` only, in the pod | Gets `HTTP(S)_PROXY` and `http(s)_proxy` = `http://<name>-egress:3128`, `NO_PROXY=localhost,127.0.0.1` (headroom's loopback proxy), `RIOTBOX_EGRESS_SESSION=<name>` (for the [prompt section](#telling-the-agent-about-denials)), `--cap-drop=NET_ADMIN,NET_RAW`, `--dns none` (no `/etc/resolv.conf`), and `--add-host <name>-egress:<ip>`, Envoy's address on `<name>-int` as `podman container inspect` reports it once Envoy is ready, refused unless it parses as an IP literal. |
+| `<name>` | the agent, on `<name>-int` only | Gets `HTTP(S)_PROXY` and `http(s)_proxy` = `http://<name>-egress:3128`, `NO_PROXY=localhost,127.0.0.1` (headroom's loopback proxy), `RIOTBOX_EGRESS_SESSION=<name>` (for the [prompt section](#telling-the-agent-about-denials)), `--cap-drop=NET_ADMIN,NET_RAW`, `--dns none` (no `/etc/resolv.conf`), and `--add-host <name>-egress:<ip>`, Envoy's address on `<name>-int` as `podman container inspect` reports it once Envoy is ready, refused unless it parses as an IP literal. |
 
-Every object carries `riotbox.egress=<name>`, `riotbox.session=<key>`,
+There is no pod: podman before 6.0 refuses `--userns` on a pod's member
+(`--userns and --pod cannot be set together`), and Envoy and the agent each
+need their own keep-id mapping. `egress-down` removes the agent's container
+by its name and the rest by theirs.
+
+Every object `egress-up` creates carries `riotbox.egress=<name>`, `riotbox.session=<key>`,
 `riotbox.owner-pid=<launch.sh PID>` and `riotbox.owner-pidns=<PID namespace>`;
 Envoy also carries `riotbox.egress-role=gateway`. A session counts as running
 while a container with that role label, named `<name>-egress`, runs.
@@ -442,7 +446,7 @@ networks are unsupported in egress mode with injected keys.
 **The gate on `RIOTBOX_EXTRA_ARGS`.** `egress_gate_env` runs after
 `egress_start` (it needs `EGRESS_INJECTED`, the names whose returned
 value is the placeholder) and fails the launch, through the EXIT trap
-that removes the pod, when `RIOTBOX_EXTRA_ARGS` holds `-e`/`--env
+that removes the proxy, when `RIOTBOX_EXTRA_ARGS` holds `-e`/`--env
 NAME=…` for an injected name (every spelling `_egress_split_args` parses,
 grouped short flags included), any `--env-file`, or any `--secret` with
 `type=env` (its target defaults to the secret's name, so any could set a
@@ -519,7 +523,7 @@ outside the CA's list. `ANTHROPIC_AUTH_TOKEN` is not a row: see
 - **Gate** (`launch.sh` → `egress_gate`), before any side effect.
 - **Mask** (`egress_mask_data`), after `egress_gate_mounts`: hides the
   state root from the agent wherever its mounts reach it (invariant 3). A
-  mount of a file in it stops the launch before the pod starts.
+  mount of a file in it stops the launch before the proxy starts.
 - **Start** (`egress_start`), after every launch check that can abort, so an
   abort leaves nothing to clean up. It requires `riotbox-core` and the agent
   registry, and fails the launch when the agent is unknown or has no
@@ -531,7 +535,7 @@ outside the CA's list. `ANTHROPIC_AUTH_TOKEN` is not a row: see
   and `projects.json` (from `PROJECT_DIRS`, one `--project` each), write the
   injection (see [Credential injection](#credential-injection); a failure
   stops the launch before any engine call), write the config, empty the logs, pull the image if absent, create the
-  networks, the pod and Envoy, wait for readiness, and print the agent's
+  networks and Envoy, wait for readiness, and print the agent's
   flags. A failed step removes what was created. Once it succeeds,
   `egress_start` prints the session's name on stderr, the name
   `riotbox egress --session` takes. `launch.sh` then runs `egress_gate_env`.
@@ -545,19 +549,20 @@ outside the CA's list. `ANTHROPIC_AUTH_TOKEN` is not a row: see
   ignores INT, TERM and HUP and runs `egress-down`, then exits with the
   launch's status. INT and HUP stay ignored in `egress-down`, so a second
   Ctrl-C cannot cut teardown short. Go does not keep an inherited ignored
-  TERM, so a TERM still stops `egress-down` and leaves the pod for the next
+  TERM, so a TERM still stops `egress-down` and leaves the proxy for the next
   launch's sweep. `egress-down` stops Envoy with SIGTERM (so it flushes the
-  access log), removes the pod, then each network if it exists
+  access log), force-removes the agent's container (if it still runs) and
+  Envoy's, then each network if it exists
   (`network rm --ignore` is missing from older podman), then the secrets
   dir, and reports denials.
   It carries on past a failed step and is safe to repeat.
-- **Sweep** (`egress-sweep`, each egress launch): removes the pods and
-  networks of sessions whose owner PID is dead *in the sweeper's own PID
+- **Sweep** (`egress-sweep`, each egress launch): finds sessions by their
+  networks and tears down those whose owner PID is dead *in the sweeper's own PID
   namespace*. A session is judged over all its objects and spared if any has
   a live owner, an owner in another namespace, or a missing or malformed
-  owner label. It is also spared while its agent container (named `<name>`)
-  runs in `<name>-pod`, or when the engine cannot list that pod's
-  containers: a launch killed with SIGKILL leaves its agent running. So a
+  owner label. It is also spared while a container named exactly `<name>`
+  (its agent) runs, or when the engine cannot list the running containers:
+  a launch killed with SIGKILL leaves its agent running. So a
   live session is never torn down. An object whose name
   does not match its `riotbox.egress` label is ignored with a warning. State
   dirs of sessions not running whose `envoy.log` (else the dir) is more than

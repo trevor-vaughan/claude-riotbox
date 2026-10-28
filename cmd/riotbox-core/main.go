@@ -62,7 +62,7 @@ verbs:
   egress-up --engine <engine> --state-root <dir> --system-conf <file>
             --user-conf <file> --image <ref> --session-key <key>
             --owner-pid <pid> [--project <dir>]... <name>
-                         start the session's egress proxy pod, reading the
+                         start the session's egress proxy, reading the
                          agent's hosts on stdin, then optionally a NUL and
                          the agent's variables as NUL-terminated NAME=VALUE
                          records (1 MiB in all), whose provider keys the
@@ -73,11 +73,11 @@ verbs:
                          project dirs for egress-list; print the agent's
                          engine flags, one per line; exit 1 on failure
   egress-down --engine <engine> --state-root <dir> <name>
-                         remove the session's egress pod, networks and
+                         remove the session's egress proxy, networks and
                          secrets and report denied requests; exit 1 if a
                          step failed
   egress-sweep --engine <engine> --state-root <dir>
-                         remove egress pods whose launch is gone, their
+                         remove egress sessions whose launch is gone, their
                          secrets after an hour unused, and state dirs
                          unused for 7 days
   egress-list --engine <engine> --state-root <dir>
