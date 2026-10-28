@@ -1,0 +1,20 @@
+Containerfile
+  s_7880ee6bdef510::t_c82ad554b3d1b3 1180-1215
+  s_7880ee6bdef510::t_8d1a6cfdacc67f 1216
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "755afebde013ea358cf27382a2bf7eb2f36e2910",
+  "prompts": {},
+  "sessions": {
+    "s_7880ee6bdef510": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e0d51aa6-07ed-4d15-9404-61dcaf0c9ad0",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
