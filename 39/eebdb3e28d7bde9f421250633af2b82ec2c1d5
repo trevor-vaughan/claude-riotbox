@@ -1,0 +1,20 @@
+README.md
+  h_4db53f42b9be42 179-183,332
+libexec/launch.sh
+  h_4db53f42b9be42 82-87
+libexec/worktree-prompt.sh
+  h_4db53f42b9be42 1-86
+tests/worktree-prompt.venom.yml
+  h_4db53f42b9be42 1-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "39eebdb3e28d7bde9f421250633af2b82ec2c1d5",
+  "prompts": {},
+  "humans": {
+    "h_4db53f42b9be42": {
+      "author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
