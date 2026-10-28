@@ -3,7 +3,7 @@
 Containerfile
   s_f98458d3a6feca::t_7fc386a4dc1213 14-17,31,142-143
 THREAT_MODEL.md
-  s_f98458d3a6feca::t_02dc11ded3cf50 1381-1383
+  s_f98458d3a6feca::t_02dc11ded3cf50 1381-1383,1570-1572
 ---
 {
   "schema_version": "authorship/3.0.0",
