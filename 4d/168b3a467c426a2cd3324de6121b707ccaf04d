@@ -1,0 +1,26 @@
+libexec/worktree-prompt.sh
+  s_7880ee6bdef510::t_8d3001503619e6 29-30,34
+  s_7880ee6bdef510::t_5d235f77e5195a 1-28,31-33,35-86
+libexec/launch.sh
+  s_7880ee6bdef510::t_85286aa8f5539d 82-87
+tests/worktree-prompt.venom.yml
+  s_7880ee6bdef510::t_85286aa8f5539d 1-102
+README.md
+  s_7880ee6bdef510::t_5ac9f46b8091ff 179-183,332
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4d168b3a467c426a2cd3324de6121b707ccaf04d",
+  "prompts": {},
+  "sessions": {
+    "s_7880ee6bdef510": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e0d51aa6-07ed-4d15-9404-61dcaf0c9ad0",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
