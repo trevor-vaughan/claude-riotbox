@@ -11,11 +11,10 @@
 # ═════════════════════════════════════════════════════════════════════════════
 # Stage 1: Download standalone tool binaries
 # ═════════════════════════════════════════════════════════════════════════════
-# Pinned for supply-chain integrity. To refresh:
-#   podman pull quay.io/centos/centos:stream10
-#   podman image inspect quay.io/centos/centos:stream10 \
-#     --format '{{index .RepoDigests 0}}'
-# Both `FROM` lines (tools + runtime) MUST reference the same digest so the
+# The base deliberately floats on the `stream10` tag rather than a digest:
+# every rebuild picks up the current Stream 10 compose and its security
+# fixes, and the dnf packages installed below float with it anyway (DL3041).
+# Both `FROM` lines (tools + runtime) MUST name the same reference so the
 # binaries baked in the tools stage match the libc they will be COPYed onto
 # in runtime.
 FROM quay.io/centos/centos:stream10 AS tools
@@ -29,7 +28,7 @@ FROM quay.io/centos/centos:stream10 AS tools
 
 # DL3041: Stream 10 is a rolling distribution — exact package versions shift
 # between releases. Pinning every rpm to a specific EVR would break on the next
-# compose. The FROM digest (set at the top of this file) pins the base layer.
+# compose, and the base image floats with them (see the top of this file).
 # hadolint ignore=DL3041
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         curl tar gzip bash && \
@@ -140,8 +139,8 @@ RUN bash -o pipefail -c '\
 # ═════════════════════════════════════════════════════════════════════════════
 # Stage 2: Runtime image
 # ═════════════════════════════════════════════════════════════════════════════
-# Pinned to the same digest as the tools stage. See refresh procedure at the
-# top of the tools stage; both `FROM` lines must move together.
+# Same floating reference as the tools stage; both `FROM` lines must name
+# the same image (see the top of the tools stage).
 FROM quay.io/centos/centos:stream10 AS runtime
 
 # Pipefail policy: see the tools stage's comment. RUN steps that pipe

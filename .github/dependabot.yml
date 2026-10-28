@@ -1,0 +1,27 @@
+# Keeps the SHA-pinned actions and the go.mod pins (including the
+# GoReleaser, Ginkgo and golangci-lint tool block) current. The "chore"
+# prefix with scope yields "chore(deps): …", which cliff.toml leaves out
+# of CHANGELOG.md.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      go-modules:
+        patterns: ["*"]

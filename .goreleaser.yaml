@@ -54,7 +54,7 @@ nfpms:
       Installs the app tree to /opt/riotbox with the riotbox CLI on PATH.
     vendor: "RiotBox"
     homepage: "https://github.com/trevor-vaughan/claude-riotbox"
-    license: "Apache-2.0"
+    license: "MIT"
     dependencies:
       - git
       # flock(1): serializes concurrent launches' host-side config sync.
