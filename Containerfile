@@ -223,7 +223,6 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         python3 \
         python3-pip \
         python3-devel \
-        python3-jsonschema \
         openssl-devel \
         zlib-devel \
         bzip2-devel \
@@ -1177,6 +1176,43 @@ RUN bash -o pipefail -c '\
     echo "installed bun ${v}"; \
     [ "${v}" = "${BUN_VERSION}" ] || { \
         echo "bun reports ${v}, pinned ${BUN_VERSION}" >&2; exit 1; }'
+
+# ── jsonschema CLI (sourcemeta) ──────────────────────────────────────────────
+# Replaces the python3-jsonschema RPM: a single static-ish binary with a
+# validator/linter/formatter CLI, instead of a Python library no tool here
+# imports. The glibc asset, not -musl, because this image is glibc. Pinned and
+# SHA256-verified like venom and bun. Upstream publishes the digest on each
+# release asset, so these are transcribed from it at review time.
+#
+# To refresh:
+#   1. Pick a new tag at https://github.com/sourcemeta/jsonschema/releases
+#   2. Read the digests for the two glibc zips:
+#        gh api repos/sourcemeta/jsonschema/releases/tags/v<VER> \
+#          --jq '.assets[] | select(.name|test("linux-(x86_64|arm64)\\.zip$")) | "\(.name) \(.digest)"'
+#   3. Update JSONSCHEMA_VERSION + JSONSCHEMA_SHA256_AMD64 + JSONSCHEMA_SHA256_ARM64
+# JSONSCHEMA_VERSION is bare: it is both the asset's name and what
+# `jsonschema version` prints, which the check at the end compares.
+ARG JSONSCHEMA_VERSION=17.3.1
+ARG JSONSCHEMA_SHA256_AMD64=a857fcfe35e3f1506a256192be9704dc8e0a8983a39519bbf4ff9e68b17d4550
+ARG JSONSCHEMA_SHA256_ARM64=d42a1e6a28e3e1d9c0c3ffa10d380c90e23e3cfcd0f8278dc3bbe1ad354f4529
+RUN bash -o pipefail -c '\
+    set -e; \
+    case "$(uname -m)" in \
+        x86_64)  ARCH=x86_64; EXPECTED_SHA="${JSONSCHEMA_SHA256_AMD64}" ;; \
+        aarch64) ARCH=arm64;  EXPECTED_SHA="${JSONSCHEMA_SHA256_ARM64}" ;; \
+        *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    NAME="jsonschema-${JSONSCHEMA_VERSION}-linux-${ARCH}"; \
+    curl -fsSLo /tmp/jsonschema.zip \
+        "https://github.com/sourcemeta/jsonschema/releases/download/v${JSONSCHEMA_VERSION}/${NAME}.zip"; \
+    echo "${EXPECTED_SHA}  /tmp/jsonschema.zip" | sha256sum -c -; \
+    unzip -qj /tmp/jsonschema.zip "${NAME}/bin/jsonschema" -d /home/llm/.local/bin; \
+    chmod +x /home/llm/.local/bin/jsonschema; \
+    rm -f /tmp/jsonschema.zip; \
+    v="$(/home/llm/.local/bin/jsonschema version)"; \
+    echo "installed jsonschema ${v}"; \
+    [ "${v}" = "${JSONSCHEMA_VERSION}" ] || { \
+        echo "jsonschema reports ${v}, pinned ${JSONSCHEMA_VERSION}" >&2; exit 1; }'
 
 # ── Context Mode (opt-in at runtime via RIOTBOX_CONTEXT_MODE) ────────────────
 # Installed under its own pinned Node, not the image default. Context Mode
