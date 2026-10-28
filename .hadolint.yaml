@@ -7,8 +7,8 @@
 #           graphs; inline ignore on each RUN documents the per-case rationale.
 # DL3016 — npm version pinning: mermaid-cli kept at latest for diagram syntax.
 # DL3041 — dnf version pinning: Stream 10 is a rolling distribution; exact
-#           package EVRs shift between composes. The FROM image digest (pinned
-#           at the top of each Containerfile) is the supply-chain anchor.
+#           package EVRs shift between composes. The base image floats on
+#           the `stream10` tag too, so packages and base move together.
 # DL3062 — go install version pinning: gopls tracks the active Go toolchain;
 #           pinning a specific semver diverges from the installed Go version.
 # DL4006 — SHELL pipefail: pipefail is supplied by inlining

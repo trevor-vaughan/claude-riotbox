@@ -1567,8 +1567,9 @@ and exfiltrate credentials.
 - **Pin base image to digest and all install scripts to commit SHA or versioned
   URL with checksum verification** _(effort: M)_ → step 3: Replace each curl|sh
   with a two-step download-then-verify pattern: (1) Download to a temp file, (2)
-  verify SHA256 against a pinned hash, (3) execute only if hash matches. For the
-  base image, use FROM quay.io/centos/centos:stream10@sha256:<digest>. For tools
+  verify SHA256 against a pinned hash, (3) execute only if hash matches. The
+  base image is deliberately not digest-pinned: it floats on the `stream10` tag
+  so each rebuild takes the current compose's security fixes. For tools
   with published checksums (trivy, grype, syft), verify them. For venom (no
   published checksums), compute and pin a self-managed SHA256. Done for venom
   and bun — each fetches a version-pinned release asset and
@@ -1636,7 +1637,6 @@ inject malicious code into the container image.
 **Acceptance criteria:**
 - [ ] Every curl download in Dockerfile verifies a SHA256 checksum before
   execution
-- [ ] Base image FROM line includes @sha256: digest pin
 - [ ] setup.sh curl-to-shell includes checksum verification
 - [ ] CI workflow downloads include checksum verification
 - [ ] A CHECKSUMS file or equivalent is maintained in the repository for all
