@@ -55,8 +55,9 @@ for session_dir in "${session_root}"/*/; do
 		project_paths=("(unknown)")
 	fi
 
-	# Last used: mtime of the session dir (updated on each launch)
-	last_used="$(stat -c '%y' "${session_dir}" 2>/dev/null | cut -d. -f1)"
+	# Last used: the newest file anywhere in the session and state dirs
+	last_used="$(session_last_used "${session_dir%/}" "${RIOTBOX_STATE_ROOT}/${name}")"
+	last_used="${last_used:-unknown}"
 
 	# Size on disk, the session's state dir included
 	size="$(session_size "${session_dir%/}" "${RIOTBOX_STATE_ROOT}/${name}")"

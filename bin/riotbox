@@ -75,6 +75,11 @@ Session management:
   session-reset [all] [force]  Delete the current dir's session and state dirs
                                (pending overlays, Pi history, git-ai store too);
                                all: every session; force: no prompt
+                               all filters, ANDed: --older-than Nd |
+                               --larger-than SIZE | --project-missing |
+                               --pending-overlays (include sessions with
+                               pending overlays, skipped otherwise); a
+                               session with a running container is skipped
   session-migrate [project...]
                                Retry moving old session data that failed to move
   egress <list|groups|allow|deny|strict|reload>

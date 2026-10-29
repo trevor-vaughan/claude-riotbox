@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -59,6 +60,11 @@ verbs:
               --state-root <dir> [--legacy-key <key>]... <dir>...
                          move the set's session from an old key to its own;
                          exit 1 if a move or the running check fails
+  session-busy --engine <engine> --lib-dir <dir> <session-dir> <state-dir>
+                         exit 0 if no live container can write the session,
+                         1 if one can, 3 if it could not tell (the engine did
+                         not answer or the session could not be resolved);
+                         says why on stderr
   egress-up --engine <engine> --state-root <dir> --system-conf <file>
             --user-conf <file> --image <ref> --session-key <key>
             --owner-pid <pid> [--project <dir>]... <name>
@@ -182,6 +188,7 @@ var verbs = map[string]verb{
 		minArgs:  1, maxArgs: unbounded,
 		run: migrateKey,
 	},
+	"session-busy": {options: []string{"--engine", "--lib-dir"}, minArgs: 2, maxArgs: 2, run: sessionBusy},
 	"egress-up": {
 		options:  []string{"--engine", "--state-root", "--system-conf", "--user-conf", "--image", "--session-key", "--owner-pid"},
 		optional: []string{"--os-dir"},
@@ -346,4 +353,23 @@ func failed(err error) int {
 func badUsage(stderr io.Writer) int {
 	_, _ = fmt.Fprint(stderr, usage)
 	return 2
+}
+
+// exitNoAnswer is session-busy's exit code when it could not tell: the engine
+// did not answer or the session could not be resolved. The caller can tell
+// that from a running container (exit 1).
+const exitNoAnswer = 3
+
+// sessionBusy asks engine.RefuseIfRunning whether a live container can write
+// the session, for riotbox session-reset.
+func sessionBusy(a parsedArgs, _, stderr io.Writer) int {
+	err := engine.RefuseIfRunning(stderr, a.opts["--engine"], a.opts["--lib-dir"], a.args[0], a.args[1], "riotbox session-reset", "run riotbox session-reset again")
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, engine.ErrRunning):
+		return 1
+	default:
+		return exitNoAnswer // ErrNoAnswer, a path that cannot be resolved, anything new
+	}
 }

@@ -36,6 +36,7 @@ setup_session_install() {
 	STATE="${XDG_DATA_HOME}/riotbox-state"
 	mkdir -p "${DATA}/backups/proj.git"
 	echo ref >"${DATA}/backups/proj.git/HEAD"
+	install_engine_stub idle
 }
 
 # make_session <name>
@@ -63,4 +64,42 @@ assert_app_tree_intact() {
 			return 1
 		fi
 	done
+}
+
+# install_engine_stub idle | busy <mount-source> | down
+#   Write ${T}/engine and export it as CONTAINER_CMD, the engine riotbox-core
+#   session-busy asks. idle: nothing runs. busy: one container mounts
+#   <mount-source> read-write. down: every call fails.
+install_engine_stub() {
+	local mode="$1" source="${2:-}"
+	case "${mode}" in
+	idle) printf '#!/bin/sh\nexit 0\n' >"${T}/engine" ;;
+	down) printf '#!/bin/sh\necho engine down >&2\nexit 125\n' >"${T}/engine" ;;
+	busy)
+		cat >"${T}/engine" <<EOF
+#!/bin/sh
+case "\$1" in
+ps) echo abc ;;
+container) printf 'abc\\0web\\0%s\\0true\\0\\n' '${source}' ;;
+esac
+EOF
+		;;
+	*)
+		echo "install_engine_stub: unknown mode ${mode}" >&2
+		return 1
+		;;
+	esac
+	chmod +x "${T}/engine"
+	export CONTAINER_CMD="${T}/engine"
+}
+
+# age_session <key> <days>
+#   Set every file and directory of the session and its state dir to <days>
+#   days ago, so nothing under it counts as recent.
+age_session() {
+	local -a dirs=("${DATA}/$1")
+	if [[ -d "${STATE}/$1" ]]; then
+		dirs+=("${STATE}/$1")
+	fi
+	find "${dirs[@]}" -exec touch -h -d "$2 days ago" {} +
 }

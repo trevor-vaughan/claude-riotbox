@@ -180,6 +180,55 @@ var _ = Describe("riotbox-core", func() {
 			Expect(s.Out.Contents()).To(BeEmpty())
 			Expect(string(s.Err.Contents())).To(Equal("engine down\n"))
 		})
+
+		It("session-busy exits 0, silently, when no container reaches the session or state dir", func() {
+			fakeEngine(`abc\0web\0`+dir+`/elsewhere\0true\0\n`, 0)
+			s := run("session-busy", "--engine", engine, "--lib-dir", libDir, "--", dir+"/session", dir+"/state")
+			Expect(s.ExitCode()).To(Equal(0))
+			Expect(s.Out.Contents()).To(BeEmpty())
+			Expect(s.Err.Contents()).To(BeEmpty())
+		})
+
+		It("session-busy exits 1, saying why, when a container mounts the session read-write", func() {
+			fakeEngine(`abc\0web\0`+dir+`/session\0true\0\n`, 0)
+			s := run("session-busy", "--engine", engine, "--lib-dir", libDir, "--", dir+"/session", dir+"/state")
+			Expect(s.ExitCode()).To(Equal(1))
+			Expect(s.Out.Contents()).To(BeEmpty())
+			Expect(string(s.Err.Contents())).To(ContainSubstring("container web mounts " + dir + "/session read-write"))
+			Expect(string(s.Err.Contents())).To(ContainSubstring("is still running"))
+		})
+
+		It("session-busy exits 0, silently, when a container mounts the session read-only", func() {
+			fakeEngine(`abc\0web\0`+dir+`/session\0false\0\n`, 0)
+			s := run("session-busy", "--engine", engine, "--lib-dir", libDir, "--", dir+"/session", dir+"/state")
+			Expect(s.ExitCode()).To(Equal(0))
+			Expect(s.Out.Contents()).To(BeEmpty())
+			Expect(s.Err.Contents()).To(BeEmpty())
+		})
+
+		It("session-busy exits 1, saying why, when a container mounts the state dir read-write", func() {
+			fakeEngine(`abc\0web\0`+dir+`/state\0true\0\n`, 0)
+			s := run("session-busy", "--engine", engine, "--lib-dir", libDir, "--", dir+"/session", dir+"/state")
+			Expect(s.ExitCode()).To(Equal(1))
+			Expect(s.Out.Contents()).To(BeEmpty())
+			Expect(string(s.Err.Contents())).To(ContainSubstring("is still running"))
+		})
+
+		It("session-busy exits 3, saying why, when the session dir is empty and cannot be resolved", func() {
+			fakeEngine(`abc\0web\0`+dir+`/elsewhere\0true\0\n`, 0)
+			s := run("session-busy", "--engine", engine, "--lib-dir", libDir, "--", "", dir+"/state")
+			Expect(s.ExitCode()).To(Equal(3))
+			Expect(s.Out.Contents()).To(BeEmpty())
+			Expect(s.Err.Contents()).NotTo(BeEmpty())
+		})
+
+		It("session-busy exits 3, saying why, when the engine cannot answer", func() {
+			fakeEngine(``, 125)
+			s := run("session-busy", "--engine", engine, "--lib-dir", libDir, "--", dir+"/session", dir+"/state")
+			Expect(s.ExitCode()).To(Equal(3))
+			Expect(s.Out.Contents()).To(BeEmpty())
+			Expect(string(s.Err.Contents())).To(ContainSubstring("could not ask"))
+		})
 	})
 
 	Describe("the migration verbs", func() {
@@ -396,6 +445,10 @@ var _ = Describe("riotbox-core", func() {
 		Entry("migrate-failed with the engine as a positional", "migrate-failed", "--lib-dir", "/l", "podman", "/s", "/t"),
 		Entry("migrate-failed with --engine twice", "migrate-failed", "--lib-dir", "/l", "--engine", "e", "--engine", "f", "/s", "/t"),
 		Entry("migrate-failed with one dir", "migrate-failed", "--lib-dir", "/l", "--engine", "podman", "/s"),
+		Entry("session-busy without --engine", "session-busy", "--lib-dir", "/l", "/s", "/t"),
+		Entry("session-busy without --lib-dir", "session-busy", "--engine", "podman", "/s", "/t"),
+		Entry("session-busy with one dir", "session-busy", "--lib-dir", "/l", "--engine", "podman", "/s"),
+		Entry("session-busy with three dirs", "session-busy", "--lib-dir", "/l", "--engine", "podman", "/s", "/t", "/u"),
 		Entry("same-project-set with one list", "same-project-set", "/a"),
 		Entry("same-project-set with three lists", "same-project-set", "/a", "/a", "/a"),
 		Entry("same-project-set with dash-led lists and no --", "same-project-set", "-a", "-a"),
