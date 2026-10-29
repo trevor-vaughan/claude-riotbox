@@ -4,7 +4,7 @@ scripts/git-ai-riotbox.sh
   s_3af1b180ec8c86::t_4d66768c9a8891 356,366,369-372,386-389
   s_3af1b180ec8c86::t_48f6560941a6f3 367-368
 README.md
-  s_3af1b180ec8c86::t_0417c669682e5c 879-880
+  s_3af1b180ec8c86::t_0417c669682e5c 879-880,893-894
 ---
 {
   "schema_version": "authorship/3.0.0",
