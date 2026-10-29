@@ -1,0 +1,18 @@
+README.md
+  h_4db53f42b9be42 893-894
+scripts/git-ai-riotbox.sh
+  h_4db53f42b9be42 356,366-372,386-389
+tests/git-ai-aggregate.venom.yml
+  h_4db53f42b9be42 522-566
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "233cd19db7e1886872eee74ab2e97ae6a88cac3f",
+  "prompts": {},
+  "humans": {
+    "h_4db53f42b9be42": {
+      "author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
