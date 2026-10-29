@@ -20,3 +20,26 @@ cmd/riotbox-core/main.go
     }
   }
 }
+
+cmd/riotbox-core/main_test.go
+  s_3af1b180ec8c86::t_d33fd7a2dadbfb 217,219
+  s_3af1b180ec8c86::t_67d40acc81b9ab 201-216,218,220-224
+cmd/riotbox-core/main.go
+  s_3af1b180ec8c86::t_9c5d27148cae8b 65-67,358-360,370,372-373
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4c1f6261deb5886b73cd72fd607a4afe9d146af6",
+  "prompts": {},
+  "sessions": {
+    "s_3af1b180ec8c86": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "febec284-1c02-4b40-b128-eca16428e321",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
