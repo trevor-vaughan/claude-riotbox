@@ -41,3 +41,27 @@ tests/session-reset-filters.venom.yml
     }
   }
 }
+
+libexec/reset-session.sh
+  s_7f5c4a05078178::t_4cd3c98fa9590e 82,87,312,367,397-400,406-408
+  s_7f5c4a05078178::t_0fcaf3165789f0 103,108-111
+libexec/session-summary.sh
+  s_7f5c4a05078178::t_3077aa8176202b 12,23
+  s_7f5c4a05078178::t_4cd3c98fa9590e 22,24,91-92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "10657f0e99bcdbe171ce35e4e1dfdc22a5e8604c",
+  "prompts": {},
+  "sessions": {
+    "s_7f5c4a05078178": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "64858e61-97a2-4fb2-978b-ed29d7feff64",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
