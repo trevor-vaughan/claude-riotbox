@@ -500,10 +500,14 @@ RUN bash -o pipefail -c 'if [ -n "${RUBY_VERSIONS}" ]; then \
 # DL3062: gopls is the official Go language server — @latest tracks the active
 # Go toolchain version installed in the same build. Pinning a specific gopls
 # semver here would diverge from the Go version and cause compatibility issues.
+# shfmt and go-global-update are developer tools tracked at @latest for the same
+# reason: the image is rebuilt to refresh them, not to reproduce an old version.
 # hadolint ignore=DL3062
 RUN if command -v go >/dev/null 2>&1; then \
         mkdir -p /home/llm/go /home/llm/.cache/go-build && \
-        go install golang.org/x/tools/gopls@latest; \
+        go install golang.org/x/tools/gopls@latest && \
+        go install mvdan.cc/sh/v3/cmd/shfmt@latest && \
+        go install github.com/Gelio/go-global-update@latest; \
     fi
 
 # ── User-phase config (mount targets, podman, gem, git, shell) ───────────────
