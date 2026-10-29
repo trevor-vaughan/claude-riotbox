@@ -1,0 +1,28 @@
+tests/session-reset-filters.venom.yml
+  s_3af1b180ec8c86::t_ac30c2777b4532 1090
+  s_3af1b180ec8c86::t_bb06014e5f5787 431,1024-1035,1037-1064,1066-1089,1091-1108,1110-1155
+  s_3af1b180ec8c86::t_5e8a7ed33b2a63 863,1036,1065,1109
+scripts/lib/overlay-ignore.sh
+  s_3af1b180ec8c86::t_85281f99c9f57d 190-192,194-200
+  s_3af1b180ec8c86::t_7b5250ae849881 193
+libexec/reset-session.sh
+  s_3af1b180ec8c86::t_9d1b5ce59a3832 112-125,154,156-158,164,169-172,174,177-179,182-183,185-187,194,351,376,386-394,398-399,403
+  s_3af1b180ec8c86::t_26776e46d5e4e3 173,184
+  s_3af1b180ec8c86::t_3943fcd0a5db44 144-153,155,159-163,165-168,175-176,180-181,188-193,195-201,293,327
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d2940ef6bd3be10985aec436ba7f654c7d337430",
+  "prompts": {},
+  "sessions": {
+    "s_3af1b180ec8c86": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "febec284-1c02-4b40-b128-eca16428e321",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
