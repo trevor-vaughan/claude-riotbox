@@ -143,6 +143,12 @@ overlay_upper_changes() {
 	)
 }
 
+# Both functions below gate deletion (riotbox session-reset all removes a
+# session only when overlay_state_pending says no), so "cannot tell" must read
+# as pending: an unlistable directory, an unreadable subtree or an upper that
+# is not a directory all return "pending". The cost of a wrong "pending" is a
+# skipped session or an extra launch warning; the cost of a wrong "not
+# pending" is lost work.
 overlay_upper_has_changes() {
 	local upper="${1:?overlay_upper_has_changes requires an upper directory}"
 	# The first entry ends the walk: a large index-free upper needs no full
@@ -153,20 +159,82 @@ overlay_upper_has_changes() {
 	while IFS= read -r -d '' _; do
 		return 0
 	done < <(overlay_upper_changes "${upper}")
+	# No entry was listed. That is only "no changes" if the whole tree could be
+	# read: overlay_upper_changes warns about an unreadable subdirectory but
+	# still lists the rest, so a failed walk here means unseen entries.
+	# The ignored cache dirs are pruned, as overlay_path_ignored ignores them
+	# in the listing: an unreadable cache is not a change to review, and the
+	# launch guard must not refuse over what overlay-diff does not show. The
+	# upper path is escaped because -path reads glob patterns.
+	if [[ -d "${upper}" ]]; then
+		local escaped="${upper%/}" name
+		escaped="${escaped//\\/\\\\}"
+		escaped="${escaped//\*/\\*}"
+		escaped="${escaped//\?/\\?}"
+		escaped="${escaped//\[/\\[}"
+		local -a prune=()
+		for name in "${OVERLAY_IGNORED_NAMES[@]}"; do
+			prune+=(-o -path "${escaped}/${name}" -o -path "${escaped}/.wh.${name}")
+		done
+		if ! find "${upper}" -mindepth 1 \( -false "${prune[@]}" \) -prune -o -true >/dev/null 2>&1; then
+			return 0
+		fi
+	fi
 	return 1
 }
 
 overlay_state_pending() {
-	local dir
-	for dir in "$1/overlay"/*/; do
-		dir="${dir%/}"
-		# shellcheck disable=SC2310 # designed to be tested in conditions
-		if overlay_is_stranded_snapshot "${dir}" ||
-			{ [[ -d "${dir}/upper" ]] && overlay_upper_has_changes "${dir}/upper"; }; then
+	local root="$1/overlay" dir
+	# A state dir we cannot search hides even whether overlay/ exists, and an
+	# unsearchable parent hides whether the state dir does.
+	if [[ ! -e "$1" && ! -L "$1" ]]; then
+		# Missing: sure only if the nearest existing ancestor can be searched.
+		local ancestor="$1"
+		[[ "${ancestor}" = /* ]] || return 0
+		while [[ ! -e "${ancestor}" ]]; do
+			ancestor="${ancestor%/*}"
+			[[ -n "${ancestor}" ]] || ancestor=/
+		done
+		if [[ ! -d "${ancestor}" || ! -x "${ancestor}" ]]; then
 			return 0
 		fi
-	done
-	return 1
+	fi
+	if [[ -e "$1" ]] && [[ ! -d "$1" || ! -x "$1" ]]; then
+		return 0
+	fi
+	if [[ ! -e "${root}" && ! -L "${root}" ]]; then
+		return 1
+	fi
+	if [[ ! -d "${root}" || ! -r "${root}" || ! -x "${root}" ]]; then
+		return 0
+	fi
+	# dotglob: a project folder's name is the project's basename, so
+	# ".dotfiles" is an overlay folder like any other. nullglob: an empty
+	# overlay/ expands to nothing. The subshell scopes both options.
+	(
+		shopt -s dotglob nullglob
+		for dir in "${root}"/*/; do
+			dir="${dir%/}"
+			# An overlay folder that cannot be entered cannot be inspected.
+			if [[ ! -r "${dir}" || ! -x "${dir}" ]]; then
+				exit 0
+			fi
+			# shellcheck disable=SC2310 # designed to be tested in conditions
+			if overlay_is_stranded_snapshot "${dir}"; then
+				exit 0
+			fi
+			if [[ -e "${dir}/upper" || -L "${dir}/upper" ]]; then
+				if [[ ! -d "${dir}/upper" ]]; then
+					exit 0
+				fi
+				# shellcheck disable=SC2310 # designed to be tested in conditions
+				if overlay_upper_has_changes "${dir}/upper"; then
+					exit 0
+				fi
+			fi
+		done
+		exit 1
+	)
 }
 
 overlay_is_stranded_snapshot() {

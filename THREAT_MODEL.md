@@ -616,6 +616,7 @@ and is removed with it. Under `RIOTBOX_OVERLAY=1` that changes: the project is
 read-only at `/mnt/lower` and the index is written into the overlay upper
 directory *inside the session's state directory*, so `riotbox session-remove` and
 `riotbox session-reset` do delete it along with everything else there.
+`session-reset all` skips a session that a running container can write, and every session when the container engine cannot answer; it also skips a session with pending overlay changes unless asked, with an unreadable overlay tree counting as pending. Both checks run again just before each removal, because the confirmation prompt can wait, and a short window remains. Age and project filters fail closed the same way: a tree or record that cannot be read never matches. Removal deletes a session's contents before the markers that make `reset` find it, so a failed removal leaves a session that can be retried.
 CodeGraph writes a `.gitignore` inside the index directory ignoring the whole
 tree, and riotbox's managed `.git/info/exclude` block lists `.codegraph/` as a
 second layer, so an index never reaches a checkpoint snapshot.

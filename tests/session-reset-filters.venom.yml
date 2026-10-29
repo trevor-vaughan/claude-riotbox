@@ -1,0 +1,1155 @@
+name: session-reset filters — selection by age, size and project, with safe defaults
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# libexec/session-summary.sh holds the helpers the filters stand on. A
+# directory's own mtime changes only when an entry directly inside it is added
+# or removed, so "last used" must come from the newest file anywhere below.
+
+testcases:
+  - name: session_last_used prints the exact newest mtime across the session and state dirs
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export TZ=UTC
+          source "{{.riotbox_dir}}/libexec/session-summary.sh"
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          # Newest of several files wins; an older file deeper in the tree does not.
+          mkdir -p "${T}/s/deep" "${T}/st"
+          echo x >"${T}/s/a"; echo x >"${T}/s/deep/old"; echo x >"${T}/s/b"
+          touch -d '2024-03-05 06:07:08' "${T}/s/a"
+          touch -d '2024-01-01 00:00:00' "${T}/s/deep/old"
+          touch -d '2024-03-09 01:02:03' "${T}/s/b"
+          touch -d '2020-01-01 00:00:00' "${T}/s/deep" "${T}/s" "${T}/st"
+          got="$(session_last_used "${T}/s" "${T}/st")"
+          [ "${got}" = "2024-03-09 01:02:03" ] || { echo "FAIL: session tree: got '${got}'"; exit 1; }
+          # A newer file only in the state dir wins over an older session dir.
+          echo x >"${T}/st/newer"
+          touch -d '2024-05-05 05:05:05' "${T}/st/newer"
+          touch -d '2020-01-01 00:00:00' "${T}/st"
+          got="$(session_last_used "${T}/s" "${T}/st")"
+          [ "${got}" = "2024-05-05 05:05:05" ] || { echo "FAIL: state dir: got '${got}'"; exit 1; }
+          # A missing state dir is ignored.
+          got="$(session_last_used "${T}/s" "${T}/missing")"
+          [ "${got}" = "2024-03-09 01:02:03" ] || { echo "FAIL: missing state dir: got '${got}'"; exit 1; }
+          none="$(session_last_used "${T}/missing" "${T}/missing")"
+          [ -z "${none}" ] || { echo "FAIL: expected nothing for unreadable dirs, got '${none}'"; exit 1; }
+          echo "last_used_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "last_used_ok=true"
+
+  - name: session_used_within_days tells recent from stale and refuses to call an unreadable tree stale
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.riotbox_dir}}/libexec/session-summary.sh"
+          T="$(mktemp -d)"; trap 'chmod -R u+rwx "${T}"; rm -rf "${T}"' EXIT
+          mkdir -p "${T}/recent" "${T}/stale"
+          echo x >"${T}/recent/f"; echo x >"${T}/stale/f"
+          find "${T}/stale" -exec touch -d '40 days ago' {} +
+          expect() { # <want> <label> <args...>
+            local want="$1" label="$2" rc=0
+            shift 2
+            session_used_within_days "$@" || rc=$?
+            [ "${rc}" -eq "${want}" ] || { echo "FAIL: ${label} gave ${rc}, want ${want}"; exit 1; }
+          }
+          expect 0 "recent" 30 "${T}/recent"
+          expect 1 "stale" 30 "${T}/stale"
+          expect 2 "stale + missing dir" 30 "${T}/stale" "${T}/missing"
+          expect 0 "recent + missing dir (hit wins over error)" 30 "${T}/recent" "${T}/missing"
+          expect 2 "negative days" -5 "${T}/stale"
+          expect 2 "non-numeric days" abc "${T}/stale"
+          expect 2 "empty days" "" "${T}/stale"
+          expect 2 "fractional days" 1.5 "${T}/stale"
+          expect 2 "expression days" "2 years +" "${T}/stale"
+          cd "${T}/stale"
+          expect 2 "dir that looks like a find option" 30 -depth
+          expect 2 "relative dir" 30 "stale"
+          expect 2 "relative dir ." 30 .
+          cd "${T}"
+          if [ "$(id -u)" -ne 0 ]; then
+            mkdir "${T}/stale/locked"; echo x >"${T}/stale/locked/f"
+            find "${T}/stale" -exec touch -d '40 days ago' {} +
+            chmod 000 "${T}/stale/locked"
+            expect 2 "unreadable subtree" 30 "${T}/stale"
+          else
+            echo "SKIP chmod case (root)"
+          fi
+          echo "within_days_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "within_days_ok=true"
+
+  - name: session_bytes sums the session and state dirs and survives an unreadable entry
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.riotbox_dir}}/libexec/session-summary.sh"
+          T="$(mktemp -d)"; trap 'chmod -R u+rwx "${T}"; rm -rf "${T}"' EXIT
+          mkdir -p "${T}/s" "${T}/st"
+          head -c 2097152 /dev/urandom >"${T}/s/a"
+          head -c 1048576 /dev/urandom >"${T}/st/b"
+          got="$(session_bytes "${T}/s" "${T}/st")"
+          [ "${got}" -ge 3145728 ] && [ "${got}" -lt 3407872 ] || { echo "FAIL: expected 3-3.25 MiB, got ${got}"; exit 1; }
+          only="$(session_bytes "${T}/s" "${T}/missing")"
+          [ "${only}" -ge 2097152 ] && [ "${only}" -lt 3145728 ] || { echo "FAIL: state dir counted though missing: ${only}"; exit 1; }
+          if [ "$(id -u)" -ne 0 ]; then
+            mkdir "${T}/s/locked"; echo x >"${T}/s/locked/f"
+            chmod 000 "${T}/s/locked"
+            part="$(session_bytes "${T}/s" "${T}/st")"
+            echo "reached_after_unreadable=true"
+            [[ "${part}" =~ ^[0-9]+$ ]] && [ "${part}" -ge 3145728 ] || { echo "FAIL: no count with unreadable entry: '${part}'"; exit 1; }
+          else
+            echo "SKIP chmod case (root)"
+          fi
+          echo "bytes_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "bytes_ok=true"
+
+  - name: session-list and the removal summary show the newest file's time, not the session dir's
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          key="$(make_session alpha)"
+          touch -d '2020-01-01 00:00:00' "${DATA}/${key}" "${STATE}/${key}"
+          list="$(bash "{{.riotbox_dir}}/libexec/list-sessions.sh")"
+          printf '%s\n' "${list}" | grep -q "Last used:  $(date +%Y)-" || { echo "FAIL: session-list used the dir mtime"; printf '%s\n' "${list}"; exit 1; }
+          summary="$(printf 'n\n' | bash "{{.riotbox_dir}}/libexec/reset-session.sh" all)"
+          printf '%s\n' "${summary}" | grep -q "last used: $(date +%Y)-" || { echo "FAIL: the summary used the dir mtime"; printf '%s\n' "${summary}"; exit 1; }
+          echo "summary_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "summary_ok=true"
+
+  - name: a filter without all, a bad value and an unknown flag are refused and delete nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          key="$(make_session alpha)"
+          cd "${T}/projects/alpha"
+          refuse() {
+            local want="$1"; shift
+            local rc=0 err
+            err="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" "$@" 2>&1 </dev/null)" || rc=$?
+            [ "${rc}" -ne 0 ] || { echo "FAIL: '$*' was accepted"; exit 1; }
+            printf '%s\n' "${err}" | grep -qF -- "${want}" || { echo "FAIL: '$*' did not say '${want}'"; printf '%s\n' "${err}"; exit 1; }
+            [ -d "${DATA}/${key}" ] && [ -f "${DATA}/${key}/payload" ] && [ -f "${STATE}/${key}/git-ai/config.json" ] ||
+              { echo "FAIL: '$*' deleted the session"; exit 1; }
+          }
+          refuse "requires all"          --older-than 30d force
+          refuse "requires all"          --larger-than 1G force
+          refuse "requires all"          --project-missing force
+          refuse "requires all"          --pending-overlays force
+          refuse "needs a number of days" all --older-than 30
+          refuse "needs a number of days" all --older-than 0d
+          refuse "needs a number of days" all --older-than -5d
+          refuse "needs a number of days" all --older-than 30D
+          refuse "needs a number of days" all --older-than 30dd
+          refuse "needs a number of days" all --older-than "3 0d"
+          refuse "needs a number of days" all --older-than
+          refuse "needs a number of days" all --older-than 1000000d
+          refuse "needs a number of days" all --older-than 1000000000000000d
+          refuse "needs a number of days" all --older-than 99999999999999999999d
+          refuse "needs a number of days" all --older-than 08d
+          refuse "needs a number of days" all --older-than 0030d
+          refuse "needs a number of days" all --older-than $'30d\n'
+          refuse "needs a number of days" all --older-than --larger-than
+          refuse "needs a size"          all --larger-than --older-than
+          refuse "--older-than given twice."  all --older-than 30d --older-than 60d
+          refuse "--larger-than given twice." all --larger-than 1G --larger-than 2G
+          refuse "needs a size"          all --larger-than abc
+          refuse "needs a size"          all --larger-than -5
+          refuse "needs a size"          all --larger-than 1e3
+          refuse "needs a size"          all --larger-than ""
+          refuse "needs a size"          all --larger-than " 5"
+          refuse "needs a size"          all --larger-than "1G "
+          refuse "needs a size"          all --larger-than "5K 6"
+          refuse "needs a size"          all --larger-than 1.5
+          refuse "needs a size"          all --larger-than 8E
+          refuse "needs a size"          all --larger-than 99999999999999999999
+          refuse "needs a size"          all --larger-than
+          refuse "Unknown flag"          all --bogus
+          echo "refused_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "refused_ok=true"
+
+  - name: --older-than removes only sessions with nothing recent anywhere below them
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          old="$(make_session old)"; fresh="$(make_session fresh)"; deep="$(make_session deep)"
+          age_session "${old}" 40
+          age_session "${deep}" 40
+          echo recent >"${STATE}/${deep}/git-ai/new"   # deep file is recent; dir mtimes stay old
+          touch -d '40 days ago' "${DATA}/${deep}" "${STATE}/${deep}" "${STATE}/${deep}/git-ai"
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --older-than 30d
+          [ ! -e "${DATA}/${old}" ] || { echo "FAIL: the stale session survived"; exit 1; }
+          [ -d "${DATA}/${fresh}" ] || { echo "FAIL: the fresh session was removed"; exit 1; }
+          [ -d "${DATA}/${deep}" ] || { echo "FAIL: a session with a recent deep file was removed"; exit 1; }
+          assert_app_tree_intact
+          echo "older_than_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Removed 1 session(s)."
+          - result.systemout ShouldContainSubstring "older_than_ok=true"
+
+  - name: --larger-than removes only sessions over the size
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          big="$(make_session big)"; small="$(make_session small)"
+          head -c 3145728 /dev/urandom >"${STATE}/${big}/git-ai/db"
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --larger-than 1M
+          [ ! -e "${DATA}/${big}" ] || { echo "FAIL: the big session survived"; exit 1; }
+          [ -d "${DATA}/${small}" ] || { echo "FAIL: the small session was removed"; exit 1; }
+          echo "larger_than_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "larger_than_ok=true"
+
+  - name: --project-missing removes only sessions whose every project is gone, and never one it cannot read
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          gone="$(make_session gone)"; here="$(make_session here)"; blank="$(make_session blank)"
+          rmdir "${T}/projects/gone"
+          rmdir "${T}/projects/blank"
+          : >"${DATA}/${blank}/.projects"      # emptied: cannot tell, so no match
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --project-missing
+          [ ! -e "${DATA}/${gone}" ] || { echo "FAIL: the orphaned session survived"; exit 1; }
+          [ -d "${DATA}/${here}" ] || { echo "FAIL: a session with a live project was removed"; exit 1; }
+          [ -d "${DATA}/${blank}" ] || { echo "FAIL: a session with an unreadable project list was removed"; exit 1; }
+          echo "project_missing_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "project_missing_ok=true"
+
+  - name: filters combine with AND
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          both="$(make_session both)"; oldonly="$(make_session oldonly)"; bigonly="$(make_session bigonly)"
+          head -c 3145728 /dev/urandom >"${STATE}/${both}/git-ai/db"
+          head -c 3145728 /dev/urandom >"${STATE}/${bigonly}/git-ai/db"
+          age_session "${both}" 40
+          age_session "${oldonly}" 40
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --older-than 30d --larger-than 1M
+          [ ! -e "${DATA}/${both}" ] || { echo "FAIL: the session matching both survived"; exit 1; }
+          [ -d "${DATA}/${oldonly}" ] || { echo "FAIL: old but small was removed"; exit 1; }
+          [ -d "${DATA}/${bigonly}" ] || { echo "FAIL: big but recent was removed"; exit 1; }
+          echo "and_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "and_ok=true"
+
+  - name: sessions with pending overlay changes are skipped unless --pending-overlays
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          dirty="$(make_session dirty)"; clean="$(make_session clean)"
+          mkdir -p "${STATE}/${dirty}/overlay/p/upper"
+          echo edit >"${STATE}/${dirty}/overlay/p/upper/file.txt"
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force)"
+          printf '%s\n' "${out}" | grep -qF "Skipped 1 session(s) with pending overlay changes" || { echo "FAIL: no skip notice"; printf '%s\n' "${out}"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF -- "--pending-overlays" || { echo "FAIL: the notice does not name the flag"; exit 1; }
+          [ -d "${DATA}/${dirty}" ] || { echo "FAIL: the session with pending changes was removed"; exit 1; }
+          [ ! -e "${DATA}/${clean}" ] || { echo "FAIL: the clean session survived"; exit 1; }
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --pending-overlays
+          [ ! -e "${DATA}/${dirty}" ] || { echo "FAIL: --pending-overlays did not include it"; exit 1; }
+          echo "overlays_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "overlays_ok=true"
+
+  - name: a session with a running container is skipped, even with --pending-overlays, and the rest are still reset
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          live="$(make_session live)"; idle="$(make_session idle)"
+          mkdir -p "${STATE}/${live}/overlay/p/upper"
+          echo edit >"${STATE}/${live}/overlay/p/upper/file.txt"
+          install_engine_stub busy "${DATA}/${live}"
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --pending-overlays)"
+          printf '%s\n' "${out}" | grep -qF "Skipped 1 session(s) with a running container" || { echo "FAIL: no skip notice"; printf '%s\n' "${out}"; exit 1; }
+          [ -d "${DATA}/${live}" ] || { echo "FAIL: the live session was removed"; exit 1; }
+          [ ! -e "${DATA}/${idle}" ] || { echo "FAIL: the idle session survived"; exit 1; }
+          echo "busy_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "busy_ok=true"
+
+  - name: when the engine cannot answer nothing is removed and the engine's message is shown once
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          a="$(make_session a)"; b="$(make_session b)"
+          install_engine_stub down
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force)"
+          printf '%s\n' "${out}" | grep -qF "Skipped 2 session(s) because the container engine did not answer" || { echo "FAIL: no skip notice"; printf '%s\n' "${out}"; exit 1; }
+          [ "$(printf '%s\n' "${out}" | grep -c 'could not ask')" -eq 1 ] || { echo "FAIL: the engine message was not shown exactly once"; printf '%s\n' "${out}"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "No sessions match." || { echo "FAIL: no 'No sessions match.'"; exit 1; }
+          [ -d "${DATA}/${a}" ] && [ -d "${DATA}/${b}" ] || { echo "FAIL: a session was removed while the engine was down"; exit 1; }
+          echo "down_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "down_ok=true"
+
+  - name: a filter that matches nothing says so and removes nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          key="$(make_session fresh)"
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --older-than 30d)"
+          printf '%s\n' "${out}" | grep -qF "No sessions match." || { echo "FAIL: no message"; printf '%s\n' "${out}"; exit 1; }
+          [ -d "${DATA}/${key}" ] || { echo "FAIL: a session was removed"; exit 1; }
+          echo "nomatch_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "nomatch_ok=true"
+
+  - name: --older-than never selects a session whose tree it cannot fully read
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'chmod -R u+rwx "${T}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          opaque="$(make_session opaque)"; plain="$(make_session plain)"
+          mkdir "${STATE}/${opaque}/git-ai/locked"
+          echo hidden >"${STATE}/${opaque}/git-ai/locked/f"
+          age_session "${opaque}" 40
+          age_session "${plain}" 40
+          chmod 000 "${STATE}/${opaque}/git-ai/locked"
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --older-than 30d
+          [ -d "${DATA}/${opaque}" ] || { echo "FAIL: a session with an unreadable subtree was removed"; exit 1; }
+          [ ! -e "${DATA}/${plain}" ] || { echo "FAIL: the readable stale session survived"; exit 1; }
+          echo "unreadable_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "unreadable_ok=true"
+
+  - name: a session with no state dir is still selected by its age and removed cleanly
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          old="$(make_session old)"; fresh="$(make_session fresh)"
+          rm -rf "${STATE}/${old}" "${STATE}/${fresh}"
+          age_session "${old}" 40
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --older-than 30d
+          [ ! -e "${DATA}/${old}" ] || { echo "FAIL: the stale session survived"; exit 1; }
+          [ -d "${DATA}/${fresh}" ] || { echo "FAIL: the fresh session was removed"; exit 1; }
+          echo "nostate_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "nostate_ok=true"
+
+  - name: a symlinked session entry is unlinked and its target is never touched
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          mkdir -p "${T}/outside"
+          echo precious >"${T}/outside/data"
+          real="$(make_session real)"
+          cp "${DATA}/${real}/.projects" "${T}/outside/.projects"
+          ln -s "${T}/outside" "${DATA}/linked"
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --older-than 1d)"
+          printf '%s\n' "${out}" | grep -qF "No sessions match." || { echo "FAIL: a fresh session or the link matched --older-than"; printf '%s\n' "${out}"; exit 1; }
+          [ -d "${DATA}/${real}" ] && [ -L "${DATA}/linked" ] && [ "$(cat "${T}/outside/data")" = precious ] || { echo "FAIL: the filtered run touched something"; exit 1; }
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force)"
+          printf '%s\n' "${out}" | grep -qF "Removed 2 session(s)." || { echo "FAIL: wrong count"; printf '%s\n' "${out}"; exit 1; }
+          [ ! -e "${DATA}/${real}" ] || { echo "FAIL: the real session survived"; exit 1; }
+          [ ! -L "${DATA}/linked" ] && [ ! -e "${DATA}/linked" ] || { echo "FAIL: the link was not removed"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "linked was a symlink to ${T}/outside; only the link was removed, its target was left in place." || { echo "FAIL: the link is reported as a plain session"; printf '%s\n' "${out}"; exit 1; }
+          [ "$(cat "${T}/outside/data")" = precious ] && [ -f "${T}/outside/.projects" ] || { echo "FAIL: the link's target was touched"; exit 1; }
+          echo "symlink_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "symlink_ok=true"
+
+  # session-reset all deletes what overlay_state_pending calls "not pending",
+  # so every way that function cannot tell must read as pending.
+  - name: a dot-named overlay folder with changes makes the session pending
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          key="$(make_session dots)"
+          mkdir -p "${STATE}/${key}/overlay/.dotfiles/upper" "${STATE}/${key}/overlay/.dotfiles/work"
+          echo precious >"${STATE}/${key}/overlay/.dotfiles/upper/bashrc"
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force)"
+          printf '%s\n' "${out}" | grep -qF "Skipped 1 session(s) with pending overlay changes" || { echo "FAIL: no skip notice"; printf '%s\n' "${out}"; exit 1; }
+          [ -f "${STATE}/${key}/overlay/.dotfiles/upper/bashrc" ] || { echo "FAIL: dot-named overlay changes were deleted"; exit 1; }
+          echo "dotoverlay_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "dotoverlay_ok=true"
+
+  - name: an overlay dir that cannot be listed makes the session pending
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'chmod -R u+rwx "${T}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          if [ "$(id -u)" -eq 0 ]; then echo "SKIP: root ignores file modes"; echo "unlistable_ok=true"; exit 0; fi
+          key="$(make_session hidden)"
+          mkdir -p "${STATE}/${key}/overlay/p/upper"
+          echo precious >"${STATE}/${key}/overlay/p/upper/f"
+          chmod 000 "${STATE}/${key}/overlay"
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force)"
+          chmod 700 "${STATE}/${key}/overlay"
+          printf '%s\n' "${out}" | grep -qF "Skipped 1 session(s) with pending overlay changes" || { echo "FAIL: no skip notice"; printf '%s\n' "${out}"; exit 1; }
+          [ -f "${STATE}/${key}/overlay/p/upper/f" ] || { echo "FAIL: unlistable overlay changes were deleted"; exit 1; }
+          echo "unlistable_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "unlistable_ok=true"
+
+  - name: an upper with an unreadable subdirectory makes the session pending
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'chmod -R u+rwx "${T}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          if [ "$(id -u)" -eq 0 ]; then echo "SKIP: root ignores file modes"; echo "unreadable_upper_ok=true"; exit 0; fi
+          key="$(make_session partial)"
+          mkdir -p "${STATE}/${key}/overlay/p/upper/sub" "${STATE}/${key}/overlay/p/work"
+          echo precious >"${STATE}/${key}/overlay/p/upper/sub/f"
+          chmod 000 "${STATE}/${key}/overlay/p/upper/sub"
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force 2>/dev/null)"
+          chmod 700 "${STATE}/${key}/overlay/p/upper/sub"
+          printf '%s\n' "${out}" | grep -qF "Skipped 1 session(s) with pending overlay changes" || { echo "FAIL: no skip notice"; printf '%s\n' "${out}"; exit 1; }
+          [ -f "${STATE}/${key}/overlay/p/upper/sub/f" ] || { echo "FAIL: changes under an unreadable subdir were deleted"; exit 1; }
+          echo "unreadable_upper_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "unreadable_upper_ok=true"
+
+  - name: a stranded accept snapshot makes the session pending
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          key="$(make_session stranded)"
+          mkdir -p "${STATE}/${key}/overlay/p/upper" "${STATE}/${key}/overlay/p/work" "${STATE}/${key}/overlay/p.accepting.4242"
+          echo precious >"${STATE}/${key}/overlay/p.accepting.4242/real.txt"
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force)"
+          printf '%s\n' "${out}" | grep -qF "Skipped 1 session(s) with pending overlay changes" || { echo "FAIL: no skip notice"; printf '%s\n' "${out}"; exit 1; }
+          [ -f "${STATE}/${key}/overlay/p.accepting.4242/real.txt" ] || { echo "FAIL: the stranded snapshot was deleted"; exit 1; }
+          echo "stranded_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "stranded_ok=true"
+
+  - name: --project-missing does not read a project it cannot see as gone
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'chmod -R u+rwx "${T}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          if [ "$(id -u)" -eq 0 ]; then echo "SKIP: root ignores file modes"; echo "unsearchable_ok=true"; exit 0; fi
+          key="$(make_session here)"
+          chmod 000 "${T}/projects"
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --project-missing
+          chmod 700 "${T}/projects"
+          [ -d "${DATA}/${key}" ] || { echo "FAIL: a session whose project could not be checked was removed"; exit 1; }
+          echo "unsearchable_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "unsearchable_ok=true"
+
+  - name: --project-missing trusts the host's record, not the container-written .projects
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          forged="$(make_session forged)"; orphan="$(make_session orphan)"
+          # forged: the record says the project exists, .projects was rewritten to a missing path.
+          printf '%s\n' "${T}/projects/forged" >"${STATE}/${forged}/projects"
+          printf '%s\n' "${T}/nowhere" >"${DATA}/${forged}/.projects"
+          # orphan: the record says the project is gone, .projects claims it exists.
+          printf '%s\n' "${T}/projects/orphan" >"${STATE}/${orphan}/projects"
+          rmdir "${T}/projects/orphan"
+          printf '%s\n' "${T}/projects/forged" >"${DATA}/${orphan}/.projects"
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --project-missing
+          [ -d "${DATA}/${forged}" ] || { echo "FAIL: a forged .projects got a live session removed"; exit 1; }
+          [ ! -e "${DATA}/${orphan}" ] || { echo "FAIL: the record's missing project was not honoured"; exit 1; }
+          echo "record_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "record_ok=true"
+
+  - name: a selected session with an unreadable subdirectory still reaches the prompt
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'chmod -R u+rwx "${T}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          if [ "$(id -u)" -eq 0 ]; then echo "SKIP: root ignores file modes"; echo "prompt_ok=true"; exit 0; fi
+          key="$(make_session opaque)"
+          mkdir "${DATA}/${key}/locked"; echo x >"${DATA}/${key}/locked/f"
+          chmod 000 "${DATA}/${key}/locked"
+          out="$(echo n | bash "{{.riotbox_dir}}/libexec/reset-session.sh" all 2>&1)" || { echo "FAIL: reset died before the prompt"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "Aborted." || { echo "FAIL: did not reach the prompt"; printf '%s\n' "${out}"; exit 1; }
+          echo "prompt_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "prompt_ok=true"
+
+  # The prompt can wait minutes. What was safe when the list was printed is
+  # checked again for each session just before its rm -rf.
+  - name: a container that starts while the prompt waits keeps its session from being removed
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          a="$(make_session a)"; b="$(make_session b)"
+          # Two sessions are checked while the list is built (two ps calls);
+          # from the third call on, a container mounts session a.
+          cat >"${T}/engine" <<STUB
+          #!/bin/sh
+          case "\$1" in
+          ps) n=\$(cat "${T}/calls" 2>/dev/null || echo 0); n=\$((n + 1)); echo "\${n}" >"${T}/calls"
+              [ "\${n}" -le 2 ] || echo abc ;;
+          container) printf 'abc\0web\0%s\0true\0\n' '${DATA}/${a}' ;;
+          esac
+          STUB
+          sed -i 's/^          //' "${T}/engine"
+          chmod +x "${T}/engine"; export CONTAINER_CMD="${T}/engine"
+          out="$(echo y | bash "{{.riotbox_dir}}/libexec/reset-session.sh" all 2>&1)"
+          [ -d "${DATA}/${a}" ] && [ -d "${STATE}/${a}" ] || { echo "FAIL: a session that became busy was removed"; printf '%s\n' "${out}"; exit 1; }
+          [ ! -e "${DATA}/${b}" ] || { echo "FAIL: the idle session survived"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "Removed 1 session(s)." || { echo "FAIL: wrong count"; printf '%s\n' "${out}"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "Skipped 1 session(s) that became busy after the list was shown:" || { echo "FAIL: no late-skip notice"; printf '%s\n' "${out}"; exit 1; }
+          echo "toctou_busy_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "toctou_busy_ok=true"
+
+  - name: overlay changes that appear while the prompt waits keep their session from being removed
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          a="$(make_session a)"; b="$(make_session b)"
+          # From the third engine call on (after the list), session a gains an overlay change.
+          cat >"${T}/engine" <<STUB
+          #!/bin/sh
+          if [ "\$1" = ps ]; then
+            n=\$(cat "${T}/calls" 2>/dev/null || echo 0); n=\$((n + 1)); echo "\${n}" >"${T}/calls"
+            if [ "\${n}" -gt 2 ]; then
+              mkdir -p "${STATE}/${a}/overlay/p/upper"; echo edit >"${STATE}/${a}/overlay/p/upper/f"
+            fi
+          fi
+          exit 0
+          STUB
+          sed -i 's/^          //' "${T}/engine"
+          chmod +x "${T}/engine"; export CONTAINER_CMD="${T}/engine"
+          out="$(echo y | bash "{{.riotbox_dir}}/libexec/reset-session.sh" all 2>&1)"
+          [ -f "${STATE}/${a}/overlay/p/upper/f" ] || { echo "FAIL: late overlay changes were deleted"; printf '%s\n' "${out}"; exit 1; }
+          [ ! -e "${DATA}/${b}" ] || { echo "FAIL: the other session survived"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "Skipped 1 session(s) that gained pending overlay changes after the list was shown:" || { echo "FAIL: no late-skip notice"; printf '%s\n' "${out}"; exit 1; }
+          echo "toctou_overlay_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "toctou_overlay_ok=true"
+
+  - name: a session dir whose name ends in a newline is never paired with another session's state
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          a="$(make_session live)"
+          odd="${a}"$'\n'
+          mkdir -p "${DATA}/${odd}"
+          printf '%s\n' "${T}/projects/live" >"${DATA}/${odd}/.projects"
+          install_engine_stub busy "${DATA}/${a}"
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force
+          [ -d "${STATE}/${a}" ] || { echo "FAIL: another session's state dir was deleted"; exit 1; }
+          [ -d "${DATA}/${a}" ] || { echo "FAIL: the live session was removed"; exit 1; }
+          echo "newline_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "newline_ok=true"
+
+  - name: keys in the skip lists have terminal controls replaced
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          key="evil"$'\033[31m'"red"
+          mkdir -p "${DATA}/${key}" "${STATE}/${key}/overlay/p/upper"
+          printf '%s\n' "${T}/projects/evil" >"${DATA}/${key}/.projects"
+          echo edit >"${STATE}/${key}/overlay/p/upper/f"
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force 2>&1)"
+          printf '%s\n' "${out}" | grep -qF "Skipped 1 session(s) with pending overlay changes" || { echo "FAIL: no skip notice"; exit 1; }
+          if printf '%s' "${out}" | grep -q $'\033'; then echo "FAIL: a raw escape reached the terminal"; exit 1; fi
+          echo "clean_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "clean_ok=true"
+
+  - name: one run reports both the overlay and the running-container skips
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          dirty="$(make_session dirty)"; live="$(make_session live)"; idle="$(make_session idle)"
+          mkdir -p "${STATE}/${dirty}/overlay/p/upper"; echo edit >"${STATE}/${dirty}/overlay/p/upper/f"
+          install_engine_stub busy "${DATA}/${live}"
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force)"
+          printf '%s\n' "${out}" | grep -qF "Skipped 1 session(s) with pending overlay changes" || { echo "FAIL: no overlay notice"; printf '%s\n' "${out}"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "Skipped 1 session(s) with a running container" || { echo "FAIL: no busy notice"; printf '%s\n' "${out}"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "Removed 1 session(s)." || { echo "FAIL: wrong count"; printf '%s\n' "${out}"; exit 1; }
+          [ -d "${DATA}/${dirty}" ] && [ -d "${DATA}/${live}" ] && [ ! -e "${DATA}/${idle}" ] || { echo "FAIL: wrong sessions removed"; exit 1; }
+          echo "both_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "both_ok=true"
+
+  # riotbox-core is found next to the scripts (scripts/lib/riotbox-core.sh), so
+  # these cases run a copy of the tree whose riotbox-core answers session-busy
+  # with an unexpected exit code and passes every other verb to the real binary.
+  - name: an unexpected session-busy exit code aborts before anything is removed
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          a="$(make_session a)"; b="$(make_session b)"
+          tree="${T}/tree"; mkdir -p "${tree}"
+          cp -a "{{.riotbox_dir}}/libexec" "{{.riotbox_dir}}/scripts" "{{.riotbox_dir}}/VERSION" "${tree}/"
+          mv "${tree}/libexec/riotbox-core" "${tree}/libexec/riotbox-core.real"
+          cat >"${tree}/libexec/riotbox-core" <<'STUB'
+          #!/bin/sh
+          if [ "$1" = session-busy ]; then echo "stub: boom" >&2; exit 2; fi
+          exec "$(dirname "$0")/riotbox-core.real" "$@"
+          STUB
+          sed -i 's/^          //' "${tree}/libexec/riotbox-core"
+          chmod +x "${tree}/libexec/riotbox-core"
+          rc=0; out="$(ROOT_DIR="${tree}" bash "${tree}/libexec/reset-session.sh" all force 2>&1)" || rc=$?
+          [ "${rc}" -ne 0 ] || { echo "FAIL: exit 0 after an unexpected engine verdict"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "ERROR: riotbox-core session-busy failed (exit 2)" || { echo "FAIL: no error message"; printf '%s\n' "${out}"; exit 1; }
+          [ -d "${DATA}/${a}" ] && [ -d "${DATA}/${b}" ] && [ -d "${STATE}/${a}" ] && [ -d "${STATE}/${b}" ] || { echo "FAIL: something was removed"; exit 1; }
+          echo "abort_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "abort_ok=true"
+
+  - name: an unexpected session-busy exit code at removal time aborts and leaves the rest in place
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          a="$(make_session a)"; b="$(make_session b)"
+          tree="${T}/tree"; mkdir -p "${tree}"
+          cp -a "{{.riotbox_dir}}/libexec" "{{.riotbox_dir}}/scripts" "{{.riotbox_dir}}/VERSION" "${tree}/"
+          mv "${tree}/libexec/riotbox-core" "${tree}/libexec/riotbox-core.real"
+          # Idle for the two selection-time checks, then an unexpected code.
+          cat >"${tree}/libexec/riotbox-core" <<STUB
+          #!/bin/sh
+          if [ "\$1" = session-busy ]; then
+            n=\$(cat "${T}/calls" 2>/dev/null || echo 0); n=\$((n + 1)); echo "\${n}" >"${T}/calls"
+            [ "\${n}" -le 2 ] && exit 0
+            echo "stub: boom" >&2; exit 2
+          fi
+          exec "\$(dirname "\$0")/riotbox-core.real" "\$@"
+          STUB
+          chmod +x "${tree}/libexec/riotbox-core"
+          rc=0; out="$(echo y | ROOT_DIR="${tree}" bash "${tree}/libexec/reset-session.sh" all 2>&1)" || rc=$?
+          [ "${rc}" -ne 0 ] || { echo "FAIL: exit 0 after an unexpected verdict at removal"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "ERROR: riotbox-core session-busy failed (exit 2)" || { echo "FAIL: no error message"; printf '%s\n' "${out}"; exit 1; }
+          [ -d "${DATA}/${a}" ] && [ -d "${DATA}/${b}" ] && [ -d "${STATE}/${a}" ] && [ -d "${STATE}/${b}" ] || { echo "FAIL: something was removed"; exit 1; }
+          echo "abort2_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "abort2_ok=true"
+
+  - name: --project-missing does not fall back to .projects when the host record cannot be read
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'chmod -R u+rwx "${T}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          if [ "$(id -u)" -eq 0 ]; then echo "SKIP: root ignores file modes"; echo "record_unreadable_ok=true"; exit 0; fi
+          key="$(make_session here)"
+          printf '%s\n' "${T}/projects/here" >"${STATE}/${key}/projects"
+          chmod 000 "${STATE}/${key}/projects"
+          printf '%s\n' "/nonexistent/forged" >"${DATA}/${key}/.projects"
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --project-missing
+          [ -d "${DATA}/${key}" ] || { echo "FAIL: an unreadable host record let .projects decide"; exit 1; }
+          echo "record_unreadable_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "record_unreadable_ok=true"
+
+  - name: an unreadable subtree inside an ignored cache dir is not pending, one elsewhere is
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"
+          trap 'chmod -R u+rwx "${T}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          if [ "$(id -u)" -eq 0 ]; then echo "SKIP: root ignores file modes"; echo "ignored_walk_ok=true"; exit 0; fi
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          for name in .headroom .codegraph .wh..headroom; do
+            rm -rf "${T}/u"; mkdir -p "${T}/u/${name}/sub"
+            chmod 000 "${T}/u/${name}/sub"
+            if overlay_upper_has_changes "${T}/u" 2>/dev/null; then echo "FAIL: unreadable ${name}/sub counted as a change"; exit 1; fi
+            chmod 700 "${T}/u/${name}/sub"
+          done
+          rm -rf "${T}/u"; mkdir -p "${T}/u/src/sub"
+          chmod 000 "${T}/u/src/sub"
+          overlay_upper_has_changes "${T}/u" 2>/dev/null || { echo "FAIL: unreadable src/sub did not read as pending"; exit 1; }
+          chmod 700 "${T}/u/src/sub"
+          echo "ignored_walk_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ignored_walk_ok=true"
+
+  - name: a state dir that cannot be searched reads as pending
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"
+          trap 'chmod -R u+rwx "${T}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          if [ "$(id -u)" -eq 0 ]; then echo "SKIP: root ignores file modes"; echo "state_unsearchable_ok=true"; exit 0; fi
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          mkdir -p "${T}/st/overlay/p/upper"; echo x >"${T}/st/overlay/p/upper/f"
+          chmod 600 "${T}/st"
+          overlay_state_pending "${T}/st" || { echo "FAIL: an unsearchable state dir read as not pending"; exit 1; }
+          chmod 700 "${T}/st"
+          if overlay_state_pending "${T}/missing"; then echo "FAIL: a missing state dir read as pending"; exit 1; fi
+          echo "state_unsearchable_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "state_unsearchable_ok=true"
+
+  - name: a failed removal keeps the session visible, stops, and counts what was removed
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'chmod -R u+rwx "${T}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          if [ "$(id -u)" -eq 0 ]; then echo "SKIP: root ignores file modes"; echo "rmfail_ok=true"; exit 0; fi
+          # Fixed names so the order is known: aaa is removed, bbb fails, ccc is left.
+          for k in aaa bbb ccc; do
+            mkdir -p "${DATA}/${k}" "${STATE}/${k}" "${T}/projects/${k}"
+            printf '%s\n' "${T}/projects/${k}" >"${DATA}/${k}/.projects"
+            printf '%s\n' "${T}/projects/${k}" >"${STATE}/${k}/projects"
+          done
+          mkdir "${DATA}/bbb/ro"; echo x >"${DATA}/bbb/ro/file"; chmod 555 "${DATA}/bbb/ro"
+          rc=0; out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force 2>&1)" || rc=$?
+          chmod 755 "${DATA}/bbb/ro"
+          [ "${rc}" -ne 0 ] || { echo "FAIL: exit 0 after a failed removal"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "ERROR: could not fully remove session bbb" || { echo "FAIL: no error naming the session"; printf '%s\n' "${out}"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "Removed 1 session(s) before the error; the rest were left in place." || { echo "FAIL: wrong count"; printf '%s\n' "${out}"; exit 1; }
+          [ ! -e "${DATA}/aaa" ] || { echo "FAIL: aaa survived"; exit 1; }
+          [ -d "${STATE}/bbb" ] && "{{.riotbox_dir}}/libexec/riotbox-core" is-session -- "${DATA}/bbb" "${STATE}/bbb" || { echo "FAIL: bbb is no longer a session"; exit 1; }
+          [ -d "${DATA}/ccc" ] && [ -d "${STATE}/ccc" ] || { echo "FAIL: ccc was touched"; exit 1; }
+          echo "rmfail_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "rmfail_ok=true"
+
+  - name: an unexpected session-busy code at removal time after a removal reports the count
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          a="$(make_session a)"; b="$(make_session b)"
+          tree="${T}/tree"; mkdir -p "${tree}"
+          cp -a "{{.riotbox_dir}}/libexec" "{{.riotbox_dir}}/scripts" "{{.riotbox_dir}}/VERSION" "${tree}/"
+          mv "${tree}/libexec/riotbox-core" "${tree}/libexec/riotbox-core.real"
+          # Idle for the two selection checks and the first recheck, then an unexpected code.
+          cat >"${tree}/libexec/riotbox-core" <<STUB
+          #!/bin/sh
+          if [ "\$1" = session-busy ]; then
+            n=\$(cat "${T}/calls" 2>/dev/null || echo 0); n=\$((n + 1)); echo "\${n}" >"${T}/calls"
+            [ "\${n}" -le 3 ] && exit 0
+            echo "stub: boom" >&2; exit 2
+          fi
+          exec "\$(dirname "\$0")/riotbox-core.real" "\$@"
+          STUB
+          chmod +x "${tree}/libexec/riotbox-core"
+          rc=0; out="$(echo y | ROOT_DIR="${tree}" bash "${tree}/libexec/reset-session.sh" all 2>&1)" || rc=$?
+          [ "${rc}" -ne 0 ] || { echo "FAIL: exit 0"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "Removed 1 session(s) before the error; the rest were left in place." || { echo "FAIL: wrong count"; printf '%s\n' "${out}"; exit 1; }
+          left=0; for k in "${a}" "${b}"; do [ -d "${DATA}/${k}" ] && [ -d "${STATE}/${k}" ] && left=$((left + 1)); done
+          [ "${left}" -eq 1 ] || { echo "FAIL: expected exactly one session left, got ${left}"; exit 1; }
+          echo "abort3_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "abort3_ok=true"
+
+  - name: an engine that stops answering while the prompt waits is reported as unanswered, not busy
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          a="$(make_session a)"; b="$(make_session b)"
+          cat >"${T}/engine" <<STUB
+          #!/bin/sh
+          n=\$(cat "${T}/calls" 2>/dev/null || echo 0); n=\$((n + 1)); echo "\${n}" >"${T}/calls"
+          [ "\${n}" -le 2 ] && exit 0
+          echo "engine went away" >&2; exit 125
+          STUB
+          chmod +x "${T}/engine"; export CONTAINER_CMD="${T}/engine"
+          out="$(echo y | bash "{{.riotbox_dir}}/libexec/reset-session.sh" all 2>&1)"
+          printf '%s\n' "${out}" | grep -qF "Skipped 2 session(s) because the container engine did not answer after the list was shown:" || { echo "FAIL: wrong late wording"; printf '%s\n' "${out}"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "became busy" && { echo "FAIL: reported as busy"; exit 1; }
+          [ -d "${DATA}/${a}" ] && [ -d "${DATA}/${b}" ] || { echo "FAIL: a session was removed"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "Removed 0 session(s)." || { echo "FAIL: wrong count"; exit 1; }
+          echo "late_unanswered_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "late_unanswered_ok=true"
+
+  - name: a key ending in a newline is shown quoted, so it differs from the key without it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          a="$(make_session plain)"
+          odd="${a}"$'\n'
+          for k in "${a}" "${odd}"; do
+            mkdir -p "${DATA}/${k}" "${STATE}/${k}/overlay/p/upper"
+            printf '%s\n' "${T}/projects/plain" >"${DATA}/${k}/.projects"
+            echo edit >"${STATE}/${k}/overlay/p/upper/f"
+          done
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force)"
+          printf '%s\n' "${out}" | grep -qxF "  ${a}" || { echo "FAIL: the plain key is not listed bare"; printf '%s\n' "${out}"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "\$'${a}\\n'" || { echo "FAIL: the newline key is not shown quoted"; printf '%s\n' "${out}"; exit 1; }
+          echo "quoted_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "quoted_ok=true"
+
+  - name: --project-missing matches a legacy session that has no state dir
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          gone="$(make_session gone)"; here="$(make_session here)"
+          rm -rf "${STATE}/${gone}" "${STATE}/${here}"
+          rmdir "${T}/projects/gone"
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force --project-missing
+          [ ! -e "${DATA}/${gone}" ] || { echo "FAIL: an orphaned session without a state dir survived"; exit 1; }
+          [ -d "${DATA}/${here}" ] || { echo "FAIL: a session with a live project was removed"; exit 1; }
+          echo "nostate_missing_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "nostate_missing_ok=true"
+
+  - name: a glob character in the upper path does not change what the completeness walk ignores
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"
+          trap 'chmod -R u+rwx "${T}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          if [ "$(id -u)" -eq 0 ]; then echo "SKIP: root ignores file modes"; echo "globpath_ok=true"; exit 0; fi
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          up="${T}/we*i?r[d\\u"
+          mkdir -p "${up}/.headroom/sub"; chmod 000 "${up}/.headroom/sub"
+          if overlay_upper_has_changes "${up}" 2>/dev/null; then echo "FAIL: ignored dir counted under a glob-character path"; exit 1; fi
+          chmod 700 "${up}/.headroom/sub"; rm -rf "${up}"
+          mkdir -p "${up}/src/sub"; chmod 000 "${up}/src/sub"
+          overlay_upper_has_changes "${up}" 2>/dev/null || { echo "FAIL: unreadable dir not pending under a glob-character path"; exit 1; }
+          echo "globpath_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "globpath_ok=true"
+
+  - name: a state dir under a parent that cannot be searched reads as pending, a missing one under a searchable parent does not
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"
+          trap 'chmod -R u+rwx "${T}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          if [ "$(id -u)" -eq 0 ]; then echo "SKIP: root ignores file modes"; echo "parent_ok=true"; exit 0; fi
+          source "{{.riotbox_dir}}/scripts/lib/overlay-ignore.sh"
+          mkdir -p "${T}/root/st/overlay/p/upper"; echo x >"${T}/root/st/overlay/p/upper/f"
+          chmod 000 "${T}/root"
+          overlay_state_pending "${T}/root/st" || { echo "FAIL: an unsearchable parent read as no overlays"; exit 1; }
+          chmod 700 "${T}/root"
+          if overlay_state_pending "${T}/root/nothing"; then echo "FAIL: a missing state dir read as pending"; exit 1; fi
+          echo "parent_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "parent_ok=true"
+
+  - name: a failure inside the state dir leaves the session listed, and a second run finishes it
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'chmod -R u+rwx "${T}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          if [ "$(id -u)" -eq 0 ]; then echo "SKIP: root ignores file modes"; echo "statefail_ok=true"; exit 0; fi
+          for k in aaa bbb ccc; do
+            mkdir -p "${DATA}/${k}" "${STATE}/${k}" "${T}/projects/${k}"
+            printf '%s\n' "${T}/projects/${k}" >"${DATA}/${k}/.projects"
+            printf '%s\n' "${T}/projects/${k}" >"${STATE}/${k}/projects"
+          done
+          mkdir "${STATE}/bbb/ro"; echo x >"${STATE}/bbb/ro/file"; chmod 555 "${STATE}/bbb/ro"
+          rc=0; out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force 2>&1)" || rc=$?
+          [ "${rc}" -ne 0 ] || { echo "FAIL: exit 0 after a failed removal"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "ERROR: could not fully remove session bbb" || { echo "FAIL: no error"; printf '%s\n' "${out}"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "rm -rf -- ${STATE}/bbb" || { echo "FAIL: no cleanup line"; printf '%s\n' "${out}"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "Removed 1 session(s) before the error; the rest were left in place." || { echo "FAIL: wrong count"; printf '%s\n' "${out}"; exit 1; }
+          "{{.riotbox_dir}}/libexec/riotbox-core" is-session -- "${DATA}/bbb" "${STATE}/bbb" || { echo "FAIL: the half-removed session is no longer a session"; exit 1; }
+          chmod -R u+rwx "${STATE}/bbb"
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force
+          [ ! -e "${DATA}/bbb" ] && [ ! -e "${STATE}/bbb" ] && [ ! -e "${DATA}/ccc" ] && [ ! -e "${STATE}/ccc" ] || { echo "FAIL: the second run left something"; exit 1; }
+          echo "statefail_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "statefail_ok=true"
+
+  - name: a failed removal of a legacy session without a record leaves it listed
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'chmod -R u+rwx "${T}" 2>/dev/null || true; rm -rf "${T}"' EXIT
+          if [ "$(id -u)" -eq 0 ]; then echo "SKIP: root ignores file modes"; echo "legacyfail_ok=true"; exit 0; fi
+          mkdir -p "${DATA}/legacy/ro" "${T}/projects/legacy"
+          printf '%s\n' "${T}/projects/legacy" >"${DATA}/legacy/.projects"
+          echo x >"${DATA}/legacy/ro/file"; chmod 555 "${DATA}/legacy/ro"
+          rc=0; bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force >/dev/null 2>&1 || rc=$?
+          [ "${rc}" -ne 0 ] || { echo "FAIL: exit 0 after a failed removal"; exit 1; }
+          "{{.riotbox_dir}}/libexec/riotbox-core" is-session -- "${DATA}/legacy" "${STATE}/legacy" || { echo "FAIL: the legacy session lost its marker"; exit 1; }
+          chmod -R u+rwx "${DATA}/legacy"
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force
+          [ ! -e "${DATA}/legacy" ] || { echo "FAIL: the second run left it"; exit 1; }
+          echo "legacyfail_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "legacyfail_ok=true"
+
+  - name: entries with dot, dash, space and newline names are all removed with their session
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          key="$(make_session odd)"
+          for base in "${DATA}/${key}" "${STATE}/${key}"; do
+            ( cd "${base}"; touch -- .hidden -rf "with space" $'new\nline'; mkdir -p -- .dotdir/sub -dir )
+          done
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force
+          [ ! -e "${DATA}/${key}" ] && [ ! -e "${STATE}/${key}" ] || { echo "FAIL: a session with odd entry names was not fully removed"; exit 1; }
+          echo "oddnames_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "oddnames_ok=true"
+
+  - name: late skips are reported before the error line when the run aborts
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          for k in aaa bbb; do
+            mkdir -p "${DATA}/${k}" "${STATE}/${k}" "${T}/projects/${k}"
+            printf '%s\n' "${T}/projects/${k}" >"${DATA}/${k}/.projects"
+          done
+          tree="${T}/tree"; mkdir -p "${tree}"
+          cp -a "{{.riotbox_dir}}/libexec" "{{.riotbox_dir}}/scripts" "{{.riotbox_dir}}/VERSION" "${tree}/"
+          mv "${tree}/libexec/riotbox-core" "${tree}/libexec/riotbox-core.real"
+          # Calls 1-2 select; call 3 (aaa) says busy; call 4 (bbb) fails unexpectedly.
+          cat >"${tree}/libexec/riotbox-core" <<STUB
+          #!/bin/sh
+          if [ "\$1" = session-busy ]; then
+            n=\$(cat "${T}/calls" 2>/dev/null || echo 0); n=\$((n + 1)); echo "\${n}" >"${T}/calls"
+            [ "\${n}" -le 2 ] && exit 0
+            [ "\${n}" -eq 3 ] && { echo "stub: busy" >&2; exit 1; }
+            echo "stub: boom" >&2; exit 2
+          fi
+          exec "\$(dirname "\$0")/riotbox-core.real" "\$@"
+          STUB
+          chmod +x "${tree}/libexec/riotbox-core"
+          rc=0; out="$(echo y | ROOT_DIR="${tree}" bash "${tree}/libexec/reset-session.sh" all 2>&1)" || rc=$?
+          [ "${rc}" -ne 0 ] || { echo "FAIL: exit 0"; exit 1; }
+          skipped="$(printf '%s\n' "${out}" | grep -nF "Skipped 1 session(s) that became busy after the list was shown:" | cut -d: -f1)"
+          errline="$(printf '%s\n' "${out}" | grep -nF "before the error" | cut -d: -f1)"
+          [ -n "${skipped}" ] && [ -n "${errline}" ] && [ "${skipped}" -lt "${errline}" ] || { echo "FAIL: the late skip was lost or came after the error"; printf '%s\n' "${out}"; exit 1; }
+          echo "order_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "order_ok=true"
+
+  - name: a state path that is not a directory is reported as such, not as pending overlay changes
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          key="$(make_session filestate)"
+          rm -rf "${STATE}/${key}"; echo x >"${STATE}/${key}"
+          out="$(bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force)"
+          printf '%s\n' "${out}" | grep -qF "Skipped 1 session(s) with an invalid name or a state path that is not a directory" || { echo "FAIL: wrong notice"; printf '%s\n' "${out}"; exit 1; }
+          printf '%s\n' "${out}" | grep -qF "pending overlay" && { echo "FAIL: reported as pending overlay changes"; exit 1; }
+          [ -d "${DATA}/${key}" ] && [ -f "${STATE}/${key}" ] || { echo "FAIL: something was removed"; exit 1; }
+          echo "filestate_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "filestate_ok=true"

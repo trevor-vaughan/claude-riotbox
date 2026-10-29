@@ -150,7 +150,7 @@ The rules behind each verb are in the doc comments of `internal/migrate`.
 
 The verbs that take `--engine` ask the container engine which live (created,
 running or paused) containers have a path mounted read-write (`internal/engine`):
-`overlay-scan` below, and `migrate-failed` and `migrate-key`, which refuse
+`overlay-scan` and `session-busy` below, and `migrate-failed` and `migrate-key`, which refuse
 while a container can write what they would move (`engine.RefuseIfRunning`). The `--engine` value is
 the executable to run, a name looked up on `PATH` or a path; the bash adapters
 pass `${CONTAINER_CMD:-podman}`. `CONTAINER_CMD` must therefore name an
@@ -164,11 +164,13 @@ Unlike the key verbs, these compare each directory argument in both
 `realpath -m` and `realpath -ms` form (`internal/realpath`), because a mount
 source may sit behind a link. All fail closed: when the engine cannot list or
 inspect the containers, its inspect output is malformed, or a path cannot be
-resolved, they exit 1. The engine's own messages go to stderr; malformed output
-is reported as `riotbox-core: malformed container inspect output`.
+resolved, they exit 1; `session-busy` exits 3 instead, so a caller can tell
+"cannot tell" from "busy" (1). The engine's own messages go to stderr; malformed
+output is reported as `riotbox-core: malformed container inspect output`.
 
 | Invocation | Behaviour |
 |---|---|
+| `riotbox-core session-busy --lib-dir <dir> --engine <engine> <session-dir> <state-dir>` | Whether a live container can write the session (`engine.RefuseIfRunning`). Exit 0: none can. Exit 1: one can. Exit 3: it could not tell (the engine did not answer, or a path could not be resolved); unlike the other verbs, this is not a failure to stop on, so callers can report "busy" and "unknown" separately. The reason is on stderr. Run by `check_busy` in `libexec/reset-session.sh`, which calls it when `session-reset all` builds its list and again just before each removal. |
 | `riotbox-core overlay-scan --lib-dir <dir> --engine <engine> <overlay-dir> <project-dir>` | Records of two NUL-terminated fields: `holder` and the name of a container that can write the overlay, once per container; or `sharer` and `<name> <source>` for each other mount that overlaps the project either way, the source cleaned with `terminal-clean.jq` from `--lib-dir`. Exit 1, printing nothing on stdout, when the engine cannot answer. `_overlay_scan_sessions` in `scripts/overlay.sh` reads the records with `mapfile -d ''` from a process substitution and checks the exit code with `wait "$!"`; a command substitution would drop the NULs. |
 
 A container "can write" a path when its mount source is the path or inside it.
