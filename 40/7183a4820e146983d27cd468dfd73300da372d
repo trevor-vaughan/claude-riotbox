@@ -1,0 +1,21 @@
+scripts/lib/overlay-ignore.sh
+  s_3af1b180ec8c86::t_b07517a3583f02 146-151,162-167,172-205
+tests/session-reset-filters.venom.yml
+  s_3af1b180ec8c86::t_25045181f9f71d 430-517
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "407183a4820e146983d27cd468dfd73300da372d",
+  "prompts": {},
+  "sessions": {
+    "s_3af1b180ec8c86": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "febec284-1c02-4b40-b128-eca16428e321",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
