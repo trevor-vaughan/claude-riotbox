@@ -1,0 +1,21 @@
+scripts/git-ai-riotbox.sh
+  s_3af1b180ec8c86::t_da91658f89ba3e 297-306
+tests/git-ai-aggregate.venom.yml
+  s_3af1b180ec8c86::t_e0b859385ead8d 452-521
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "19dc3694619166420d876c1006e5192dc306fb51",
+  "prompts": {},
+  "sessions": {
+    "s_3af1b180ec8c86": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "febec284-1c02-4b40-b128-eca16428e321",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
