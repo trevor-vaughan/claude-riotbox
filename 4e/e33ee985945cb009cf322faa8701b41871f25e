@@ -1,0 +1,29 @@
+THREAT_MODEL.md
+  s_3af1b180ec8c86::t_c2b50bf9e4eb8c 619
+bin/riotbox
+  s_3af1b180ec8c86::t_c2b50bf9e4eb8c 78-81
+  s_3af1b180ec8c86::t_e4dc8a9c36940c 82
+README.md
+  s_3af1b180ec8c86::t_1547bd503f7a9f 291
+  s_3af1b180ec8c86::t_c2b50bf9e4eb8c 569-583
+docs/dev/riotbox-core.md
+  s_3af1b180ec8c86::t_1547bd503f7a9f 167
+  s_3af1b180ec8c86::t_c2b50bf9e4eb8c 153
+  s_3af1b180ec8c86::t_b9fabed3302409 168-169,173
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4ee33ee985945cb009cf322faa8701b41871f25e",
+  "prompts": {},
+  "sessions": {
+    "s_3af1b180ec8c86": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "febec284-1c02-4b40-b128-eca16428e321",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
