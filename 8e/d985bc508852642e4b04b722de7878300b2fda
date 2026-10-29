@@ -1,0 +1,22 @@
+tests/session-reset-filters.venom.yml
+  s_3af1b180ec8c86::t_08312c54bdae92 366-429
+  s_3af1b180ec8c86::t_c4b4f8234807c0 192-365
+libexec/reset-session.sh
+  s_3af1b180ec8c86::t_ebb2c286782c4d 21-73,147-150,156-187,191-195,197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8ed985bc508852642e4b04b722de7878300b2fda",
+  "prompts": {},
+  "sessions": {
+    "s_3af1b180ec8c86": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "febec284-1c02-4b40-b128-eca16428e321",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
