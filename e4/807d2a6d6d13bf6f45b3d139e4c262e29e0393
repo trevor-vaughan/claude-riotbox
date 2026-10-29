@@ -1,0 +1,22 @@
+libexec/session-summary.sh
+  s_3af1b180ec8c86::t_07a565be1d49c2 12,17-22
+tests/session-reset-filters.venom.yml
+  s_3af1b180ec8c86::t_f5260c2c2ef200 578
+  s_3af1b180ec8c86::t_171018958ae8fb 563-577,579-582
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e4807d2a6d6d13bf6f45b3d139e4c262e29e0393",
+  "prompts": {},
+  "sessions": {
+    "s_3af1b180ec8c86": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "febec284-1c02-4b40-b128-eca16428e321",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
