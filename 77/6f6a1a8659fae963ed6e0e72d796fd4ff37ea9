@@ -1,0 +1,21 @@
+tests/overlay.venom.yml
+  s_597e69b24d1e9b::t_c6187e37a44707 721-763
+scripts/overlay.sh
+  s_597e69b24d1e9b::t_afc10b11cfc2e0 438,442-450,484-489
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "643e8924bdf76499b08d4e6a42c8ca720fe9390a",
+  "prompts": {},
+  "sessions": {
+    "s_597e69b24d1e9b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51bd9bbc-7d63-4ef3-85a7-247407a2834c",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}

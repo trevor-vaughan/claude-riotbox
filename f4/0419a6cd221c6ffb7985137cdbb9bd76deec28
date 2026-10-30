@@ -1,0 +1,57 @@
+libexec/list-sessions.sh
+  s_597e69b24d1e9b::t_1023d40dad292a 27-29
+scripts/tokscale-riotbox.sh
+  s_597e69b24d1e9b::t_0383b385a75120 122-124
+docs/dev/riotbox-core.md
+  s_597e69b24d1e9b::t_466874a99e3087 145
+libexec/remove-session.sh
+  s_597e69b24d1e9b::t_89e442af10bb55 46-48
+tests/session-commands.venom.yml
+  s_597e69b24d1e9b::t_121a586e516c47 68-103
+  s_597e69b24d1e9b::t_98d08369fe2218 34-67
+scripts/git-ai-riotbox.sh
+  s_597e69b24d1e9b::t_833f9784f7e754 178-180
+container/entrypoint.sh
+  s_597e69b24d1e9b::t_7c249fe92f4ecb 60-62,66
+internal/migrate/headroom_test.go
+  s_597e69b24d1e9b::t_cae8b5869daff0 98-103
+libexec/reset-session.sh
+  s_597e69b24d1e9b::t_a92a571ef55d8e 285-287
+tests/lib/session-commands-helpers.sh
+  s_597e69b24d1e9b::t_067d5f98da1186 56-75
+scripts/mount-projects.sh
+  s_597e69b24d1e9b::t_fd86779a0d9d7c 409-417
+internal/migrate/headroom.go
+  s_597e69b24d1e9b::t_a43f77fff3facf 85-87
+  s_597e69b24d1e9b::t_127726d9254868 99
+internal/migrate/all_test.go
+  s_597e69b24d1e9b::t_a8f49e43a006db 68,81-84
+  s_597e69b24d1e9b::t_19016040142242 85-86
+internal/migrate/all.go
+  s_597e69b24d1e9b::t_bab69908bf1c35 65
+  s_597e69b24d1e9b::t_e4915772eaed9b 16-20
+tests/codegraph.venom.yml
+  s_597e69b24d1e9b::t_b54bc7463f7227 589-614
+container/overlay-setup.sh
+  s_597e69b24d1e9b::t_c9dce4e9cfecd6 26-33
+  s_597e69b24d1e9b::t_147f6243050d56 83
+  s_597e69b24d1e9b::t_bbdb430c6be402 80-82,84
+container/codegraph-setup.sh
+  s_597e69b24d1e9b::t_2c620344587271 298-307
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "89d0bd5b7738b08087722b7055c001b202f384b2",
+  "prompts": {},
+  "sessions": {
+    "s_597e69b24d1e9b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51bd9bbc-7d63-4ef3-85a7-247407a2834c",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
