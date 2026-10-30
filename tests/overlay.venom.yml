@@ -718,6 +718,49 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "list_dot_snapshot=pass"
 
+  - name: List shows a session whose key starts with a dot
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export XDG_DATA_HOME="$(mktemp -d --tmpdir=/dev/shm)"
+          trap 'rm -rf "${XDG_DATA_HOME}"' EXIT
+          STATE="${XDG_DATA_HOME}/riotbox-state/.dotfiles-1more-0123456789abcdef"
+          mkdir -p "${STATE}/overlay/.dotfiles/upper"
+          echo edit > "${STATE}/overlay/.dotfiles/upper/file.txt"
+
+          out="$("{{.riotbox_dir}}/scripts/overlay.sh" list)"
+          printf '%s\n' "${out}"
+          printf '%s\n' "${out}" | grep -q 'Key      .dotfiles-1more-0123456789abcdef' \
+            || { echo "FAIL: dot-keyed session not listed"; exit 1; }
+          echo "list_dot_key=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "list_dot_key=pass"
+
+  - name: List leaves the caller's dotglob and nullglob settings alone
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export XDG_DATA_HOME="$(mktemp -d --tmpdir=/dev/shm)"
+          trap 'rm -rf "${XDG_DATA_HOME}"' EXIT
+          source "{{.riotbox_dir}}/scripts/overlay.sh"
+          export RIOTBOX_STATE_ROOT="${XDG_DATA_HOME}/riotbox-state"
+          mkdir -p "${RIOTBOX_STATE_ROOT}/key/overlay/p/upper"
+          echo edit > "${RIOTBOX_STATE_ROOT}/key/overlay/p/upper/file.txt"
+
+          shopt -s dotglob nullglob
+          overlay_list >/dev/null
+          shopt -q dotglob && shopt -q nullglob || { echo "FAIL: options cleared"; exit 1; }
+          shopt -u dotglob nullglob
+          overlay_list >/dev/null
+          ! shopt -q dotglob && ! shopt -q nullglob || { echo "FAIL: options set"; exit 1; }
+          echo "list_shopt=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "list_shopt=pass"
+
   - name: Accept still copies .codegraph through to the project
     steps:
       - type: exec

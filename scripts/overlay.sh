@@ -435,11 +435,19 @@ overlay_list() {
 
 	local found=0
 	local state_dir name overlay_base overlay_dir
-	local -a project_paths raw_paths commands overlay_dirs
+	local -a project_paths raw_paths commands overlay_dirs state_dirs
 	local -A project_of
 	local projects last_modified local_added local_deleted size rel kind i verb
 
-	for state_dir in "${RIOTBOX_STATE_ROOT}"/*/; do
+	# A multi-project session key starts with the first project's basename,
+	# so it starts with a dot when that project is ".dotfiles". The
+	# subshell keeps the caller's shell options untouched.
+	mapfile -d '' -t state_dirs < <(
+		shopt -s dotglob nullglob
+		for state_dir in "${RIOTBOX_STATE_ROOT}"/*/; do printf '%s\0' "${state_dir}"; done
+	)
+
+	for state_dir in "${state_dirs[@]}"; do
 		[[ -d "${state_dir}" ]] || continue
 		name="$(basename "${state_dir}")"
 
@@ -473,10 +481,12 @@ overlay_list() {
 
 		# dotglob: an overlay folder is named after its project's basename,
 		# so ".dotfiles" is an overlay like any other. nullglob: an empty
-		# overlay/ expands to nothing.
-		shopt -s dotglob nullglob
-		overlay_dirs=("${overlay_base}"/*/)
-		shopt -u dotglob nullglob
+		# overlay/ expands to nothing. The subshell keeps the caller's
+		# shell options untouched.
+		mapfile -d '' -t overlay_dirs < <(
+			shopt -s dotglob nullglob
+			for overlay_dir in "${overlay_base}"/*/; do printf '%s\0' "${overlay_dir}"; done
+		)
 
 		# Check each overlay subdir for non-empty upper
 		for overlay_dir in "${overlay_dirs[@]}"; do
