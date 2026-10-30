@@ -24,6 +24,9 @@ fi
 riotbox_core_require || exit 1
 
 found=0
+# dotglob: a multi-project session key starts with the first project's
+# basename, so ".dotfiles" gives a key that starts with a dot.
+shopt -s dotglob
 for session_dir in "${session_root}"/*/; do
 	[[ -d "${session_dir}" ]] || continue
 	name="$(basename "${session_dir}")"

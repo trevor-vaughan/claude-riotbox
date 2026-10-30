@@ -282,6 +282,9 @@ if [[ "${all}" = true ]]; then
 	skipped_unanswered=()
 	engine_message=""
 	if [[ -d "${session_root}" ]]; then
+		# dotglob: a multi-project session key starts with the first
+		# project's basename, so ".dotfiles" gives a key that starts with a dot.
+		shopt -s dotglob
 		for d in "${session_root}"/*/; do
 			# Not basename: it strips trailing newlines, so a dir named "<A>\n"
 			# would be paired with session A's state.

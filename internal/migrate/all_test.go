@@ -65,9 +65,8 @@ var _ = Describe("AllSessions (riotbox overlays' migration pass)", func() {
 		Expect(errOut.String()).To(Equal(moved("key")))
 	})
 
-	It("skips what is not a session: a dir with no marker, a hidden dir, a file", func() {
+	It("skips what is not a session: a dir with no marker, a hidden dir with no marker, a file", func() {
 		write(dataDir+"/plain/headroom/mem", "m")
-		write(dataDir+"/.hidden/.projects", "/p\n")
 		write(dataDir+"/.hidden/headroom/mem", "m")
 		write(dataDir+"/file", "x")
 		legacySession("key")
@@ -77,6 +76,12 @@ var _ = Describe("AllSessions (riotbox overlays' migration pass)", func() {
 		Expect(exists(dataDir + "/.hidden/headroom/mem")).To(BeTrue())
 		Expect(exists(stateRoot + "/plain")).To(BeFalse())
 		Expect(exists(stateRoot + "/.hidden")).To(BeFalse())
+	})
+
+	It("migrates a session whose key starts with a dot", func() {
+		legacySession(".dotfiles-1more-0123456789abcdef")
+		Expect(migrate.AllSessions(errOut, libDir, dataDir, stateRoot)).To(Succeed())
+		Expect(errOut.String()).To(Equal(moved(".dotfiles-1more-0123456789abcdef")))
 	})
 
 	It("does nothing, creating no state root, when there is no session", func() {

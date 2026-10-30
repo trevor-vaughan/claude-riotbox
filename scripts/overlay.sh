@@ -435,11 +435,19 @@ overlay_list() {
 
 	local found=0
 	local state_dir name overlay_base overlay_dir
-	local -a project_paths raw_paths commands
+	local -a project_paths raw_paths commands overlay_dirs state_dirs
 	local -A project_of
 	local projects last_modified local_added local_deleted size rel kind i verb
 
-	for state_dir in "${RIOTBOX_STATE_ROOT}"/*/; do
+	# A multi-project session key starts with the first project's basename,
+	# so it starts with a dot when that project is ".dotfiles". The
+	# subshell keeps the caller's shell options untouched.
+	mapfile -d '' -t state_dirs < <(
+		shopt -s dotglob nullglob
+		for state_dir in "${RIOTBOX_STATE_ROOT}"/*/; do printf '%s\0' "${state_dir}"; done
+	)
+
+	for state_dir in "${state_dirs[@]}"; do
 		[[ -d "${state_dir}" ]] || continue
 		name="$(basename "${state_dir}")"
 
@@ -471,8 +479,17 @@ overlay_list() {
 			project_paths=("(unknown) — launch this project set once with this release")
 		fi
 
+		# dotglob: an overlay folder is named after its project's basename,
+		# so ".dotfiles" is an overlay like any other. nullglob: an empty
+		# overlay/ expands to nothing. The subshell keeps the caller's
+		# shell options untouched.
+		mapfile -d '' -t overlay_dirs < <(
+			shopt -s dotglob nullglob
+			for overlay_dir in "${overlay_base}"/*/; do printf '%s\0' "${overlay_dir}"; done
+		)
+
 		# Check each overlay subdir for non-empty upper
-		for overlay_dir in "${overlay_base}"/*/; do
+		for overlay_dir in "${overlay_dirs[@]}"; do
 			[[ -d "${overlay_dir}/upper" ]] || continue
 			# shellcheck disable=SC2310 # designed to be tested in conditions
 			overlay_upper_has_changes "${overlay_dir}/upper" || continue
@@ -518,7 +535,7 @@ overlay_list() {
 
 		# A snapshot an overlay-accept never put back (it was killed, or is
 		# still running) holds reviewed-but-unapplied changes.
-		for overlay_dir in "${overlay_base}"/*/; do
+		for overlay_dir in "${overlay_dirs[@]}"; do
 			overlay_dir="${overlay_dir%/}"
 			# shellcheck disable=SC2310 # designed to be tested in conditions
 			overlay_is_stranded_snapshot "${overlay_dir}" || continue

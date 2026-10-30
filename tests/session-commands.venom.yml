@@ -31,6 +31,76 @@ testcases:
           - result.systemout ShouldContainSubstring "Removed 1 session(s)."
           - result.systemout ShouldContainSubstring "REMOVE_ALL_OK"
 
+  # A multi-project key starts with the first project's basename, so a set
+  # led by ~/.dotfiles has a key that starts with a dot. A bash glob skips
+  # such names; every session command must still find the session, and must
+  # still leave an unmarked dot-named directory alone.
+  - name: session-list, session-remove --all and session-reset all handle a session whose key starts with a dot
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          key="$(make_dot_session)"
+          mkdir -p "${DATA}/.stray"
+
+          listed="$(bash "{{.riotbox_dir}}/libexec/list-sessions.sh")"
+          printf '%s\n' "${listed}" | grep -qF -- "${key}" || { echo "FAIL: session-list missed ${key}"; exit 1; }
+          printf '%s\n' "${listed}" | grep -qF -- ".stray" && { echo "FAIL: session-list showed an unmarked dir"; exit 1; }
+
+          bash "{{.riotbox_dir}}/libexec/reset-session.sh" all force
+          [ ! -e "${DATA}/${key}" ] || { echo "FAIL: reset all left the session"; exit 1; }
+          [ -d "${DATA}/.stray" ] || { echo "FAIL: reset all removed an unmarked dot dir"; exit 1; }
+
+          key="$(make_dot_session)"
+          printf 'y\n' | bash "{{.riotbox_dir}}/libexec/remove-session.sh" --all
+          [ ! -e "${DATA}/${key}" ] || { echo "FAIL: remove --all left the session"; exit 1; }
+          [ -d "${DATA}/.stray" ] || { echo "FAIL: remove --all removed an unmarked dot dir"; exit 1; }
+          assert_app_tree_intact
+          echo "DOT_KEY_SESSION_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DOT_KEY_SESSION_OK"
+
+  - name: the git-ai and tokscale scans and the member hint find a session whose key starts with a dot
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-commands-helpers.sh"
+          setup_session_install
+          trap 'rm -rf "${T}"' EXIT
+          export RIOTBOX_DATA_DIR="${DATA}" RIOTBOX_STATE_ROOT="${STATE}"
+          key="$(make_dot_session)"
+          echo "1.7.4" >"${STATE}/${key}/git-ai/.riotbox-version"
+          mkdir -p "${STATE}/${key}/pi-agent/sessions"
+
+          printf '#!/bin/sh\nexit 0\n' >"${T}/stub"
+          chmod +x "${T}/stub"
+          GIT_AI_BIN="${T}/stub" bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" --list >"${T}/out"
+          grep -qF "${STATE}/${key}/git-ai" "${T}/out" || { echo "FAIL: git-ai missed the store"; cat "${T}/out"; exit 1; }
+
+          # tokscale-riotbox.sh hides the scan behind a network namespace.
+          if command -v unshare >/dev/null && unshare -rn true 2>/dev/null; then
+            printf '#!/bin/sh\necho "EXTRA=${TOKSCALE_EXTRA_DIRS}"\n' >"${T}/tok"
+            chmod +x "${T}/tok"
+            TOKSCALE_BIN="${T}/tok" bash "{{.riotbox_dir}}/scripts/tokscale-riotbox.sh" >"${T}/tokout"
+            grep -qF "pi:${STATE}/${key}/pi-agent/sessions" "${T}/tokout" || { echo "FAIL: tokscale missed the pi root"; cat "${T}/tokout"; exit 1; }
+          fi
+
+          # The member hint reaches a set only through the whole-set command.
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          member_set_hint session-migrate "${T}/projects/zeta" 2>"${T}/hint"
+          grep -qF 'It is part of a multi-project session; name the whole set:' "${T}/hint" || { echo "FAIL: no member hint"; cat "${T}/hint"; exit 1; }
+          echo "DOT_KEY_SCANS_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "DOT_KEY_SCANS_OK"
+
   - name: session-reset all force removes marked sessions and leaves the rootless app tree
     steps:
       - type: exec

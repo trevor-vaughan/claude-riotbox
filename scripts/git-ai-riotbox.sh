@@ -175,6 +175,9 @@ record_store "${HOME}/.git-ai" 0
 # A store an older RiotBox left at riotbox/<session>/git-ai is not read: the
 # next launch of that project moves it here (scripts/lib/session-state.sh).
 if [[ -d "${RIOTBOX_STATE_ROOT}" ]]; then
+	# dotglob: a multi-project session key starts with the first project's
+	# basename, so ".dotfiles" gives a key that starts with a dot.
+	shopt -s dotglob
 	for session in "${RIOTBOX_STATE_ROOT}"/*/; do
 		record_store "${session%/}/git-ai" 1
 	done

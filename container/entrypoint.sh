@@ -57,10 +57,13 @@ export CLAUDE_CONFIG_DIR="${HOME}/.claude"
 # writes hit persistent storage instead of the overlay filesystem.
 export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
 
-# Mark multi-project mount subdirectories as safe for git
+# Mark multi-project mount subdirectories as safe for git. dotglob: a project
+# mounted at /workspace/.dotfiles is a project too.
+shopt -s dotglob
 for d in /workspace/*/; do
 	[[ -d "${d}.git" ]] && git config --global --add safe.directory "${d%/}"
 done
+shopt -u dotglob
 
 # Ensure Claude Code directories exist
 mkdir -p ~/.claude/debug ~/.claude/plugins/cache

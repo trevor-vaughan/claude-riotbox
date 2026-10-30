@@ -406,8 +406,15 @@ require_overlay_dir() {
 #   consulted.
 member_set_hint() {
 	local subcommand="$1" dir="$2" state projects member
-	local -a members
-	for state in "${RIOTBOX_STATE_ROOT}"/*/; do
+	local -a members states
+	# dotglob: a multi-project session key starts with the first project's
+	# basename, so ".dotfiles" gives a key that starts with a dot. The
+	# subshell keeps the caller's shell options untouched.
+	mapfile -d '' -t states < <(
+		shopt -s dotglob nullglob
+		for state in "${RIOTBOX_STATE_ROOT}"/*/; do printf '%s\0' "${state}"; done
+	)
+	for state in "${states[@]}"; do
 		# shellcheck disable=SC2310 # a session without a record names no set
 		projects="$(recorded_projects "${state%/}")" || continue
 		mapfile -t members <<<"${projects}"

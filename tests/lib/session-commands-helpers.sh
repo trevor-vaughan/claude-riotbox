@@ -53,6 +53,26 @@ make_session() {
 	printf '%s\n' "${key}"
 }
 
+# make_dot_session
+#   Like make_session for the project set {.dotfiles, zeta}. A multi-project
+#   key starts with the first basename, so this key starts with a dot. The
+#   state dir also holds the launch's own record of the set. Prints the key.
+make_dot_session() {
+	local first="${T}/projects/.dotfiles" second="${T}/projects/zeta" key
+	mkdir -p "${first}" "${second}"
+	key="$(session_key "${first}" "${second}")"
+	[[ "${key}" == .* ]] || {
+		echo "FAIL: key '${key}' does not start with a dot" >&2
+		return 1
+	}
+	mkdir -p "${DATA}/${key}" "${STATE}/${key}/git-ai"
+	printf '%s\n%s\n' "${first}" "${second}" >"${DATA}/${key}/.projects"
+	printf '%s\n%s\n' "${first}" "${second}" >"${STATE}/${key}/projects"
+	echo payload >"${DATA}/${key}/payload"
+	echo '{}' >"${STATE}/${key}/git-ai/config.json"
+	printf '%s\n' "${key}"
+}
+
 # assert_app_tree_intact
 #   Fail unless every app path install.sh lays down, and the seeded backup,
 #   still exists.

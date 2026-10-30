@@ -295,11 +295,16 @@ codegraph_project_roots() {
 		return 0
 	fi
 
-	local dir
-	for dir in "${CODEGRAPH_WORKSPACE}"/*/; do
-		[[ -d "${dir}" ]] || continue
-		printf '%s\n' "${dir%/}"
-	done
+	# dotglob: a project mounted at /workspace/.dotfiles is a project too.
+	# The subshell keeps the entrypoint's shell options untouched.
+	(
+		shopt -s dotglob
+		local dir
+		for dir in "${CODEGRAPH_WORKSPACE}"/*/; do
+			[[ -d "${dir}" ]] || continue
+			printf '%s\n' "${dir%/}"
+		done
+	)
 }
 
 # Print one hint line per project that has no index. Silent when every project

@@ -89,11 +89,16 @@ var _ = Describe("HeadroomNotice (notice_project_headroom)", func() {
 		mkdirs(tmp+"/upper-target/.headroom", state+"/overlay/linked", tmp+"/name-target/upper/.headroom")
 		Expect(os.Symlink(tmp+"/upper-target", state+"/overlay/linked/upper")).To(Succeed())
 		Expect(os.Symlink(tmp+"/name-target", state+"/overlay/named")).To(Succeed())
-		mkdirs(state + "/overlay/.hidden/upper/.headroom")
 		Expect(migrate.HeadroomNotice(errOut, libDir, proj, state)).To(Succeed())
 		Expect(errOut.String()).To(BeEmpty())
 		Expect(read(state + "/.migrated")).To(Equal("project-headroom-notice\n"))
 		expectVictimIntact()
+	})
+
+	It("reports a copy in an overlay whose name starts with a dot", func() {
+		mkdirs(state + "/overlay/.dotfiles/upper/.headroom")
+		Expect(migrate.HeadroomNotice(errOut, libDir, proj, state)).To(Succeed())
+		Expect(errOut.String()).To(HavePrefix("Notice: " + state + "/overlay/.dotfiles/upper/.headroom may hold headroom memory from an older RiotBox.\n"))
 	})
 
 	It("prints one footer for several copies", func() {
