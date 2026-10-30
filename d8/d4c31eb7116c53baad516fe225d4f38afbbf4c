@@ -1,0 +1,38 @@
+README.md
+  h_4db53f42b9be42 893-894
+scripts/git-ai-riotbox.sh
+  h_4db53f42b9be42 356,366-372,386-389
+tests/git-ai-aggregate.venom.yml
+  h_4db53f42b9be42 522-566
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "233cd19db7e1886872eee74ab2e97ae6a88cac3f",
+  "prompts": {},
+  "humans": {
+    "h_4db53f42b9be42": {
+      "author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
+
+tests/git-ai-aggregate.venom.yml
+  s_421ff80fa2e687::t_6db895d2276d66 621,623
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c2c85fb8ca0b20246896592b792c6fee843820d",
+  "prompts": {},
+  "sessions": {
+    "s_421ff80fa2e687": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6ac3b02-0997-4268-85ca-7a10b66b11d4",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
