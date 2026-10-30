@@ -1,29 +1,12 @@
 README.md
-  h_4db53f42b9be42 893-894
+  s_421ff80fa2e687::t_c0f624b802b36f 893-894
 scripts/git-ai-riotbox.sh
-  h_4db53f42b9be42 356,366-372,386-389
-tests/git-ai-aggregate.venom.yml
-  h_4db53f42b9be42 522-566
+  s_421ff80fa2e687::t_c0f624b802b36f 363,373-379,393-396
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.5",
-  "base_commit_sha": "233cd19db7e1886872eee74ab2e97ae6a88cac3f",
-  "prompts": {},
-  "humans": {
-    "h_4db53f42b9be42": {
-      "author": "Trevor Vaughan <peiriannydd@gmail.com>"
-    }
-  }
-}
-
-tests/git-ai-aggregate.venom.yml
-  s_421ff80fa2e687::t_6db895d2276d66 621,623
----
-{
-  "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.5",
-  "base_commit_sha": "3c2c85fb8ca0b20246896592b792c6fee843820d",
+  "base_commit_sha": "d8d4c31eb7116c53baad516fe225d4f38afbbf4c",
   "prompts": {},
   "sessions": {
     "s_421ff80fa2e687": {
