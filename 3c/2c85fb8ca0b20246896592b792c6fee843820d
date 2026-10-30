@@ -1,0 +1,19 @@
+tests/git-ai-aggregate.venom.yml
+  s_421ff80fa2e687::t_6db895d2276d66 621,623
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c2c85fb8ca0b20246896592b792c6fee843820d",
+  "prompts": {},
+  "sessions": {
+    "s_421ff80fa2e687": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6ac3b02-0997-4268-85ca-7a10b66b11d4",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
