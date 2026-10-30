@@ -676,6 +676,48 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "list_count=pass"
 
+  - name: List shows a pending overlay whose folder name starts with a dot
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export XDG_DATA_HOME="$(mktemp -d --tmpdir=/dev/shm)"
+          trap 'rm -rf "${XDG_DATA_HOME}"' EXIT
+          STATE="${XDG_DATA_HOME}/riotbox-state/dot-key"
+          for n in visible .dotfiles; do
+            mkdir -p "${STATE}/overlay/${n}/upper"
+            echo edit > "${STATE}/overlay/${n}/upper/file.txt"
+          done
+
+          out="$("{{.riotbox_dir}}/scripts/overlay.sh" list)"
+          printf '%s\n' "${out}"
+          [ "$(printf '%s\n' "${out}" | grep -c 'Files    1 added/modified, 0 deleted')" -eq 2 ] \
+            || { echo "FAIL: expected both overlays listed"; exit 1; }
+          echo "list_dot_overlay=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "list_dot_overlay=pass"
+
+  - name: List shows an interrupted overlay-accept snapshot of a dot-named overlay
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export XDG_DATA_HOME="$(mktemp -d --tmpdir=/dev/shm)"
+          trap 'rm -rf "${XDG_DATA_HOME}"' EXIT
+          STATE="${XDG_DATA_HOME}/riotbox-state/dot-key"
+          mkdir -p "${STATE}/overlay/.dotfiles" "${STATE}/overlay/.dotfiles.accepting.123/upper"
+          echo edit > "${STATE}/overlay/.dotfiles.accepting.123/upper/file.txt"
+
+          out="$("{{.riotbox_dir}}/scripts/overlay.sh" list)"
+          printf '%s\n' "${out}"
+          printf '%s\n' "${out}" | grep -q 'interrupted (or still running) overlay-accept' \
+            || { echo "FAIL: stranded snapshot not listed"; exit 1; }
+          echo "list_dot_snapshot=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "list_dot_snapshot=pass"
+
   - name: Accept still copies .codegraph through to the project
     steps:
       - type: exec

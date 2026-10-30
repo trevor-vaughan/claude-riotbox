@@ -435,7 +435,7 @@ overlay_list() {
 
 	local found=0
 	local state_dir name overlay_base overlay_dir
-	local -a project_paths raw_paths commands
+	local -a project_paths raw_paths commands overlay_dirs
 	local -A project_of
 	local projects last_modified local_added local_deleted size rel kind i verb
 
@@ -471,8 +471,15 @@ overlay_list() {
 			project_paths=("(unknown) — launch this project set once with this release")
 		fi
 
+		# dotglob: an overlay folder is named after its project's basename,
+		# so ".dotfiles" is an overlay like any other. nullglob: an empty
+		# overlay/ expands to nothing.
+		shopt -s dotglob nullglob
+		overlay_dirs=("${overlay_base}"/*/)
+		shopt -u dotglob nullglob
+
 		# Check each overlay subdir for non-empty upper
-		for overlay_dir in "${overlay_base}"/*/; do
+		for overlay_dir in "${overlay_dirs[@]}"; do
 			[[ -d "${overlay_dir}/upper" ]] || continue
 			# shellcheck disable=SC2310 # designed to be tested in conditions
 			overlay_upper_has_changes "${overlay_dir}/upper" || continue
@@ -518,7 +525,7 @@ overlay_list() {
 
 		# A snapshot an overlay-accept never put back (it was killed, or is
 		# still running) holds reviewed-but-unapplied changes.
-		for overlay_dir in "${overlay_base}"/*/; do
+		for overlay_dir in "${overlay_dirs[@]}"; do
 			overlay_dir="${overlay_dir%/}"
 			# shellcheck disable=SC2310 # designed to be tested in conditions
 			overlay_is_stranded_snapshot "${overlay_dir}" || continue
