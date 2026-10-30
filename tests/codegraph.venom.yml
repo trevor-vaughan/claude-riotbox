@@ -586,6 +586,32 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "hint_single_nongit=pass"
 
+  - name: project roots include a project mounted at a dot-named folder
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export CODEGRAPH_WORKSPACE="${TEST_DIR}/workspace"
+          mkdir -p "${CLAUDE_CONFIG_DIR}" "${CODEGRAPH_WORKSPACE}/.dotfiles" "${CODEGRAPH_WORKSPACE}/zeta"
+          printf '%s\n' "/home/user/.dotfiles" "/home/user/zeta" > "${CLAUDE_CONFIG_DIR}/.projects"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/codegraph-setup.sh"
+          shopt -u dotglob
+          roots="$(codegraph_project_roots)"
+
+          [ "${roots}" = "$(printf '%s\n%s' "${CODEGRAPH_WORKSPACE}/.dotfiles" "${CODEGRAPH_WORKSPACE}/zeta")" ] \
+            || { echo "FAIL: expected both projects, got: ${roots}"; exit 1; }
+          shopt -q dotglob && { echo "FAIL: dotglob leaked into the caller"; exit 1; }
+          echo "roots_dot_project=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "roots_dot_project=pass"
+
   - name: hint names every project when the launcher recorded two
     steps:
       - type: exec

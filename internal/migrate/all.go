@@ -3,7 +3,6 @@ package migrate
 import (
 	"io"
 	"os"
-	"strings"
 
 	"github.com/trevor-vaughan/claude-riotbox/internal/records"
 )
@@ -14,11 +13,11 @@ import (
 // session under <dataDir>, so an upgrade does not hide pending overlay data
 // until each project's next launch.
 //
-// A session is what bash's "${dataDir}"/*/ glob and is_session accept: an
-// entry whose name does not start with a dot and that records.IsSession
-// accepts with <stateRoot>/<name> as its state dir. A link to a directory
-// counts, as the glob and [[ -d ]] follow it, and is migrated through the
-// link. Sessions run in bytewise name order. The bash glob sorted by the
+// A session is what bash's "${dataDir}"/*/ glob (dotglob on: a multi-project
+// key starts with the first project's basename, so it can start with a dot)
+// and is_session accept: an entry that records.IsSession accepts with
+// <stateRoot>/<name> as its state dir. A link to a directory counts, as the
+// glob and [[ -d ]] follow it, and is migrated through the link. Sessions run in bytewise name order. The bash glob sorted by the
 // caller's LC_COLLATE, so under a locale other than C the bash could take
 // them in another order: their messages, and which ran before one that
 // failed, could differ.
@@ -63,7 +62,7 @@ func sessions(dataDir, stateRoot string) []string {
 	var names []string
 	for _, e := range entries {
 		name := e.Name()
-		if !strings.HasPrefix(name, ".") && records.IsSession(dataDir+"/"+name, stateRoot+"/"+name) {
+		if records.IsSession(dataDir+"/"+name, stateRoot+"/"+name) {
 			names = append(names, name)
 		}
 	}

@@ -43,6 +43,9 @@ riotbox_core_require || exit 1
 to_remove=()
 
 if [[ "$1" = "--all" ]]; then
+	# dotglob: a multi-project session key starts with the first project's
+	# basename, so ".dotfiles" gives a key that starts with a dot.
+	shopt -s dotglob
 	for d in "${session_root}"/*/; do
 		# shellcheck disable=SC2310 # a predicate designed for conditions
 		is_session "${d%/}" "${state_root}/$(basename "${d}")" || continue

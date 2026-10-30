@@ -23,7 +23,14 @@ overlay_setup() {
 		echo "  [overlay] Host project is read-only. All writes go to the overlay."
 	else
 		# Multi-project mode: overlay each subdirectory
-		for lower_dir in /mnt/lower/*/; do
+		# dotglob: a project mounted at /mnt/lower/.dotfiles is a project too.
+		# The subshell keeps the entrypoint's shell options untouched.
+		local -a lower_dirs
+		mapfile -d '' -t lower_dirs < <(
+			shopt -s dotglob nullglob
+			for lower_dir in /mnt/lower/*/; do printf '%s\0' "${lower_dir}"; done
+		)
+		for lower_dir in "${lower_dirs[@]}"; do
 			[[ -d "${lower_dir}" ]] || continue
 			local name
 			name="$(basename "${lower_dir}")"
@@ -70,9 +77,11 @@ overlay_teardown() {
 	if [[ -d /mnt/overlay/upper ]]; then
 		upper_dirs=(/mnt/overlay/upper)
 	else
-		for d in /mnt/overlay/*/upper; do
-			[[ -d "${d}" ]] && upper_dirs+=("${d}")
-		done
+		# dotglob: as above, ".dotfiles" is a project folder like any other.
+		mapfile -d '' -t upper_dirs < <(
+			shopt -s dotglob nullglob
+			for d in /mnt/overlay/*/upper/; do printf '%s\0' "${d%/}"; done
+		)
 	fi
 
 	local added=0 modified=0 deleted=0

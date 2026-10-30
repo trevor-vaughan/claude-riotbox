@@ -119,7 +119,9 @@ scan_root() {
 # scan_root, so a link the container plants anywhere below its dir keeps that
 # root out.
 build_extra_dirs() {
-	shopt -s nullglob
+	# dotglob: a multi-project session key starts with the first project's
+	# basename, so ".dotfiles" gives a key that starts with a dot.
+	shopt -s dotglob nullglob
 	local session state root entries=()
 	for session in "${RIOTBOX_DATA_DIR}"/*/; do
 		root="$(scan_root "${session%/}" projects)"

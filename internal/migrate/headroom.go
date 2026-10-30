@@ -82,8 +82,9 @@ func headroomLocked(w io.Writer, libDir, projectDir, stateDir string) error {
 
 // overlayHeadroomCopies is bash's "<stateDir>"/overlay/*/upper/.headroom
 // glob without the paths that do not exist, which the caller's checks drop
-// anyway: one candidate per overlay name that does not start with a dot,
-// in byte order, following a link at overlay/ as the glob does.
+// anyway: one candidate per overlay name, dot names included (an overlay is
+// named after its project's basename, so ".dotfiles" is one), in byte order,
+// following a link at overlay/ as the glob does.
 func overlayHeadroomCopies(stateDir string) []string {
 	base := stateDir + "/overlay"
 	f, err := os.Open(base)
@@ -95,9 +96,7 @@ func overlayHeadroomCopies(stateDir string) []string {
 	slices.Sort(names)
 	var copies []string
 	for _, name := range names {
-		if !strings.HasPrefix(name, ".") {
-			copies = append(copies, base+"/"+name+"/upper/.headroom")
-		}
+		copies = append(copies, base+"/"+name+"/upper/.headroom")
 	}
 	return copies
 }
