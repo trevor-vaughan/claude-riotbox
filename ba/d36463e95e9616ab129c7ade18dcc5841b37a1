@@ -1,0 +1,23 @@
+README.md
+  s_421ff80fa2e687::t_c0f624b802b36f 893-894
+scripts/git-ai-riotbox.sh
+  s_421ff80fa2e687::t_c0f624b802b36f 363,373-379,393-396
+tests/git-ai-aggregate.venom.yml
+  s_421ff80fa2e687::t_51749dbb266a1e 589-635
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "215a5b6b97669d50889f70d808b01c69bcef03ab",
+  "prompts": {},
+  "sessions": {
+    "s_421ff80fa2e687": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6ac3b02-0997-4268-85ca-7a10b66b11d4",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
