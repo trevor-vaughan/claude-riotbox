@@ -890,7 +890,8 @@ What lands where:
   included. Reflink makes the copy near-free where the filesystem supports it,
   and only one store is copied at a time. Stores are still read where they live
   rather than registered anywhere, so a `riotbox session-reset` drops that
-  session from the report.
+  session from the report. On a terminal, each store is announced on stderr
+  (`[3/20] reading …`) as it is read; redirected stderr stays clean.
 
   The read also runs with **no network** (`unshare -rn`, the same rule
   [`riotbox tokscale`](#commands) applies). git-ai fetches a models.dev pricing
@@ -910,8 +911,11 @@ What lands where:
   not trust them. A stamp that is not a regular file holding a plain version
   number (`1.7.5`, say) gets the store skipped with `has an invalid
   .riotbox-version`, and a store that contains a symlink is skipped with
-  `contains a symlink`; the private copy is checked again after copying, in case
-  a running session changed the store meanwhile. git-ai reads that copy with an
+  `contains a symlink`. The stale `control.sock` and `trace2.sock` that git-ai's
+  daemon leaves behind are removed from the private copy and do not cause a skip;
+  any other special file, a FIFO say, still does, as does a copy the sockets cannot
+  be removed from (`could not be cleaned of sockets`). The private copy is checked
+  again after copying, in case a running session changed the store meanwhile. git-ai reads that copy with an
   empty `config.json`. The text report prints as `?` every character from a store
   that a terminal acts on or that makes text read differently from its bytes:
   C0 and C1 controls, DEL, bidirectional-text controls, zero-width characters

@@ -280,6 +280,13 @@ resolve_binary_for() {
 }
 
 # ── Read one store through a HOME shim ──────────────────────────────────────
+# cp -a keeps modes, so a read-only directory in a store stays read-only in the
+# private copy and rm -rf could not empty it, leaving the copy behind.
+remove_tree() {
+	chmod -R u+w "$1" 2>/dev/null
+	rm -rf "$1"
+}
+
 read_store() {
 	local bin="$1" store="$2" shim out odd
 	shim="$(mktemp -d)"
@@ -287,18 +294,28 @@ read_store() {
 	# --reflink=auto is GNU cp; a host whose cp lacks it (macOS) falls back to
 	# a plain recursive copy rather than failing the scan.
 	if ! cp -a --reflink=auto "${store}" "${shim}/.git-ai" 2>/dev/null; then
-		rm -rf "${shim}/.git-ai"
+		remove_tree "${shim}/.git-ai"
 		if ! cp -a "${store}" "${shim}/.git-ai" 2>/dev/null; then
-			rm -rf "${shim}"
+			remove_tree "${shim}"
 			return 0
 		fi
+	fi
+
+	# git-ai's daemon leaves control.sock and trace2.sock behind when a session
+	# ends, and cp -a recreates them. A socket cannot be followed to a host path
+	# and the reader never uses one, so drop them from the private copy; the
+	# source store is untouched.
+	if ! find "${shim}/.git-ai" -type s -delete 2>/dev/null; then
+		remove_tree "${shim}"
+		echo "git-ai-riotbox: ${store} could not be cleaned of sockets in the private copy — skipped." >&2
+		return 0
 	fi
 
 	# The early scan in record_store ran before this copy, and the container
 	# may still be running: re-check the private copy, and fail closed if the
 	# check itself fails. Only plain files and directories may remain.
 	if ! odd="$(find "${shim}/.git-ai" \( -type l -o ! -type f ! -type d \) -print -quit 2>/dev/null)" || [[ -n "${odd}" ]]; then
-		rm -rf "${shim}"
+		remove_tree "${shim}"
 		echo "git-ai-riotbox: ${store} changed during the copy (link or special file in the private copy) — skipped." >&2
 		return 0
 	fi
@@ -308,7 +325,7 @@ read_store() {
 	printf '{}\n' >"${shim}/.git-ai/config.json"
 
 	out="$(unshare -rn env HOME="${shim}" "${bin}" usage --period "${period}" --json 2>/dev/null || true)"
-	rm -rf "${shim}"
+	remove_tree "${shim}"
 
 	if [[ -n "${out}" ]] && printf '%s' "${out}" | jq -e . >/dev/null 2>&1; then
 		printf '%s' "${out}"
@@ -343,6 +360,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 read_count=0
 skipped_unstamped=0
+store_index=0
 
 for i in "${!STORE_PATHS[@]}"; do
 	[[ -n "${STORE_VERSIONS[${i}]}" ]] || {
@@ -351,6 +369,13 @@ for i in "${!STORE_PATHS[@]}"; do
 		continue
 	}
 done
+
+# Progress goes to stderr and only to a terminal, so logs and pipes stay clean.
+# The total counts every stamped store; one whose version has no reader is never
+# announced, so the last index can fall short of the total.
+show_progress=0
+[[ -t 2 ]] && show_progress=1
+store_total=$((${#STORE_PATHS[@]} - skipped_unstamped))
 
 for version in "${VERSIONS[@]-}"; do
 	[[ -n "${version}" ]] || continue
@@ -365,6 +390,10 @@ for version in "${VERSIONS[@]-}"; do
 	fi
 	for i in "${!STORE_PATHS[@]}"; do
 		[[ "${STORE_VERSIONS[${i}]}" == "${version}" ]] || continue
+		store_index=$((store_index + 1))
+		if [[ "${show_progress}" -eq 1 ]]; then
+			echo "git-ai-riotbox: [${store_index}/${store_total}] reading ${STORE_PATHS[${i}]}" >&2
+		fi
 		out="$(read_store "${bin}" "${STORE_PATHS[${i}]}")"
 		if [[ -n "${out}" ]]; then
 			printf '%s' "${out}" >"${work}/store-${read_count}.json"
