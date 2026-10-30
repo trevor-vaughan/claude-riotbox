@@ -890,7 +890,8 @@ What lands where:
   included. Reflink makes the copy near-free where the filesystem supports it,
   and only one store is copied at a time. Stores are still read where they live
   rather than registered anywhere, so a `riotbox session-reset` drops that
-  session from the report.
+  session from the report. On a terminal, each store is announced on stderr
+  (`[3/20] reading …`) as it is read; redirected stderr stays clean.
 
   The read also runs with **no network** (`unshare -rn`, the same rule
   [`riotbox tokscale`](#commands) applies). git-ai fetches a models.dev pricing

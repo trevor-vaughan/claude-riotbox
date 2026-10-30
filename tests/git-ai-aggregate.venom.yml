@@ -586,6 +586,53 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "rodir_ok=true"
 
+  # A long run needs to show it is alive, but progress lines in a log or a pipe
+  # are noise, so they appear only when stderr is a terminal. `script` supplies
+  # the pty.
+  - name: Progress is shown on a terminal and stays out of redirected stderr
+    steps:
+      - type: exec
+        script: |
+          set -e
+          W="$(mktemp -d)"
+          trap 'rm -rf "${W}"' EXIT
+          export HOME="${W}/home"; mkdir -p "${HOME}"
+          export RIOTBOX_STATE_ROOT="${W}/data"
+          bash "{{.riotbox_dir}}/tests/lib/git-ai-usage-fixtures.sh" "${W}"
+          for s in s1 s2; do
+            mkdir -p "${RIOTBOX_STATE_ROOT}/${s}/git-ai"
+            echo '{}' > "${RIOTBOX_STATE_ROOT}/${s}/git-ai/config.json"
+            echo "1.7.4" > "${RIOTBOX_STATE_ROOT}/${s}/git-ai/.riotbox-version"
+          done
+          # An unstamped store is never read, so it must not count in the total.
+          mkdir -p "${RIOTBOX_STATE_ROOT}/s9/git-ai"
+          echo '{}' > "${RIOTBOX_STATE_ROOT}/s9/git-ai/config.json"
+          cat > "${W}/stub" <<EOF
+          #!/bin/sh
+          case "\$1" in
+            --version) echo 1.7.4 ;;
+            usage) cat "${W}/a.json" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod +x "${W}/stub"
+          export GIT_AI_BIN="${W}/stub"
+
+          command -v script >/dev/null || { echo "FAIL: script (util-linux) is required to supply a pty"; exit 1; }
+          script -qec "bash '{{.riotbox_dir}}/scripts/git-ai-riotbox.sh' --json" /dev/null >"${W}/tty" 2>&1
+          grep -qE '\[1/2\] reading .*/s1/git-ai' "${W}/tty" || { echo "FAIL: first progress line does not name its store"; cat "${W}/tty"; exit 1; }
+          grep -qF '[1/2]' "${W}/tty" || { echo "FAIL: no first progress line"; cat "${W}/tty"; exit 1; }
+          grep -qF '[2/2]' "${W}/tty" || { echo "FAIL: no second progress line"; cat "${W}/tty"; exit 1; }
+          grep -qF '[3/' "${W}/tty" && { echo "FAIL: the unstamped store was counted"; cat "${W}/tty"; exit 1; }
+
+          bash "{{.riotbox_dir}}/scripts/git-ai-riotbox.sh" --json >"${W}/out" 2>"${W}/err"
+          grep -q '\[[0-9]*/[0-9]*\]' "${W}/err" && { echo "FAIL: progress leaked into redirected stderr"; cat "${W}/err"; exit 1; }
+          jq -e . "${W}/out" >/dev/null || { echo "FAIL: stdout is not clean JSON"; exit 1; }
+          echo "progress_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "progress_ok=true"
+
   # config.json is container-written and git-ai reads settings from it (for
   # instance the git binary to run), so the host reader never sees it.
   - name: The reader is given an empty config, not the container's

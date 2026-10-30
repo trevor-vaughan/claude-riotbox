@@ -360,6 +360,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 read_count=0
 skipped_unstamped=0
+store_index=0
 
 for i in "${!STORE_PATHS[@]}"; do
 	[[ -n "${STORE_VERSIONS[${i}]}" ]] || {
@@ -368,6 +369,13 @@ for i in "${!STORE_PATHS[@]}"; do
 		continue
 	}
 done
+
+# Progress goes to stderr and only to a terminal, so logs and pipes stay clean.
+# The total counts every stamped store; one whose version has no reader is never
+# announced, so the last index can fall short of the total.
+show_progress=0
+[[ -t 2 ]] && show_progress=1
+store_total=$((${#STORE_PATHS[@]} - skipped_unstamped))
 
 for version in "${VERSIONS[@]-}"; do
 	[[ -n "${version}" ]] || continue
@@ -382,6 +390,10 @@ for version in "${VERSIONS[@]-}"; do
 	fi
 	for i in "${!STORE_PATHS[@]}"; do
 		[[ "${STORE_VERSIONS[${i}]}" == "${version}" ]] || continue
+		store_index=$((store_index + 1))
+		if [[ "${show_progress}" -eq 1 ]]; then
+			echo "git-ai-riotbox: [${store_index}/${store_total}] reading ${STORE_PATHS[${i}]}" >&2
+		fi
 		out="$(read_store "${bin}" "${STORE_PATHS[${i}]}")"
 		if [[ -n "${out}" ]]; then
 			printf '%s' "${out}" >"${work}/store-${read_count}.json"
