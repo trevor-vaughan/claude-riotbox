@@ -1,0 +1,43 @@
+tests/context-mode.venom.yml
+  s_12396f456952ef::t_b6062009bf0fc6 463-557
+docs/dev/context-mode.md
+  s_12396f456952ef::t_9805f3e4fad660 183-197,199-204
+  s_12396f456952ef::t_65ec10306a31a7 397
+tests/session-state.venom.yml
+  s_12396f456952ef::t_a89b8030ba193b 648-683
+scripts/mount-projects.sh
+  s_12396f456952ef::t_949f422797f356 812-827
+docs/dev/mount-projects.md
+  s_12396f456952ef::t_00505cb943992f 40-41
+internal/migrate/migrate_test.go
+  s_12396f456952ef::t_ebdbad2c9995fb 420-430
+tests/passthrough-vars.venom.yml
+  s_12396f456952ef::t_96ec16ebceee20 82-100
+container/context-mode-setup.sh
+  s_12396f456952ef::t_8195ada8cddf4d 194-195
+  s_12396f456952ef::t_d0433cb0aaf8b9 170-177,188-193,196-200
+  s_12396f456952ef::t_c541f4a1e17b8f 201-202
+README.md
+  s_12396f456952ef::t_00505cb943992f 438,1599-1606
+  s_12396f456952ef::t_b18e157b86117d 1607-1612
+THREAT_MODEL.md
+  s_12396f456952ef::t_9805f3e4fad660 764,769-775
+  s_12396f456952ef::t_65ec10306a31a7 781
+  s_12396f456952ef::t_1ac2fd2baa4a83 776-780
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "678a8fb2880b822905da56bde1a745428767b63f",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
