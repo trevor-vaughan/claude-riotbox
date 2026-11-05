@@ -1,0 +1,57 @@
+tests/headroom-claude.venom.yml
+  s_12396f456952ef::t_3f5e9d0af0dac6 8-10,309,333
+  s_12396f456952ef::t_3d15d93df18501 14-16
+  s_12396f456952ef::t_70c9d32e6b7ab6 13
+  s_12396f456952ef::t_5a87c26799d4c9 11-12
+tests/headroom-opencode.venom.yml
+  s_12396f456952ef::t_3f5e9d0af0dac6 253,255-256
+agents/opencode/headroom-exec.sh
+  s_12396f456952ef::t_7e69815eded869 40
+tests/agents.venom.yml
+  s_12396f456952ef::t_50baf04b857c45 575
+README.md
+  s_12396f456952ef::t_50baf04b857c45 984-985
+  s_12396f456952ef::t_5b6463843036a5 961
+tests/headroom.venom.yml
+  s_12396f456952ef::t_50baf04b857c45 124
+  s_12396f456952ef::t_3f5e9d0af0dac6 229,231-234
+container/agent-wrapper.sh
+  s_12396f456952ef::t_7e69815eded869 52
+agents/lib/headroom-proxy.sh
+  s_12396f456952ef::t_97c313ce9133d8 44-45,59
+  s_12396f456952ef::t_19261dc46bff8d 106-108,110-111
+  s_12396f456952ef::t_30d5c19eaaa493 12-16,22,24,28-30
+agents/claude/manifest.sh
+  s_12396f456952ef::t_5b6463843036a5 85-88
+agents/claude/headroom-exec.sh
+  s_12396f456952ef::t_6dd9ca2564dd72 20-22,26,30,34,36
+  s_12396f456952ef::t_6da5586d41d493 43,45-49
+  s_12396f456952ef::t_14c5739cd7a4ac 59
+  s_12396f456952ef::t_782e9b3f94f799 69-71
+  s_12396f456952ef::t_b544af695a12c4 112,141,181
+tests/lib/fake-headroom-listener.py
+  s_12396f456952ef::t_086e18363e6cd1 9
+Containerfile
+  s_12396f456952ef::t_7423eb2561098d 815,817,857
+  s_12396f456952ef::t_aa74c2d656066e 819-820
+tests/lib/headroom-fakes.sh
+  s_12396f456952ef::t_7e69815eded869 178-179
+docs/dev/agent-contract.md
+  s_12396f456952ef::t_5b6463843036a5 348-352
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2e7c194e1e284a5c0719305d7c51fd3e4aa13c58",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
