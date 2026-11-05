@@ -1,0 +1,21 @@
+Containerfile
+  s_12396f456952ef::t_04557f63fc29ac 1009,1353
+docs/dev/decisions/pi-support.md
+  s_12396f456952ef::t_04557f63fc29ac 37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d07d1f323c979cb75c5634f0911b256eb8ba29e8",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
