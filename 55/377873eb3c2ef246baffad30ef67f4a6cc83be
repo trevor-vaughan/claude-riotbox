@@ -1,0 +1,60 @@
+.taskfiles/lint.yml
+  h_4db53f42b9be42 25
+Containerfile
+  h_4db53f42b9be42 778-779,798-800,803-804,904-907,910-913,915-924,926-933,936-939,954,956,958,962-964,1531-1539
+README.md
+  h_4db53f42b9be42 28,201-211,233-235,282,628-631,952-956,1180,1855-1865,2804
+THREAT_MODEL.md
+  h_4db53f42b9be42 199-214,224,777-778
+agents/opencode/context-mode.sh
+  h_4db53f42b9be42 29-30,87-90
+agents/opencode/headroom-exec.sh
+  h_4db53f42b9be42 110-111
+agents/opencode/manifest.sh
+  h_4db53f42b9be42 66,68-74,76-81,88,199-202,213
+agents/opencode/setup.sh
+  h_4db53f42b9be42 10-11,73-86,146-157,195-209,252
+agents/opencode/sync-settings.sh
+  h_4db53f42b9be42 66,103-107
+bin/riotbox
+  h_4db53f42b9be42 199
+container/opencode/smoke.sh
+  h_4db53f42b9be42 1-263
+docs/dev/agent-contract.md
+  h_4db53f42b9be42 157,164-169,605
+docs/dev/context-mode.md
+  h_4db53f42b9be42 137-139,141-146,639
+docs/dev/decisions/README.md
+  h_4db53f42b9be42 26
+docs/dev/decisions/context-mode-opencode.md
+  h_4db53f42b9be42 288-294,356
+docs/dev/decisions/opencode-v2.md
+  h_4db53f42b9be42 1-42
+docs/dev/decisions/pi-support.md
+  h_4db53f42b9be42 16-17
+tests/container-tasks.venom.yml
+  h_4db53f42b9be42 15,83
+tests/context-mode-opencode.venom.yml
+  h_4db53f42b9be42 738-742,744-748,756,763,765-766,769-772,775
+tests/egress-launch.venom.yml
+  h_4db53f42b9be42 59
+tests/egress-manifests.venom.yml
+  h_4db53f42b9be42 46-49
+tests/forge-mcp.venom.yml
+  h_4db53f42b9be42 989-991
+tests/opencode-smoke.venom.yml
+  h_4db53f42b9be42 1-102
+tests/opencode.venom.yml
+  h_4db53f42b9be42 122-125,128,249-259,261,319-327,329-333,340,765-904,1313-1336
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "55377873eb3c2ef246baffad30ef67f4a6cc83be",
+  "prompts": {},
+  "humans": {
+    "h_4db53f42b9be42": {
+      "author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
