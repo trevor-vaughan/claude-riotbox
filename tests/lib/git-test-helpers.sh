@@ -333,6 +333,24 @@ init_test_repo_staged_and_unstaged() {
 	printf 'new\n' >"${REPO_DIR}/untracked.txt"
 }
 
+# Repo with one commit, a plain subdirectory that has no repo of its own, and a
+# sibling directory holding an independent nested repo. Snapshotting the parent
+# from SUB_DIR is what made `git add -A` warn about an embedded repository.
+# Sets: TEST_DIR, REPO_DIR, BARE_DIR (from init_test_repo), SUB_DIR
+init_test_repo_with_subdir() {
+	init_test_repo
+	printf 'parent\n' >"${REPO_DIR}/parent.txt"
+	git -C "${REPO_DIR}" add parent.txt
+	git -C "${REPO_DIR}" commit -qm initial
+	SUB_DIR="${REPO_DIR}/sub"
+	mkdir -p "${SUB_DIR}" "${REPO_DIR}/other"
+	printf 'code\n' >"${SUB_DIR}/main.go"
+	git init -q "${REPO_DIR}/other/nested"
+	printf 'nested\n' >"${REPO_DIR}/other/nested/f.txt"
+	git -C "${REPO_DIR}/other/nested" add f.txt
+	git -C "${REPO_DIR}/other/nested" commit -qm nested
+}
+
 # Session and turn IDs used by the attribution-note helpers. Fixed values, so
 # a test can assert on the exact text a note carries.
 # shellcheck disable=SC2034  # consumed by callers that source this helper

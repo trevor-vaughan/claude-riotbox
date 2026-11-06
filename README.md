@@ -2446,7 +2446,7 @@ Session branching is automatically disabled for `riotbox run` (non-interactive) 
 
 ### Initializing a git repo
 
-Checkpoint protection needs a git repo. RiotBox handles the two "missing repo" cases so a session never errors out:
+Checkpoint protection needs a git repo. RiotBox handles the three "missing repo" cases so a session never errors out:
 
 - **Empty repo (no commits yet):** Starting in a freshly `git init`'d directory is fine. A repo with no commits *and* no files has nothing to capture, so the checkpoint step prints `empty git repo (no commits yet) — nothing to checkpoint` and the session continues. If the directory does have files in it, they are snapshotted as a parentless commit in `refs/riotbox/checkpoints/<timestamp>` — still nothing committed to a branch and no tag created, so the repo has no commits and no branch when the session starts, exactly as you left it.
 
@@ -2459,6 +2459,18 @@ Checkpoint protection needs a git repo. RiotBox handles the two "missing repo" c
 
   Answer yes (the default) and the directory is initialized and immediately snapshotted to `refs/riotbox/checkpoints/<timestamp>`; nothing is committed to a branch and no tag is created. Answer no and the session continues without checkpoint protection (you'll see the no-protection warning).
 
+- **Inside another repo, with no repo of its own** (e.g. `~/src/parent/sub`, where only `~/src/parent` has a `.git`): in an interactive session RiotBox asks which repo to checkpoint:
+
+  ```
+    /home/you/src/parent/sub is inside the git repository /home/you/src/parent.
+      1) Use /home/you/src/parent for checkpoints
+      2) Create a new git repository in /home/you/src/parent/sub
+      3) Do not use a git repository for this run
+    Choice [1/2/3] (default 3):
+  ```
+
+  `1` snapshots and backs up the whole parent repo, exactly as a launch from the parent would. git warns `adding embedded git repository` for any other repo nested inside the parent. `2` initializes and snapshots `sub` on its own. `3` (the default, and any other answer) runs without checkpoint protection. Only `sub` is mounted into the container either way.
+
 **Controlling repo creation** via environment variable:
 
 | Value                | Behavior                                                                                       |
@@ -2466,6 +2478,8 @@ Checkpoint protection needs a git repo. RiotBox handles the two "missing repo" c
 | *(unset)*            | Prompt on an interactive terminal (default Yes); skip without creating on non-interactive runs |
 | `RIOTBOX_GIT_INIT=1` | Always create the repo, no prompt                                                              |
 | `RIOTBOX_GIT_INIT=0` | Never create; warn that there's no checkpoint protection                                       |
+
+Inside another repo, the same values apply: `1` creates a repo in the directory, while `0` and non-interactive runs use none. Checkpointing through the enclosing repo is only available from the interactive prompt.
 
 ```sh
 RIOTBOX_GIT_INIT=1 riotbox run "scaffold a new project" ./new-dir   # init non-interactively
