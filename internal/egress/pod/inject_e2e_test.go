@@ -22,8 +22,8 @@ import (
 
 var _ = Describe("credential injection, against real podman and Envoy", Label("e2e"), Ordered, func() {
 	const (
-		curlImage = "quay.io/centos/centos:stream10@sha256:99b8fe27dd4958b5dc2630ce35f5f6a7ff7bf9b2b1a72078102fde50d3277550"
-		nodeImage = "docker.io/library/node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53"
+		curlImage = "quay.io/centos/centos:stream10"
+		nodeImage = "docker.io/library/node:24-alpine"
 		// A public echo: it answers with the request's headers as JSON.
 		echoHost = "postman-echo.com"
 		// trustCurl applies the container's real trust setup
