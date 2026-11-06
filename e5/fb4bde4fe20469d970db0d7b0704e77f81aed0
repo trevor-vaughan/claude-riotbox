@@ -1,0 +1,26 @@
+docs/dev/agent-contract.md
+  s_12396f456952ef::t_e5199ed5e8e0ed 157
+Containerfile
+  s_12396f456952ef::t_3b019d271c9734 907-910
+  s_12396f456952ef::t_7c519d9993c217 901-904,912-921,923-928,931-934,949,951,953,957-959
+tests/opencode.venom.yml
+  s_12396f456952ef::t_e145f86fbb5b5f 312-318,320-324,331
+README.md
+  s_12396f456952ef::t_e5199ed5e8e0ed 28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e5fb4bde4fe20469d970db0d7b0704e77f81aed0",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
