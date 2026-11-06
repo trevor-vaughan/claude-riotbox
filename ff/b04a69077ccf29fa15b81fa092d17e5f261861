@@ -1,0 +1,23 @@
+internal/egress/inject/vouch_e2e_test.go
+  s_216e8ef1c0dbfa::t_1ab3e37928a5dc 18-19,21
+internal/egress/pod/inject_e2e_test.go
+  s_216e8ef1c0dbfa::t_1ab3e37928a5dc 25
+tests/lib/egress-e2e-helpers.sh
+  s_216e8ef1c0dbfa::t_1ab3e37928a5dc 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6940223e524559b6f6f61f9b32fe735bc0d4276e",
+  "prompts": {},
+  "sessions": {
+    "s_216e8ef1c0dbfa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "75b2ded0-6884-4bc1-b64c-fbb30eb34206",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
