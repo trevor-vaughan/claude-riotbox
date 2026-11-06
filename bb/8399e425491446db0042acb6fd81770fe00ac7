@@ -1,0 +1,399 @@
+tests/opencode-smoke.venom.yml
+  s_12396f456952ef::t_f4cff09423c8e6 1-102
+container/opencode/smoke.sh
+  s_12396f456952ef::t_92d729e2a83dcc 1-72
+.taskfiles/lint.yml
+  s_12396f456952ef::t_d322148231ed3d 25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b3d5d4d4e74b966a8944b099b9d299b706bbe8dc",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+docs/dev/agent-contract.md
+  s_12396f456952ef::t_e5199ed5e8e0ed 157
+Containerfile
+  s_12396f456952ef::t_3b019d271c9734 907-910
+  s_12396f456952ef::t_7c519d9993c217 901-904,912-921,923-928,931-934,949,951,953,957-959
+tests/opencode.venom.yml
+  s_12396f456952ef::t_e145f86fbb5b5f 312-318,320-324,331
+README.md
+  s_12396f456952ef::t_e5199ed5e8e0ed 28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e5fb4bde4fe20469d970db0d7b0704e77f81aed0",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+agents/opencode/manifest.sh
+  s_12396f456952ef::t_db5ec7660cbac1 66,68-74,76-81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4186bbdc3bfbaae898f415b04108fd9cb0ca0b94",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+tests/opencode.venom.yml
+  s_12396f456952ef::t_5bdaa3f167bd1d 756-827
+tests/forge-mcp.venom.yml
+  s_12396f456952ef::t_f5a74d8863f8c8 989-991
+README.md
+  s_12396f456952ef::t_09fc2386defcf1 222-224
+agents/opencode/setup.sh
+  s_12396f456952ef::t_85510a8a8d3d01 10-11
+  s_12396f456952ef::t_f5a74d8863f8c8 238
+  s_12396f456952ef::t_3b00eea17ee43c 181-195
+  s_12396f456952ef::t_695ef298eab47f 132-143
+THREAT_MODEL.md
+  s_12396f456952ef::t_6f5e798d5bef1f 199
+  s_12396f456952ef::t_09fc2386defcf1 200-202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "73716aafff3cc3245fc99a3f7c880c6023334a4a",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+tests/opencode.venom.yml
+  s_12396f456952ef::t_9e835c1ea77d8c 122-125,128
+docs/dev/agent-contract.md
+  s_12396f456952ef::t_3a7b078b84c126 599
+docs/dev/context-mode.md
+  s_12396f456952ef::t_3a7b078b84c126 636
+README.md
+  s_12396f456952ef::t_006bceb4768e9f 1845-1846
+  s_12396f456952ef::t_a0878cf0149b77 1836-1844
+  s_12396f456952ef::t_3a7b078b84c126 2771
+tests/context-mode-opencode.venom.yml
+  s_12396f456952ef::t_230a97f6518b05 738-742,744-748,756,763,765-766,769-772,775
+docs/dev/decisions/context-mode-opencode.md
+  s_12396f456952ef::t_3a7b078b84c126 288-294,356
+agents/opencode/manifest.sh
+  s_12396f456952ef::t_4495d37e0d003b 88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e80469bf8b005a5b8221f3f04260e88c959429e3",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+agents/opencode/manifest.sh
+  s_12396f456952ef::t_98fe2f98e182eb 199-202,213
+tests/egress-launch.venom.yml
+  s_12396f456952ef::t_b17a67b7405ce0 59
+tests/egress-manifests.venom.yml
+  s_12396f456952ef::t_b17a67b7405ce0 46-49
+README.md
+  s_12396f456952ef::t_98fe2f98e182eb 1161
+  s_12396f456952ef::t_96cc058d928835 271
+THREAT_MODEL.md
+  s_12396f456952ef::t_0de72a10100732 213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "054731d44fe854dfb92eed5ace64626f1971b4b1",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+container/opencode/smoke.sh
+  s_12396f456952ef::t_eebac6bfc1f8c5 98-117,122-126,128,130,132,134,136-140,144-155,182-204,207-225,227-229,231-239,243-249
+  s_12396f456952ef::t_bc05e75006c8b2 34-58
+  s_12396f456952ef::t_a9fe437a801f3f 163
+  s_12396f456952ef::t_00a85937edb9df 141,143,206,226,230,240-242
+  s_12396f456952ef::t_15905bb7581297 121,156-157,205
+  s_12396f456952ef::t_0a23baecd51032 127,129,131,133,135,142
+  s_12396f456952ef::t_a768e5f43da86d 161
+  s_12396f456952ef::t_1d40c78e2d1711 171
+  s_12396f456952ef::t_889dfce1be4460 176
+  s_12396f456952ef::t_d8a1422c1fe1de 158-160,162,164-170,172-175,177-181
+  s_12396f456952ef::t_eacb8162d2dbe8 118-120
+Containerfile
+  s_12396f456952ef::t_5f360fc3cae3b3 1526-1534
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3cecb5455c36aaadc94cf34b6d05e237a81159a8",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+agents/opencode/headroom-exec.sh
+  s_12396f456952ef::t_7c0c86fb0a55c9 110-111
+container/opencode/smoke.sh
+  s_12396f456952ef::t_52a98ec6291d08 33,36-38,45-47,53,116,165-172,219-224,226,228,238
+  s_12396f456952ef::t_b55efc910dc1ec 117,235,247,254-256
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9d4cc97b74a94f8865fe9e8bfc8ef998ebf200a7",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+agents/opencode/sync-settings.sh
+  s_12396f456952ef::t_5a437e8b9221a6 103-107
+  s_12396f456952ef::t_5f7897cc4fca66 66
+agents/opencode/setup.sh
+  s_12396f456952ef::t_48fc3b074825a9 73-86
+tests/opencode.venom.yml
+  s_12396f456952ef::t_8ec638d0f8df91 827-861,1270-1292
+  s_12396f456952ef::t_8c54f65b6b1be6 1293
+THREAT_MODEL.md
+  s_12396f456952ef::t_b0b42ad5f677b9 201-206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fe1622c8bb7c60dc9d456e8e124f628111110e63",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+Containerfile
+  s_12396f456952ef::t_2e2dcefbbcfa67 917,926-930,955
+tests/opencode.venom.yml
+  s_12396f456952ef::t_2e2dcefbbcfa67 315,319
+  s_12396f456952ef::t_a600fc40b1c94b 799-830,846
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "10865db66aa1d4175d3700b038aed16946ce4a48",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+THREAT_MODEL.md
+  s_12396f456952ef::t_a24fdd32eff25d 208
+README.md
+  s_12396f456952ef::t_51dccbe51e6e7f 937-941
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d93b3c256cb6365220598695410792b9c31ffa11",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+docs/dev/agent-contract.md
+  s_12396f456952ef::t_459c7e759adb82 164-167
+README.md
+  s_12396f456952ef::t_3c7b17037565b2 201,208
+  s_12396f456952ef::t_459c7e759adb82 202-207,209-211,628-630
+  s_12396f456952ef::t_761cb8005e1fb4 631
+THREAT_MODEL.md
+  s_12396f456952ef::t_459c7e759adb82 210-213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "02594a2e83d7597c05094e9d71f67a4bad67702e",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+tests/opencode.venom.yml
+  s_12396f456952ef::t_3f3ffafc043d78 249-259,261
+tests/container-tasks.venom.yml
+  s_12396f456952ef::t_9d220b59ca3ec7 15,83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c7c8f4b38f21a81cf2e53bf65cf31894d533e2f4",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+bin/riotbox
+  s_12396f456952ef::t_e1f4f546248e12 199
+agents/opencode/context-mode.sh
+  s_12396f456952ef::t_956be545ee9dac 29-30,87-90
+Containerfile
+  s_12396f456952ef::t_5b5a011187db6f 778-779,798-800
+  s_12396f456952ef::t_49615424a851cf 803-804
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b6c38dd1f23b098bbab507a197654f63415bfd22",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+docs/dev/decisions/opencode-v2.md
+  s_12396f456952ef::t_a2384d23f2578c 35
+  s_12396f456952ef::t_c2194cec957208 1-34,36-42
+docs/dev/agent-contract.md
+  s_12396f456952ef::t_c2194cec957208 164
+  s_12396f456952ef::t_78959d4662b79e 165-166
+docs/dev/context-mode.md
+  s_12396f456952ef::t_956be545ee9dac 137-139,141-146
+docs/dev/decisions/pi-support.md
+  s_12396f456952ef::t_7e966a295ec90c 16-17
+docs/dev/decisions/README.md
+  s_12396f456952ef::t_c2194cec957208 26
+THREAT_MODEL.md
+  s_12396f456952ef::t_49615424a851cf 777-778
+  s_12396f456952ef::t_c2194cec957208 212-213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "51b41cc51a4baa558ea9489390d204d7abbee92b",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
