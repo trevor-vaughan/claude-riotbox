@@ -614,6 +614,174 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
+  # The three host shapes a 2.x image meets, as real versions rather than the
+  # one-version fixture above. Hosts really do still carry 1.x: its hooks run
+  # hooks/<event>.mjs against better-sqlite3, neither of which a 2.x image
+  # has, so a session that took that tree would load hooks that cannot run.
+  # The rule is "the staged tree wins whatever the host has": the host version
+  # is never compared, so a newer host 2.x does not displace the pin either.
+  - name: A host 1.x Context Mode never displaces the image's staged 2.x tree
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${staged}/.claude-plugin" "${staged}/hooks" "${HOME}/.claude/plugins/cache"
+          echo '{"name":"context-mode","version":"2.1.4"}' > "${staged}/package.json"
+          echo '{"hooks":"./hooks/claude-code.json"}' > "${staged}/.claude-plugin/plugin.json"
+          echo '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"command":"/opt/node24/bin/node \"${CLAUDE_PLUGIN_ROOT}/hook.mjs\" --agent claude-code"}]}]}}' \
+            > "${staged}/hooks/claude-code.json"
+
+          host_rel="cache/context-mode/context-mode/1.0.169"
+          mkdir -p "${HOME}/.host-plugins/${host_rel}/hooks" \
+                   "${HOME}/.host-plugins/${host_rel}/node_modules/better-sqlite3"
+          echo '{"hooks":{"PreToolUse":[{"hooks":[{"command":"node ${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse.mjs"}]}]}}' \
+            > "${HOME}/.host-plugins/${host_rel}/hooks/hooks.json"
+          echo '{"name":"better-sqlite3"}' \
+            > "${HOME}/.host-plugins/${host_rel}/node_modules/better-sqlite3/package.json"
+          jq -n --arg cm "/Users/someone/.claude/plugins/${host_rel}" \
+            '{version:2,plugins:{"context-mode@context-mode":[{scope:"user",installPath:$cm,version:"1.0.169"}]}}' \
+            > "${HOME}/.host-plugins/installed_plugins.json"
+          jq -n '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                                  installLocation:"/Users/someone/.claude/plugins/marketplaces/context-mode"}}' \
+            > "${HOME}/.host-plugins/known_marketplaces.json"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          plugin_setup >/dev/null
+
+          installed="${HOME}/.claude/plugins/installed_plugins.json"
+          markets="${HOME}/.claude/plugins/known_marketplaces.json"
+          entry="$(jq -c '.plugins["context-mode@context-mode"]' "${installed}")"
+          want="$(jq -nc --arg p "${staged}" '[{scope:"user",installPath:$p,version:"2.1.4"}]')"
+          [ "${entry}" = "${want}" ] || { echo "FAIL - registry entry ${entry}, want ${want}"; exit 1; }
+          got_location="$(jq -r '.["context-mode"].installLocation' "${markets}")"
+          [ "${got_location}" = "${staged}" ] || { echo "FAIL - marketplace points at ${got_location}"; exit 1; }
+          ! grep -q "1\.0\.169" "${installed}" "${markets}" || {
+            echo "FAIL - the 1.x tree is still named in the session registry"; exit 1; }
+          [ ! -e "${HOME}/.claude/plugins/cache/context-mode" ] || {
+            echo "FAIL - copied the host 1.x tree into the session"; exit 1; }
+          jq -e '.enabledPlugins["context-mode@context-mode"] == true' \
+            "${HOME}/.claude/settings.json" >/dev/null || {
+            echo "FAIL - the staged plugin is not enabled"; exit 1; }
+          echo "host1x=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "host1x=pass"
+
+  - name: A host 2.x Context Mode, older, equal or newer, never displaces the staged tree
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_ROOT="$(mktemp -d)"
+          trap 'rm -rf "${TEST_ROOT}"' EXIT
+          for host_version in 2.0.9 2.1.4 2.2.0; do
+            export HOME="${TEST_ROOT}/${host_version}"
+            mkdir -p "${HOME}"
+            unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+            # shellcheck disable=SC1091
+            source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+            plugin_setup_test_env on
+            export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+            staged="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+            mkdir -p "${staged}/.claude-plugin" "${HOME}/.claude/plugins/cache"
+            echo '{"name":"context-mode","version":"2.1.4"}' > "${staged}/package.json"
+
+            host_rel="cache/context-mode/context-mode/${host_version}"
+            mkdir -p "${HOME}/.host-plugins/${host_rel}/hooks"
+            echo '{"hooks":{}}' > "${HOME}/.host-plugins/${host_rel}/hooks/claude-code.json"
+            jq -n --arg cm "/Users/someone/.claude/plugins/${host_rel}" --arg v "${host_version}" \
+              '{version:2,plugins:{"context-mode@context-mode":[{scope:"user",installPath:$cm,version:$v}]}}' \
+              > "${HOME}/.host-plugins/installed_plugins.json"
+            jq -n '{"context-mode":{source:{source:"github",repo:"mksglu/context-mode"},
+                                    installLocation:"/Users/someone/.claude/plugins/marketplaces/context-mode"}}' \
+              > "${HOME}/.host-plugins/known_marketplaces.json"
+
+            # shellcheck disable=SC1091
+            source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+            # shellcheck disable=SC1091
+            source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+            # shellcheck disable=SC1091
+            source "{{.riotbox_dir}}/container/plugin-setup.sh"
+            plugin_setup >/dev/null
+
+            installed="${HOME}/.claude/plugins/installed_plugins.json"
+            entry="$(jq -c '.plugins["context-mode@context-mode"]' "${installed}")"
+            want="$(jq -nc --arg p "${staged}" '[{scope:"user",installPath:$p,version:"2.1.4"}]')"
+            [ "${entry}" = "${want}" ] || {
+              echo "FAIL (host ${host_version}) - registry entry ${entry}, want ${want}"; exit 1; }
+            got_location="$(jq -r '.["context-mode"].installLocation' \
+              "${HOME}/.claude/plugins/known_marketplaces.json")"
+            [ "${got_location}" = "${staged}" ] || {
+              echo "FAIL (host ${host_version}) - marketplace points at ${got_location}"; exit 1; }
+            [ ! -e "${HOME}/.claude/plugins/cache/context-mode" ] || {
+              echo "FAIL (host ${host_version}) - copied the host tree into the session"; exit 1; }
+          done
+          echo "host2x=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "host2x=pass"
+
+  - name: With no host plugins mounted the staged 2.x tree is registered and enabled
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/plugin-setup-test-helpers.sh"
+          plugin_setup_test_env on
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${staged}/.claude-plugin" "${HOME}/.claude/plugins"
+          echo '{"name":"context-mode","version":"2.1.4"}' > "${staged}/package.json"
+
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          stdout_file="${TEST_DIR}/stdout"
+          plugin_setup >"${stdout_file}"
+
+          [ ! -e "${HOME}/.host-plugins" ] || { echo "FAIL - fixture has a host mount"; exit 1; }
+          grep -q -F "No host plugins found" "${stdout_file}" || {
+            echo "FAIL - did not take the no-host-plugins branch:"; cat "${stdout_file}"; exit 1; }
+          entry="$(jq -c '.plugins["context-mode@context-mode"]' \
+            "${HOME}/.claude/plugins/installed_plugins.json")"
+          want="$(jq -nc --arg p "${staged}" '[{scope:"user",installPath:$p,version:"2.1.4"}]')"
+          [ "${entry}" = "${want}" ] || { echo "FAIL - registry entry ${entry}, want ${want}"; exit 1; }
+          got_location="$(jq -r '.["context-mode"].installLocation' \
+            "${HOME}/.claude/plugins/known_marketplaces.json")"
+          [ "${got_location}" = "${staged}" ] || { echo "FAIL - marketplace points at ${got_location}"; exit 1; }
+          jq -e '.enabledPlugins["context-mode@context-mode"] == true' \
+            "${HOME}/.claude/settings.json" >/dev/null || {
+            echo "FAIL - the staged plugin is not enabled"; exit 1; }
+          n_said="$(grep -c -F -x "  [plugins] Context Mode 2.1.4 registered at ${staged}." "${stdout_file}" || true)"
+          [ "${n_said}" = "1" ] || {
+            echo "FAIL - ${n_said} registration lines, want 1:"; cat "${stdout_file}"; exit 1; }
+          echo "nohost=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "nohost=pass"
+
   - name: A staged tree this session cannot register does not cost it the host copy
     # The third member of the family above, and the one the skip got wrong: the
     # image staged a tree, so the directory is there, but it carries no

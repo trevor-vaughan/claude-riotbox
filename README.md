@@ -435,6 +435,7 @@ Run `riotbox mounts [project ...]` to print the projected mount set — it lists
 | `~/.local/share/riotbox/<session>/`                 | `~/.claude`                   | bind mount (`:z`)                    |
 | `~/.local/share/riotbox-state/<session>/headroom/`  | `~/.headroom`                 | bind mount (`:z`), when `RIOTBOX_HEADROOM=1` |
 | `~/.local/share/riotbox-state/<session>/git-ai/`    | `~/.git-ai`                   | bind mount (`:z`), when `RIOTBOX_GIT_AI` is unset, empty or `1` |
+| `~/.local/share/riotbox-state/<session>/context-mode/` | `~/.context-mode`          | bind mount (`:z`)                    |
 | `~/.local/share/riotbox-state/<session>/overlay/<name>/` | `/mnt/overlay[/<name>]`  | bind mount (`:z`), when `RIOTBOX_OVERLAY=1` (owned projects) |
 | `~/.claude/.credentials.json`                       | `~/.claude/.credentials.json` | nested bind mount (`:z`, read-write) |
 | `~/.claude.json`                                    | copied into session dir       | file copy                            |
@@ -587,7 +588,7 @@ The prompt can wait, so RiotBox asks again about a running container and pending
 ### Upgrading from a release that kept state in the session directory
 
 Before your first launch or `riotbox overlays` after upgrading, exit every session the older release started. This is required when the two directories are on different disks (see below), where a session still writing would race the copy.
-Stop running opencode sessions of a project before its first launch after upgrading: that launch moves opencode's [Context Mode stores](#context-mode-opt-in) between two mounts by copying, which would race a session still writing them.
+Stop running opencode sessions of a project before its first launch after upgrading: that launch moves opencode's data directory between two mounts by copying, which would race a session still writing it.
 
 Older releases kept `.config-opencode`, `.local-share-opencode`, `.pi-agent`, `headroom`, `git-ai` and `overlay` inside the session directory. Each session moves them into its state directory once, at its first launch after the upgrade or at the first `riotbox overlays`, `riotbox overlay-diff`, `riotbox overlay-accept` or `riotbox overlay-reject` for it, and prints `Notice: moved <old> to <new>` per entry. After that RiotBox never looks at those old paths again, so nothing a session leaves there later is picked up. A later release that moves something else gets the same one-time move for that entry.
 
@@ -684,7 +685,7 @@ rm -f "$data/riotbox-state/.migrate.lock"
 
 Check the output. `mv -T` refuses to replace a non-empty directory, so `NOT MOVED` means the older path already holds data (an older release recreated it); compare the two and keep what you need. `NOT EMPTY` names a state directory with something left in it; empty it and remove it yourself, because an older release's `session-remove` does not know about `riotbox-state/`. `NO SESSION DIR` names a state directory whose session directory is already gone; nothing can move back into it, so look through it and delete it. `NO RECORD` names a session under a new key that no launch of this release has recorded its projects for (an overlay command moved it); launch it once with this release, exit, and run the script again. `NOT RENAMED` means a session directory already exists under the older key, which happens when two project sets shared it: the older release can only use one of them, so keep the one you want under that key. Running this release again moves everything forward again.
 
-opencode's [Context Mode stores](#context-mode-opt-in) now live in `opencode-data/context-mode`, so they move back as `.local-share-opencode/context-mode`. An older release does not read them there: it kept them in its opencode config copy, which it rebuilds at every launch. Under an older release, opencode's Context Mode starts without that history; this release finds it again. Headroom memory does the same: this release keeps it in the state directory's `headroom/`, while an older release looks for it in `.headroom/` in the working directory, so under an older release it starts empty.
+opencode's data directory moves back as `.local-share-opencode`. The [Context Mode store](#context-mode-opt-in) is not part of it: it lives in the state directory's `context-mode/` and has no older location to move back to, so an older release does not read it. Headroom memory does the same: this release keeps it in the state directory's `headroom/`, while an older release looks for it in `.headroom/` in the working directory, so under an older release it starts empty.
 
 ## Agent wrapper
 
@@ -1549,12 +1550,12 @@ warning naming it.
 
 | | `--agent=claude` | `--agent=opencode` | `--agent=pi` |
 |---|---|---|---|
-| Where the support comes from | upstream's marketplace plugin, staged in the image at a pinned ref and registered against the session in place | one generated plugin file, `~/.config/opencode/plugins/riotbox-context-mode.js` | upstream's Pi package: the installed `context-mode` package root, listed in `~/.pi/agent/settings.json` `packages` |
-| Where the code runs | a short-lived hook process per matched tool call, plus an MCP child process | in-process, inside opencode's own embedded bun | in-process, inside Pi, plus an MCP child process the extension starts on the first prompt |
-| How the `ctx_*` tools arrive | over MCP, named `mcp__plugin_context-mode_context-mode__ctx_*` | eleven native opencode tools the plugin registers directly — no MCP server at all | native Pi tools the extension registers and forwards to that MCP child |
-| Where interception happens | a `PreToolUse` matcher in the plugin's `hooks/hooks.json` | `tool.execute.before`, enforced in-process | Pi's `tool_call` event, enforced in-process; at context-mode v1.0.169 only `bash` calls are routed |
+| Where the support comes from | upstream's npm package, which carries its Claude Code plugin manifest, staged in the image at a pinned version and registered against the session in place | one generated plugin file, `~/.config/opencode/plugins/riotbox-context-mode.js` | upstream's Pi package: the installed `context-mode` package root, listed in `~/.pi/agent/settings.json` `packages` |
+| Where the code runs | a short-lived hook process per matched tool call, plus an MCP child process | in-process, inside opencode's own embedded bun | in-process, inside Pi |
+| How the `ctx_*` tools arrive | over MCP, named `mcp__plugin_context-mode_context-mode__ctx_*` | nine native opencode tools the plugin registers directly — no MCP server at all | native Pi tools the extension registers in-process on the first prompt |
+| Where interception happens | a `PreToolUse` matcher in the plugin's `hooks/claude-code.json` | `tool.execute.before`, enforced in-process | Pi's `tool_call` event, enforced in-process |
 | Slash commands | `/context-mode:*`, one per bundled skill | none — opencode has no equivalent surface | `/ctx-stats` and `/ctx-doctor` |
-| Store | `~/.claude/context-mode` | `~/.local/share/opencode/context-mode` | `~/.pi/agent/context-mode` |
+| Store | `~/.context-mode` | `~/.context-mode` | `~/.context-mode` |
 
 What changes when enabled:
 
@@ -1584,140 +1585,128 @@ What changes when enabled:
   registered in-process and there is no skill or command surface to attach.
 - **`/context-mode:ctx-upgrade`, `context-mode upgrade` and the `ctx_upgrade`
   tool do not work inside riotbox, by design.** The slash command is listed with
-  the rest because the plugin ships it; it simply cannot do its job here. All
-  three git-clone upstream's `main` over the installed tree, and the plugin is
-  pinned to the image at a version the build asserted its contracts against.
+  the rest because the plugin ships it; it simply cannot do its job here.
+  `context-mode upgrade` reinstalls from the npm registry, and `ctx_upgrade`
+  points at the agent's own plugin update command; the plugin is pinned to the
+  image at a version the build asserted its contracts against.
   `RIOTBOX_NETWORK=none` forbids the fetch outright, and the staged tree carries
-  an interpreter rewrite and an offline dependency install that a fresh clone
-  would undo — leaving every hook to spend 120 seconds in `npm install` and
-  fail anyway. The version is a property of the image, so moving it is a
-  maintainer change plus a `riotbox rebuild`, not something a session can do.
-  The recipe is in the `Containerfile`, immediately above the
-  `CONTEXT_MODE_PLUGIN_REF` ARG.
-- The FTS5 store lives under a directory of the agent that wired it —
-  in-container `~/.claude/context-mode` for Claude Code (on the host
-  `~/.local/share/riotbox/<session>/context-mode`), opencode's data directory
-  `~/.local/share/opencode/context-mode` for opencode and `~/.pi/agent/context-mode`
-  for Pi (on the host under `~/.local/share/riotbox-state/<session>/opencode-data/`
-  and `pi-agent/`). It holds verbatim tool
-  output — treat it with the same sensitivity as your session transcripts.
-  `riotbox session-remove` deletes it along with the rest of the session.
-
-  The location is per agent rather than shared, which is a deliberate cost: a
-  session directory reused with a different `--agent` starts from an empty store,
-  because recall does not cross from one agent's store to another's. Only one
-  agent's *wiring* exists in a session directory at a time — starting a session
-  with a different `--agent` strips the others' on the way in — but the stores
-  themselves stay until the session is removed.
-- **Two stores, both kept with the session.** `content/` holds the parked tool
-  output; `sessions/` holds continuity — what the session did, and the snapshot
-  `PreCompact` writes so an autocompact does not lose the thread. Both persist for
-  the project set, so `riotbox resume` and a fresh run on the same projects pick up
-  what the last one learned.
-
-  opencode's stores sit in its data directory rather than its config directory
-  because a launch replaces the config copy whenever you have a host
-  `~/.config/opencode/`. A host `~/.config/opencode/context-mode/` is not copied
-  in, and neither is `~/.config/opencode/memory/`, upstream's default home for
-  opencode's auto-memory: it holds memory from every project on the host. Each
-  session's auto-memory lives in `~/.local/share/opencode/context-mode/memory`
-  instead, kept with the session's other stores. One case loses out: if your
-  own opencode config loads context-mode as a plugin and RiotBox's Context Mode
-  is off, upstream still reads and writes `~/.config/opencode/memory/`. That
-  session starts with none of your host's auto-memory, and with a host
-  `~/.config/opencode/`, what it writes there is discarded at the next launch.
-  Sessions created by an earlier RiotBox kept them at
-  `~/.config/opencode/context-mode`. Only sessions whose host has no
-  `~/.config/opencode/` still have them: with a host config dir, the first
-  launch after upgrading replaces the config copy before the container starts,
-  as every launch did before, so those stores are lost. Where they survive, the
-  first start after upgrading moves them across. It moves nothing, and warns,
-  when both locations already hold stores (the session uses the new one) or
-  when a `.db-wal` or `.db-shm` file shows another opencode session of the
-  project may have the store open. A crashed session leaves those files behind
-  for good; the warning then gives two recovery commands. Don't delete the
-  `-wal` file: it can hold committed data.
+  an interpreter rewrite a fresh install would undo. The version is a property
+  of the image, so moving it is a maintainer change plus a `riotbox rebuild`,
+  not something a session can do. The recipe is in the `Containerfile`, in the
+  Context Mode block above the `CONTEXT_MODE_VERSION` ARG.
+- The store is one SQLite database per project under `~/.context-mode`, the same
+  for every agent. It holds verbatim tool output — treat it with the same
+  sensitivity as your session transcripts. It is kept per session, in
+  `~/.local/share/riotbox-state/<session>/context-mode/`, so it survives the
+  container, is shared by every agent and every concurrent run of the session,
+  and `riotbox session-reset` deletes it with the rest of the session.
+  A `CONTEXT_MODE_DATA_DIR` passed into the container is unset at startup, so
+  it cannot move the store off that mount.
+- **Stores written by context-mode 1.x are no longer read.** They lived under
+  `~/.claude/context-mode`, `~/.pi/agent/context-mode` and
+  `~/.local/share/opencode/context-mode` in the container — on the host,
+  `~/.local/share/riotbox/<session>/context-mode/` and
+  `~/.local/share/riotbox-state/<session>/{pi-agent,opencode-data}/context-mode/`.
+  2.x does not import them, and RiotBox leaves them in place: an enabled session
+  prints one `[context-mode] NOTE:` line naming each one it finds. Delete them
+  when you no longer need them.
 - **The session prints what it kept out when it exits**, the same way
   `RIOTBOX_HEADROOM=1` prints its token summary:
 
   ```text
   ── context-mode ─────────────────────────────────────
-   this run 218 KB kept out · 21.5 KB re-read via ctx_search · 8.2 KB hook log on disk
-   last 7 days 1.4 MB
-   store: /home/llm/.claude/context-mode (this project set)
+   this run 279 KB kept out · 4.0 KB re-read via ctx_search · 10 tool calls recorded
+   store total 427 KB kept out
+   store: /home/llm/.context-mode (this project set)
   ```
 
-  "Kept out" is upstream's `bytesAvoided` — bytes the hooks withheld from the
-  model's context — and nothing else; the re-read figure is what came back out of
-  the store to pay for it, omitted when it is zero. Deliberately **not** what
-  `context-mode statusline` shows for the same store: its headline adds the
-  session bookkeeping and the resume snapshot to the savings and prints a
-  percentage of them, which is why it reads near 100% even for a session that
-  redirected nothing. See `container/context-mode-summary.sh`.
+  "Kept out" counts the bytes a tool call produced that the model never
+  received, summed call by call. It covers shell commands whose output the
+  hooks replaced and the `ctx_execute` and `ctx_batch` sandboxes. It leaves out
+  the diagnostic tools and `ctx_index`, because indexed content may be text the
+  model wrote itself. "Re-read" is what `ctx_search` and `ctx_resume` brought
+  back out of the store, and it is omitted when it is zero. Both come from the
+  `events` rows context-mode 2.x writes.
+
+  **Kept out is a lower bound.** context-mode 2.x writes those rows only for
+  shell commands, edits, tool errors and `ctx_*` calls. A `Read`, `Grep` or
+  `WebFetch` whose output the hook replaced leaves no row, so that saving is
+  real but not measured.
+
+  This is deliberately **not** what upstream's `ctx_stats` shows. That headline
+  nets re-reads against savings within each session, counts diagnostic and
+  index bytes as saved, and prints a percentage. See
+  `container/context-mode-summary.sh`.
 - **A wired session always prints the report, including when it saved nothing.**
   That is the case worth reading closely:
 
   ```text
   ── context-mode ─────────────────────────────────────
-   this run 0 B kept out · 8.0 KB hook log on disk
-   last 7 days 0 B
-   store: /home/llm/.claude/context-mode (this project set)
+   this run 0 B kept out · 7 tool calls recorded
+   store total 0 B kept out
+   store: /home/llm/.context-mode (this project set)
   ```
 
-  The hooks fired and withheld nothing. "Hook log on disk" is `eventDataBytes`,
-  the continuity rows `PostToolUse` writes for every matched call whether or not
-  anything was redirected. **It is not a token cost** — those rows are read back
-  only by aggregate queries and never enter a context window, so the unit is
-  bytes on disk, not context. It is on the line as proof-of-life: non-zero means
-  the hooks ran, which beside a zero kept-out is the whole diagnosis. A missing
-  report means something else entirely: the wiring did not complete. Look for
-  `[context-mode] WARN` on stderr at session start, and see "Context Mode does
-  not appear to do anything" below.
+  The hooks fired and withheld nothing. "Tool calls recorded" counts the calls
+  context-mode logged during the run: shell commands, edits, tool errors and
+  `ctx_*` calls only, so a session of nothing but `Read` and `Grep` shows none.
+  It is on the line as proof of life:
+  non-zero means the hooks ran, which beside a zero kept-out is the whole
+  diagnosis. A missing report means something else entirely: the wiring did not
+  complete. Look for `[context-mode] WARN` on stderr at session start, and see
+  "Context Mode does not appear to do anything" below.
 
-  The figures cover the store, not one session: `mount-projects.sh` allows two
-  concurrent sessions per project set and they share one store, so each one's
-  report includes the other's bytes.
+  "This run" counts only rows written after the session started, by the
+  session's agent. Concurrent sessions of the **same** agent on one project set
+  share the stores, and nothing in them tells the sessions apart, so each
+  report includes the other's rows. With one session per project set at a time
+  the figure is exact.
 
-  "Last 7 days" is the honest ceiling, not a display choice: the totals come from
-  `session_events`, and upstream's `hooks/sessionstart.mjs` calls
-  `cleanupOldSessions(7)` — a hardcoded literal with no configuration knob —
-  deleting event, meta and resume rows for sessions older than a week. The parked
-  content is untouched by that sweep (`ctx_purge` is the only thing that removes
-  it), so retrieval keeps working across the boundary while the counters reset.
-  Totals beyond seven days have to be captured at session exit; they cannot be
-  recovered from the store afterwards.
+  "Store total" is every kept-out byte the stores still hold for this agent. It
+  is not a time window: context-mode deletes these rows only on `ctx_purge`, or
+  when it sweeps a project that has been idle for 14 days. A total that drops
+  between sessions was one of those two.
 
-  Nothing prints in two cases now: the store could not be read at exit, or the
-  session degraded to Context Mode off. A zero run prints a row of zeros rather
-  than nothing, so an absent report always means one of those two.
+  Nothing prints in two cases: the store could not be read at exit (it does not
+  exist yet, or it is locked or corrupt), or the session degraded to Context
+  Mode off. A store that exists but cannot be read also leaves one stderr line,
+  `[context-mode] NOTE: exit report skipped, cannot read <path>: <reason>`,
+  naming the file. A zero run prints a row of zeros rather than nothing, so an absent
+  report always means one of those two.
 - **Each session exit also writes a durable record**, one small JSON file per
   run, into `${RIOTBOX_CONTEXT_LEDGER:-${XDG_DATA_HOME:-~/.local/share}/riotbox-context-mode}/runs/`.
   This is deliberately outside `RIOTBOX_DATA_DIR`, so `riotbox session-reset`
   and `riotbox session-remove` cannot erase it along with a session directory.
-  That separation matters because of the seven-day pruning described above:
-  the store's own counters do not survive past a week, which is why the exit
-  report says "last 7 days" rather than "lifetime". A total spanning longer
-  than that exists only because it was captured into the ledger at the moment
-  each session exited — there is nothing left in the store to re-derive it
-  from later.
+  That separation matters because upstream prunes the stores: `ctx_purge` and
+  the idle-project sweep delete them, and `session-reset` removes them with the
+  session. A total spanning longer than that exists only because it was
+  captured into the ledger at the moment each session exited. There is nothing
+  left in the store to re-derive it from later.
 - **`riotbox ctx-stats` aggregates the ledger.** It runs entirely on the host —
   no container starts — and reads every record under the ledger directory.
-  Default view, run against a ledger with four valid records, one
-  `baseline_unknown` run, one record from a newer schema, and one unreadable
-  file:
+  Default view, run against a ledger with two runs from before the context-mode
+  2.x upgrade, two after it (one with a `baseline_unknown` run), one record
+  from a newer schema, and one unreadable file:
 
   ```text
   ── context-mode rollup ──────────────────────────────
-   4 runs  2026-07-28 → 2026-07-29
-   kept out  264 KB
-   re-read   21.0 KB
-   hook log  18.2 KB (disk, not tokens)
+   4 runs  2026-10-28 → 2026-11-07
+   kept out  493 KB
+   re-read   25.0 KB
+   hook log  18.2 KB (disk, not tokens; 1.x runs only)
    1 run saved nothing
    1 run excluded (baseline unknown)
+   2 runs through 2026-11-03 measured by context-mode 1.x (214 KB of kept out)
    1 record from a newer schema (upgrade riotbox)
    1 file skipped (unreadable)
    ledger: /tmp/riotbox-context-mode-demo/runs
   ```
+
+  Records written under context-mode 1.x and 2.x are summed together, because
+  both count only bytes withheld from the model. The `measured by context-mode
+  1.x` line marks where the measurement changed; `--runs` also marks each 1.x
+  row with `(1.x)`. The hook log is a 1.x-only counter, so it appears only when
+  1.x records do.
 
   Other views:
 
@@ -1740,25 +1729,29 @@ What changes when enabled:
 
   ```json
   {
-    "schema": 1,
-    "started_at": "2026-07-30T14:02:11Z",
-    "ended_at": "2026-07-30T14:48:03Z",
+    "schema": 2,
+    "started_at": "2026-11-06T09:02:11Z",
+    "ended_at": "2026-11-06T09:48:03Z",
     "session_id": "a3f9c1d4e8b27f60",
     "project_set": "riotbox",
     "agent": "claude",
-    "kept_out_bytes": 219184,
-    "re_read_bytes": 21500,
-    "hook_log_bytes": 8412,
-    "retained_total_bytes": 221184,
+    "kept_out_bytes": 285914,
+    "re_read_bytes": 4096,
+    "tool_calls": 10,
+    "retained_total_bytes": 437014,
     "baseline_unknown": false
   }
   ```
 
-  `kept_out_bytes`, `re_read_bytes` and `hook_log_bytes` are `null` and
-  `baseline_unknown` is `true` when a run's start snapshot could not be read
-  — a concurrent session held the write lock. `ctx-stats` counts those runs
-  (they happened) but excludes them from the kept/re-read/hook-log totals,
-  because a run whose start point is unknown has no honest delta to add.
+  `kept_out_bytes`, `re_read_bytes` and `tool_calls` are `null` and
+  `baseline_unknown` is `true` when the run has no usable starting point: the
+  store could not be read when the session started (locked or corrupt), or a
+  store was recreated during the session and had not yet grown back past its
+  starting point. `ctx-stats` counts those runs (they
+  happened) but excludes them from the totals, because a run whose start point
+  is unknown has no honest figure to add. Records written before the 2.x
+  upgrade are schema 1, with `hook_log_bytes` where schema 2 has `tool_calls`;
+  `ctx-stats` reads both.
 - **Audit sessions are not recorded.** `riotbox audit` runs with
   `RIOTBOX_READONLY=1` and gets no ledger mount at all. The mount is an
   ordinary read-write bind mount — nothing enforces "write-only" at the
@@ -1777,25 +1770,13 @@ What changes when enabled:
   `baseline unknown`). A reader that silently skipped any of these would
   under-report a total while still presenting it as complete — the wrong
   answer, stated with confidence.
-- **Event forwarding is neutralized.** Context Mode can POST session events to a
-  remote platform when a `platform.json` config file exists. RiotBox ships that
-  file's directory root-owned and unwritable at both paths Context Mode resolves
-  by default — `~/.context-mode` when `XDG_CONFIG_HOME` is unset, and
-  `~/.config/context-mode` when it is left at `~/.config` — so the file stays
-  absent and cannot be created inadvertently. A session that points
-  `XDG_CONFIG_HOME` somewhere else moves the path outside both. Absent is also
-  the only state Context Mode reads without logging, so the closed gate is silent
-  rather than warning on every tool call. This is not a boundary against a
-  deliberate actor — the container's user holds `sudo` — and `RIOTBOX_NETWORK=none`
-  remains the hard control. See [Context Mode store and
-  wiring](THREAT_MODEL.md#context-mode-store-and-wiring).
 - **Starting a session needs no network, on any agent.** On Claude the plugin
-  is cloned at a pinned ref and has its dependencies installed at image build
-  time, and the session only writes a registry entry naming that path; on
-  opencode riotbox generates the plugin file itself; on Pi the `packages` entry
-  is the absolute path of the copy installed in the image, so Pi never installs
-  it from npm. No path runs `context-mode upgrade`, which clones upstream and overwrites the installed
-  tree with whatever is on `main`. On opencode the same reasoning is why the
+  is the npm package, installed from a committed lockfile at image build time,
+  and the session only writes a registry entry naming that path; on opencode
+  riotbox generates the plugin file itself; on Pi the `packages` entry is the
+  absolute path of the copy installed in the image, so Pi never installs it from
+  npm. No path runs `context-mode upgrade`, which reinstalls from the npm
+  registry whatever is published. On opencode the same reasoning is why the
   generated plugin file re-exports the copy
   **vendored in the image, by absolute path**, instead of riotbox adding
   `"plugin": ["context-mode"]` to the opencode config: an npm plugin entry makes
@@ -1803,21 +1784,20 @@ What changes when enabled:
   needs network (`RIOTBOX_NETWORK=none` forbids it) and floats the version off
   the pin the image build asserts against.
 
-  One outbound request remains on the Claude and Pi paths, and it is not RiotBox's: the
-  MCP server GETs `https://registry.npmjs.org/context-mode/latest` at startup to
-  warn about newer versions. It carries no payload, fails soft, and — unlike
-  headroom and CodeGraph — has no off switch; `RIOTBOX_NETWORK=none` is what
-  suppresses it. Pi's extension starts the same MCP server as a child, so it
-  makes the same request. The opencode path has no counterpart, because it starts no
-  server: the plugin imports the server module with
-  `CONTEXT_MODE_EMBEDDED_PLUGIN_TOOLS=1`, which is exactly the flag that skips
-  the startup routine the version check lives in. See [Context Mode store and
+  One outbound request can still happen, on any agent, and it is not RiotBox's:
+  when the agent calls the `ctx_doctor` tool (`/context-mode:ctx-doctor`),
+  upstream reads the npm registry's dist-tags for `context-mode` to check for a
+  newer version, falling back to `git ls-remote` of its release tags. It carries
+  no payload, fails soft, and — unlike headroom and CodeGraph — has no off
+  switch; `RIOTBOX_NETWORK=none` is what suppresses it. Nothing is fetched when a
+  session starts. See [Context Mode store and
   wiring](THREAT_MODEL.md#context-mode-store-and-wiring) in the threat model.
 - **A `context-mode` plugin installed on your host is skipped on Claude, and
   riotbox does *not* say so.** Host plugins otherwise win every merge (see
-  [Plugins](#plugins)), but a host Context Mode tree has been through neither the
-  interpreter rewrite nor the offline dependency install the staged one has, so
-  every hook would spend 120 seconds in `npm install` and fail. The skip is
+  [Plugins](#plugins)), but a host Context Mode tree has not been through the
+  interpreter rewrite the staged one has, so its hooks would start on the
+  image's default Node, below the 24.15 floor context-mode needs, and do
+  nothing. The skip is
   narrow: it applies only when `RIOTBOX_CONTEXT_MODE=1` *and* riotbox has
   actually registered the tree the image staged for that session. With the toggle
   off, on an image built before the staging layer, or where that registration did
@@ -1830,7 +1810,7 @@ What changes when enabled:
 - **A `context-mode` entry in your own opencode config is dropped, and riotbox
   says so.** opencode loads a local plugin file and an npm plugin of the same
   name as two separate plugins, so leaving both in place would register the
-  eleven `ctx_*` tools twice and fire every hook twice. When
+  nine `ctx_*` tools twice and fire every hook twice. When
   `RIOTBOX_CONTEXT_MODE=1`, `context-mode` and `context-mode@<version>` are
   filtered out of the `plugin` array of the generated `opencode.jsonc` and a
   warning on stderr names what was dropped and why. Your host config is not
@@ -1838,13 +1818,12 @@ What changes when enabled:
   own plugin choice. On Pi a `context-mode` entry in your host `packages` is
   dropped with every other host package (see [Pi config](#pi-config)), whatever
   the toggle says.
-- Context Mode runs on its own pinned Node 22 inside the image on the Claude
-  path, independent of whichever Node versions the build mirrored from your host.
-  **The opencode path does not use it**: the plugin runs under opencode's
-  embedded bun, and upstream's `bun:sqlite` adapter means the native SQLite
-  addon that forced the pinned Node is never loaded there. Pi runs on its own
-  pinned Node, the same version today, so the extension loads the addon built
-  for it.
+- Context Mode runs on its own pinned Node 24 inside the image on the Claude
+  path, independent of whichever Node versions the build mirrored from your host:
+  context-mode 2.x uses Node's built-in `node:sqlite` and refuses anything below
+  24.15. **The opencode path does not use it**: the plugin runs in-process under
+  opencode's embedded bun. Pi runs on its own pinned Node, the same version,
+  because the extension opens `node:sqlite` inside Pi's process.
 - **`ctx_execute` runs TypeScript because the image ships [bun](https://github.com/oven-sh/bun).**
   Without it upstream reports `TypeScript: not available (install bun, tsx, or
   ts-node)` and TS snippets do not run at all. The version is pinned and the
@@ -2557,7 +2536,7 @@ The following are only needed if you want to run the linters or tests locally (o
 - [hadolint](https://github.com/hadolint/hadolint) — Dockerfile linter (`brew install hadolint` or download from [releases](https://github.com/hadolint/hadolint/releases))
 - [venom](https://github.com/ovh/venom) — integration test runner (downloaded automatically inside the test container)
 - python3 — renders the errors-only Venom summary for `MODE=llm` (standard library only)
-- `setpriv` (util-linux) — **only when running the suites as root.** One case in `tests/doctor-context-mode.venom.yml` extracts the `riotbox doctor` probe body and runs it, and that body tests `[ -w ]` against a 0555 directory — a test root passes whatever the mode, so as uid 0 the case drops to uid 65534 with `setpriv` rather than skipping and reporting coverage it did not get. It fails loudly if `setpriv` is missing. Run the suites as an unprivileged user and this is not needed at all; `dnf install util-linux` (or `apk add util-linux` on Alpine) if you must run them as root. CI covers that path rather than leaving it to whoever happens to be root: the `test` job re-runs this one suite as uid 0 (`task test:as-root`), and `tests/Containerfile.test` installs `util-linux` for it.
+- `setpriv` (util-linux) — **only when running the suites as root.** One case in `tests/doctor-context-mode.venom.yml` runs the `riotbox doctor` probe body (`scripts/lib/context-mode-probe.sh`), and one of its shapes is a 0555 `~/.context-mode` the probe must fail to write — root writes whatever the mode, so as uid 0 the case drops to uid 65534 with `setpriv` rather than skipping and reporting coverage it did not get. It fails loudly if `setpriv` is missing. Run the suites as an unprivileged user and this is not needed at all; `dnf install util-linux` (or `apk add util-linux` on Alpine) if you must run them as root. CI covers that path rather than leaving it to whoever happens to be root: the `test` job re-runs this one suite as uid 0 (`task test:as-root`), and `tests/Containerfile.test` installs `util-linux` for it.
 
 ### Tasks
 
@@ -2796,14 +2775,14 @@ cat ~/.claude/debug/latest
 **Check**:
 
 - **Did the support land?** The signal differs per agent, and on Claude it changed in this release.
-  - **`--agent=claude`** — there is no `[context-mode]` startup line any more, because riotbox no longer writes Claude's wiring. The plugin registration prints instead, on stdout: `  [plugins] Context Mode 1.0.169 registered at /home/llm/.riotbox/context-mode-plugin/v1.0.169.` **Do not read that line, or its absence, as the answer.** It is printed only by a call that changed the registry, and how often that happens depends on your host: with no `context-mode` under `~/.claude/plugins` it prints on the first run and then goes quiet, while with one mounted the host merge overwrites the entry every start and the line prints on every run — twice on the first. The definitive negative signal is on stderr instead: `  [context-mode] WARN: no Context Mode plugin is installed and enabled in this session`. To check a quiet session directly, look for the plugin: `riotbox run "/context-mode:ctx-doctor"`, or `jq '.plugins["context-mode@context-mode"]' ~/.local/share/riotbox/<session>/.claude/plugins/installed_plugins.json`.
+  - **`--agent=claude`** — there is no `[context-mode]` startup line any more, because riotbox no longer writes Claude's wiring. The plugin registration prints instead, on stdout: `  [plugins] Context Mode 2.1.4 registered at /home/llm/.riotbox/context-mode-plugin/v2.1.4.` **Do not read that line, or its absence, as the answer.** It is printed only by a call that changed the registry, and how often that happens depends on your host: with no `context-mode` under `~/.claude/plugins` it prints on the first run and then goes quiet, while with one mounted the host merge overwrites the entry every start and the line prints on every run — twice on the first. The definitive negative signal is on stderr instead: `  [context-mode] WARN: no Context Mode plugin is installed and enabled in this session`. To check a quiet session directly, look for the plugin: `riotbox run "/context-mode:ctx-doctor"`, or `jq '.plugins["context-mode@context-mode"]' ~/.local/share/riotbox/<session>/.claude/plugins/installed_plugins.json`.
   - **`--agent=opencode`** — unchanged: `  [context-mode] opencode plugin shim wired at <path>.` on stderr.
   - **`--agent=pi`** — `  [context-mode] pi package wired in /home/llm/.pi/agent/settings.json.` on stderr.
 
   Either way, every give-up path explains itself on **stderr** as `[context-mode] WARN:` or `[plugins] WARNING:` — streams an autonomous run usually discards. Re-run capturing them: `RIOTBOX_CONTEXT_MODE=1 riotbox run "…" 2>/tmp/rb.err; grep -E 'context-mode|Context Mode' /tmp/rb.err`. Most common causes: the selected agent has no Context Mode support in riotbox (the warning names it), the session config could not be written, the image is older than the plugin-staging layer and staged nothing (`riotbox doctor` catches that one and tells you to rebuild), or — on opencode — `--pure` was on the command line, which disables external plugins outright.
-- **Is the exit report zero rather than absent?** `this run 0 B kept out · 8.0 KB hook log on disk` means the hooks ran and withheld nothing — the feature engaged and saved nothing. The hook-log figure is disk volume, not tokens. `bytesAvoided` only moves when the model actually routes large output through the sandbox tools; a session of small tool results has nothing to redirect. **No report at all** is the different problem, and it points back to the support check above.
-- **Do not read `riotbox doctor` as proof the session works.** Its probe runs the image with `--entrypoint /usr/bin/bash`, which bypasses `container/entrypoint.sh` — the file where the per-session wiring actually happens. A green check proves the image ships a working `context-mode`, that it carries a staged plugin tree a session could register, and that the agent you selected has Context Mode support at all — and nothing else about your session.
-- **Compare against `context-mode statusline` and expect disagreement.** Upstream's headline divides `eventDataBytes` by 4 and calls the result saved tokens, so it reports a saving for a session that saved nothing. RiotBox reports `bytesAvoided` alone.
+- **Is the exit report zero rather than absent?** `this run 0 B kept out · 7 tool calls recorded` means the hooks ran and withheld nothing — the feature engaged and saved nothing. Kept out only moves when a large shell output is replaced or routed through the sandbox tools; a session of small tool results has nothing to redirect, and replaced `Read`, `Grep` and `WebFetch` outputs are not measured at all. **No report at all** is the different problem, and it points back to the support check above.
+- **Do not read `riotbox doctor` as proof the session works.** Its probe runs the image with `--entrypoint /usr/bin/bash`, which bypasses `container/entrypoint.sh` — the file where the per-session wiring actually happens. A green check proves that the image's `context-mode` CLI and Node are the versions this riotbox pins, and that the OpenCode adapter and Pi extension are present. It also proves the staged plugin tree routes a `PreToolUse` call, with the hook table the build was reviewed against, and that a mounted `~/.context-mode` store is writable. Finally, it proves the agent you selected has Context Mode support at all. It proves nothing else about your session.
+- **Compare against `/context-mode:ctx-stats` and expect disagreement.** Upstream's headline nets re-reads against savings within each session, counts `ctx_doctor` reports and `ctx_index` input as saved, and reports a percentage of what the tools produced. RiotBox counts only bytes a call produced and the model never received, and reports re-reads separately.
 
 ### Session directory owned by wrong UID
 

@@ -1,4 +1,4 @@
-name: agents/opencode/context-mode.sh — plugin shim wiring, stripping, and storage
+name: agents/opencode/context-mode.sh — plugin shim wiring and stripping
 vars:
   root: "."
   riotbox_dir: "{{.root}}"
@@ -12,12 +12,11 @@ vars:
 # See docs/dev/decisions/context-mode-opencode.md.
 
 testcases:
-  # The stores are data, not config. The host sync replaces the whole
-  # opencode-config copy on every launch that finds a host ~/.config/opencode,
-  # so a store under the config mount would not outlive the session that
-  # wrote it. ~/.local/share/opencode is the opencode-data mount, which the
-  # sync never re-stages.
-  - name: store dir is under the opencode data dir, not the config or claude one
+  # context-mode 2.x reads none of CONTEXT_MODE_DIR, CONTEXT_MODE_DATA_DIR's
+  # 1.x meaning or CONTEXT_MODE_PLATFORM, so the verbs that produced them, and
+  # the one-time move of 1.x stores between two 1.x locations, are gone rather
+  # than left to export values nothing reads.
+  - name: opencode carries no store, data or platform verb and no 1.x store move
     steps:
       - type: exec
         script: |
@@ -26,48 +25,22 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-
           source "{{.riotbox_dir}}/agents/registry.sh"
-          declare -F agent_opencode_context_mode_store_dir >/dev/null \
-            || { echo "FAIL: agent_opencode_context_mode_store_dir is not defined"; exit 1; }
-
-          got="$(agent_call opencode context_mode_store_dir)"
-          want="${HOME}/.local/share/opencode/context-mode"
-          [ "${got}" = "${want}" ] || { echo "FAIL: got '${got}' want '${want}'"; exit 1; }
-          case "${got}" in
-            */.claude/*) echo "FAIL: opencode store resolved under .claude"; exit 1 ;;
-          esac
-          echo "STORE_DIR_OK"
+          declare -F agent_opencode_context_mode_build_assert >/dev/null \
+            || { echo "FAIL: agent_opencode_context_mode_build_assert is not defined"; exit 1; }
+          for fn in agent_opencode_context_mode_store_dir agent_opencode_context_mode_data_dir \
+                    agent_opencode_context_mode_platform _agent_opencode_cm_migrate_store; do
+            if declare -F "${fn}" >/dev/null; then echo "FAIL: ${fn} is still defined"; exit 1; fi
+          done
+          body="$(sed -n '/^agent_opencode_container_setup() {/,/^}/p' "{{.riotbox_dir}}/agents/opencode/manifest.sh")"
+          [ -n "${body}" ] || { echo "FAIL: agent_opencode_container_setup not found"; exit 1; }
+          if grep -qF '_agent_opencode_cm_migrate_store' <<<"${body}"; then
+            echo "FAIL: container setup still runs the 1.x store move"; exit 1
+          fi
+          echo "NO_PINS_OK"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "STORE_DIR_OK"
-
-  - name: store dir and data root do not follow OPENCODE_CONFIG_DIR
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export OPENCODE_CONFIG_DIR="${HOME}/elsewhere/opencode"
-
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          declare -F agent_opencode_context_mode_store_dir >/dev/null \
-            || { echo "FAIL: agent_opencode_context_mode_store_dir is not defined"; exit 1; }
-
-          got="$(agent_call opencode context_mode_store_dir)"
-          want="${HOME}/.local/share/opencode/context-mode"
-          [ "${got}" = "${want}" ] || { echo "FAIL: got '${got}' want '${want}'"; exit 1; }
-          got="$(agent_call opencode context_mode_data_dir)"
-          want="${HOME}/.local/share/opencode"
-          [ "${got}" = "${want}" ] || { echo "FAIL: data root got '${got}' want '${want}'"; exit 1; }
-          echo "STORE_DIR_NOT_CONFIG_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "STORE_DIR_NOT_CONFIG_OK"
+          - result.systemout ShouldContainSubstring "NO_PINS_OK"
 
   - name: wire writes the shim into plugins/ with the vendored absolute path
     steps:
@@ -77,15 +50,15 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           PKG="${HOME}/pkg/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" "${OPENCODE_CONFIG_DIR}"
-          : > "${PKG}/build/adapters/opencode/plugin.js"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/opencode" "${OPENCODE_CONFIG_DIR}"
+          : > "${PKG}/opencode/plugin.js"
           printf '%s\n' \
             '#!/usr/bin/env bash' \
-            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" \
+            "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" \
             > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
@@ -102,8 +75,13 @@ testcases:
           [ ! -e "${OPENCODE_CONFIG_DIR}/plugin" ] || { echo "FAIL: wrote singular plugin/"; exit 1; }
           head -n 1 "${shim}" | grep -qF 'riotbox-generated: context-mode shim' \
             || { echo "FAIL: marker missing from first line"; exit 1; }
-          grep -qF "export { ContextModePlugin } from \"${PKG}/build/adapters/opencode/plugin.js\"" "${shim}" \
-            || { echo "FAIL: shim does not re-export from the vendored path"; exit 1; }
+          # Exactly one export line, and it re-exports the default alone. The
+          # adapter also exports server, setup and setupLegacy by name; opencode
+          # 1.x's legacy loader calls every function export as a plugin, so a
+          # named re-export would register the plugin three times.
+          exports="$(grep -E '^export ' "${shim}")"
+          [ "${exports}" = "export { default } from \"${PKG}/opencode/plugin.js\"" ] \
+            || { echo "FAIL: shim exports '${exports}', want the default alone from the vendored path"; exit 1; }
           echo "WIRE_OK"
         assertions:
           - result.code ShouldEqual 0
@@ -117,14 +95,14 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           PKG="${HOME}/pkg/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" "${OPENCODE_CONFIG_DIR}"
-          : > "${PKG}/build/adapters/opencode/plugin.js"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/opencode" "${OPENCODE_CONFIG_DIR}"
+          : > "${PKG}/opencode/plugin.js"
           printf '%s\n' '#!/usr/bin/env bash' \
-            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+            "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
@@ -154,15 +132,15 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           PKG="${HOME}/pkg/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" \
+          mkdir -p "${HOME}/.local/bin" "${PKG}/opencode" \
             "${OPENCODE_CONFIG_DIR}/plugins"
-          : > "${PKG}/build/adapters/opencode/plugin.js"
+          : > "${PKG}/opencode/plugin.js"
           printf '%s\n' '#!/usr/bin/env bash' \
-            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+            "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
           printf 'export const Mine = async () => ({})\n' \
             > "${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js"
@@ -192,13 +170,13 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           PKG="${HOME}/pkg/context-mode"
           mkdir -p "${HOME}/.local/bin" "${PKG}" "${OPENCODE_CONFIG_DIR}"
           printf '%s\n' '#!/usr/bin/env bash' \
-            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+            "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
@@ -225,15 +203,15 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           PKG="${HOME}/pkg/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" \
+          mkdir -p "${HOME}/.local/bin" "${PKG}/opencode" \
             "${OPENCODE_CONFIG_DIR}/plugins"
-          : > "${PKG}/build/adapters/opencode/plugin.js"
+          : > "${PKG}/opencode/plugin.js"
           printf '%s\n' '#!/usr/bin/env bash' \
-            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+            "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
           printf 'export const UserPlugin = async () => ({})\n' \
             > "${OPENCODE_CONFIG_DIR}/plugins/user-thing.js"
@@ -264,7 +242,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
           mkdir -p "${OPENCODE_CONFIG_DIR}"
 
@@ -287,7 +265,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
           mkdir -p "${OPENCODE_CONFIG_DIR}/plugins"
           printf 'export const Mine = async () => ({})\n' \
@@ -321,38 +299,25 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           PKG="${HOME}/pkg/context-mode"
-          ADAPTER="${PKG}/build/adapters/opencode/plugin.js"
+          ADAPTER="${PKG}/opencode/plugin.js"
           mkdir -p "$(dirname "${ADAPTER}")"
-          printf '%s\n' \
-            'const createContextModePlugin = async () => ({});' \
-            'export { createContextModePlugin as ContextModePlugin };' \
-            > "${ADAPTER}"
-          jq -n '{name: "context-mode",
-                  exports: {".": "./build/adapters/opencode/plugin.js",
-                            "./plugin": "./build/adapters/opencode/plugin.js"}}' \
+          # The tail of upstream's bundle: a default object plus named exports.
+          good_adapter() {
+            printf '%s\n' \
+              'var opencode_default = { id: PLUGIN_ID, server, setup };' \
+              'export {' \
+              '  opencode_default as default,' \
+              '  id,' \
+              '  server,' \
+              '  setup,' \
+              '  setupLegacy' \
+              '};' > "${ADAPTER}"
+          }
+          good_adapter
+          jq -n '{name: "context-mode", exports: {".": "./opencode/plugin.js", "./server": "./opencode/plugin.js"}}' \
             > "${PKG}/package.json"
-
-          # Upstream's getAdapter() switch, reduced to the two branches the
-          # assert cares about: the one the pinned platform token selects and
-          # the default it would silently fall into if the token were renamed.
-          DETECT="${PKG}/build/adapters/detect.js"
-          printf '%s\n' \
-            'export async function getAdapter(platform) {' \
-            '  switch (platform) {' \
-            '    case "kilo":' \
-            '    case "opencode": {' \
-            '      const { OpenCodeAdapter } = await import("./opencode/index.js");' \
-            '      return new OpenCodeAdapter(platform);' \
-            '    }' \
-            '    default: {' \
-            '      const { ClaudeCodeAdapter } = await import("./claude-code/index.js");' \
-            '      return new ClaudeCodeAdapter();' \
-            '    }' \
-            '  }' \
-            '}' \
-            > "${DETECT}"
 
           source "{{.riotbox_dir}}/agents/registry.sh"
           declare -F agent_opencode_context_mode_build_assert >/dev/null \
@@ -361,49 +326,33 @@ testcases:
           agent_call opencode context_mode_build_assert "${PKG}" \
             || { echo "FAIL: rejected a well-formed package"; exit 1; }
 
-          # The drift the shim survives and the session does not: the shim loads
-          # the adapter by absolute path, so a renamed platform id still gets a
-          # working plugin, while CONTEXT_MODE_PLATFORM=opencode drops into
-          # getAdapter's default branch and hands the session Claude's adapter —
-          # its Context Mode storage moves and nothing reports it.
-          sed -i 's/case "opencode":/case "opencodex":/' "${DETECT}"
-          rc=0
-          err="$(agent_call opencode context_mode_build_assert "${PKG}" 2>&1 >/dev/null)" || rc=$?
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: accepted a package whose getAdapter no longer maps opencode"; exit 1; }
-          case "${err}" in
-            *"no longer maps the platform id"*) ;;
-            *) echo "FAIL: failed for the wrong reason: ${err}"; exit 1 ;;
-          esac
-          sed -i 's/case "opencodex":/case "opencode":/' "${DETECT}"
+          # expect_fail <label> <phrase>: the assert must fail AND name <phrase>.
+          expect_fail() {
+            rc=0
+            err="$(agent_call opencode context_mode_build_assert "${PKG}" 2>&1 >/dev/null)" || rc=$?
+            [ "${rc}" != "0" ] || { echo "FAIL: $1 accepted"; exit 1; }
+            case "${err}" in
+              *"$2"*) ;;
+              *) echo "FAIL: $1 failed for the wrong reason: ${err}"; exit 1 ;;
+            esac
+          }
 
-          # The one drift the shim cannot survive: it re-exports the name
-          # ContextModePlugin by hand, so an upstream rename leaves opencode
-          # loading a plugin with no hooks and no error.
-          printf '%s\n' \
-            'const createContextModePlugin = async () => ({});' \
-            'export { createContextModePlugin as SomethingElse };' \
-            > "${ADAPTER}"
+          # The one drift the shim cannot survive: it re-exports the default
+          # alone, so an adapter with only named exports leaves opencode loading
+          # a module with no plugin in it and no error.
+          printf '%s\n' 'export { server, setup };' > "${ADAPTER}"
+          expect_fail no-default 'no default export'
+          good_adapter
 
-          rc=0
-          err="$(agent_call opencode context_mode_build_assert "${PKG}" 2>&1 >/dev/null)" || rc=$?
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: accepted a package that no longer exports ContextModePlugin"; exit 1; }
-          case "${err}" in
-            *"no longer exports ContextModePlugin"*) ;;
-            *) echo "FAIL: failed for the wrong reason: ${err}"; exit 1 ;;
-          esac
+          # The package moving its adapter: the shim names the file by path, so
+          # the export map is the published statement of where it lives.
+          jq -n '{name: "context-mode", exports: {".": "./build/adapters/opencode/plugin.js"}}' > "${PKG}/package.json"
+          expect_fail export-map 'no longer maps "." to ./opencode/plugin.js'
+          jq -n '{name: "context-mode", exports: {".": "./opencode/plugin.js"}}' > "${PKG}/package.json"
 
-          # And the same for the adapter going missing entirely.
+          # And the adapter going missing entirely.
           rm -f "${ADAPTER}"
-          rc=0
-          err="$(agent_call opencode context_mode_build_assert "${PKG}" 2>&1 >/dev/null)" || rc=$?
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: accepted a package with no opencode adapter"; exit 1; }
-          case "${err}" in
-            *"no longer ships build/adapters/opencode/plugin.js"*) ;;
-            *) echo "FAIL: failed for the wrong reason: ${err}"; exit 1 ;;
-          esac
+          expect_fail missing 'no longer ships opencode/plugin.js'
           echo "BUILD_ASSERT_OK"
         assertions:
           - result.code ShouldEqual 0
@@ -422,17 +371,17 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
           PKG="${HOME}/pkg/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" \
+          mkdir -p "${HOME}/.local/bin" "${PKG}/opencode" \
             "${OPENCODE_CONFIG_DIR}" "${CLAUDE_CONFIG_DIR}"
-          : > "${PKG}/build/adapters/opencode/plugin.js"
+          : > "${PKG}/opencode/plugin.js"
           printf '%s\n' '#!/usr/bin/env bash' \
-            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+            "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
@@ -452,8 +401,6 @@ testcases:
             '{mcpServers: {"plugin_context-mode_context-mode": {type:"stdio", command:$bin, args:[]}}}' \
             > "${CLAUDE_CONFIG_DIR}/.claude.json"
 
-          # Called in this shell, not a subshell: CONTEXT_MODE_DIR is an export
-          # and the assertion below is on what the session inherits.
           export RIOTBOX_AGENT=opencode
           context_mode_setup >/dev/null 2>&1
 
@@ -465,23 +412,18 @@ testcases:
           jq -e '.mcpServers["plugin_context-mode_context-mode"] == null' \
             "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
             || { echo "FAIL: the claude MCP entry survived the agent change"; exit 1; }
-          [ "${CONTEXT_MODE_DIR:-}" = "${HOME}/.local/share/opencode/context-mode" ] \
-            || { echo "FAIL: store pinned at '${CONTEXT_MODE_DIR:-}', want '${HOME}/.local/share/opencode/context-mode'"; exit 1; }
           echo "SETUP_WIRE_OPENCODE_OK"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "SETUP_WIRE_OPENCODE_OK"
 
-  # Two variables, two stores. CONTEXT_MODE_DIR pins the sessions/ and content/
-  # stores behind the ctx_* tools; the opencode plugin's own session DB comes
-  # from the adapter's getSessionDir(), which reads CONTEXT_MODE_DATA_DIR
-  # instead and otherwise falls back to ~/.config/opencode. That fallback is
-  # the config mount the host sync replaces on relaunch, and both stores hold
-  # verbatim tool output, so the pin has to name both and put both under the
-  # data mount. The DB path is asserted as upstream
-  # composes it — <data dir>/context-mode/sessions — which is what fails if the
-  # verb ever returns the store path itself instead of its parent.
-  - name: setup pins both the ctx_ store and the plugin session DB
+  # context-mode 2.x keeps every store under ~/.context-mode and takes its
+  # platform from the `--agent` argument the hook and server commands carry, or
+  # from which in-process entry loaded. None of the three 1.x variables means
+  # anything to it, and CONTEXT_MODE_DATA_DIR has since come back upstream with
+  # a different meaning (the whole data root), so a stale 1.x value exported
+  # here would relocate the store. Read from a child, which is what a hook is.
+  - name: setup exports no 1.x storage or platform variable, for opencode or claude
     steps:
       - type: exec
         script: |
@@ -489,124 +431,53 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
           export RIOTBOX_AGENT=opencode
           PKG="${HOME}/pkg/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" \
+          mkdir -p "${HOME}/.local/bin" "${PKG}/opencode" \
             "${OPENCODE_CONFIG_DIR}" "${CLAUDE_CONFIG_DIR}"
-          : > "${PKG}/build/adapters/opencode/plugin.js"
+          : > "${PKG}/opencode/plugin.js"
           printf '%s\n' '#!/usr/bin/env bash' \
-            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+            "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/registry.sh"
 
-          # Called in this shell, not a subshell: both variables are exports and
-          # the assertions below are on what the session inherits.
+          no_1x_exports() {
+            local got
+            got="$(bash -c 'printf "%s|%s|%s" "${CONTEXT_MODE_DIR-unset}" "${CONTEXT_MODE_DATA_DIR-unset}" "${CONTEXT_MODE_PLATFORM-unset}"')"
+            [ "${got}" = "unset|unset|unset" ] \
+              || { echo "FAIL: $1 exported DIR|DATA_DIR|PLATFORM = ${got}"; exit 1; }
+          }
+
+          # Called in this shell, not a subshell: the exports are what is under test.
           context_mode_setup >/dev/null 2>&1
+          [ "${_CONTEXT_MODE_WIRED:-}" = "1" ] || { echo "FAIL: opencode not marked wired"; exit 1; }
+          no_1x_exports opencode
 
-          data="${HOME}/.local/share/opencode"
-          [ "${CONTEXT_MODE_DIR:-}" = "${data}/context-mode" ] \
-            || { echo "FAIL: CONTEXT_MODE_DIR is '${CONTEXT_MODE_DIR:-}', want '${data}/context-mode'"; exit 1; }
-          [ "${CONTEXT_MODE_DATA_DIR:-}" = "${data}" ] \
-            || { echo "FAIL: CONTEXT_MODE_DATA_DIR is '${CONTEXT_MODE_DATA_DIR:-}', want '${data}'"; exit 1; }
-
-          # Upstream: join(CONTEXT_MODE_DATA_DIR, "context-mode", "sessions").
-          # Off by the context-mode segment in either direction and these differ.
-          db_dir="${CONTEXT_MODE_DATA_DIR}/context-mode/sessions"
-          [ "${db_dir}" = "${CONTEXT_MODE_DIR}/sessions" ] \
-            || { echo "FAIL: the session DB resolves to '${db_dir}', beside the ctx_ stores it would be '${CONTEXT_MODE_DIR}/sessions'"; exit 1; }
-          [ "${db_dir}" = "${data}/context-mode/sessions" ] \
-            || { echo "FAIL: the session DB left the opencode data mount: '${db_dir}'"; exit 1; }
-
-          # The stores moved; the shim did not. opencode loads plugins only
-          # from the config dir's plugins/, so that is where it must land.
+          # opencode loads plugins only from the config dir's plugins/, so that
+          # is where the shim must land.
           [ -f "${OPENCODE_CONFIG_DIR}/plugins/riotbox-context-mode.js" ] \
             || { echo "FAIL: the shim is not in the config dir's plugins/"; exit 1; }
-          [ ! -e "${data}/plugins" ] \
-            || { echo "FAIL: setup wrote a plugins/ dir under the data mount"; exit 1; }
 
-          # Claude resolves its own config dir from CLAUDE_CONFIG_DIR, so the
-          # second variable buys it nothing and is not exported on that path.
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR
+          # Same session directory, opened again as claude.
           export RIOTBOX_AGENT=claude
           context_mode_setup >/dev/null 2>&1
-          [ "${CONTEXT_MODE_DIR:-}" = "${CLAUDE_CONFIG_DIR}/context-mode" ] \
-            || { echo "FAIL: claude store pinned at '${CONTEXT_MODE_DIR:-}'"; exit 1; }
-          [ "${CONTEXT_MODE_DATA_DIR:-unset}" = "unset" ] \
-            || { echo "FAIL: CONTEXT_MODE_DATA_DIR exported for claude: '${CONTEXT_MODE_DATA_DIR}'"; exit 1; }
-          echo "SETUP_PIN_BOTH_OK"
+          no_1x_exports claude
+          echo "SETUP_NO_1X_EXPORTS_OK"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "SETUP_PIN_BOTH_OK"
-
-  # Every riotbox image ships both agents, so upstream's detectPlatform() has
-  # two configs to choose between and no way to know which one is running. Left
-  # to guess, it can resolve getPluginRoot() to a package cache no riotbox
-  # install populates, and the failed import lands on a stderr the dispatcher
-  # already pointed at /dev/null — a session that routes nothing and reports
-  # itself healthy. The pin is per agent for the same reason the store path is,
-  # so the negative below matters as much as the positive: claude must not
-  # inherit opencode's token from a session directory opened as opencode first.
-  - name: setup pins the opencode platform token, and claude does not inherit it
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          export RIOTBOX_CONTEXT_MODE=1
-          export RIOTBOX_AGENT=opencode
-          PKG="${HOME}/pkg/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" \
-            "${OPENCODE_CONFIG_DIR}" "${CLAUDE_CONFIG_DIR}"
-          : > "${PKG}/build/adapters/opencode/plugin.js"
-          printf '%s\n' '#!/usr/bin/env bash' \
-            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-
-          # Called in this shell, not a subshell: the variable is an export and
-          # the assertion below is on what the session inherits.
-          context_mode_setup >/dev/null 2>&1
-
-          # Read from a child, which is what a hook is. Reading it in this shell
-          # would pass just as well on a plain assignment, and an unexported
-          # value reaches nothing upstream ever runs.
-          got="$(bash -c 'printf %s "${CONTEXT_MODE_PLATFORM-}"')"
-          [ "${got}" = "opencode" ] \
-            || { echo "FAIL: CONTEXT_MODE_PLATFORM is '${got:-unset}' in a child, want 'opencode'"; exit 1; }
-
-          # Same session directory, opened again as claude: the token has to
-          # follow the agent, not the directory.
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM
-          export RIOTBOX_AGENT=claude
-          context_mode_setup >/dev/null 2>&1
-          got="$(bash -c 'printf %s "${CONTEXT_MODE_PLATFORM-}"')"
-          [ "${got}" = "claude-code" ] \
-            || { echo "FAIL: claude inherited platform '${got:-unset}', want 'claude-code'"; exit 1; }
-          echo "SETUP_PIN_PLATFORM_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "SETUP_PIN_PLATFORM_OK"
+          - result.systemout ShouldContainSubstring "SETUP_NO_1X_EXPORTS_OK"
 
   # The toggle is opt-in and a session directory is reusable, so turning it off
-  # has to take the shim back out. Left behind, it would keep loading a plugin
-  # against a store the session no longer pins, for the life of the directory.
+  # has to take the shim back out. Left behind, it would keep loading the plugin
+  # in sessions that turned the feature off, for the life of the directory.
   - name: setup strips the opencode shim when the feature is off
     steps:
       - type: exec
@@ -615,15 +486,15 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_AGENT=opencode
           PKG="${HOME}/pkg/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" "${OPENCODE_CONFIG_DIR}"
-          : > "${PKG}/build/adapters/opencode/plugin.js"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/opencode" "${OPENCODE_CONFIG_DIR}"
+          : > "${PKG}/opencode/plugin.js"
           printf '%s\n' '#!/usr/bin/env bash' \
-            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+            "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
@@ -652,7 +523,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           # Nothing under test ever clears this flag, so a maintainer running
           # the suite from inside a wired RiotBox session would otherwise
           # inherit a 1 and read it as the bug this case exists to catch.
@@ -662,11 +533,11 @@ testcases:
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
           PKG="${HOME}/pkg/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" \
+          mkdir -p "${HOME}/.local/bin" "${PKG}/opencode" \
             "${OPENCODE_CONFIG_DIR}" "${CLAUDE_CONFIG_DIR}"
-          : > "${PKG}/build/adapters/opencode/plugin.js"
+          : > "${PKG}/opencode/plugin.js"
           printf '%s\n' '#!/usr/bin/env bash' \
-            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+            "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
@@ -707,7 +578,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export RIOTBOX_CONTEXT_MODE=1
           mkdir -p "${HOME}/.config/opencode"
           printf '%s\n' \
@@ -746,7 +617,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export RIOTBOX_CONTEXT_MODE=1
           mkdir -p "${HOME}/.config/opencode"
           printf '%s\n' \
@@ -778,7 +649,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export RIOTBOX_CONTEXT_MODE=1
           mkdir -p "${HOME}/.config/opencode"
           printf '%s\n' '{"plugin": ["some-other-plugin"], "theme": "dark"}' \
@@ -807,7 +678,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export RIOTBOX_CONTEXT_MODE=0
           mkdir -p "${HOME}/.config/opencode"
           printf '%s\n' \
@@ -839,7 +710,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export RIOTBOX_CONTEXT_MODE=1
           mkdir -p "${HOME}/.config/opencode"
           printf '%s\n' '{"theme": "dark"}' \
@@ -882,7 +753,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export RIOTBOX_CONTEXT_MODE=1
 
           source "{{.riotbox_dir}}/agents/registry.sh"
@@ -911,7 +782,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export RIOTBOX_CONTEXT_MODE=1
 
           source "{{.riotbox_dir}}/agents/registry.sh"
@@ -936,7 +807,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export RIOTBOX_CONTEXT_MODE=1
 
           source "{{.riotbox_dir}}/agents/registry.sh"
@@ -967,7 +838,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
 
           source "{{.riotbox_dir}}/agents/registry.sh"
 
@@ -992,481 +863,3 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PURE_OFF_SILENT_OK"
-
-  # Follow-up #6. The real host sync, run twice against one state dir with a
-  # host ~/.config/opencode present: the second run replaces opencode-config
-  # wholesale. The container's two mounts are stood in for by links from a
-  # fake container HOME to the state-dir entries, so the store paths the verbs
-  # name resolve where they would inside a session.
-  #
-  # Follow-up #11 pins per-session auto-memory here too. Upstream's
-  # BaseAdapter.getMemoryDir() (build/adapters/base.js, not overridden by the
-  # opencode adapter at v1.0.169) is join(CONTEXT_MODE_DATA_DIR, "context-mode",
-  # "memory", <project hash>) when the variable is set, and
-  # join(<config dir>, "memory", ...) otherwise. The value comes from
-  # context_mode_setup itself, the code that exports it into the session, so
-  # the memory dir must land in the state dir's opencode-data/ and not in the
-  # opencode-config/ copy the sync replaces.
-  - name: Context Mode stores and auto-memory survive a relaunch sync that re-stages the host config
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          HOST="${TEST_DIR}/host"
-          STATE="${TEST_DIR}/state"
-          mkdir -p "${HOST}/.config/opencode/agents" "${HOST}/.local/share/opencode" "${STATE}"
-          printf '{}\n' > "${HOST}/.config/opencode/opencode.json"
-          printf '# agent\n' > "${HOST}/.config/opencode/agents/a.md"
-          run_sync() {
-            "{{.riotbox_dir}}/agents/opencode/sync-settings.sh" \
-              "${HOST}/.config/opencode" "${HOST}/.local/share/opencode" "${STATE}" >/dev/null 2>&1
-          }
-          run_sync
-
-          export HOME="${TEST_DIR}/container"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          mkdir -p "${HOME}/.config" "${HOME}/.local/share"
-          ln -s "${STATE}/opencode-config" "${HOME}/.config/opencode"
-          ln -s "${STATE}/opencode-data" "${HOME}/.local/share/opencode"
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          export RIOTBOX_CONTEXT_MODE=1
-          export RIOTBOX_AGENT=opencode
-          PKG="${TEST_DIR}/pkg/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/opencode" "${CLAUDE_CONFIG_DIR}"
-          touch "${PKG}/build/adapters/opencode/plugin.js"
-          printf '%s\n' '#!/usr/bin/env bash' \
-            "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          # In this shell, not a subshell: the exports are what is under test.
-          context_mode_setup >/dev/null 2>&1
-          [ -n "${CONTEXT_MODE_DIR:-}" ] && [ -n "${CONTEXT_MODE_DATA_DIR:-}" ] \
-            || { echo "FAIL: setup exported no Context Mode store pins"; exit 1; }
-          store="${CONTEXT_MODE_DIR}"
-          root="${CONTEXT_MODE_DATA_DIR}"
-          # Where upstream puts each: CONTEXT_MODE_DIR/content (ctx_* stores),
-          # <data root>/context-mode/sessions (plugin DB) and
-          # <data root>/context-mode/memory/<project hash> (auto-memory).
-          memory="${root}/context-mode/memory/0123abcd"
-          want="$(realpath -m "${STATE}/opencode-data/context-mode/memory/0123abcd")"
-          got="$(realpath -m "${memory}")"
-          [ "${got}" = "${want}" ] \
-            || { echo "FAIL: auto-memory resolves to '${got}', want the session's '${want}'"; exit 1; }
-          mkdir -p "${store}/content" "${root}/context-mode/sessions" "${memory}"
-          printf 'kept\n' > "${store}/content/probe.db"
-          printf 'kept\n' > "${root}/context-mode/sessions/probe.db"
-          printf 'kept\n' > "${memory}/probe.md"
-
-          run_sync
-
-          [ -f "${STATE}/opencode-config/agents/a.md" ] \
-            || { echo "FAIL: the relaunch sync did not re-stage the host config"; exit 1; }
-          for f in "${store}/content/probe.db" \
-                   "${root}/context-mode/sessions/probe.db" \
-                   "${memory}/probe.md"; do
-            [ -f "${f}" ] || { echo "FAIL: ${f} did not survive the relaunch sync"; exit 1; }
-          done
-          echo "STORES_SURVIVE_RELAUNCH_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "STORES_SURVIVE_RELAUNCH_OK"
-
-  # A session whose host has no ~/.config/opencode was never re-staged, so its
-  # stores still sit under the config mount from before the move. Container
-  # setup carries them across once, before Context Mode starts.
-  - name: container setup moves stores left under the config dir to the data dir
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.opencode_helpers}}"
-          setup_opencode_setup_test noconfig noprompt
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-          old="${OPENCODE_CONFIG_DIR}/context-mode"
-          new="${HOME}/.local/share/opencode/context-mode"
-          mkdir -p "${old}/sessions" "${old}/content" "${old}/memory" "${HOME}/.local/share/opencode"
-          printf 'db\n' > "${old}/sessions/s.db"
-          printf 'fts\n' > "${old}/content/c.db"
-          printf 'mem\n' > "${old}/memory/m.md"
-
-          source "${RIOTBOX_DIR}/agents/registry.sh"
-          agent_call opencode container_setup 2> "${TEST_DIR}/err"
-
-          [ ! -e "${old}" ] || { echo "FAIL: the old store is still in the config dir"; exit 1; }
-          [ "$(cat "${new}/sessions/s.db")" = "db" ] || { echo "FAIL: session DB not moved"; exit 1; }
-          [ "$(cat "${new}/content/c.db")" = "fts" ] || { echo "FAIL: ctx store not moved"; exit 1; }
-          [ "$(cat "${new}/memory/m.md")" = "mem" ] || { echo "FAIL: memory not moved"; exit 1; }
-          grep -qF "${new}" "${TEST_DIR}/err" || { echo "FAIL: the move was not reported"; cat "${TEST_DIR}/err"; exit 1; }
-
-          # One-time: a second start has nothing to move and says nothing.
-          agent_call opencode container_setup 2> "${TEST_DIR}/err2"
-          ! grep -qF "context-mode" "${TEST_DIR}/err2" \
-            || { echo "FAIL: a second start reported a move again"; cat "${TEST_DIR}/err2"; exit 1; }
-          echo "MIGRATE_MOVE_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_MOVE_OK"
-
-  - name: container setup leaves both stores and warns when both exist
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.opencode_helpers}}"
-          setup_opencode_setup_test noconfig noprompt
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-          old="${OPENCODE_CONFIG_DIR}/context-mode"
-          new="${HOME}/.local/share/opencode/context-mode"
-          mkdir -p "${old}/sessions" "${new}/sessions"
-          printf 'old\n' > "${old}/sessions/old.db"
-          printf 'new\n' > "${new}/sessions/new.db"
-
-          source "${RIOTBOX_DIR}/agents/registry.sh"
-          agent_call opencode container_setup 2> "${TEST_DIR}/err"
-
-          [ "$(cat "${old}/sessions/old.db")" = "old" ] || { echo "FAIL: the old store was touched"; exit 1; }
-          [ "$(cat "${new}/sessions/new.db")" = "new" ] || { echo "FAIL: the new store was touched"; exit 1; }
-          [ ! -e "${new}/sessions/old.db" ] || { echo "FAIL: the stores were merged"; exit 1; }
-          [ ! -e "${new}/context-mode" ] || { echo "FAIL: the old store was moved inside the new one"; exit 1; }
-          grep -qF "WARN" "${TEST_DIR}/err" && grep -qF "${old}" "${TEST_DIR}/err" && grep -qF "${new}" "${TEST_DIR}/err" \
-            || { echo "FAIL: no warning naming both stores"; cat "${TEST_DIR}/err"; exit 1; }
-          echo "MIGRATE_CONFLICT_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_CONFLICT_OK"
-
-  - name: container setup does not follow a link at the old store path
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.opencode_helpers}}"
-          setup_opencode_setup_test noconfig noprompt
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-          old="${OPENCODE_CONFIG_DIR}/context-mode"
-          new="${HOME}/.local/share/opencode/context-mode"
-          target="${TEST_DIR}/elsewhere"
-          mkdir -p "${target}/sessions" "${HOME}/.local/share/opencode"
-          printf 'x\n' > "${target}/sessions/x.db"
-          ln -s "${target}" "${old}"
-
-          source "${RIOTBOX_DIR}/agents/registry.sh"
-          agent_call opencode container_setup 2> "${TEST_DIR}/err"
-
-          [ -L "${old}" ] || { echo "FAIL: the link was moved or replaced"; exit 1; }
-          grep -qF "WARN" "${TEST_DIR}/err" && grep -qF "${old}" "${TEST_DIR}/err" \
-            || { echo "FAIL: no warning naming the link"; cat "${TEST_DIR}/err"; exit 1; }
-          [ -f "${target}/sessions/x.db" ] || { echo "FAIL: the link target was emptied"; exit 1; }
-          [ ! -e "${new}" ] && [ ! -L "${new}" ] || { echo "FAIL: something was moved to ${new}"; exit 1; }
-          echo "MIGRATE_LINK_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_LINK_OK"
-
-  # The two paths are separate bind mounts, so the move is a copy then a delete.
-  # A SQLite -wal/-shm file means an older session may still be writing the DB:
-  # copying it then would catch a half-done write and lose that session's later ones.
-  - name: container setup skips the move while a session may have the store open
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.opencode_helpers}}"
-          setup_opencode_setup_test noconfig noprompt
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-          old="${OPENCODE_CONFIG_DIR}/context-mode"
-          new="${HOME}/.local/share/opencode/context-mode"
-          mkdir -p "${old}/sessions" "${HOME}/.local/share/opencode"
-          printf 'db\n' > "${old}/sessions/s.db"
-          : > "${old}/sessions/s.db-wal"
-
-          source "${RIOTBOX_DIR}/agents/registry.sh"
-          agent_call opencode container_setup 2> "${TEST_DIR}/err"
-
-          [ -f "${old}/sessions/s.db" ] && [ -f "${old}/sessions/s.db-wal" ] \
-            || { echo "FAIL: the live store was touched"; exit 1; }
-          [ ! -e "${new}" ] || { echo "FAIL: the live store was copied to ${new}"; exit 1; }
-          grep -qF "WARN: ${old}/sessions/s.db-wal exists" "${TEST_DIR}/err" \
-            || { echo "FAIL: no warning naming the live file"; cat "${TEST_DIR}/err"; exit 1; }
-          # A crash leaves the same files with no session to exit, and the WAL
-          # may hold committed rows: the warning must say so and give both
-          # recoveries with the real paths, never a delete.
-          for want in "exit it and relaunch" "left from a crash" "never delete it" \
-                      "sqlite3 '${old}/sessions/s.db' 'PRAGMA wal_checkpoint(TRUNCATE);'" \
-                      "mv -T '${old}' '${new}'"; do
-            grep -qF -- "${want}" "${TEST_DIR}/err" \
-              || { echo "FAIL: the warning lacks: ${want}"; cat "${TEST_DIR}/err"; exit 1; }
-          done
-          if grep -E '\brm\b' "${TEST_DIR}/err"; then echo "FAIL: the warning suggests rm"; exit 1; fi
-
-          # -shm alone is the same signal.
-          rm -f "${old}/sessions/s.db-wal"
-          : > "${old}/sessions/s.db-shm"
-          agent_call opencode container_setup 2>/dev/null
-          [ ! -e "${new}" ] || { echo "FAIL: moved with a -shm file present"; exit 1; }
-
-          # With neither, the next start moves it.
-          rm -f "${old}/sessions/s.db-shm"
-          agent_call opencode container_setup 2>/dev/null
-          [ -f "${new}/sessions/s.db" ] || { echo "FAIL: not moved once the session was gone"; exit 1; }
-          echo "MIGRATE_LIVE_SKIP_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_LIVE_SKIP_OK"
-
-  - name: container setup leaves a regular file at the old store path and warns
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.opencode_helpers}}"
-          setup_opencode_setup_test noconfig noprompt
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-          old="${OPENCODE_CONFIG_DIR}/context-mode"
-          new="${HOME}/.local/share/opencode/context-mode"
-          mkdir -p "${HOME}/.local/share/opencode"
-          printf 'file\n' > "${old}"
-
-          source "${RIOTBOX_DIR}/agents/registry.sh"
-          agent_call opencode container_setup 2> "${TEST_DIR}/err"
-
-          [ "$(cat "${old}")" = "file" ] || { echo "FAIL: the file was moved or changed"; exit 1; }
-          [ ! -e "${new}" ] || { echo "FAIL: something was moved to ${new}"; exit 1; }
-          grep -qF "not a real directory" "${TEST_DIR}/err" \
-            || { echo "FAIL: no warning naming the file"; cat "${TEST_DIR}/err"; exit 1; }
-          echo "MIGRATE_OLD_FILE_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_OLD_FILE_OK"
-
-  - name: container setup does not move onto a link at the new store path, live or dangling
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.opencode_helpers}}"
-          setup_opencode_setup_test noconfig noprompt
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-          old="${OPENCODE_CONFIG_DIR}/context-mode"
-          new="${HOME}/.local/share/opencode/context-mode"
-          mkdir -p "${old}/sessions" "${HOME}/.local/share/opencode" "${TEST_DIR}/target"
-          printf 'db\n' > "${old}/sessions/s.db"
-          source "${RIOTBOX_DIR}/agents/registry.sh"
-
-          for target in "${TEST_DIR}/target" "${TEST_DIR}/missing"; do
-            rm -f "${new}"
-            ln -s "${target}" "${new}"
-            agent_call opencode container_setup 2> "${TEST_DIR}/err"
-
-            [ -f "${old}/sessions/s.db" ] || { echo "FAIL: the old store moved (link to ${target})"; exit 1; }
-            [ -L "${new}" ] && [ "$(readlink "${new}")" = "${target}" ] \
-              || { echo "FAIL: the link at ${new} was replaced"; exit 1; }
-            [ -z "$(ls -A "${TEST_DIR}/target")" ] || { echo "FAIL: wrote through the link"; exit 1; }
-            grep -qF "is a link" "${TEST_DIR}/err" && grep -qF "${target}" "${TEST_DIR}/err" \
-              || { echo "FAIL: no warning naming the link (${target})"; cat "${TEST_DIR}/err"; exit 1; }
-            ! grep -qF "exist at both" "${TEST_DIR}/err" \
-              || { echo "FAIL: a link was reported as a second store (${target})"; exit 1; }
-          done
-          echo "MIGRATE_NEW_LINK_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_NEW_LINK_OK"
-
-  - name: container setup keeps the old store and warns when the move fails
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.opencode_helpers}}"
-          setup_opencode_setup_test noconfig noprompt
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-          old="${OPENCODE_CONFIG_DIR}/context-mode"
-          new="${HOME}/.local/share/opencode/context-mode"
-          mkdir -p "${old}/sessions" "${HOME}/.local/share/opencode" "${TEST_DIR}/bin"
-          printf 'db\n' > "${old}/sessions/s.db"
-          # Fail only the store move; opencode_setup's own mv calls go through.
-          real_mv="$(command -v mv)"
-          printf '%s\n' '#!/usr/bin/env bash' \
-            'if [[ "${!#}" == */context-mode ]]; then echo "mv: simulated failure" >&2; exit 1; fi' \
-            "exec \"${real_mv}\" \"\$@\"" > "${TEST_DIR}/bin/mv"
-          chmod +x "${TEST_DIR}/bin/mv"
-
-          source "${RIOTBOX_DIR}/agents/registry.sh"
-          PATH="${TEST_DIR}/bin:${PATH}" agent_call opencode container_setup 2> "${TEST_DIR}/err"
-
-          grep -qF "simulated failure" "${TEST_DIR}/err" || { echo "FAIL: the mv stub never ran"; exit 1; }
-          [ -f "${old}/sessions/s.db" ] || { echo "FAIL: the old store is gone"; exit 1; }
-          grep -qF "could not move" "${TEST_DIR}/err" \
-            || { echo "FAIL: no warning for the failed move"; cat "${TEST_DIR}/err"; exit 1; }
-          echo "MIGRATE_MV_FAIL_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_MV_FAIL_OK"
-
-  - name: container setup keeps the old store and warns when the data dir is missing
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.opencode_helpers}}"
-          setup_opencode_setup_test noconfig noprompt
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-          old="${OPENCODE_CONFIG_DIR}/context-mode"
-          new="${HOME}/.local/share/opencode/context-mode"
-          mkdir -p "${old}/sessions"
-          printf 'db\n' > "${old}/sessions/s.db"
-          rm -rf "${HOME}/.local/share/opencode"
-
-          source "${RIOTBOX_DIR}/agents/registry.sh"
-          agent_call opencode container_setup 2> "${TEST_DIR}/err"
-
-          [ -f "${old}/sessions/s.db" ] || { echo "FAIL: the old store is gone"; exit 1; }
-          [ ! -e "${HOME}/.local/share/opencode" ] || { echo "FAIL: the data dir was created"; exit 1; }
-          grep -qF "${HOME}/.local/share/opencode is missing" "${TEST_DIR}/err" \
-            || { echo "FAIL: no warning naming the missing data dir"; cat "${TEST_DIR}/err"; exit 1; }
-          echo "MIGRATE_NO_PARENT_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_NO_PARENT_OK"
-
-  - name: container setup quietly removes an empty old store when the new one exists
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.opencode_helpers}}"
-          setup_opencode_setup_test noconfig noprompt
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-          old="${OPENCODE_CONFIG_DIR}/context-mode"
-          new="${HOME}/.local/share/opencode/context-mode"
-          mkdir -p "${old}" "${new}/sessions"
-          printf 'new\n' > "${new}/sessions/new.db"
-
-          source "${RIOTBOX_DIR}/agents/registry.sh"
-          agent_call opencode container_setup 2> "${TEST_DIR}/err"
-
-          [ ! -e "${old}" ] || { echo "FAIL: the empty old store was left"; exit 1; }
-          [ -f "${new}/sessions/new.db" ] || { echo "FAIL: the new store was touched"; exit 1; }
-          ! grep -qF "context-mode" "${TEST_DIR}/err" \
-            || { echo "FAIL: an empty leftover produced output"; cat "${TEST_DIR}/err"; exit 1; }
-          echo "MIGRATE_EMPTY_OLD_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_EMPTY_OLD_OK"
-
-  # The migration must finish before Context Mode exports its pins and wires
-  # the shim, or the first session after an upgrade starts on empty stores.
-  - name: the store migration runs in container setup, before context_mode_setup
-    steps:
-      - type: exec
-        script: |
-          set -e
-          cd "{{.riotbox_dir}}"
-          f=container/entrypoint.sh
-
-          agents=$(grep -n 'agent_call "${_agent}" container_setup' "${f}" | cut -d: -f1 | head -1)
-          ctx=$(grep -n '^context_mode_setup$' "${f}" | cut -d: -f1 | head -1)
-          [ -n "${agents}" ] && [ -n "${ctx}" ] || { echo "FAIL: a call is missing from ${f}"; exit 1; }
-          [ "${agents}" -lt "${ctx}" ] \
-            || { echo "FAIL: the agent setup loop runs after context_mode_setup"; exit 1; }
-
-          body="$(sed -n '/^agent_opencode_container_setup() {/,/^}/p' agents/opencode/manifest.sh)"
-          grep -qx $'\t_agent_opencode_cm_migrate_store' <<<"${body}" \
-            || { echo "FAIL: agent_opencode_container_setup does not run the migration"; exit 1; }
-          echo "MIGRATE_ORDER_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_ORDER_OK"
-
-  # Only SQLite's own sidecars (<name>.db-wal, <name>.db-shm) mean a live DB.
-  # A memory note that merely ends in -wal must not hold the move back.
-  - name: container setup moves the stores past files that only end in -wal or -shm
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.opencode_helpers}}"
-          setup_opencode_setup_test noconfig noprompt
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-          old="${OPENCODE_CONFIG_DIR}/context-mode"
-          new="${HOME}/.local/share/opencode/context-mode"
-          mkdir -p "${old}/memory" "${HOME}/.local/share/opencode"
-          printf 'note\n' > "${old}/memory/foo-wal"
-          printf 'note\n' > "${old}/memory/bar-shm"
-
-          source "${RIOTBOX_DIR}/agents/registry.sh"
-          agent_call opencode container_setup 2> "${TEST_DIR}/err"
-
-          [ -f "${new}/memory/foo-wal" ] && [ -f "${new}/memory/bar-shm" ] \
-            || { echo "FAIL: a -wal/-shm-suffixed note blocked the move"; cat "${TEST_DIR}/err"; exit 1; }
-          [ ! -e "${old}" ] || { echo "FAIL: the old store is still there"; exit 1; }
-          echo "MIGRATE_SUFFIX_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_SUFFIX_OK"
-
-  # The link check comes before the empty-leftover cleanup, so a link at the
-  # new path warns even when there is nothing in the old dir to move.
-  - name: container setup warns about a link at the new path beside an empty old dir
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          export RIOTBOX_DIR="{{.riotbox_dir}}"
-          source "{{.opencode_helpers}}"
-          setup_opencode_setup_test noconfig noprompt
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export OPENCODE_CONFIG_DIR="${HOME}/.config/opencode"
-          old="${OPENCODE_CONFIG_DIR}/context-mode"
-          new="${HOME}/.local/share/opencode/context-mode"
-          mkdir -p "${old}" "${HOME}/.local/share/opencode"
-          ln -s "${TEST_DIR}/missing" "${new}"
-
-          source "${RIOTBOX_DIR}/agents/registry.sh"
-          agent_call opencode container_setup 2> "${TEST_DIR}/err"
-
-          [ -L "${new}" ] || { echo "FAIL: the link was replaced"; exit 1; }
-          grep -qF "${new} is a link" "${TEST_DIR}/err" \
-            || { echo "FAIL: the link went unreported"; cat "${TEST_DIR}/err"; exit 1; }
-          echo "MIGRATE_EMPTY_OLD_LINK_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "MIGRATE_EMPTY_OLD_LINK_OK"

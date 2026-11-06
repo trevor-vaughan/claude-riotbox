@@ -104,6 +104,49 @@ RUN curl --proto '=https' --tlsv1.2 -sSfL \
 # binary are edited together.
 ENV RIOTBOX_REQUIRE_GIT_AI=1
 
+# Node — the version the runtime image pins as CONTEXT_MODE_NODE.
+#
+# The context-mode store cases in tests/context-mode-summary.venom.yml and
+# tests/context-mode-ledger.venom.yml build real context-mode 2.x stores and
+# read them through container/context-mode-stats.mjs, which needs node:sqlite
+# with readOnly and a busy timeout (Node 24). Without Node they skip, which is
+# how they ran here before this install: green, having run nothing.
+#
+# Same pin as the runtime image, and a case in the summary suite asserts the
+# two agree, as the git-ai case does for its pin. Refresh both together.
+# Upstream publishes SHASUMS256.txt per release; the digests below are
+# transcribed from it at review time, not fetched beside the tarball:
+#   curl -fsSL https://nodejs.org/dist/v<VER>/SHASUMS256.txt \
+#     | grep -E 'linux-(x64|arm64)\.tar\.gz$'
+# Both arches are pinned, though venom above limits this image to amd64 today.
+# The .tar.gz is used rather than .tar.xz, which would need xz in the image.
+ARG CM_NODE_VERSION=24.22.2
+ARG CM_NODE_SHA256_AMD64=361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9
+ARG CM_NODE_SHA256_ARM64=95c264150aceb7f3437a29fd6984924f5f8d1511ea3cbd6c508b83f6c555dae2
+RUN bash -o pipefail -c '\
+    set -e; \
+    case "$(uname -m)" in \
+        x86_64)  ASSET="node-v${CM_NODE_VERSION}-linux-x64"; EXPECTED_SHA="${CM_NODE_SHA256_AMD64}" ;; \
+        aarch64) ASSET="node-v${CM_NODE_VERSION}-linux-arm64"; EXPECTED_SHA="${CM_NODE_SHA256_ARM64}" ;; \
+        *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl --proto "=https" --tlsv1.2 -fsSLo /tmp/node.tar.gz \
+        "https://nodejs.org/dist/v${CM_NODE_VERSION}/${ASSET}.tar.gz"; \
+    echo "${EXPECTED_SHA}  /tmp/node.tar.gz" | sha256sum -c -; \
+    mkdir -p /opt/node; \
+    tar -xzf /tmp/node.tar.gz -C /opt/node --strip-components=1; \
+    rm -f /tmp/node.tar.gz; \
+    ln -s /opt/node/bin/node /usr/local/bin/node; \
+    v="$(node --version)"; \
+    echo "installed node ${v}"; \
+    [ "${v}" = "v${CM_NODE_VERSION}" ] || { \
+        echo "node reports ${v}, pinned ${CM_NODE_VERSION}" >&2; exit 1; }'
+
+# Declares that this environment provides Node 24, which turns the store
+# cases' SKIP into a failure here while leaving it a skip on a bare host. Kept
+# next to the install above, as RIOTBOX_REQUIRE_GIT_AI is.
+ENV RIOTBOX_REQUIRE_CM_NODE=1
+
 # Non-root test user
 ARG HOST_UID=1000
 RUN useradd -l -m -u ${HOST_UID} -s /bin/bash testuser 2>/dev/null || \

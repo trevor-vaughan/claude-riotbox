@@ -809,6 +809,22 @@ setup_projects() {
 		PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${RIOTBOX_STATE_DIR}/git-ai:/home/llm/.git-ai:z"
 	fi
 
+	# ── Context Mode store (always) ─────────────────────────────────────
+	# context-mode 2.x keeps every store — one SQLite database per project,
+	# holding verbatim tool output — under ~/.context-mode, whichever agent
+	# runs it. Mounted from the state dir so the stores outlive the
+	# container, are shared by the session's agents, and go with
+	# `riotbox session-reset`. Placement rests on this mount alone, not on
+	# CONTEXT_MODE_DATA_DIR, which container/context-mode-setup.sh unsets.
+	#
+	# Not gated on RIOTBOX_CONTEXT_MODE: a Context Mode plugin copied in
+	# from the host runs without it and writes the same store.
+	if [[ "${RIOTBOX_DRY_RUN:-0}" != "1" ]]; then
+		# shellcheck disable=SC2310 # ensure_real_dir has already said why it failed
+		ensure_real_dir "${RIOTBOX_STATE_DIR}/context-mode" || return 1
+	fi
+	PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${RIOTBOX_STATE_DIR}/context-mode:/home/llm/.context-mode:z"
+
 	# ── Context Mode ledger (opt-in) ────────────────────────────────────
 	# One JSON record per session exit, for `riotbox ctx-stats`. Lives
 	# OUTSIDE riotbox_session_dir on purpose: the counters it accumulates

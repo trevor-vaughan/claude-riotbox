@@ -43,7 +43,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -100,7 +100,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -149,7 +149,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -207,7 +207,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -280,7 +280,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}"
@@ -322,7 +322,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -369,11 +369,11 @@ testcases:
 
   # Claude Code has no wire verb: its hooks and MCP server arrive with the
   # plugin container/plugin-setup.sh registers, and nothing in this file writes
-  # to settings.json for it. What is left is the pair the session inherits — the
-  # storage pin and the flag the exit report reads — and both have to be set on
-  # an agent whose wiring this function never touches, or an enabled session
-  # writes its FTS5 store wherever upstream defaults to and ends with no report.
-  - name: setup pins the store and marks the session wired for an agent with no wire verb
+  # to settings.json for it. What is left is the flag the exit report reads,
+  # which has to be set on an agent whose wiring this function never touches,
+  # or an enabled session ends with no report. No storage or platform variable
+  # goes with it: context-mode 2.x reads neither.
+  - name: setup marks the session wired for an agent with no wire verb and exports no 1.x variable
     steps:
       - type: exec
         script: |
@@ -381,18 +381,18 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
           # The tree the image stages and the registration reads: the wiring this
           # agent gets is that registration, so the flag asserted below follows it.
           export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
-          staged="${RIOTBOX_CM_PLUGIN_DIR}/v1.0.169"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin" "${staged}"
           printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
-          echo '{"name":"context-mode","version":"1.0.169"}' > "${staged}/package.json"
+          echo '{"name":"context-mode","version":"2.1.4"}' > "${staged}/package.json"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           # shellcheck disable=SC1091
@@ -409,14 +409,151 @@ testcases:
           context_mode_plugin_register >/dev/null 2>&1
           context_mode_setup >/dev/null 2>&1
 
-          [ "${CONTEXT_MODE_DIR}" = "${CLAUDE_CONFIG_DIR}/context-mode" ] \
-            || { echo "FAIL: storage root not set (got '${CONTEXT_MODE_DIR:-unset}')"; exit 1; }
+          for v in CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM; do
+            [ -z "${!v+set}" ] || { echo "FAIL: ${v} exported as '${!v}' — context-mode 2.x reads none of them"; exit 1; }
+          done
           [ "${_CONTEXT_MODE_WIRED:-unset}" = "1" ] \
             || { echo "FAIL: an enabled session was not marked wired, so it ends with no report"; exit 1; }
           echo "setup_enabled=pass"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "setup_enabled=pass"
+
+  # A guard, not a behaviour test: it passes while nothing exports the variable
+  # and fails the day someone "helpfully" turns it on. With it set to 1, a
+  # Claude deny-rules file that exists but cannot be parsed makes context-mode
+  # deny every tool call. See the note in container/context-mode-setup.sh.
+  - name: setup does not export CONTEXT_MODE_REQUIRE_SECURITY
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_REQUIRE_SECURITY
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_CONTEXT_MODE=1
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          staged="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin" "${staged}"
+          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+          echo '{"name":"context-mode","version":"2.1.4"}' > "${staged}/package.json"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          context_mode_plugin_register >/dev/null 2>&1
+          context_mode_setup >/dev/null 2>&1
+
+          [ -z "${CONTEXT_MODE_REQUIRE_SECURITY+set}" ] \
+            || { echo "FAIL: CONTEXT_MODE_REQUIRE_SECURITY exported as '${CONTEXT_MODE_REQUIRE_SECURITY}'"; exit 1; }
+          [ "${_CONTEXT_MODE_WIRED:-unset}" = "1" ] \
+            || { echo "FAIL: setup did not run to completion, so the check above proves nothing"; exit 1; }
+          echo "require_security_unset=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "require_security_unset=pass"
+
+  # context-mode 2.1.4 reads CONTEXT_MODE_DATA_DIR as its whole data root, so a
+  # value that reached the container (a passthrough entry, an extra -e) would
+  # move every store off the ~/.context-mode session mount, silently. Setup
+  # clears it before any agent starts, whether or not the feature is on: a
+  # plugin copied in from the host runs either way.
+  - name: setup unsets an inherited CONTEXT_MODE_DATA_DIR, with the feature on and off
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
+          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+          for cm in 1 0; do
+            export CONTEXT_MODE_DATA_DIR="${HOME}/elsewhere"
+            RIOTBOX_CONTEXT_MODE="${cm}" context_mode_setup >/dev/null 2>&1
+            [ -z "${CONTEXT_MODE_DATA_DIR+set}" ] \
+              || { echo "FAIL: RIOTBOX_CONTEXT_MODE=${cm}: CONTEXT_MODE_DATA_DIR survived setup as '${CONTEXT_MODE_DATA_DIR}'"; exit 1; }
+            got="$(bash -c 'printf "%s" "${CONTEXT_MODE_DATA_DIR-unset}"')"
+            [ "${got}" = unset ] || { echo "FAIL: RIOTBOX_CONTEXT_MODE=${cm}: a child process sees '${got}'"; exit 1; }
+          done
+          echo "data_dir_cleared=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "data_dir_cleared=pass"
+
+  # 2.x neither reads nor imports a 1.x store, and the user chose to leave them
+  # where they are. Setup says so in one line naming each one it finds, and
+  # deletes nothing. An empty directory is not a store.
+  - name: setup names every context-mode 1.x store in one notice line and leaves them in place
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_CONTEXT_MODE=1
+          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin" "${HOME}/.pi/agent" "${HOME}/.local/share/opencode"
+          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/scripts/lib/progress.sh"
+          source "{{.riotbox_dir}}/container/plugin-setup.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/registry.sh"
+
+          context_mode_setup 2>"${TEST_DIR}/err" >/dev/null
+          if grep -q '1\.x' "${TEST_DIR}/err"; then echo "FAIL: a notice with no 1.x store:"; cat "${TEST_DIR}/err"; exit 1; fi
+
+          claude_store="${CLAUDE_CONFIG_DIR}/context-mode"
+          pi_store="${HOME}/.pi/agent/context-mode"
+          opencode_store="${HOME}/.local/share/opencode/context-mode"
+          mkdir -p "${opencode_store}"
+          context_mode_setup 2>"${TEST_DIR}/err" >/dev/null
+          if grep -q '1\.x' "${TEST_DIR}/err"; then echo "FAIL: an empty directory was named as a store:"; cat "${TEST_DIR}/err"; exit 1; fi
+
+          mkdir -p "${claude_store}/sessions" "${pi_store}/sessions"
+          touch "${claude_store}/sessions/a.db" "${pi_store}/sessions/b.db" "${opencode_store}/c.db"
+          context_mode_setup 2>"${TEST_DIR}/err" >/dev/null
+          [ "$(grep -c '1\.x' "${TEST_DIR}/err")" = 1 ] \
+            || { echo "FAIL: expected exactly one notice line:"; cat "${TEST_DIR}/err"; exit 1; }
+          line="$(grep '1\.x' "${TEST_DIR}/err")"
+          case "${line}" in
+            "  [context-mode] "*) ;;
+            *) echo "FAIL: not a [context-mode] line: ${line}"; exit 1 ;;
+          esac
+          for store in "${claude_store}" "${pi_store}" "${opencode_store}"; do
+            printf '%s\n' "${line}" | grep -qF -- "${store}" || { echo "FAIL: ${store} not named in: ${line}"; exit 1; }
+          done
+          [ -f "${claude_store}/sessions/a.db" ] && [ -f "${pi_store}/sessions/b.db" ] && [ -f "${opencode_store}/c.db" ] \
+            || { echo "FAIL: a 1.x store was touched"; exit 1; }
+          echo "legacy_notice=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "legacy_notice=pass"
 
   # The other half of that pair: an agent with no wire verb is wired by a plugin
   # or not at all, so the flag has to follow the plugin rather than the absence
@@ -470,13 +607,6 @@ testcases:
             || { echo "FAIL: the fixture registered a plugin; this case no longer covers the path it names"; exit 1; }
           [ "${_CONTEXT_MODE_WIRED:-unset}" = "unset" ] \
             || { echo "FAIL: a session with no registered plugin was marked wired, so it ends with a report claiming Context Mode ran"; exit 1; }
-          # The storage pin outlives the flag on this branch, deliberately: it
-          # says where an FTS5 store goes, not that anything was wired. Unset it
-          # here and the next writer puts a store of verbatim tool output on the
-          # container overlay, where it dies at exit and `riotbox session-remove`
-          # never sees it.
-          [ "${CONTEXT_MODE_DIR}" = "${CLAUDE_CONFIG_DIR}/context-mode" ] \
-            || { echo "FAIL: the storage pin went with the flag (got '${CONTEXT_MODE_DIR:-unset}') — a store of verbatim tool output would land on the container overlay, out of reach of riotbox session-remove"; exit 1; }
           echo "${err}" | grep -q "no Context Mode plugin is installed and enabled" \
             || { echo "FAIL: the session was left with the feature off in silence: ${err}"; exit 1; }
           echo "setup_unregistered=pass"
@@ -501,7 +631,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
@@ -590,10 +720,6 @@ testcases:
 
           [ "${_CONTEXT_MODE_WIRED:-unset}" = "unset" ] \
             || { echo "FAIL: a registration pointing at a directory that is gone was read as wired"; exit 1; }
-          # Same pin, same reason as the unregistered case above: withholding the
-          # flag must not withhold the storage root with it.
-          [ "${CONTEXT_MODE_DIR}" = "${CLAUDE_CONFIG_DIR}/context-mode" ] \
-            || { echo "FAIL: the storage pin went with the flag (got '${CONTEXT_MODE_DIR:-unset}') — a store of verbatim tool output would land on the container overlay, out of reach of riotbox session-remove"; exit 1; }
           echo "${err}" | grep -q "no Context Mode plugin" \
             || { echo "FAIL: the session was left with the feature off in silence: ${err}"; exit 1; }
           echo "setup_dangling=pass"
@@ -733,7 +859,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
@@ -772,7 +898,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=true
@@ -804,7 +930,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
@@ -852,7 +978,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
@@ -916,7 +1042,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CLAUDE_CONFIG_DIR="${HOME}/.claude"
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
@@ -956,7 +1082,7 @@ testcases:
   # The agent check must not cost the default path: `riotbox run` leaves
   # RIOTBOX_AGENT unset and means claude (bin/riotbox), so an unset variable
   # has to reach the same support decision an explicit claude does — the same
-  # warning-free run, the same store, the same platform token.
+  # warning-free run and the same wired flag.
   - name: setup treats an unset agent as claude, both paths alike
     steps:
       - type: exec
@@ -965,7 +1091,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           export RIOTBOX_CONTEXT_MODE=1
           # A staged tree, because for claude the registration is the wiring: a
@@ -995,17 +1121,14 @@ testcases:
               export RIOTBOX_AGENT="${agent_case}"
             fi
 
-            # Called in this shell, not a subshell: every variable asserted
-            # below is an export, and the assertions are on what the session
-            # inherits.
-            unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM
+            # Called in this shell, not a subshell: the flag asserted below is
+            # an export, and the assertion is on what the session inherits.
+            unset _CONTEXT_MODE_WIRED
             context_mode_setup 2>"${TEST_DIR}/err.${agent_case}" >/dev/null
             [ ! -s "${TEST_DIR}/err.${agent_case}" ] \
               || { echo "FAIL (${agent_case}): warned on a supported agent: $(cat "${TEST_DIR}/err.${agent_case}")"; exit 1; }
-            [ "${CONTEXT_MODE_DIR}" = "${CLAUDE_CONFIG_DIR}/context-mode" ] \
-              || { echo "FAIL (${agent_case}): storage root not set"; exit 1; }
-            [ "${CONTEXT_MODE_PLATFORM:-unset}" = "claude-code" ] \
-              || { echo "FAIL (${agent_case}): platform token is '${CONTEXT_MODE_PLATFORM:-unset}'"; exit 1; }
+            [ "${_CONTEXT_MODE_WIRED:-unset}" = "1" ] \
+              || { echo "FAIL (${agent_case}): not marked wired"; exit 1; }
           done
           echo "setup_claude_agent=pass"
         assertions:
@@ -1057,16 +1180,18 @@ testcases:
   # five months (docs/dev/decisions/context-mode-adoption.md), and the build-time
   # guards in the Containerfile — the matcher greps, the MCP-name grep, the
   # dispatcher check — only assert against whatever version the build resolved.
-  # Drop the `@${CONTEXT_MODE_VERSION}` and every one of them still passes while
-  # the image silently tracks upstream. The pin is the thing they rest on, so it
-  # is pinned here, in the shape tests/codegraph.venom.yml pins CodeGraph's.
+  # Drop the version from the generated package.json and every one of them
+  # still passes while the image silently tracks upstream. The pin is the thing
+  # they rest on, so it is pinned here, in the shape tests/codegraph.venom.yml
+  # pins CodeGraph's.
   #
-  # The Node pin and the shim are the same chain: `nvm install 22` accepts a
-  # partial version and lands whatever 22.x it resolves, and npm's own global
-  # shim starts `#!/usr/bin/env node`, which resolves to the session default —
-  # often Node 20, the version Context Mode refuses to run on. Asserting the
-  # exact ARG, the `nvm which` derivation, and the interpreter the generated
-  # shim execs keeps the pin reaching the CLI, the MCP server, and every hook.
+  # The Node pin and the shim are the same chain: `nvm install 24` accepts a
+  # partial version and lands whatever 24.x it resolves, and a bare `node` on
+  # PATH resolves to the session default — Node 20 or 22, both of which
+  # context-mode 2.x refuses (engines >=24.15.0; its hook prints "Node vX is
+  # below 24.15.0" and does nothing). Asserting the exact ARG, its floor, the
+  # `nvm which` derivation, and the interpreter the generated shim execs keeps
+  # the pin reaching the CLI, the MCP server, and every hook.
   - name: Containerfile pins the Context Mode version and the interpreter it runs on
     steps:
       - type: exec
@@ -1076,15 +1201,19 @@ testcases:
             || { echo "FAIL: CONTEXT_MODE_VERSION is not pinned to an exact version"; exit 1; }
           grep -qE '^ARG CONTEXT_MODE_NODE=[0-9]+\.[0-9]+\.[0-9]+$' Containerfile \
             || { echo "FAIL: CONTEXT_MODE_NODE is not pinned to an exact version"; exit 1; }
-          grep -qF 'install -g "context-mode@${CONTEXT_MODE_VERSION}"' Containerfile \
-            || { echo "FAIL: the install does not use the pinned version"; exit 1; }
+          node_pin="$(sed -nE 's/^ARG CONTEXT_MODE_NODE=(.+)$/\1/p' Containerfile)"
+          printf '24.15.0\n%s\n' "${node_pin}" | sort -VC \
+            || { echo "FAIL: CONTEXT_MODE_NODE=${node_pin} is below 24.15.0, the floor context-mode 2.x runs on"; exit 1; }
+          if grep -qF 'install -g "context-mode@' Containerfile; then
+            echo "FAIL: context-mode is still installed with npm install -g, which reads no lockfile"; exit 1
+          fi
           # The paths come from `nvm which` rather than a hand-built
           # v${CONTEXT_MODE_NODE}, so a major-only arg still resolves; the shim
           # is what carries the result to run time.
           grep -qF 'CM_NODE_EXE="$(nvm which "${CONTEXT_MODE_NODE}")"' Containerfile \
             || { echo "FAIL: the install paths are not derived from the pinned Node"; exit 1; }
-          grep -qF 'exec \"${CM_NODE_BIN}/node\" \"${CM_PKG}/cli.bundle.mjs\"' Containerfile \
-            || { echo "FAIL: the generated shim does not exec the pinned interpreter"; exit 1; }
+          grep -qF 'exec \"${CM_NODE_BIN}/node\" \"${CM_PKG}/cli.mjs\"' Containerfile \
+            || { echo "FAIL: the generated shim does not exec the pinned interpreter against cli.mjs"; exit 1; }
           echo "containerfile_pin=pass"
         assertions:
           - result.code ShouldEqual 0
@@ -1167,120 +1296,123 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "bun_pin=pass"
 
-  # The plugin-staging layer clones a pinned tree, installs its dependencies,
-  # rewrites two interpreters and then probes the result. `podman build` does
-  # not run in the dev container (docs/dev/context-mode.md), so no CI observes
-  # any of it — the layer has to be pinned as text, exactly like bun above.
+  # The Context Mode layer installs the npm package from a committed lockfile,
+  # stages it as the Claude plugin, rewrites two interpreters and probes the
+  # result. `podman build` does not run in the dev container
+  # (docs/dev/context-mode.md), so no CI observes any of it — the layer has to
+  # be pinned as text, exactly like bun above.
   #
-  # File-wide greps pin the ARG shapes; the rest is scoped to the lines between
-  # the first plugin ARG and the layer's success line, because whether a step is
-  # in THIS block is a property of the block, not of a 1400-line file. The
-  # block's boundaries are asserted before anything is matched against it, in
-  # both directions — that it contains its terminator (an unmatched end pattern
-  # makes sed print to EOF) and that it spans exactly one `RUN` (a terminator
-  # that moved to a later layer, or a phrase that came to appear twice, extends
-  # the range instead). Either way every check below would be silently scanning
-  # a wider slice than the layer it names.
+  # The rest is scoped to the lines between the version ARG and the layer's
+  # success line, because whether a step is in THIS block is a property of the
+  # block, not of a 1400-line file. The block's boundaries are asserted before
+  # anything is matched against it, in both directions — that it contains its
+  # terminator (an unmatched end pattern makes sed print to EOF) and that it
+  # spans exactly one `RUN` (a terminator that moved to a later layer, or a
+  # phrase that came to appear twice, extends the range instead).
   #
   # Each scoped match is a way a step survives review and stops working:
   #
   #   * `set -e`, with no `set +e` after it. The block is one `bash -c` string
   #     of `;`-joined statements, so without abort-on-error every guard in it
   #     prints its message and the layer still exits 0 on the closing echo.
-  #   * The clone's SHA assert. A git tag is mutable; `--branch <tag>` takes
-  #     whatever it resolves to at build time. Comparing `git rev-parse HEAD`
-  #     against CONTEXT_MODE_PLUGIN_SHA is the only thing making the tag a pin.
-  #   * The staged tree's own contract assert. The Context Mode layer above
-  #     runs each agent's context_mode_build_assert against the npm package
-  #     root, which no Claude session loads; this call runs claude's verb
-  #     against the clone container/plugin-setup.sh registers. Drop it and the
-  #     MCP-name guarantee falls back to CONTEXT_MODE_VERSION and
-  #     CONTEXT_MODE_PLUGIN_REF happening to name one release.
-  #   * The lockfile arriving and `npm ci --omit=dev` reading it. `ci` is what
-  #     makes the lockfile authoritative — `npm install` resolves fresh and
-  #     rewrites it — and `--omit=dev` keeps upstream's devDependencies out of a
-  #     tree that then executes in every session.
+  #   * The lockfile arriving, the generated package.json naming the ARG, and
+  #     `npm ci` reading both. `ci` is what makes the lockfile authoritative —
+  #     it refuses a package.json the lockfile does not satisfy, so an ARG bump
+  #     without a regenerated lockfile fails the layer — and its integrity hash
+  #     is the only pin on the bytes. --ignore-scripts keeps any future install
+  #     script from running at build time unreviewed.
+  #   * The staged Claude plugin being that same installed package, without the
+  #     Gemini hooks/hooks.json Claude Code would otherwise load as a second,
+  #     invalid hook file (upstream's build/main-tree.mjs drops it too), and
+  #     with the marketplace.json container/plugin-setup.sh registers it by.
+  #   * Every agent's contract assert running against that package.
   #   * Both interpreter-rewrite counts. `before` > 0 catches upstream changing
-  #     the command shape, which would leave the substitution a no-op that
-  #     rewrites nothing; `after` == 0 catches it missing a command. Drop either
-  #     and hooks run the session-default Node, which Context Mode refuses to
-  #     start on — at hook time, not build time.
-  #   * The routing probe's three controls. The unseeded run asserts the probe
-  #     answers NOTHING before a sentinel is written, so a later pass cannot be
-  #     arriving from elsewhere; the private sentinel directory keeps it off the
-  #     shared /tmp, where any unrelated process's sentinel satisfies it; and
-  #     the scrubbed PATH stops an un-rewritten tree from answering anyway on
-  #     the build's Node. Remove any one and the probe still passes, on nothing.
-  - name: Containerfile pins the staged plugin to a reviewed commit and keeps its staging steps load-bearing
+  #     the command shape, which would leave the substitution a no-op; `after`
+  #     == 0 catches it missing a command. Drop either and hooks run the
+  #     session-default Node, which context-mode 2.x refuses.
+  #   * The health gate that replaced `context-mode doctor` (which exits 1 for
+  #     every agent riotbox does not wire through `context-mode setup`): the CLI
+  #     answers --version with the pin, and the OpenCode adapter's default export
+  #     carries id, server and setup under the pinned Node.
+  #   * The routing probe and its control. The control run feeds a tool the
+  #     matcher does not route and must get no decision, so a pass is about
+  #     WebFetch and not about a hook that denies everything; the scrubbed PATH
+  #     stops an un-rewritten tree from answering anyway on the build's Node.
+  - name: Containerfile stages the Context Mode package from its lockfile and keeps its steps load-bearing
     steps:
       - type: exec
         script: |
           cd "{{.riotbox_dir}}"
-          grep -qE '^ARG CONTEXT_MODE_PLUGIN_REF=v[0-9]+\.[0-9]+\.[0-9]+$' Containerfile \
-            || { echo "FAIL: CONTEXT_MODE_PLUGIN_REF is not pinned to an exact release tag"; exit 1; }
-          grep -qE '^ARG CONTEXT_MODE_PLUGIN_SHA=[0-9a-f]{40}$' Containerfile \
-            || { echo "FAIL: CONTEXT_MODE_PLUGIN_SHA is not pinned to a full 40-character commit SHA"; exit 1; }
-          grep -qF 'git clone --depth 1 --branch "${CONTEXT_MODE_PLUGIN_REF}"' Containerfile \
-            || { echo "FAIL: the clone does not request the pinned tag"; exit 1; }
-          block="$(sed -n '/^ARG CONTEXT_MODE_PLUGIN_REF=/,/PreToolUse routes WebFetch to/p' Containerfile)"
+          for gone in '^ARG CONTEXT_MODE_PLUGIN_REF=' '^ARG CONTEXT_MODE_PLUGIN_SHA=' 'github.com/mksglu/context-mode.git'; do
+            if grep -qE -- "${gone}" Containerfile; then
+              echo "FAIL: Containerfile still matches '${gone}' — the git clone is gone; the lockfile is the single pin"; exit 1
+            fi
+          done
+          block="$(sed -n '/^ARG CONTEXT_MODE_VERSION=/,/PreToolUse routes WebFetch to/p' Containerfile)"
           printf '%s\n' "${block}" | grep -qF 'PreToolUse routes WebFetch to' \
-            || { echo "FAIL: the staging block did not delimit — its first ARG or its closing echo moved, and every match below would be scanning the whole file"; exit 1; }
+            || { echo "FAIL: the Context Mode block did not delimit — its ARG or its closing echo moved, and every match below would be scanning the whole file"; exit 1; }
           [ "$(printf '%s\n' "${block}" | grep -c '^RUN ')" = 1 ] \
-            || { echo "FAIL: the staging block spans more than one RUN — its closing echo moved to a later layer, or the phrase now appears twice, and every match below is scanning a wider slice than the layer it names"; exit 1; }
+            || { echo "FAIL: the Context Mode block spans more than one RUN — its closing echo moved to a later layer, or the phrase now appears twice"; exit 1; }
           in_block() {
-            printf '%s\n' "${block}" | grep -qF "$1" || { echo "FAIL: $2"; exit 1; }
+            printf '%s\n' "${block}" | grep -qF -- "$1" || { echo "FAIL: $2"; exit 1; }
           }
           printf '%s\n' "${block}" | grep -q 'set -e' \
-            || { echo "FAIL: the staging layer does not abort on the first failed step, so every guard below it would print and the layer would still succeed"; exit 1; }
+            || { echo "FAIL: the layer does not abort on the first failed step, so every guard in it would print and the layer would still succeed"; exit 1; }
           if printf '%s\n' "${block}" | grep -q 'set +e'; then
             echo "FAIL: the layer re-disables abort-on-error mid-block"; exit 1
           fi
-          in_block 'cloned="$(git -C "${dest}" rev-parse HEAD)"' \
-            "the layer does not read the cloned commit, so the tag is not pinned to anything"
-          in_block '[ "${cloned}" = "${CONTEXT_MODE_PLUGIN_SHA}" ]' \
-            "the cloned commit is not compared against CONTEXT_MODE_PLUGIN_SHA — a moved tag would stage code nobody reviewed"
-          in_block 'agent_call claude context_mode_build_assert "${dest}"' \
-            "the staged tree is not contract-checked — the only remaining MCP-name assert runs against the npm package root, which no Claude session loads"
           in_block 'COPY --chown=llm:llm container/context-mode-package-lock.json' \
             "the pinned lockfile is not copied into the build"
-          in_block 'mv /tmp/context-mode-package-lock.json "${dest}/package-lock.json"' \
-            "the lockfile is not moved into the staged tree, which is the only directory npm ci reads one from"
-          in_block '"${CM_NODE_BIN}/npm" ci --omit=dev' \
-            "the install is not a lockfile-authoritative \`npm ci --omit=dev\` — npm install would resolve fresh, and devDependencies would ship into every session"
+          in_block '\"dependencies\":{\"context-mode\":\"%s\"}}\n" "${CONTEXT_MODE_VERSION}" > "${cm_install}/package.json"' \
+            "the generated package.json does not depend on exactly CONTEXT_MODE_VERSION, so npm ci has nothing to hold the lockfile to"
+          in_block 'mv /tmp/context-mode-package-lock.json "${cm_install}/package-lock.json"' \
+            "the lockfile is not moved into the install root, the only directory npm ci reads one from"
+          in_block '"${CM_NODE_BIN}/npm" ci --ignore-scripts' \
+            "the install is not a lockfile-authoritative \`npm ci --ignore-scripts\`"
+          in_block '! -name ".*" -printf "%f\n")" = "context-mode" ]' \
+            "the layer does not assert node_modules holds only context-mode before moving it out, so a dependency would be stranded"
+          in_block 'CM_PKG="${RIOTBOX_CM_PLUGIN_DIR}/v${CONTEXT_MODE_VERSION}"' \
+            "the package is not staged at the version-stamped path container/plugin-setup.sh reads"
+          in_block 'mv "${cm_install}/node_modules/context-mode" "${CM_PKG}"' \
+            "the staged tree is not the package npm ci installed"
+          in_block 'rm -f "${CM_PKG}/hooks/hooks.json"' \
+            "the staged tree keeps the Gemini hooks/hooks.json Claude Code would load as a second hook file"
+          in_block 'select(.name == \"context-mode\") | .source] | first" "${CM_PKG}/.claude-plugin/marketplace.json")" = "./" ]' \
+            "the layer does not check the staged tree still declares itself as the marketplace container/plugin-setup.sh registers"
+          in_block 'agent_call "${_cm_agent}" context_mode_build_assert "${CM_PKG}"' \
+            "the agents' contract asserts do not run against the staged package"
           in_block '[ "${before}" -gt 0 ]' \
-            "the layer does not assert there was a bare-node command to rewrite, so an upstream command-shape change would leave the substitution a silent no-op"
+            "the layer does not assert there was a bare-node command to rewrite"
           in_block '[ "${after}" -eq 0 ]' \
-            "the layer does not assert every bare-node command was rewritten, so a missed hook would run the session-default Node"
-          in_block '[ -z "${cm_decision}" ]' \
-            "the routing probe has no unseeded control run — a decision read from a sentinel the build did not write would be recorded as a pass"
-          in_block 'CONTEXT_MODE_MCP_SENTINEL_DIR="${cm_probe}/sentinel"' \
-            "the probe does not point the sentinel scan at its own private directory — upstream's default is a shared /tmp any process can satisfy"
+            "the layer does not assert every bare-node command was rewritten"
+          in_block '[ "$("${CONTEXT_MODE_BIN}" --version)" = "${CONTEXT_MODE_VERSION}" ]' \
+            "the health gate does not check the CLI answers with the pinned version"
+          in_block 'typeof d.setup === \"function\"' \
+            "the health gate does not import the OpenCode adapter's default export"
+          in_block '[ -z "${cm_control}" ]' \
+            "the routing probe has no control run — a hook that denies every tool would pass"
           in_block 'env PATH=/usr/bin:/bin' \
             "the probe does not scrub node off PATH, so a tree the interpreter rewrite missed would still answer"
-          echo "plugin_staging_shape=pass"
+          if printf '%s\n' "${block}" | grep -qF '"${CONTEXT_MODE_BIN}" doctor'; then
+            echo "FAIL: the layer still gates on context-mode doctor, which exits 1 for agents riotbox does not set up"; exit 1
+          fi
+          echo "context_mode_staging_shape=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "plugin_staging_shape=pass"
+          - result.systemout ShouldContainSubstring "context_mode_staging_shape=pass"
 
   # The matcher set is the routing table a session's redirects are built from,
-  # and the routing probe above exercises exactly one entry of it: it feeds the
-  # PreToolUse command a WebFetch payload. That leaves the other eight
-  # PreToolUse matchers and the whole PostToolUse set with no build-time signal
-  # — upstream could drop Bash or Read from the intercept set, or narrow what
-  # PostToolUse captures, and every guard in this layer would still pass.
+  # and the routing probe exercises exactly one entry of it: it feeds the
+  # PreToolUse command a WebFetch payload. That leaves the rest of the
+  # PreToolUse set and the whole PostToolUse set with no build-time signal.
   #
   # container/context-mode-hooks-expected.json is the other side of that
   # comparison, committed the way the lockfile is and checked against the
-  # staged tree inside the staging layer itself. It replaces the hand-written
-  # transcription (context_mode_hook_table, CONTEXT_MODE_MATCHER,
-  # CONTEXT_MODE_POST_MATCHER) that used to live in agents/claude/context-mode.sh:
-  # same guarantee, but regenerated from the tree by a recipe instead of typed
-  # out, which is the maintenance cost that got the original asserts deleted.
-  #
-  # What repo state can check is the shape — the file parses, it names an event
-  # set, its matcher lists are non-empty, and the layer actually reads it.
-  # Whether it MATCHES upstream is not knowable here: that needs the cloned
-  # tree, which is why the comparison itself runs at build time.
+  # staged hooks/claude-code.json inside the layer itself. What repo state can
+  # check is the shape — the file parses, it names exactly the 2.x event set,
+  # its matchers cover more than the probed tool, and the layer reads it.
+  # Whether it MATCHES upstream needs the installed package, which is why the
+  # comparison itself runs at build time.
   - name: the staged hook table is gated against a committed expectation
     steps:
       - type: exec
@@ -1288,69 +1420,46 @@ testcases:
           cd "{{.riotbox_dir}}"
           expected=container/context-mode-hooks-expected.json
           [ -r "${expected}" ] \
-            || { echo "FAIL: ${expected} is missing — the staged matcher set has nothing to be compared against, and the routing probe covers WebFetch alone"; exit 1; }
+            || { echo "FAIL: ${expected} is missing"; exit 1; }
           jq -e . "${expected}" > /dev/null \
             || { echo "FAIL: ${expected} is not readable JSON"; exit 1; }
-          [ "$(jq -r 'type' "${expected}")" = "object" ] \
-            || { echo "FAIL: ${expected} is not a JSON object keyed by hook event"; exit 1; }
-          for event in PreToolUse PostToolUse; do
-            [ "$(jq -r --arg e "${event}" 'has($e)' "${expected}")" = "true" ] \
-              || { echo "FAIL: ${expected} names no ${event} event — the tool set that event intercepts would go unchecked"; exit 1; }
-          done
+          events="$(jq -r 'keys | join(",")' "${expected}")"
+          [ "${events}" = "PostToolUse,PreToolUse,SessionStart,UserPromptSubmit" ] \
+            || { echo "FAIL: ${expected} names events '${events}', want PostToolUse,PreToolUse,SessionStart,UserPromptSubmit"; exit 1; }
           [ "$(jq -r 'map_values(type) | to_entries | map(select(.value != "array")) | length' "${expected}")" = 0 ] \
             || { echo "FAIL: ${expected} has an event whose value is not an array of matchers"; exit 1; }
-          [ "$(jq -r '[.[][] | select(type != "string")] | length' "${expected}")" = 0 ] \
-            || { echo "FAIL: ${expected} has a matcher that is not a string"; exit 1; }
-          [ "$(jq -r '.PreToolUse | length' "${expected}")" -gt 1 ] \
-            || { echo "FAIL: ${expected} expects one PreToolUse matcher or none — trimming the expectation to the single matcher the routing probe exercises is how this gate gets silently emptied"; exit 1; }
-          block="$(sed -n '/^ARG CONTEXT_MODE_PLUGIN_REF=/,/PreToolUse routes WebFetch to/p' Containerfile)"
+          [ "$(jq -r '[.[][] | select(type != "string" and type != "null")] | length' "${expected}")" = 0 ] \
+            || { echo "FAIL: ${expected} has a matcher that is neither a string nor absent"; exit 1; }
+          for tool in Bash Read Grep WebFetch; do
+            jq -e --arg t "${tool}" '[.PreToolUse[] | strings | test("(^|[(|])" + $t + "([|)]|$)")] | any' "${expected}" > /dev/null \
+              || { echo "FAIL: ${expected} does not route ${tool} through PreToolUse — trimming the expectation to what the routing probe exercises is how this gate gets silently emptied"; exit 1; }
+          done
+          block="$(sed -n '/^ARG CONTEXT_MODE_VERSION=/,/PreToolUse routes WebFetch to/p' Containerfile)"
           printf '%s\n' "${block}" | grep -qF 'PreToolUse routes WebFetch to' \
-            || { echo "FAIL: the staging block did not delimit — every match below would be scanning the whole file"; exit 1; }
+            || { echo "FAIL: the Context Mode block did not delimit — every match below would be scanning the whole file"; exit 1; }
           in_block() {
-            printf '%s\n' "${block}" | grep -qF "$1" || { echo "FAIL: $2"; exit 1; }
+            printf '%s\n' "${block}" | grep -qF -- "$1" || { echo "FAIL: $2"; exit 1; }
           }
           in_block 'COPY --chown=llm:llm container/context-mode-hooks-expected.json' \
-            "the committed hook expectation is not copied into the build, so the layer has nothing to compare the staged tree against"
+            "the committed hook expectation is not copied into the build"
+          in_block 'hooks="${CM_PKG}/hooks/claude-code.json"' \
+            "the layer does not read the hook file the staged plugin.json names"
           in_block 'cm_table="$(jq -Sc ".hooks | map_values([.[].matcher])" "${hooks}")"' \
-            "the layer does not project the staged hooks.json down to its event and matcher set"
+            "the layer does not project the staged hook file down to its event and matcher set"
           in_block '[ "${cm_table}" = "${cm_expected_table}" ]' \
-            "the staged matcher set is not compared against the committed expectation — upstream could reshape the intercept set and this layer would still pass"
+            "the staged matcher set is not compared against the committed expectation"
           echo "hook_table_gate=pass"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "hook_table_gate=pass"
 
-  # Three artifacts have to name one upstream release, and only prose currently
-  # couples them: CONTEXT_MODE_VERSION (the npm package installed globally),
-  # CONTEXT_MODE_PLUGIN_REF (the git tag the plugin tree is cloned from), and
-  # the root version of the lockfile npm ci installs that tree's dependencies
-  # from. Bump any subset and both layers still build green.
-  #
-  # The lockfile is the case that motivates this. Measured against npm 11.9.0:
-  # with the lockfile root at 1.0.169 and package.json at 1.0.170 over an
-  # identical dependency block, `npm ci --omit=dev` exits 0. It errors only when
-  # the dependency SET or its RANGES differ, and an upstream patch release
-  # rarely moves a `^` range — so a maintainer who bumps the ARGs and forgets
-  # the lockfile gets a green image installing the old resolved dependency tree
-  # under new code.
-  #
-  # What repo state cannot supply, and what this case therefore does NOT claim:
-  #
-  #   * The staged tree's own package.json version. It exists only inside a
-  #     build, after the clone. CONTEXT_MODE_PLUGIN_REF stands in for it, since
-  #     the tag is what the clone resolves and the lockfile is regenerated from
-  #     that same tree.
-  #   * Whether CONTEXT_MODE_PLUGIN_SHA is the commit that tag points at. That
-  #     needs the network. The SHA's shape is pinned by the case above and its
-  #     value is checked at build time against `git rev-parse HEAD`.
-  #   * That the lockfile was GENERATED FROM the tree it names. Comparing
-  #     version strings proves the lockfile CLAIMS a release, not that its
-  #     resolved dependency graph came from one: hand-editing the two version
-  #     fields after a bump passes here with a stale graph, reaching the same
-  #     end state by a different route. Nothing in repo state distinguishes a
-  #     regenerated lockfile from an edited one — only running the recipe does.
-  #     The claim asserted here is exactly "three artifacts name one release".
-  - name: the staged plugin ref, its lockfile and the npm package name one release
+  # The lockfile is the single pin on what the image installs: its integrity
+  # hash is what npm ci verifies the downloaded tarball against. The build
+  # itself refuses a lockfile that disagrees with CONTEXT_MODE_VERSION (npm ci
+  # exits EUSAGE when the generated package.json and the lockfile are out of
+  # sync), so this is the repo-side half: the committed lockfile names the ARG's
+  # release, records an integrity hash for it, and pulls in nothing else.
+  - name: the lockfile pins exactly the context-mode release the ARG names
     steps:
       - type: exec
         script: |
@@ -1359,27 +1468,40 @@ testcases:
           [ -r "${lock}" ] || { echo "FAIL: ${lock} is missing — the pinned lockfile npm ci reads"; exit 1; }
           [ "$(grep -c '^ARG CONTEXT_MODE_VERSION=' Containerfile)" = 1 ] \
             || { echo "FAIL: expected exactly one ARG CONTEXT_MODE_VERSION line"; exit 1; }
-          [ "$(grep -c '^ARG CONTEXT_MODE_PLUGIN_REF=' Containerfile)" = 1 ] \
-            || { echo "FAIL: expected exactly one ARG CONTEXT_MODE_PLUGIN_REF line"; exit 1; }
           version="$(sed -nE 's/^ARG CONTEXT_MODE_VERSION=(.+)$/\1/p' Containerfile)"
-          ref="$(sed -nE 's/^ARG CONTEXT_MODE_PLUGIN_REF=(.+)$/\1/p' Containerfile)"
           [ -n "${version}" ] || { echo "FAIL: CONTEXT_MODE_VERSION has no value"; exit 1; }
-          [ -n "${ref}" ] || { echo "FAIL: CONTEXT_MODE_PLUGIN_REF has no value"; exit 1; }
-          [ "${ref}" = "v${version}" ] \
-            || { echo "FAIL: CONTEXT_MODE_PLUGIN_REF is ${ref} but CONTEXT_MODE_VERSION is ${version} — the staged plugin tree and the installed npm package would be different releases"; exit 1; }
-          lock_name="$(jq -r '.name' "${lock}")" \
-            || { echo "FAIL: ${lock} is not readable JSON"; exit 1; }
-          [ "${lock_name}" = "context-mode" ] \
-            || { echo "FAIL: ${lock} is not context-mode's lockfile (name=${lock_name})"; exit 1; }
-          for field in '.version' '.packages[""].version'; do
-            lock_version="$(jq -r "${field}" "${lock}")"
-            [ "${lock_version}" = "${version}" ] \
-              || { echo "FAIL: ${lock} ${field} is ${lock_version} but the build stages ${ref} — npm ci exits 0 against a stale lockfile whose ranges still satisfy package.json, so the image would install the old resolved dependency tree under new code. Regenerate it with the recipe in the Containerfile."; exit 1; }
-          done
-          echo "context_mode_release_agreement=pass"
+          jq -e . "${lock}" > /dev/null || { echo "FAIL: ${lock} is not readable JSON"; exit 1; }
+          [ "$(jq -r '.packages[""].dependencies["context-mode"]' "${lock}")" = "${version}" ] \
+            || { echo "FAIL: ${lock} does not depend on exactly context-mode ${version}"; exit 1; }
+          [ "$(jq -r '.packages["node_modules/context-mode"].version' "${lock}")" = "${version}" ] \
+            || { echo "FAIL: ${lock} resolves a context-mode other than ${version} — regenerate it with the recipe in the Containerfile"; exit 1; }
+          jq -r '.packages["node_modules/context-mode"].integrity' "${lock}" | grep -qE '^sha512-' \
+            || { echo "FAIL: ${lock} records no sha512 integrity for context-mode, so nothing pins the bytes"; exit 1; }
+          [ "$(jq -r '.packages | keys | join(",")' "${lock}")" = ",node_modules/context-mode" ] \
+            || { echo "FAIL: ${lock} resolves more than context-mode itself — the package grew dependencies, and staging it out of node_modules would strand them"; exit 1; }
+          echo "context_mode_lock_pin=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "context_mode_release_agreement=pass"
+          - result.systemout ShouldContainSubstring "context_mode_lock_pin=pass"
+
+  # The 1.x image made ~/.context-mode and ~/.config/context-mode root-owned
+  # and read-only to keep 1.x's event bridge from finding a platform.json.
+  # 2.x has no event bridge, and ~/.context-mode is its whole data root: left
+  # read-only, every hook fails its store write with EACCES, exits 0 and passes
+  # the tool output through whole, so the feature reports itself on and saves
+  # nothing.
+  - name: the image leaves the context-mode data root writable
+    steps:
+      - type: exec
+        script: |
+          cd "{{.riotbox_dir}}"
+          if grep -nE '(chmod|chown).*\.context-mode|/home/llm/\.(config/)?context-mode' Containerfile; then
+            echo "FAIL: the Containerfile still creates or locks down a context-mode data directory"; exit 1
+          fi
+          echo "data_root_writable=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "data_root_writable=pass"
 
   # `riotbox build` runs the Containerfile from the INSTALLED app tree, not from
   # the dev repo, so a COPY source that no install manifest ships resolves for
@@ -1460,7 +1582,7 @@ testcases:
           STUB
           chmod +x "${stub_dir}/podman"
           export HOME="${stub_dir}/home"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export XDG_CONFIG_HOME="${stub_dir}/home/.config"
           export XDG_DATA_HOME="${stub_dir}/home/.local/share"
           mkdir -p "${XDG_CONFIG_HOME}/riotbox" "${XDG_DATA_HOME}"
@@ -1497,14 +1619,14 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${HOME}/.local/bin"
           printf '%s\n' \
             '#!/usr/bin/env bash' \
             '# Generated by the RiotBox image build. Pins the interpreter — see the' \
             '# Context Mode block in the Containerfile for why a bare node is wrong.' \
-            'exec "/nvm/versions/node/v22.23.1/bin/node" "/nvm/versions/node/v22.23.1/lib/node_modules/context-mode/cli.bundle.mjs" "$@"' \
+            'exec "/nvm/versions/node/v24.22.2/bin/node" "/home/llm/.riotbox/context-mode-plugin/v2.1.4/cli.mjs" "$@"' \
             > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
 
@@ -1513,7 +1635,7 @@ testcases:
           declare -F context_mode_pkg_root >/dev/null || { echo "FAIL: context_mode_pkg_root is not defined"; exit 1; }
 
           got="$(context_mode_pkg_root)"
-          want="/nvm/versions/node/v22.23.1/lib/node_modules/context-mode"
+          want="/home/llm/.riotbox/context-mode-plugin/v2.1.4"
           [ "${got}" = "${want}" ] || { echo "FAIL: got '${got}' want '${want}'"; exit 1; }
           echo "PKG_ROOT_OK"
         assertions:
@@ -1528,7 +1650,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
           mkdir -p "${HOME}/.local/bin"
           printf '#!/usr/bin/env bash\nexec /usr/bin/node /somewhere/else.js "$@"\n' \
@@ -1543,6 +1665,14 @@ testcases:
             echo "FAIL: unparseable shim resolved anyway"; exit 1
           fi
 
+          # A shim an image of the 1.x line wrote: its entry point is gone in
+          # 2.x, so a root derived from it names a package with no CLI.
+          printf '#!/usr/bin/env bash\nexec "/n/bin/node" "/n/lib/node_modules/context-mode/cli.bundle.mjs" "$@"\n' \
+            > "${CONTEXT_MODE_BIN}"
+          if context_mode_pkg_root; then
+            echo "FAIL: a 1.x cli.bundle.mjs shim resolved anyway"; exit 1
+          fi
+
           rm -f "${CONTEXT_MODE_BIN}"
           if context_mode_pkg_root; then
             echo "FAIL: missing shim resolved anyway"; exit 1
@@ -1553,8 +1683,8 @@ testcases:
           - result.systemout ShouldContainSubstring "PKG_ROOT_REJECTS_OK"
 
   # The image build calls this verb against the package it just installed. What
-  # is left for it to assert, now that upstream's own hooks.json defines the
-  # events and the matchers, is the MCP server name: the routing table hardcodes
+  # is left for it to assert, now that upstream's own hook file defines the
+  # events and the matchers, is the MCP server name: the hook bundle hardcodes
   # `mcp__plugin_context-mode_context-mode__<tool>` with nothing to steer it, so
   # a pin bump that renamed the prefix would leave every redirect pointing at a
   # tool the session does not have — and the registered plugin would still look
@@ -1563,7 +1693,7 @@ testcases:
   # Both directions are exercised. The negative half is the guard; the positive
   # half is what stops it from being a guard that rejects everything, which is
   # how a build-time check gets deleted by the next person who hits it.
-  - name: the claude build assert accepts the routing table and rejects a renamed one
+  - name: the claude build assert accepts the hook bundle and rejects a renamed prefix
     steps:
       - type: exec
         script: |
@@ -1571,38 +1701,37 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           PKG="${HOME}/pkg/context-mode"
-          mkdir -p "${PKG}/hooks/core"
+          mkdir -p "${PKG}"
 
           source "{{.riotbox_dir}}/agents/registry.sh"
           declare -F agent_claude_context_mode_build_assert >/dev/null \
             || { echo "FAIL: agent_claude_context_mode_build_assert is not defined"; exit 1; }
 
-          # Upstream's routing table, reduced to the one line the guard greps —
-          # including the backtick that opens the template literal.
-          printf 'const t = `mcp__%s__${name}`;\n' "${CONTEXT_MODE_MCP_NAME}" \
-            > "${PKG}/hooks/core/tool-naming.mjs"
+          # Upstream's minified hook bundle, reduced to the string literal the
+          # guard greps — quotes included, as the bundle spells it.
+          printf 'var Wn="mcp__%s__",Ys=Object.freeze(["Bash"]);\n' "${CONTEXT_MODE_MCP_NAME}" \
+            > "${PKG}/hook.mjs"
           agent_call claude context_mode_build_assert "${PKG}" \
-            || { echo "FAIL: rejected a package whose routing table still names the server"; exit 1; }
+            || { echo "FAIL: rejected a package whose hook bundle still names the server"; exit 1; }
 
-          # The same file with the prefix renamed, and the old string left in a
-          # doc comment: the grep must read the code, not the prose beside it.
-          printf '// mcp__%s__<tool> was the old name\nconst t = `mcp__plugin_ctxmode_ctxmode__${name}`;\n' \
-            "${CONTEXT_MODE_MCP_NAME}" > "${PKG}/hooks/core/tool-naming.mjs"
+          # The same file with the prefix renamed, and the old name left inside
+          # a longer string: the grep must match the literal, not a substring.
+          printf 'var d="see mcp__%s__ctx_search";var Wn="mcp__plugin_ctxmode_ctxmode__";\n' \
+            "${CONTEXT_MODE_MCP_NAME}" > "${PKG}/hook.mjs"
 
           rc=0
           err="$(agent_call claude context_mode_build_assert "${PKG}" 2>&1 >/dev/null)" || rc=$?
           [ "${rc}" != "0" ] \
-            || { echo "FAIL: accepted a package whose routing table no longer names the server"; exit 1; }
+            || { echo "FAIL: accepted a package whose hook bundle no longer names the server"; exit 1; }
           case "${err}" in
-            *"no longer appears in hooks/core/tool-naming.mjs"*) ;;
+            *"no longer appears in hook.mjs"*) ;;
             *) echo "FAIL: failed for the wrong reason: ${err}"; exit 1 ;;
           esac
-          # The verb is called on more than one tree — the npm package root and
-          # the staged plugin clone — and nothing obliges a caller to say which
-          # one it handed over, so the diagnostic has to name the root it read
-          # or a build failure does not say which tree drifted.
+          # Nothing obliges a caller to say which tree it handed over, so the
+          # diagnostic has to name the root it read or a build failure does not
+          # say which tree drifted.
           case "${err}" in
             *"${PKG}"*) ;;
             *) echo "FAIL: the diagnostic does not name the tree it read: ${err}"; exit 1 ;;
@@ -1612,18 +1741,18 @@ testcases:
           # replaced could not: they put two command substitutions on either
           # side of a `!=`, so a run in which both failed compared "" to "" and
           # passed.
-          rm -f "${PKG}/hooks/core/tool-naming.mjs"
+          rm -f "${PKG}/hook.mjs"
           rc=0
           agent_call claude context_mode_build_assert "${PKG}" >/dev/null 2>&1 || rc=$?
           [ "${rc}" != "0" ] \
-            || { echo "FAIL: accepted a package with no routing table at all"; exit 1; }
+            || { echo "FAIL: accepted a package with no hook bundle at all"; exit 1; }
           echo "BUILD_ASSERT_MCP_NAME_OK"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "BUILD_ASSERT_MCP_NAME_OK"
 
   # Without the required-argument guard, an empty $1 sends the grep above at
-  # "/hooks/core/tool-naming.mjs" — an absolute path that never exists — so
+  # "/hook.mjs" — an absolute path that never exists — so
   # the function still fails, but blames an upstream rename that never
   # happened. The guard exists so a missing tree root is diagnosed as a missing
   # tree root. Deliberately not `set -u` here: the Containerfile's
@@ -1639,7 +1768,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
 
           source "{{.riotbox_dir}}/agents/registry.sh"
           declare -F agent_claude_context_mode_build_assert >/dev/null \
@@ -1650,7 +1779,7 @@ testcases:
           [ "${rc}" != "0" ] \
             || { echo "FAIL: accepted a call with no tree root"; exit 1; }
           case "${err}" in
-            *"no longer appears in hooks/core/tool-naming.mjs"*)
+            *"no longer appears in hook.mjs"*)
               echo "FAIL: blamed an upstream rename instead of the missing argument: ${err}"
               exit 1
               ;;
@@ -1662,113 +1791,3 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "BUILD_ASSERT_REQUIRES_ROOT_OK"
 
-  # Upstream's detectPlatform() cannot tell the two agents apart in an image
-  # that ships both, and a wrong guess resolves getPluginRoot() to a package
-  # cache no riotbox install populates — an import that throws into the stderr
-  # hookDispatch already redirected to /dev/null, so the session routes nothing
-  # and still reports itself healthy. The pin is what removes the guess.
-  - name: setup exports the pinned platform token
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-          export RIOTBOX_CONTEXT_MODE=1
-          export RIOTBOX_AGENT=claude
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-          context_mode_setup
-
-          # Read from a child, which is what a hook is. Reading it in this shell
-          # would pass on a plain assignment too, and a value that is set but not
-          # exported reaches nothing upstream ever runs.
-          got="$(bash -c 'printf %s "${CONTEXT_MODE_PLATFORM-}"')"
-          [ "${got}" = "claude-code" ] || {
-            echo "FAIL: CONTEXT_MODE_PLATFORM='${got:-unset}' in a child, want claude-code"
-            exit 1
-          }
-          echo "OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "OK"
-
-  # The verb is an extension point a third-party agent implements, so an empty
-  # answer is reachable even though neither shipped agent can produce one — the
-  # same reason the store and data roots validate what their verbs print. The
-  # stand-in agent is appended to AGENT_REGISTRY the way the "no Context Mode
-  # verbs" case above invents one: every agent riotbox ships answers correctly,
-  # so one that does not is exactly what the fixture has to build. Exporting the
-  # empty string would be worse than not exporting at all — upstream reads it as
-  # "unset" on some paths and as a platform literally named "" on others.
-  - name: setup warns and strips for an agent whose platform verb prints nothing
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          export RIOTBOX_CONTEXT_MODE=1
-          mkdir -p "${CLAUDE_CONFIG_DIR}" "${HOME}/.local/bin"
-          printf '#!/bin/sh\nexit 0\n' > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-
-          # An earlier session in this same directory, so the degrade below has
-          # wiring to clear rather than an empty config to leave alone.
-          jq -n --arg bin "${CONTEXT_MODE_BIN}" '{hooks: {
-            PreToolUse:   [{matcher:"Bash", hooks:[{type:"command", command:($bin + " hook claude-code pretooluse")}]}],
-            SessionStart: [{matcher:"",     hooks:[{type:"command", command:($bin + " hook claude-code sessionstart")}]}]
-          }}' > "${CLAUDE_CONFIG_DIR}/settings.json"
-          jq -n --arg bin "${CONTEXT_MODE_BIN}" \
-            '{mcpServers: {"plugin_context-mode_context-mode": {type:"stdio", command:$bin, args:[]}}}' \
-            > "${CLAUDE_CONFIG_DIR}/.claude.json"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
-          source "{{.riotbox_dir}}/agents/registry.sh"
-
-          # Everything the orchestrator asks for before the platform probe
-          # answers correctly, so the give-up below can only be the probe's.
-          AGENT_REGISTRY+=(mute)
-          agent_mute_context_mode_store_dir() { printf '%s\n' "${HOME}/.mute/context-mode"; }
-          agent_mute_context_mode_platform() { :; }
-          agent_mute_context_mode_wire() { echo "FAIL: wired past an empty platform token"; return 1; }
-          agent_mute_context_mode_strip() { :; }
-          export RIOTBOX_AGENT=mute
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_PLATFORM
-          # Called in this shell, not a subshell: both variables are exports and
-          # the assertions below are on what the session inherits.
-          context_mode_setup 2>"${TEST_DIR}/err" >/dev/null
-          err="$(cat "${TEST_DIR}/err")"
-
-          echo "${err}" | grep -q "mute" \
-            || { echo "FAIL: warning does not name the agent: ${err}"; exit 1; }
-          echo "${err}" | grep -q "no platform token" \
-            || { echo "FAIL: warning does not name the empty token: ${err}"; exit 1; }
-          [ -z "${CONTEXT_MODE_PLATFORM+set}" ] \
-            || { echo "FAIL: exported CONTEXT_MODE_PLATFORM='${CONTEXT_MODE_PLATFORM}' for an agent that named no platform"; exit 1; }
-          [ -z "${CONTEXT_MODE_DIR:-}" ] \
-            || { echo "FAIL: storage root exported for a session that wires nothing"; exit 1; }
-          jq -e '.hooks.PreToolUse == null and .hooks.SessionStart == null' \
-            "${CLAUDE_CONFIG_DIR}/settings.json" >/dev/null \
-            || { echo "FAIL: inherited hooks survived the degrade"; exit 1; }
-          jq -e '.mcpServers["plugin_context-mode_context-mode"] == null' \
-            "${CLAUDE_CONFIG_DIR}/.claude.json" >/dev/null \
-            || { echo "FAIL: inherited MCP entry survived the degrade"; exit 1; }
-          echo "setup_empty_platform=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "setup_empty_platform=pass"

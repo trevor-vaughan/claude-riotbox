@@ -13,64 +13,62 @@ vars:
 # silence on a zero was itself indistinguishable from a session where the
 # feature never engaged, which is the question the report exists to answer.
 # What silence used to convey is now carried by the numbers — a zero kept-out
-# beside a non-zero hook log says the hooks fired and withheld nothing.
+# beside a non-zero tool-call count says the hooks fired and withheld nothing.
 #
-# The hook log is disk volume, not tokens: eventDataBytes never reaches a
-# model's context (see the note in the file under test), so the assertions below
-# pin the unit to the line. Dropping "on disk" would turn a proof-of-life signal
-# into an apparent token cost — the same category error as upstream's headline,
-# which divides this counter by 4 and reports it as tokens saved. Honesty runs
-# in both directions: no zero is dressed up as a saving, and nothing that never
-# entered context is priced as though it did.
+# Two kinds of case live here.
 #
-# context_mode_render_stats is pure: {"before":…,"after":…} on stdin, text or
-# nothing on stdout. Every case below drives that seam directly, so none of them
-# need the image, the pinned Node, or a store.
+# The pure ones drive context_mode_compute_deltas and context_mode_render_stats
+# with the stats reader's JSON on stdin, or the gate through a fake shim. They
+# need no store and no Node, so they run everywhere, the test image included.
 #
-# Every case clears _CONTEXT_MODE_WIRED, CONTEXT_MODE_DIR, RIOTBOX_CONTEXT_MODE
-# and RIOTBOX_AGENT before it does anything else, and re-exports whatever it
-# actually needs afterwards. A wired RiotBox session — the environment a
-# maintainer of this feature runs the suite in — exports all four, and the gate
-# case in particular asserts what happens with the wired flag ABSENT, so an
-# inherited 1 turns a real regression into a green run in CI and a red one on a
-# developer's machine.
+# The store cases build real context-mode 2.x stores (upstream's DDL, see
+# tests/lib/context-mode-store-helpers.sh) and read them through
+# container/context-mode-stats.mjs, the same reader the image runs. They pin
+# the SQL: which rows count as kept out, which as re-read, and which belong to
+# this run at all. They need Node 24 or later on PATH. The test image installs
+# it and declares RIOTBOX_REQUIRE_CM_NODE=1, so there a missing Node fails;
+# on a bare host the cases print "<name>=SKIPPED" instead of their pass
+# sentinel.
+#
+# Every case clears _CONTEXT_MODE_WIRED, CONTEXT_MODE_DIR, CONTEXT_MODE_DATA_DIR,
+# RIOTBOX_CONTEXT_MODE and RIOTBOX_AGENT before it does anything else, and
+# re-exports whatever it actually needs afterwards. A wired RiotBox session —
+# the environment a maintainer of this feature runs the suite in — exports
+# them, and the gate case in particular asserts what happens with the wired
+# flag ABSENT, so an inherited 1 turns a real regression into a green run in CI
+# and a red one on a developer's machine.
 
 testcases:
-  # The fixture keeps non-zero eventDataBytes and snapshotBytes on purpose: both
-  # are excluded from "kept out", so an implementation that folds either back in
-  # (upstream's composite) fails here instead of quietly inflating the report.
-  - name: renders the kept-out delta, the re-read term, and lifetime in natural units
+  - name: renders the kept-out, re-read, call count and store total in natural units
     steps:
       - type: exec
         script: |
           set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          export HOME="/nonexistent-home"
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           out="$(jq -nc '{
-            before: {eventDataBytes: 1000, bytesAvoided: 2000, bytesReturned: 500,
-                     snapshotBytes: 0},
-            after:  {eventDataBytes: 1000, bytesAvoided: 221184, bytesReturned: 22000,
-                     snapshotBytes: 4096}
+            after: {seq: {}, kept_out: 224256, re_read: 21504, calls: 12,
+                    total_kept_out: 1468006, rewound: false},
+            baseline_unknown: false
           }' | context_mode_render_stats)"
           printf '%s\n' "${out}"
-          # kept-out delta: 221184 - 2000 = 219184 B = 214.05 KB -> "214 KB"
-          #   (at or above 100 KB, so whole numbers; the old composite formula
-          #   read 223280 B = "218 KB" here by adding snapshot and event bytes)
-          # re-read delta:  22000 - 500 = 21500 B = 21.00 KB -> "21.0 KB"
-          #   (below 100 KB, so one decimal)
-          # last 7 days:    221184 B = 216.0 KB exactly -> "216 KB"
-          printf '%s' "${out}" | grep -q '214 KB kept out' \
-            || { echo "FAIL: kept-out delta not humanized as 214 KB"; exit 1; }
-          printf '%s' "${out}" | grep -q '21.0 KB re-read via ctx_search' \
-            || { echo "FAIL: re-read term wrong"; exit 1; }
-          printf '%s' "${out}" | grep -q 'last 7 days 216 KB' \
-            || { echo "FAIL: lifetime wrong"; exit 1; }
+          # kept out:    224256 B = 219.0 KB -> "219 KB" (whole numbers at or
+          #              above 100 units)
+          # re-read:     21504 B = 21.0 KB  -> "21.0 KB" (one decimal below 100)
+          # store total: 1468006 B = 1.40 MB -> "1.4 MB"
           printf '%s' "${out}" | grep -q '── context-mode ─' \
             || { echo "FAIL: missing section rule"; exit 1; }
-          # No percentage anywhere: the ratio it used to print was pinned near
-          # 100% by construction and read lowest when the feature worked hardest.
+          printf '%s' "${out}" | grep -qx ' this run 219 KB kept out · 21.0 KB re-read via ctx_search · 12 tool calls recorded' \
+            || { echo "FAIL: this-run line wrong: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -qx ' store total 1.4 MB kept out' \
+            || { echo "FAIL: store total line wrong: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -qx ' store: /nonexistent-home/.context-mode (this project set)' \
+            || { echo "FAIL: store path line wrong: ${out}"; exit 1; }
+          # No percentage anywhere: upstream's reductionPct divides by what was
+          # produced, and the ratio says nothing about what reached the model.
           if printf '%s' "${out}" | grep -q '%'; then
-            echo "FAIL: output still carries a percentage: ${out}"; exit 1
+            echo "FAIL: output carries a percentage: ${out}"; exit 1
           fi
           echo "render_normal=pass"
         assertions:
@@ -79,7 +77,7 @@ testcases:
 
   # A large kept-out with nothing re-read is a shape worth recognising, not a
   # formatting edge: it is what a session looks like when the MCP server never
-  # started — the hooks denied the tool calls and pointed the model at
+  # started — the hooks replaced tool output and pointed the model at
   # ctx_search tools that did not exist, so the bytes went out of context and
   # came back by no route at all. " · 0 B re-read" would hide that among the
   # ordinary runs, so the term is omitted and its absence carries the signal.
@@ -88,21 +86,16 @@ testcases:
       - type: exec
         script: |
           set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           out="$(jq -nc '{
-            before: {eventDataBytes: 0, bytesAvoided: 0, bytesReturned: 4096,
-                     snapshotBytes: 0},
-            after:  {eventDataBytes: 0, bytesAvoided: 3145728, bytesReturned: 4096,
-                     snapshotBytes: 0}
+            after: {seq: {}, kept_out: 3145728, re_read: 0, calls: 1,
+                    total_kept_out: 3145728, rewound: false}
           }' | context_mode_render_stats)"
           printf '%s\n' "${out}"
-          # kept-out delta: 3145728 - 0 = 3145728 B = 3072 KB = 3.0 MB exactly
-          # re-read delta:  4096 - 4096 = 0 -> the term must not appear
-          printf '%s' "${out}" | grep -q '3.0 MB kept out' \
-            || { echo "FAIL: kept-out delta wrong: ${out}"; exit 1; }
-          printf '%s' "${out}" | grep -q 'last 7 days 3.0 MB' \
-            || { echo "FAIL: lifetime wrong: ${out}"; exit 1; }
+          # 1 call, singular: "1 tool calls" reads as a formatting bug.
+          printf '%s' "${out}" | grep -qx ' this run 3.0 MB kept out · 1 tool call recorded' \
+            || { echo "FAIL: this-run line wrong: ${out}"; exit 1; }
           if printf '%s' "${out}" | grep -q 're-read'; then
             echo "FAIL: printed a zero re-read term: ${out}"; exit 1
           fi
@@ -113,261 +106,83 @@ testcases:
 
   # The floor case: a wired session that did nothing at all still reports, so
   # "no report" never has to be interpreted. With every counter at zero there is
-  # no activity to disclose either, so the hook log term stays off — it earns
-  # its place on the line only when there is a number behind it.
-  - name: reports a zero run rather than staying silent when the store is empty
+  # no activity to disclose either, so the call term stays off — it earns its
+  # place on the line only when there is a number behind it.
+  - name: reports a zero run rather than staying silent
     steps:
       - type: exec
         script: |
           set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           rc=0
-          out="$(jq -nc '{before: {}, after: {eventDataBytes: 0, bytesAvoided: 0,
-                                             bytesReturned: 0, snapshotBytes: 0}}' \
+          out="$(jq -nc '{after: {seq: {}, kept_out: 0, re_read: 0, calls: 0,
+                                  total_kept_out: 0, rewound: false}}' \
             | context_mode_render_stats)" || rc=$?
-          [ "${rc}" = "0" ] || { echo "FAIL: expected success, got ${rc}"; exit 1; }
-          printf '%s' "${out}" | grep -q '── context-mode ─' \
-            || { echo "FAIL: missing section rule, got: ${out}"; exit 1; }
-          printf '%s' "${out}" | grep -q 'this run 0 B kept out' \
-            || { echo "FAIL: expected a zero run line, got: ${out}"; exit 1; }
-          printf '%s' "${out}" | grep -q 'last 7 days 0 B' \
-            || { echo "FAIL: expected a zero total, got: ${out}"; exit 1; }
-          if printf '%s' "${out}" | grep -q 'hook log'; then
-            echo "FAIL: hook log term printed with nothing behind it: ${out}"; exit 1
-          fi
-          # Neither label may overstate what the store actually holds. The
-          # totals come from session_events, which upstream prunes at a
-          # hardcoded 7 days (cleanupOldSessions(7), called from
-          # hooks/sessionstart.mjs), so "lifetime" was never true. The store
-          # itself is mounted per project set — a run on other projects gets a
-          # different session key and a different store — so "persists across
-          # sessions" was not true either.
-          printf '%s' "${out}" | grep -q 'store: .* (this project set)' \
-            || { echo "FAIL: store line does not state its scope, got: ${out}"; exit 1; }
-          if printf '%s' "${out}" | grep -qE 'lifetime|persists across sessions'; then
-            echo "FAIL: report still claims totals it cannot back up: ${out}"; exit 1
-          fi
-          echo "render_empty=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "render_empty=pass"
-
-  # eventDataBytes is the log every PostToolUse writes whether or not anything
-  # was redirected. A session that only wrote continuity events kept nothing
-  # out, and this is the shape that has to read as "ran, logged this much, saved
-  # you nothing" — the diagnosis a user cannot make from silence, and cannot
-  # make from upstream's headline either, which folds this very counter into a
-  # savings claim.
-  - name: reports the hook log when the session redirected nothing
-    steps:
-      - type: exec
-        script: |
-          set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          source "{{.riotbox_dir}}/container/context-mode-summary.sh"
-          rc=0
-          out="$(jq -nc '{
-            before: {eventDataBytes: 5000, bytesAvoided: 0, bytesReturned: 0,
-                     snapshotBytes: 0},
-            after:  {eventDataBytes: 900000, bytesAvoided: 0, bytesReturned: 0,
-                     snapshotBytes: 65536}
-          }' | context_mode_render_stats)" || rc=$?
-          [ "${rc}" = "0" ] || { echo "FAIL: expected success, got ${rc}"; exit 1; }
           printf '%s\n' "${out}"
-          printf '%s' "${out}" | grep -q 'this run 0 B kept out' \
-            || { echo "FAIL: a zero saving must print as zero, got: ${out}"; exit 1; }
-          # hook log delta: 900000 - 5000 = 895000 B = 874.02 KB -> "874 KB".
-          # snapshotBytes is excluded here as everywhere: it is context added
-          # BACK after a compact, not overhead this run paid to write.
-          printf '%s' "${out}" | grep -q '874 KB hook log on disk' \
-            || { echo "FAIL: hook log not disclosed, got: ${out}"; exit 1; }
-          printf '%s' "${out}" | grep -q 'last 7 days 0 B' \
-            || { echo "FAIL: hook log leaked into lifetime savings: ${out}"; exit 1; }
-          if printf '%s' "${out}" | grep -q 're-read'; then
-            echo "FAIL: re-read term printed for a zero delta: ${out}"; exit 1
-          fi
-          echo "render_hook_log_only=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "render_hook_log_only=pass"
+          [ "${rc}" = "0" ] || { echo "FAIL: status ${rc} for a zero run"; exit 1; }
+          printf '%s' "${out}" | grep -qx ' this run 0 B kept out' \
+            || { echo "FAIL: zero run not reported: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -qx ' store total 0 B kept out' \
+            || { echo "FAIL: zero store total not reported: ${out}"; exit 1; }
 
-  # The three run-line terms coexisting, which no other case exercises: a real
-  # saving, a real re-read, and the disk the run wrote. Ordering is fixed —
-  # what was withheld, what it cost in context to get back, then what went to
-  # disk — so the line reads as a ledger, and the one term that is not context
-  # bytes carries its unit.
-  - name: prints the hook log alongside a real saving and a re-read
-    steps:
-      - type: exec
-        script: |
-          set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          source "{{.riotbox_dir}}/container/context-mode-summary.sh"
-          out="$(jq -nc '{
-            before: {eventDataBytes: 1000, bytesAvoided: 2000, bytesReturned: 500,
-                     snapshotBytes: 0},
-            after:  {eventDataBytes: 9412, bytesAvoided: 221184, bytesReturned: 22000,
-                     snapshotBytes: 4096}
-          }' | context_mode_render_stats)"
-          printf '%s\n' "${out}"
-          # hook log delta: 9412 - 1000 = 8412 B = 8.21 KB -> "8.2 KB"
-          printf '%s' "${out}" | grep -q '214 KB kept out · 21.0 KB re-read via ctx_search · 8.2 KB hook log on disk' \
-            || { echo "FAIL: run line is not the expected ledger, got: ${out}"; exit 1; }
-          printf '%s' "${out}" | grep -q 'last 7 days 216 KB' \
-            || { echo "FAIL: hook log leaked into lifetime savings: ${out}"; exit 1; }
-          echo "render_full_ledger=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "render_full_ledger=pass"
-
-  - name: reports lifetime when this run added nothing to a non-empty store
-    steps:
-      - type: exec
-        script: |
-          set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          source "{{.riotbox_dir}}/container/context-mode-summary.sh"
-          out="$(jq -nc '{
-            before: {eventDataBytes: 5000, bytesAvoided: 5000, bytesReturned: 0,
-                     snapshotBytes: 0},
-            after:  {eventDataBytes: 5000, bytesAvoided: 5000, bytesReturned: 0,
-                     snapshotBytes: 0}
-          }' | context_mode_render_stats)"
-          printf '%s' "${out}" | grep -q '0 B kept out' \
-            || { echo "FAIL: expected a zero run delta"; exit 1; }
-          # lifetime: bytesAvoided alone = 5000 B = 4.88 KB -> "4.9 KB". The
-          # identical eventDataBytes is ignored; were it counted the line would
-          # read 9.8 KB.
-          printf '%s' "${out}" | grep -q 'last 7 days 4.9 KB' \
-            || { echo "FAIL: expected lifetime 4.9 KB, got: ${out}"; exit 1; }
-          echo "render_lifetime_only=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "render_lifetime_only=pass"
-
-  # SessionStart runs cleanupOldSessions(7) when the agent starts, which is
-  # AFTER context_mode_summary_init has taken its baseline. A pruned store can
-  # therefore be smaller at exit than at start, and a negative "kept out" would
-  # be nonsense. Clamp to zero rather than print it. Both counters shrink here,
-  # so both clamps are exercised: the kept-out delta prints as zero and the
-  # re-read delta drops the term rather than printing a negative one.
-  - name: clamps a shrinking store to a zero run delta
-    steps:
-      - type: exec
-        script: |
-          set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          source "{{.riotbox_dir}}/container/context-mode-summary.sh"
-          out="$(jq -nc '{
-            before: {eventDataBytes: 900000, bytesAvoided: 900000, bytesReturned: 4096,
-                     snapshotBytes: 0},
-            after:  {eventDataBytes: 5000, bytesAvoided: 5000, bytesReturned: 0,
-                     snapshotBytes: 0}
-          }' | context_mode_render_stats)"
-          printf '%s' "${out}" | grep -q '0 B kept out' \
-            || { echo "FAIL: negative delta not clamped, got: ${out}"; exit 1; }
-          if printf '%s' "${out}" | grep -q 're-read'; then
-            echo "FAIL: printed a re-read term for a negative delta: ${out}"; exit 1
-          fi
-          # grep -v would pass on any single hyphen-free line; assert the absence
-          # of a negative number across the whole report instead.
-          if printf '%s' "${out}" | grep -q -- '-[0-9]'; then
-            echo "FAIL: output contains a negative number: ${out}"; exit 1
-          fi
-          echo "render_clamp=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "render_clamp=pass"
-
-  - name: treats a missing before as a first run rather than an error
-    steps:
-      - type: exec
-        script: |
-          set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          source "{{.riotbox_dir}}/container/context-mode-summary.sh"
-          out="$(jq -nc '{before: null,
-                          after: {eventDataBytes: 0, bytesAvoided: 1572864,
-                                  bytesReturned: 0, snapshotBytes: 0}}' \
-            | context_mode_render_stats)"
-          printf '%s' "${out}" | grep -q '1.5 MB kept out' \
-            || { echo "FAIL: expected the whole store as this run, got: ${out}"; exit 1; }
-          echo "render_no_before=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "render_no_before=pass"
-
-  # A THIRD outcome, distinct from both of the above: context_mode_summary_init
-  # sets baseline_unknown when the store already held a database and the read
-  # still failed within its budget — a concurrent session's write lock, most
-  # likely. .before is null here too, the same shape a genuine first run
-  # leaves, so baseline_unknown is what tells the two apart; a null .before
-  # with baseline_unknown false or absent is still the first-run case tested
-  # above, and must keep attributing the whole store to this run.
-  - name: reports the lifetime figure with no this-run claim when the baseline is unknown
-    steps:
-      - type: exec
-        script: |
-          set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          source "{{.riotbox_dir}}/container/context-mode-summary.sh"
-          out="$(jq -nc '{before: null, baseline_unknown: true,
-                          after: {eventDataBytes: 0, bytesAvoided: 1468006,
-                                  bytesReturned: 51200, snapshotBytes: 0}}' \
+          # The diagnosis the call term exists for: the hooks fired, nothing
+          # was withheld.
+          out="$(jq -nc '{after: {seq: {}, kept_out: 0, re_read: 0, calls: 7,
+                                  total_kept_out: 2048, rewound: false}}' \
             | context_mode_render_stats)"
           printf '%s\n' "${out}"
-          printf '%s' "${out}" | grep -q 'this run unknown (baseline could not be read)' \
-            || { echo "FAIL: no disclosure of the unknown baseline: ${out}"; exit 1; }
-          printf '%s' "${out}" | grep -q 'last 7 days 1.4 MB' \
-            || { echo "FAIL: lifetime wrong or missing: ${out}"; exit 1; }
-          echo "render_baseline_unknown=pass"
+          printf '%s' "${out}" | grep -qx ' this run 0 B kept out · 7 tool calls recorded' \
+            || { echo "FAIL: idle-but-engaged run wrong: ${out}"; exit 1; }
+          echo "render_zero=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "render_baseline_unknown=pass"
+          - result.systemout ShouldContainSubstring "render_zero=pass"
 
-  # Unknown baseline AND an empty store: the least informative run there is, and
-  # still the one most easily mistaken for a broken feature. It reports too, and
-  # keeps the this-run claim it cannot back up out of the line.
-  - name: reports a zero lifetime when the baseline is unknown and the store is empty
+  # Both ways a run can lose its baseline print the store total with no
+  # this-run claim: init could not read the store (baseline_unknown), or a
+  # store's AUTOINCREMENT counter is now below the watermark taken at start
+  # (rewound), which means the database was recreated during the run and rows
+  # above the watermark are not this run's rows.
+  - name: reports the store total with no this-run claim when the baseline is unusable
     steps:
       - type: exec
         script: |
           set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
-          rc=0
-          out="$(jq -nc '{before: null, baseline_unknown: true,
-                          after: {eventDataBytes: 0, bytesAvoided: 0,
-                                  bytesReturned: 0, snapshotBytes: 0}}' \
-            | context_mode_render_stats)" || rc=$?
-          [ "${rc}" = "0" ] || { echo "FAIL: expected success, got ${rc}"; exit 1; }
-          printf '%s' "${out}" | grep -q 'this run unknown (baseline could not be read)' \
-            || { echo "FAIL: no disclosure of the unknown baseline: ${out}"; exit 1; }
-          printf '%s' "${out}" | grep -q 'last 7 days 0 B' \
-            || { echo "FAIL: expected a zero lifetime, got: ${out}"; exit 1; }
-          echo "render_baseline_unknown_empty=pass"
+          for payload in \
+              '{"baseline_unknown":true,"after":{"seq":{},"kept_out":1468006,"re_read":51200,"calls":3,"total_kept_out":1468006,"rewound":false}}' \
+              '{"baseline_unknown":false,"after":{"seq":{},"kept_out":1468006,"re_read":51200,"calls":3,"total_kept_out":1468006,"rewound":true}}'; do
+            out="$(printf '%s' "${payload}" | context_mode_render_stats)"
+            printf '%s\n' "${out}"
+            printf '%s' "${out}" | grep -qx ' this run unknown (no usable baseline) · store total 1.4 MB kept out' \
+              || { echo "FAIL: unusable baseline not disclosed for ${payload}: ${out}"; exit 1; }
+            printf '%s' "${out}" | grep -q 'kept out ·' \
+              && { echo "FAIL: fabricated a this-run figure: ${out}"; exit 1; }
+          done
+          echo "render_unknown=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "render_baseline_unknown_empty=pass"
+          - result.systemout ShouldContainSubstring "render_unknown=pass"
 
-  - name: silent on malformed input and on a missing after
+  - name: silent on malformed input and on a missing or mistyped after
     steps:
       - type: exec
         script: |
           set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
-          # The last three carry a VALID .after with a non-object .before — a
-          # number, an array, a string. Coercing any of those to {} (treating
-          # them as "no baseline") would report the entire store as this
-          # run's savings on a corrupted baseline instead of staying silent,
-          # which is the one failure mode worse than every other malformed
-          # shape in this loop.
-          for payload in '' 'not json' '{"before":{}}' '[]' \
-              '{"before":5,"after":{"eventDataBytes":0,"bytesAvoided":1572864,"bytesReturned":0,"snapshotBytes":0}}' \
-              '{"before":[1,2],"after":{"eventDataBytes":0,"bytesAvoided":1572864,"bytesReturned":0,"snapshotBytes":0}}' \
-              '{"before":"x","after":{"eventDataBytes":0,"bytesAvoided":1572864,"bytesReturned":0,"snapshotBytes":0}}'; do
+          # A field that is absent, null, negative, fractional or a string is
+          # malformed, not zero: a `// 0` fallback would turn a reader that
+          # lost a column into a confident "0 B kept out".
+          for payload in '' 'not json' '{}' '[]' '{"after":[1]}' \
+              '{"after":{"kept_out":1,"re_read":0,"calls":0}}' \
+              '{"after":{"kept_out":null,"re_read":0,"calls":0,"total_kept_out":0}}' \
+              '{"after":{"kept_out":-1,"re_read":0,"calls":0,"total_kept_out":0}}' \
+              '{"after":{"kept_out":1.5,"re_read":0,"calls":0,"total_kept_out":0}}' \
+              '{"after":{"kept_out":"1","re_read":0,"calls":0,"total_kept_out":0}}' \
+              '{"baseline_unknown":true,"after":{"total_kept_out":"x"}}'; do
             rc=0
             out="$(printf '%s' "${payload}" | context_mode_render_stats)" || rc=$?
             [ "${rc}" != "0" ] \
@@ -385,7 +200,7 @@ testcases:
       - type: exec
         script: |
           set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
           check() {
             got="$(_humanize_bytes "$1")"
@@ -414,17 +229,17 @@ testcases:
           - result.systemout ShouldContainSubstring "humanize=pass"
 
   # POSIXLY_CORRECT makes gawk honor LC_NUMERIC for printf's "%f" family,
-  # and a de_DE-family locale renders the decimal point as a comma. This file
-  # claims never to disagree with `context-mode statusline`'s formatting for
-  # the same store, so the separator must not depend on the caller's locale.
-  # Only runs if the locale is installed; skips cleanly otherwise rather than
-  # failing on an environment that never had it.
+  # and a de_DE-family locale renders the decimal point as a comma. A report
+  # and a ctx-stats rollup that disagree about the separator for the same
+  # number read as one of them being wrong, so it must not depend on the
+  # caller's locale. Only runs if the locale is installed; skips cleanly
+  # otherwise rather than failing on an environment that never had it.
   - name: humanizes with a locale-stable decimal separator
     steps:
       - type: exec
         script: |
           set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           if ! locale -a 2>/dev/null | grep -qi '^de_DE\.utf8$\|^de_DE\.UTF-8$'; then
             echo "SKIP: de_DE.UTF-8 locale not installed"
             echo "humanize_locale=pass"
@@ -439,11 +254,12 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "humanize_locale=pass"
 
-  # The gate, driven through a fake stats shim. The real one needs the image's
-  # pinned Node and upstream's analytics module; what has to be verified here is
-  # that the gate is closed unless the session was actually wired, and that a
-  # missing or broken shim degrades to silence rather than to a teardown error.
-  - name: init and print are gated on a wired session
+  # The gate and the watermark plumbing, driven through a fake stats shim. What
+  # has to be verified here is that the gate is closed unless the session was
+  # actually wired, and that the exit read is handed exactly the per-project
+  # watermark the start read returned — the fake fails the second call
+  # otherwise.
+  - name: init and print are gated on a wired session and pass the watermark through
     steps:
       - type: exec
         script: |
@@ -451,9 +267,7 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_DIR="${CLAUDE_CONFIG_DIR}/context-mode"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           export CONTEXT_MODE_STATS_BIN="${HOME}/fake-stats"
           # Deliberately never created: this suite is about the report, not the
           # ledger, and an absent CONTEXT_MODE_LEDGER_DIR keeps
@@ -462,16 +276,23 @@ testcases:
           # /home/llm/.riotbox-ledger is a live bind mount, so a case that
           # forgets to override HOME first must not be able to write into it.
           export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/no-ledger"
-          mkdir -p "${CONTEXT_MODE_DIR}/sessions"
+          mkdir -p "${HOME}/.context-mode/projects"
 
-          # Grows between the two reads, the way a real session does.
+          # $1 store root, $2 agent id, $3 watermark or --seq-only. The start
+          # read asks for the counters alone; the exit read must get the start
+          # read's seq map, and claude must be asked for as upstream's
+          # claude-code.
           cat > "${CONTEXT_MODE_STATS_BIN}" <<'SHIM'
           #!/bin/sh
+          [ "$1" = "${HOME}/.context-mode" ] || exit 9
+          [ "$2" = "claude-code" ] || exit 9
           if [ -f "${HOME}/second" ]; then
-            echo '{"eventDataBytes":0,"bytesAvoided":524288,"bytesReturned":51200,"snapshotBytes":0}'
+            [ "$3" = '{"0123456789abcdef":41}' ] || exit 9
+            echo '{"seq":{"0123456789abcdef":57},"kept_out":524288,"re_read":51200,"calls":4,"total_kept_out":1048576,"rewound":false}'
           else
+            [ "$3" = "--seq-only" ] || exit 9
             touch "${HOME}/second"
-            echo '{"eventDataBytes":0,"bytesAvoided":0,"bytesReturned":0,"snapshotBytes":0}'
+            echo '{"seq":{"0123456789abcdef":41}}'
           fi
           SHIM
           chmod +x "${CONTEXT_MODE_STATS_BIN}"
@@ -489,134 +310,18 @@ testcases:
           rm -f "${HOME}/second"
           export _CONTEXT_MODE_WIRED=1
           context_mode_summary_init
-          [ -n "${_CONTEXT_MODE_SUMMARY_START:-}" ] \
-            || { echo "FAIL: no baseline taken while wired"; exit 1; }
+          [ "${_CONTEXT_MODE_SUMMARY_START:-}" = '{"0123456789abcdef":41}' ] \
+            || { echo "FAIL: baseline is not the start read's seq map: '${_CONTEXT_MODE_SUMMARY_START:-}'"; exit 1; }
           out="$(context_mode_summary_print)"
           printf '%s\n' "${out}"
-          # 524288 B = 512 KB exactly, and _humanize_bytes prints whole numbers
-          # at or above 100 units — "512 KB", not "512.0 KB".
-          printf '%s' "${out}" | grep -q '512 KB kept out' \
-            || { echo "FAIL: run delta missing from report"; exit 1; }
-          # 51200 B = 50.0 KB — below 100 units, so one decimal.
-          printf '%s' "${out}" | grep -q '50.0 KB re-read via ctx_search' \
-            || { echo "FAIL: re-read term missing from report"; exit 1; }
-          printf '%s' "${out}" | grep -q 'last 7 days 512 KB' \
-            || { echo "FAIL: lifetime missing from report"; exit 1; }
+          printf '%s' "${out}" | grep -qx ' this run 512 KB kept out · 50.0 KB re-read via ctx_search · 4 tool calls recorded' \
+            || { echo "FAIL: run line missing or the watermark was not passed: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -qx ' store total 1.0 MB kept out' \
+            || { echo "FAIL: store total missing: ${out}"; exit 1; }
           echo "gate=pass"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "gate=pass"
-
-  # This is the bug: a failed read used to collapse into the same empty string
-  # as a genuinely absent store, so the renderer treated a stalled read the
-  # same as a first run and reported the whole pre-existing store as this run's
-  # savings. The store here is non-empty (a *.db is on disk), so a failed read
-  # is an UNKNOWN baseline, not a zero one — the report must say so, not print
-  # a fabricated this-run figure.
-  - name: init treats a failed read against a non-empty store as unknown, not absent
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_DIR="${CLAUDE_CONFIG_DIR}/context-mode"
-          export CONTEXT_MODE_STATS_BIN="${HOME}/fake-stats"
-          # Declared, not implied by the HOME override — see the same note in
-          # "init and print are gated on a wired session".
-          export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/no-ledger"
-          export _CONTEXT_MODE_WIRED=1
-          mkdir -p "${CONTEXT_MODE_DIR}/sessions"
-          # A store that already exists — this is NOT a first run.
-          touch "${CONTEXT_MODE_DIR}/sessions/existing.db"
-
-          # Fails the first call (the 3-second budget context_mode_summary_init
-          # uses), the way a concurrent session's write lock would stall it.
-          # Succeeds on the second, the way the teardown read behind it does.
-          cat > "${CONTEXT_MODE_STATS_BIN}" <<'SHIM'
-          #!/bin/sh
-          if [ -f "${HOME}/second" ]; then
-            echo '{"eventDataBytes":0,"bytesAvoided":1468006,"bytesReturned":51200,"snapshotBytes":0}'
-          else
-            touch "${HOME}/second"
-            exit 1
-          fi
-          SHIM
-          chmod +x "${CONTEXT_MODE_STATS_BIN}"
-
-          source "{{.riotbox_dir}}/container/context-mode-summary.sh"
-          context_mode_summary_init
-          [ -z "${_CONTEXT_MODE_SUMMARY_START:-}" ] \
-            || { echo "FAIL: a failed read should not have produced a baseline"; exit 1; }
-
-          out="$(context_mode_summary_print)"
-          printf '%s\n' "${out}"
-          printf '%s' "${out}" | grep -q '1.4 MB kept out' \
-            && { echo "FAIL: fabricated a this-run figure from an unknown baseline: ${out}"; exit 1; }
-          printf '%s' "${out}" | grep -q 'this run unknown (baseline could not be read)' \
-            || { echo "FAIL: report does not disclose the unknown baseline: ${out}"; exit 1; }
-          printf '%s' "${out}" | grep -q 'last 7 days 1.4 MB' \
-            || { echo "FAIL: lifetime missing or wrong: ${out}"; exit 1; }
-          echo "init_baseline_unknown_nonempty=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "init_baseline_unknown_nonempty=pass"
-
-  # The other half of the same distinction: no *.db anywhere means Context
-  # Mode really has never run in this session directory, so a failed read is
-  # an honestly absent baseline, and attributing the whole store to this run
-  # (the existing first-run path) is correct — not a fallback that happens to
-  # look right.
-  - name: init treats a failed read against an empty store as a first run
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_DIR="${CLAUDE_CONFIG_DIR}/context-mode"
-          export CONTEXT_MODE_STATS_BIN="${HOME}/fake-stats"
-          # Declared, not implied by the HOME override — see the same note in
-          # "init and print are gated on a wired session".
-          export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/no-ledger"
-          export _CONTEXT_MODE_WIRED=1
-          mkdir -p "${CONTEXT_MODE_DIR}/sessions"
-          # No *.db anywhere — the store has never been written.
-
-          cat > "${CONTEXT_MODE_STATS_BIN}" <<'SHIM'
-          #!/bin/sh
-          if [ -f "${HOME}/second" ]; then
-            echo '{"eventDataBytes":0,"bytesAvoided":1572864,"bytesReturned":0,"snapshotBytes":0}'
-          else
-            touch "${HOME}/second"
-            exit 1
-          fi
-          SHIM
-          chmod +x "${CONTEXT_MODE_STATS_BIN}"
-
-          source "{{.riotbox_dir}}/container/context-mode-summary.sh"
-          context_mode_summary_init
-          [ -z "${_CONTEXT_MODE_SUMMARY_START:-}" ] \
-            || { echo "FAIL: a failed read should not have produced a baseline"; exit 1; }
-          [ -z "${_CONTEXT_MODE_SUMMARY_BASELINE_UNKNOWN:-}" ] \
-            || { echo "FAIL: an absent store must not be flagged as an unknown baseline"; exit 1; }
-
-          out="$(context_mode_summary_print)"
-          printf '%s\n' "${out}"
-          printf '%s' "${out}" | grep -q '1.5 MB kept out' \
-            || { echo "FAIL: expected the whole store attributed to this run: ${out}"; exit 1; }
-          printf '%s' "${out}" | grep -q 'unknown' \
-            && { echo "FAIL: a genuine first run must not be reported as unknown: ${out}"; exit 1; }
-          echo "init_baseline_absent_empty=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "init_baseline_absent_empty=pass"
 
   - name: print stays silent and successful when the shim is absent or broken
     steps:
@@ -626,14 +331,12 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_DIR="${CLAUDE_CONFIG_DIR}/context-mode"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           # Declared, not implied by the HOME override — see the same note in
           # "init and print are gated on a wired session".
           export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/no-ledger"
           export _CONTEXT_MODE_WIRED=1
-          mkdir -p "${CONTEXT_MODE_DIR}/sessions"
+          mkdir -p "${HOME}/.context-mode/projects"
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
 
           # Absent shim — an older image, or a session whose toggle was set
@@ -682,69 +385,494 @@ testcases:
 
   # The seam the ledger depends on. render_stats formats these numbers and
   # ledger_append records them; if the two ever computed their own, one store
-  # would produce two different answers. Pinned on the same fixture the
-  # formatter case uses, so a drift shows up here as a number mismatch rather
-  # than as a disagreement discovered in a ledger weeks later.
+  # would produce two different answers.
   - name: compute_deltas emits the four integers the formatter prints
     steps:
       - type: exec
         script: |
           set -e
-          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
-          out="$(jq -nc '{
-            before: {eventDataBytes: 1000, bytesAvoided: 2000, bytesReturned: 500,
-                     snapshotBytes: 0},
-            after:  {eventDataBytes: 9412, bytesAvoided: 221184, bytesReturned: 22000,
-                     snapshotBytes: 4096}
-          }' | context_mode_compute_deltas)"
-          # kept 221184-2000=219184, re-read 22000-500=21500,
-          # retained total 221184, hook log 9412-1000=8412
-          [ "${out}" = "219184 21500 221184 8412" ] \
-            || { echo "FAIL: expected '219184 21500 221184 8412', got '${out}'"; exit 1; }
+          out="$(jq -nc '{after: {seq: {}, kept_out: 224256, re_read: 21504, calls: 12,
+                                  total_kept_out: 1468006, rewound: false},
+                          baseline_unknown: false}' | context_mode_compute_deltas)"
+          [ "${out}" = "224256 21504 1468006 12" ] \
+            || { echo "FAIL: expected '224256 21504 1468006 12', got '${out}'"; exit 1; }
 
-          unknown="$(jq -nc '{before: null, baseline_unknown: true,
-                              after: {eventDataBytes: 0, bytesAvoided: 1468006,
-                                      bytesReturned: 51200, snapshotBytes: 0}}' \
+          unknown="$(jq -nc '{baseline_unknown: true,
+                              after: {seq: {}, kept_out: 9, re_read: 9, calls: 9,
+                                      total_kept_out: 1468006, rewound: false}}' \
             | context_mode_compute_deltas)"
           [ "${unknown}" = "UNKNOWN 1468006" ] \
             || { echo "FAIL: expected 'UNKNOWN 1468006', got '${unknown}'"; exit 1; }
+
+          rewound="$(jq -nc '{after: {seq: {}, kept_out: 9, re_read: 9, calls: 9,
+                                      total_kept_out: 77, rewound: true}}' \
+            | context_mode_compute_deltas)"
+          [ "${rewound}" = "UNKNOWN 77" ] \
+            || { echo "FAIL: expected 'UNKNOWN 77' for a rewound store, got '${rewound}'"; exit 1; }
 
           rc=0
           bad="$(printf 'not json' | context_mode_compute_deltas)" || rc=$?
           [ -z "${bad}" ] || { echo "FAIL: malformed input produced '${bad}'"; exit 1; }
           # jq exits nonzero (a parse error) on unparsable stdin even with the
           # trailing `2>/dev/null`, which only silences the message, not the
-          # status. Assert on it rather than leaving `rc` write-only, which
-          # reads as a forgotten check.
+          # status.
           [ "${rc}" -ne 0 ] \
             || { echo "FAIL: expected a nonzero status for malformed input, got 0"; exit 1; }
-
-          # .before: null with no baseline_unknown flag is a first run: the
-          # whole store is attributed to this run, matching the render_stats
-          # case pinned in "treats a missing before as a first run rather
-          # than an error" above. compute_deltas is exercised directly here
-          # because the ledger calls it without going through the renderer.
-          first_run="$(jq -nc '{before: null,
-                                 after: {eventDataBytes: 3000, bytesAvoided: 1572864,
-                                         bytesReturned: 2048, snapshotBytes: 0}}' \
-            | context_mode_compute_deltas)"
-          [ "${first_run}" = "1572864 2048 1572864 3000" ] \
-            || { echo "FAIL: expected '1572864 2048 1572864 3000', got '${first_run}'"; exit 1; }
-
-          # A malformed non-null, non-object .before (a bare number) must
-          # stay silent, not get coerced into {} and report the whole store
-          # as this run's savings on a corrupted baseline. jq exits 0 here
-          # (valid JSON, the program just evaluates to `empty`), so there is
-          # no exit status worth asserting on — `|| true` only shields the
-          # capture from `set -e` on a shell where that ever changes.
-          malformed_before="$(jq -nc '{before: 42,
-                                        after: {eventDataBytes: 0, bytesAvoided: 1572864,
-                                                bytesReturned: 0, snapshotBytes: 0}}' \
-            | context_mode_compute_deltas)" || true
-          [ -z "${malformed_before}" ] \
-            || { echo "FAIL: malformed .before produced '${malformed_before}'"; exit 1; }
           echo "compute_deltas=pass"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "compute_deltas=pass"
+
+  # ── Real stores ────────────────────────────────────────────────────────────
+  #
+  # The central case. Three project stores under one ~/.context-mode, two of
+  # them holding rows from before the run, one created during it. Between init
+  # and print the run writes one row of every kind the SQL has to classify:
+  #
+  #   A  Bash         146890 -> 161   kept out 146729 (the hook's replace, the
+  #                                   byte pair the real 2.1.4 hook wrote for a
+  #                                   146890-byte output)
+  #   A  ctx_execute  108894 -> 2477  kept out 106417
+  #   A  ctx_execute     500 -> 600   kept out 0 (clamped per row: a small
+  #                                   output comes back wrapped in a reply longer
+  #                                   than itself, which withheld nothing and
+  #                                   must not cancel another's saving the way
+  #                                   upstream's netting does)
+  #   A  ctx_search        0 -> 3072  re-read 3072
+  #   A  ctx_resume        0 -> 1024  re-read 1024
+  #   A  ctx_doctor    50000 -> 2000  neither: a diagnostic report
+  #   A  ctx_index     40000 -> 80    neither: ctx_index content can be bytes
+  #                                   the model itself wrote into the call
+  #   A  cost/prompt rows             not tool calls at all
+  #   A  Bash (pi)     90000 -> 100   another agent's row: excluded
+  #   A  Bash (S2)      2048 -> 0     kept out 2048: the same agent's second
+  #                                   session in this run (a /clear starts one)
+  #   B  Bash          20480 -> 0     kept out 20480, above B's watermark
+  #   C  Bash          10250 -> 10    kept out 10240; C did not exist at start,
+  #                                   so its watermark is 0
+  #
+  # this run:    146729 + 106417 + 2048 + 20480 + 10240 = 285914  re-read 4096
+  #              tool calls 10 (every claude-code tool row above, cost and
+  #              prompt rows aside)
+  # store total: 285914 + the pre-existing 99900 (A) + 51200 (B) = 437014
+  #
+  # No row here is a Read, Grep or WebFetch: 2.x writes no events row for a
+  # clean one, replaced or not. See "a replaced Read contributes nothing".
+  #
+  # What this case cannot show, because 2.x cannot tell it: a CONCURRENT run of
+  # the same agent on the same project set writes to the same stores, with the
+  # same agent and its own session ids, and its rows above the watermark are
+  # counted here too. See "Concurrent runs" in container/context-mode-summary.sh.
+  - name: a run counts only its own agent's rows above each store's watermark
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "${RIOTBOX_DIR}/tests/lib/context-mode-store-helpers.sh"
+          cm_require_node store_scoping
+          export CONTEXT_MODE_STATS_BIN="${HOME}/stats"
+          cm_stats_shim "${CONTEXT_MODE_STATS_BIN}"
+          export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/no-ledger"
+          export RIOTBOX_AGENT=claude
+          export _CONTEXT_MODE_WIRED=1
+          P="${HOME}/.context-mode/projects"
+
+          cm_store rows "${P}/aaaaaaaaaaaaaaaa/context.db" \
+            '[{"session_id":"S0","agent":"claude-code","tool":"Bash","sandbox_bytes":100000,"returned_bytes":100}]'
+          cm_store rows "${P}/bbbbbbbbbbbbbbbb/context.db" \
+            '[{"session_id":"S0","agent":"claude-code","tool":"Bash","sandbox_bytes":51200,"returned_bytes":0}]'
+
+          source "${RIOTBOX_DIR}/container/context-mode-summary.sh"
+          context_mode_summary_init
+          [ "$(jq -cS . <<<"${_CONTEXT_MODE_SUMMARY_START}")" = '{"aaaaaaaaaaaaaaaa":1,"bbbbbbbbbbbbbbbb":1}' ] \
+            || { echo "FAIL: watermark is not each store's sequence: ${_CONTEXT_MODE_SUMMARY_START:-}"; exit 1; }
+
+          cm_store rows "${P}/aaaaaaaaaaaaaaaa/context.db" '[
+            {"session_id":"S1","agent":"claude-code","tool":"Bash","sandbox_bytes":146890,"returned_bytes":161},
+            {"session_id":"S1","agent":"claude-code","tool":"ctx_execute","sandbox_bytes":108894,"returned_bytes":2477},
+            {"session_id":"S1","agent":"claude-code","tool":"ctx_execute","sandbox_bytes":500,"returned_bytes":600},
+            {"session_id":"S1","agent":"claude-code","tool":"ctx_search","sandbox_bytes":0,"returned_bytes":3072},
+            {"session_id":"S1","agent":"claude-code","tool":"ctx_resume","sandbox_bytes":0,"returned_bytes":1024},
+            {"session_id":"S1","agent":"claude-code","tool":"ctx_doctor","sandbox_bytes":50000,"returned_bytes":2000},
+            {"session_id":"S1","agent":"claude-code","kind":"index","tool":"ctx_index","sandbox_bytes":40000,"returned_bytes":80},
+            {"session_id":"S1","agent":"claude-code","kind":"cost","tool":"Bash","sandbox_bytes":9999,"returned_bytes":0},
+            {"session_id":"S1","agent":"claude-code","kind":"prompt","sandbox_bytes":7777,"returned_bytes":0},
+            {"session_id":"P1","agent":"pi","tool":"Bash","sandbox_bytes":90000,"returned_bytes":100},
+            {"session_id":"S2","agent":"claude-code","tool":"Bash","sandbox_bytes":2048,"returned_bytes":0}]'
+          cm_store rows "${P}/bbbbbbbbbbbbbbbb/context.db" \
+            '[{"session_id":"S1","agent":"claude-code","tool":"Bash","sandbox_bytes":20480,"returned_bytes":0}]'
+          cm_store rows "${P}/cccccccccccccccc/context.db" \
+            '[{"session_id":"S1","agent":"claude-code","tool":"Bash","sandbox_bytes":10250,"returned_bytes":10}]'
+
+          # The exact integers, from the reader itself.
+          raw="$("${CONTEXT_MODE_STATS_BIN}" "${HOME}/.context-mode" claude-code "${_CONTEXT_MODE_SUMMARY_START}")"
+          printf '%s\n' "${raw}"
+          jq -e '.kept_out == 285914 and .re_read == 4096 and .calls == 10
+                 and .total_kept_out == 437014 and .rewound == false' <<<"${raw}" >/dev/null \
+            || { echo "FAIL: reader totals wrong: ${raw}"; exit 1; }
+
+          out="$(context_mode_summary_print)"
+          printf '%s\n' "${out}"
+          # 285914 B = 279.2 KB -> "279 KB"; 437014 B = 426.8 KB -> "427 KB"
+          printf '%s' "${out}" | grep -qx ' this run 279 KB kept out · 4.0 KB re-read via ctx_search · 10 tool calls recorded' \
+            || { echo "FAIL: this-run line wrong: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -qx ' store total 427 KB kept out' \
+            || { echo "FAIL: store total wrong: ${out}"; exit 1; }
+
+          # The agent filter is the reader's, not an accident of the fixture:
+          # read as pi, only pi's one row is this run's.
+          pi="$("${CONTEXT_MODE_STATS_BIN}" "${HOME}/.context-mode" pi "${_CONTEXT_MODE_SUMMARY_START}")"
+          jq -e '.kept_out == 89900 and .calls == 1 and .total_kept_out == 89900' <<<"${pi}" >/dev/null \
+            || { echo "FAIL: agent filter wrong: ${pi}"; exit 1; }
+          echo "store_scoping=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "store_scoping=(pass|SKIPPED)"
+
+  # The 1.x rule carries over: no store, nothing to report. A projects
+  # directory with no context.db in it is the same state — 2.x creates the
+  # directory and the database together, so an empty one is a store that has
+  # never been written.
+  - name: no store and no database print nothing and do not fail
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "${RIOTBOX_DIR}/tests/lib/context-mode-store-helpers.sh"
+          cm_require_node store_absent
+          export CONTEXT_MODE_STATS_BIN="${HOME}/stats"
+          cm_stats_shim "${CONTEXT_MODE_STATS_BIN}"
+          export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/no-ledger"
+          export _CONTEXT_MODE_WIRED=1
+          source "${RIOTBOX_DIR}/container/context-mode-summary.sh"
+
+          for layout in none empty-projects owners-only; do
+            rm -rf "${HOME}/.context-mode"
+            case "${layout}" in
+              empty-projects) mkdir -p "${HOME}/.context-mode/projects" ;;
+              owners-only) mkdir -p "${HOME}/.context-mode/projects/aaaaaaaaaaaaaaaa/owners" ;;
+            esac
+            context_mode_summary_init
+            [ -z "${_CONTEXT_MODE_SUMMARY_BASELINE_UNKNOWN:-}" ] \
+              || { echo "FAIL: ${layout}: no database is a first run, not an unknown baseline"; exit 1; }
+            rc=0
+            out="$(context_mode_summary_print 2>&1)" || rc=$?
+            [ "${rc}" = "0" ] || { echo "FAIL: ${layout}: status ${rc}"; exit 1; }
+            [ -z "${out}" ] || { echo "FAIL: ${layout}: printed '${out}'"; exit 1; }
+          done
+          echo "store_absent=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "store_absent=(pass|SKIPPED)"
+
+  - name: a run that wrote no rows reports zero against the store total
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "${RIOTBOX_DIR}/tests/lib/context-mode-store-helpers.sh"
+          cm_require_node store_no_rows
+          export CONTEXT_MODE_STATS_BIN="${HOME}/stats"
+          cm_stats_shim "${CONTEXT_MODE_STATS_BIN}"
+          export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/no-ledger"
+          export _CONTEXT_MODE_WIRED=1
+          cm_store rows "${HOME}/.context-mode/projects/aaaaaaaaaaaaaaaa/context.db" \
+            '[{"session_id":"S0","agent":"claude-code","tool":"Bash","sandbox_bytes":1049600,"returned_bytes":1024}]'
+          source "${RIOTBOX_DIR}/container/context-mode-summary.sh"
+          context_mode_summary_init
+          out="$(context_mode_summary_print)"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -qx ' this run 0 B kept out' \
+            || { echo "FAIL: an idle run must report zero: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -qx ' store total 1.0 MB kept out' \
+            || { echo "FAIL: store total wrong: ${out}"; exit 1; }
+          echo "store_no_rows=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "store_no_rows=(pass|SKIPPED)"
+
+  # A store another process holds exclusively. The read waits a bounded time
+  # and gives up: at exit the report is silent (the 1.x rule for an
+  # unreadable store) and the teardown is not held open; at start the
+  # baseline is UNKNOWN, because a database is on disk.
+  - name: a locked store bounds the wait and never fabricates a figure
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "${RIOTBOX_DIR}/tests/lib/context-mode-store-helpers.sh"
+          cm_require_node store_locked
+          export CONTEXT_MODE_STATS_BIN="${HOME}/stats"
+          cm_stats_shim "${CONTEXT_MODE_STATS_BIN}"
+          export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/no-ledger"
+          export _CONTEXT_MODE_WIRED=1
+          DB="${HOME}/.context-mode/projects/aaaaaaaaaaaaaaaa/context.db"
+          cm_store rows "${DB}" \
+            '[{"session_id":"S0","agent":"claude-code","tool":"Bash","sandbox_bytes":1049600,"returned_bytes":1024}]'
+          source "${RIOTBOX_DIR}/container/context-mode-summary.sh"
+
+          hold() {
+            cm_store lock "${DB}" "$1" > "${TEST_DIR}/lock.out" &
+            for _ in $(seq 1 100); do
+              grep -q locked "${TEST_DIR}/lock.out" 2>/dev/null && return 0
+              sleep 0.1
+            done
+            echo "FAIL: the lock holder never took the lock"; exit 1
+          }
+
+          # Locked at exit, for longer than the reader's busy timeout. The
+          # holder outlives the read, so a read that did not give up on its own
+          # would show as the elapsed time, not as a pass.
+          context_mode_summary_init
+          hold 6000
+          start="$(date +%s)"
+          rc=0
+          out="$(context_mode_summary_print 2>"${TEST_DIR}/err")" || rc=$?
+          elapsed=$(( $(date +%s) - start ))
+          [ "${rc}" = "0" ] || { echo "FAIL: status ${rc} on a locked store"; exit 1; }
+          [ -z "${out}" ] || { echo "FAIL: printed from a locked store: ${out}"; exit 1; }
+          grep -qF "exit report skipped, cannot read ${DB}" "${TEST_DIR}/err" \
+            || { echo "FAIL: no stderr note naming the locked store: $(cat "${TEST_DIR}/err")"; exit 1; }
+          [ "${elapsed}" -le 4 ] \
+            || { echo "FAIL: exit read waited ${elapsed}s on a locked store"; exit 1; }
+          wait
+
+          # Locked at start, free again at exit.
+          hold 2500
+          context_mode_summary_init
+          [ "${_CONTEXT_MODE_SUMMARY_BASELINE_UNKNOWN:-}" = "1" ] \
+            || { echo "FAIL: a locked store at start must be an unknown baseline"; exit 1; }
+          wait
+          out="$(context_mode_summary_print)"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -qx ' this run unknown (no usable baseline) · store total 1.0 MB kept out' \
+            || { echo "FAIL: unknown baseline not disclosed: ${out}"; exit 1; }
+          echo "store_locked=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "store_locked=(pass|SKIPPED)"
+
+  # A context.db that is not a database. It is a store that exists and cannot
+  # be read, so it behaves as a locked one: no report at exit, an unknown
+  # baseline at start. Skipping it instead would under-count without a word,
+  # and so would staying silent about which file did it: the exit leaves one
+  # stderr note naming the store.
+  - name: a corrupt store is unreadable, not empty
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "${RIOTBOX_DIR}/tests/lib/context-mode-store-helpers.sh"
+          cm_require_node store_corrupt
+          export CONTEXT_MODE_STATS_BIN="${HOME}/stats"
+          cm_stats_shim "${CONTEXT_MODE_STATS_BIN}"
+          export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/no-ledger"
+          export _CONTEXT_MODE_WIRED=1
+          cm_store rows "${HOME}/.context-mode/projects/aaaaaaaaaaaaaaaa/context.db" \
+            '[{"session_id":"S0","agent":"claude-code","tool":"Bash","sandbox_bytes":1049600,"returned_bytes":1024}]'
+          mkdir -p "${HOME}/.context-mode/projects/bbbbbbbbbbbbbbbb"
+          head -c 4096 /dev/urandom > "${HOME}/.context-mode/projects/bbbbbbbbbbbbbbbb/context.db"
+          source "${RIOTBOX_DIR}/container/context-mode-summary.sh"
+
+          context_mode_summary_init 2>"${TEST_DIR}/init.err"
+          [ "${_CONTEXT_MODE_SUMMARY_BASELINE_UNKNOWN:-}" = "1" ] \
+            || { echo "FAIL: a corrupt store at start must be an unknown baseline"; exit 1; }
+          # The start read stays quiet: it is in front of the agent, and the
+          # exit note below says the same thing once.
+          [ ! -s "${TEST_DIR}/init.err" ] \
+            || { echo "FAIL: init wrote to stderr: $(cat "${TEST_DIR}/init.err")"; exit 1; }
+          rc=0
+          out="$(context_mode_summary_print 2>"${TEST_DIR}/err")" || rc=$?
+          [ "${rc}" = "0" ] || { echo "FAIL: status ${rc} on a corrupt store"; exit 1; }
+          [ -z "${out}" ] || { echo "FAIL: printed past a corrupt store: ${out}"; exit 1; }
+          # Silent on stdout, but findable: one stderr line naming the store
+          # that stopped the report, so a user can find and remove it.
+          bad="${HOME}/.context-mode/projects/bbbbbbbbbbbbbbbb/context.db"
+          cat "${TEST_DIR}/err"
+          [ "$(wc -l < "${TEST_DIR}/err")" = "1" ] \
+            || { echo "FAIL: expected exactly one stderr line: $(cat "${TEST_DIR}/err")"; exit 1; }
+          grep -qF "[context-mode] NOTE: exit report skipped, cannot read ${bad}:" "${TEST_DIR}/err" \
+            || { echo "FAIL: stderr note does not name the corrupt store"; exit 1; }
+          echo "store_corrupt=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "store_corrupt=(pass|SKIPPED)"
+
+  # The watermark is the store's AUTOINCREMENT counter (sqlite_sequence), not
+  # MAX(seq). ctx_purge deletes rows but leaves the counter, so a purge during
+  # the run must not make the run's later rows look old. A counter BELOW the
+  # watermark means the database was recreated (the dead-project sweep, or a
+  # heal) and has not yet grown past the old counter; the run is unknown. A
+  # recreated store that has already grown past it is NOT detected — its rows
+  # above the watermark are counted as the run's — so this case recreates the
+  # store with fewer rows than it had.
+  - name: a purge keeps the watermark and a recreated store below it makes the run unknown
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "${RIOTBOX_DIR}/tests/lib/context-mode-store-helpers.sh"
+          cm_require_node store_rewind
+          export CONTEXT_MODE_STATS_BIN="${HOME}/stats"
+          cm_stats_shim "${CONTEXT_MODE_STATS_BIN}"
+          export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/no-ledger"
+          export _CONTEXT_MODE_WIRED=1
+          DB="${HOME}/.context-mode/projects/aaaaaaaaaaaaaaaa/context.db"
+          row='{"session_id":"S0","agent":"claude-code","tool":"Bash","sandbox_bytes":2048,"returned_bytes":1024}'
+          cm_store rows "${DB}" "[${row},${row},${row}]"
+          source "${RIOTBOX_DIR}/container/context-mode-summary.sh"
+
+          context_mode_summary_init
+          cm_store purge "${DB}"
+          cm_store rows "${DB}" "[${row}]"
+          out="$(context_mode_summary_print)"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -qx ' this run 1.0 KB kept out · 1 tool call recorded' \
+            || { echo "FAIL: a purge must not hide the run's later rows: ${out}"; exit 1; }
+
+          context_mode_summary_init
+          rm -f "${DB}" "${DB}-wal" "${DB}-shm"
+          cm_store rows "${DB}" "[${row}]"
+          out="$(context_mode_summary_print)"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -qx ' this run unknown (no usable baseline) · store total 1.0 KB kept out' \
+            || { echo "FAIL: a recreated store must make the run unknown: ${out}"; exit 1; }
+          echo "store_rewind=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "store_rewind=(pass|SKIPPED)"
+
+  # A baseline that is not a map of store keys to counters cannot scope
+  # anything. Treating it as "no baseline" would credit the whole store to
+  # this run, so the reader refuses it and the report stays silent.
+  - name: a malformed watermark is refused, not read as a first run
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "${RIOTBOX_DIR}/tests/lib/context-mode-store-helpers.sh"
+          cm_require_node store_bad_watermark
+          export CONTEXT_MODE_STATS_BIN="${HOME}/stats"
+          cm_stats_shim "${CONTEXT_MODE_STATS_BIN}"
+          export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/no-ledger"
+          export _CONTEXT_MODE_WIRED=1
+          cm_store rows "${HOME}/.context-mode/projects/aaaaaaaaaaaaaaaa/context.db" \
+            '[{"session_id":"S0","agent":"claude-code","tool":"Bash","sandbox_bytes":1049600,"returned_bytes":1024}]'
+          source "${RIOTBOX_DIR}/container/context-mode-summary.sh"
+          for wm in '42' '[1]' '"x"' 'null' '{"aaaaaaaaaaaaaaaa":-1}' '{"aaaaaaaaaaaaaaaa":1.5}' '{"aaaaaaaaaaaaaaaa":"1"}' 'not json'; do
+            _CONTEXT_MODE_SUMMARY_START="${wm}"
+            rc=0
+            out="$(context_mode_summary_print 2>&1)" || rc=$?
+            [ "${rc}" = "0" ] || { echo "FAIL: status ${rc} for watermark ${wm}"; exit 1; }
+            [ -z "${out}" ] || { echo "FAIL: watermark ${wm} printed '${out}'"; exit 1; }
+          done
+          echo "store_bad_watermark=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "store_bad_watermark=(pass|SKIPPED)"
+
+  # 2.x journals only shell commands, edits, tool errors and ctx_* calls
+  # (journalKind in upstream's hooks/dispatch.ts). A clean Read, Grep or
+  # WebFetch writes no events row even when the hook replaces its output; the
+  # only trace is the indexed copy in `sources`. The real 2.1.4 hook, fed a
+  # 168893-byte Read, leaves exactly that: no events row, one sources row of
+  # that size. So the report does not count those savings at all, and its
+  # kept-out figure is a lower bound. This case pins the reader's side of it —
+  # a sources row is not a saving it can measure — and the image build pins
+  # upstream's side with a real Read.
+  - name: a replaced Read contributes nothing, so kept out is a lower bound
+    steps:
+      - type: exec
+        script: |
+          set -e
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset _CONTEXT_MODE_WIRED CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "${RIOTBOX_DIR}/tests/lib/context-mode-store-helpers.sh"
+          cm_require_node store_replaced_read
+          export CONTEXT_MODE_STATS_BIN="${HOME}/stats"
+          cm_stats_shim "${CONTEXT_MODE_STATS_BIN}"
+          export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/no-ledger"
+          export _CONTEXT_MODE_WIRED=1
+          DB="${HOME}/.context-mode/projects/aaaaaaaaaaaaaaaa/context.db"
+          cm_store rows "${DB}" '[]'
+          source "${RIOTBOX_DIR}/container/context-mode-summary.sh"
+          context_mode_summary_init
+          cm_store source "${DB}" \
+            '[{"session_id":"S1","agent":"claude-code","kind":"content","label":"Read:#h08870ea2","bytes_total":168893,"chunk_count":3582}]'
+          out="$(context_mode_summary_print)"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -qx ' this run 0 B kept out' \
+            || { echo "FAIL: a replaced Read was counted: ${out}"; exit 1; }
+          echo "store_replaced_read=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldMatchRegex "store_replaced_read=(pass|SKIPPED)"
+
+  # The store cases above skip on a host without Node 24, and that was how
+  # they ran in CI before the test image installed one: green, having run
+  # nothing. An environment that declares RIOTBOX_REQUIRE_CM_NODE=1 must
+  # really provide it, and the test image must keep declaring it beside an
+  # install of the same Node the runtime image pins. The two images are
+  # separate builds with no shared ARG, so a drift is caught here instead of
+  # the suites quietly running on a Node RiotBox does not ship.
+  - name: the test image provides the pinned Node the store cases require
+    steps:
+      - type: exec
+        script: |
+          set -e
+          cd "{{.riotbox_dir}}"
+          runtime="$(sed -n 's/^ARG CONTEXT_MODE_NODE=//p' Containerfile)"
+          test_pin="$(sed -n 's/^ARG CM_NODE_VERSION=//p' tests/Containerfile.test)"
+          [ -n "${runtime}" ] || { echo "FAIL: Containerfile no longer pins CONTEXT_MODE_NODE"; exit 1; }
+          [ "${test_pin}" = "${runtime}" ] \
+            || { echo "FAIL: tests/Containerfile.test pins Node '${test_pin}', the runtime image pins '${runtime}'"; exit 1; }
+          grep -qE '^ENV RIOTBOX_REQUIRE_CM_NODE=1$' tests/Containerfile.test \
+            || { echo "FAIL: the test image installs Node but does not declare RIOTBOX_REQUIRE_CM_NODE=1"; exit 1; }
+          if [ "${RIOTBOX_REQUIRE_CM_NODE:-0}" = "1" ]; then
+            [ "$(node --version 2>/dev/null)" = "v${runtime}" ] \
+              || { echo "FAIL: RIOTBOX_REQUIRE_CM_NODE=1 but node on PATH is '$(node --version 2>/dev/null)', not v${runtime}"; exit 1; }
+          fi
+          echo "node_pin=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "node_pin=pass"

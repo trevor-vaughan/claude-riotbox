@@ -4,11 +4,15 @@ vars:
   riotbox_dir: "{{.root}}"
 
 # One record per session exit, written into a bind-mounted drop directory.
-# These cases drive context_mode_ledger_append directly: it takes the same
-# before/after JSON the report renders from, so no store, image or pinned Node
-# is needed. Every skip path must return 0 — the teardown calls this after the
-# agent's exit status is captured, and a bookkeeping failure must never become
-# the session's exit code.
+# Most cases drive context_mode_ledger_append directly: it takes the same
+# {"after":…,"baseline_unknown":…} JSON the report renders from, so no store,
+# image or pinned Node is needed. The wiring case reads a real context-mode 2.x
+# store and needs Node 24 or later on PATH (see
+# tests/lib/context-mode-store-helpers.sh): the test image provides it and
+# requires it, and a bare host reports the case as SKIPPED, not passed. Every
+# skip path must return 0 — the teardown calls this after the agent's exit
+# status is captured, and a bookkeeping failure must never become the
+# session's exit code.
 
 testcases:
   - name: writes a well-formed record for a normal run
@@ -29,8 +33,9 @@ testcases:
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
 
           payload="$(jq -nc '{
-            before: {eventDataBytes: 1000, bytesAvoided: 2000, bytesReturned: 500},
-            after:  {eventDataBytes: 9412, bytesAvoided: 221184, bytesReturned: 22000}
+            after: {seq: {"0123456789abcdef": 40}, kept_out: 219184, re_read: 21500,
+                    calls: 37, total_kept_out: 221184, rewound: false},
+            baseline_unknown: false
           }')"
           context_mode_ledger_append "${payload}"
 
@@ -40,11 +45,14 @@ testcases:
             *-a3f9c1d4e8b27f60.json) : ;;
             *) echo "FAIL: filename does not carry SESSION_ID: ${file}"; exit 1 ;;
           esac
-          jq -e '.schema == 1' "${file}" >/dev/null || { echo "FAIL: schema"; exit 1; }
+          jq -e '.schema == 2' "${file}" >/dev/null || { echo "FAIL: schema"; exit 1; }
           jq -e '.kept_out_bytes == 219184' "${file}" >/dev/null || { echo "FAIL: kept_out"; exit 1; }
           jq -e '.re_read_bytes == 21500' "${file}" >/dev/null || { echo "FAIL: re_read"; exit 1; }
-          jq -e '.hook_log_bytes == 8412' "${file}" >/dev/null || { echo "FAIL: hook_log"; exit 1; }
+          jq -e '.tool_calls == 37' "${file}" >/dev/null || { echo "FAIL: tool_calls"; exit 1; }
           jq -e '.retained_total_bytes == 221184' "${file}" >/dev/null || { echo "FAIL: retained"; exit 1; }
+          # 2.x has no hook log counter. A schema-2 record that still carried
+          # the 1.x field would invite a reader to sum a number nobody measured.
+          jq -e 'has("hook_log_bytes") | not' "${file}" >/dev/null || { echo "FAIL: schema 2 carries hook_log_bytes"; exit 1; }
           jq -e '.project_set == "riotbox"' "${file}" >/dev/null || { echo "FAIL: project_set"; exit 1; }
           jq -e '.agent == "claude"' "${file}" >/dev/null || { echo "FAIL: agent"; exit 1; }
           jq -e '.started_at == "2026-07-30T14:02:11Z"' "${file}" >/dev/null || { echo "FAIL: started_at"; exit 1; }
@@ -70,9 +78,9 @@ testcases:
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
 
-          payload="$(jq -nc '{before: null, baseline_unknown: true,
-                              after: {eventDataBytes: 5, bytesAvoided: 1468006,
-                                      bytesReturned: 51200}}')"
+          payload="$(jq -nc '{baseline_unknown: true,
+                              after: {seq: {}, kept_out: 1468006, re_read: 51200,
+                                      calls: 4, total_kept_out: 1468006, rewound: false}}')"
           context_mode_ledger_append "${payload}"
           file="$(find "${CONTEXT_MODE_LEDGER_DIR}" -name '*.json' -print -quit)"
           [ -n "${file}" ] || { echo "FAIL: unknown-baseline run not recorded"; exit 1; }
@@ -80,6 +88,9 @@ testcases:
           # A zero here would be indistinguishable from a genuine zero-saving
           # run, and the reader excludes these from totals on the flag alone.
           jq -e '.kept_out_bytes == null' "${file}" >/dev/null || { echo "FAIL: kept_out not null"; exit 1; }
+          jq -e '.re_read_bytes == null and .tool_calls == null' "${file}" >/dev/null \
+            || { echo "FAIL: re_read or tool_calls not null"; exit 1; }
+          jq -e '.schema == 2' "${file}" >/dev/null || { echo "FAIL: schema"; exit 1; }
           jq -e '.retained_total_bytes == 1468006' "${file}" >/dev/null || { echo "FAIL: retained"; exit 1; }
           # _CONTEXT_MODE_SUMMARY_STARTED_AT was never exported in this case —
           # the stamp context_mode_summary_init normally takes is absent, so
@@ -104,7 +115,8 @@ testcases:
           export RIOTBOX_SESSION_KEY="shared-projects"
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
-          payload="$(jq -nc '{before: {}, after: {bytesAvoided: 10, eventDataBytes: 5}}')"
+          payload="$(jq -nc '{after: {seq: {}, kept_out: 10, re_read: 0, calls: 1,
+                                      total_kept_out: 10, rewound: false}}')"
           SESSION_ID="sess-one" context_mode_ledger_append "${payload}"
           SESSION_ID="sess-two" context_mode_ledger_append "${payload}"
           # Name both files rather than just counting: the filename must carry
@@ -131,7 +143,8 @@ testcases:
           trap 'chmod 0700 "${TEST_DIR}/nowrite" 2>/dev/null; rm -rf "${TEST_DIR}"' EXIT
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
-          payload="$(jq -nc '{before: {}, after: {bytesAvoided: 10}}')"
+          payload="$(jq -nc '{after: {seq: {}, kept_out: 10, re_read: 0, calls: 1,
+                                      total_kept_out: 10, rewound: false}}')"
           export SESSION_ID="s1"
 
           # Unwired: nothing true to record.
@@ -183,7 +196,8 @@ testcases:
   # "wired correctly" from "the call was deleted from context_mode_summary_print"
   # — every other case here never goes near that function. Deleting the
   # context_mode_ledger_append call at the end of context_mode_summary_print
-  # must fail this case and only this case.
+  # must fail this case and only this case. It runs on a real 2.x store, so the
+  # record is checked against rows, not against a fake shim's numbers.
   - name: summary_print writes both the report and a matching ledger record
     steps:
       - type: exec
@@ -193,36 +207,31 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}/home"
           mkdir -p "${HOME}"
-          export CLAUDE_CONFIG_DIR="${HOME}/.claude"
-          export CONTEXT_MODE_DIR="${CLAUDE_CONFIG_DIR}/context-mode"
-          export CONTEXT_MODE_STATS_BIN="${HOME}/fake-stats"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "${RIOTBOX_DIR}/tests/lib/context-mode-store-helpers.sh"
+          cm_require_node wiring_seam
+          export CONTEXT_MODE_STATS_BIN="${HOME}/stats"
+          cm_stats_shim "${CONTEXT_MODE_STATS_BIN}"
           export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/ledger"
-          mkdir -p "${CONTEXT_MODE_DIR}/sessions" "${CONTEXT_MODE_LEDGER_DIR}"
+          mkdir -p "${CONTEXT_MODE_LEDGER_DIR}"
           export _CONTEXT_MODE_WIRED=1
           export SESSION_ID="wiring-check"
+          DB="${HOME}/.context-mode/projects/0123456789abcdef/context.db"
+          cm_store rows "${DB}" \
+            '[{"session_id":"S0","agent":"claude-code","tool":"Bash","sandbox_bytes":4096,"returned_bytes":0}]'
 
-          # Grows between the two reads, the way a real session does — same
-          # shim shape as "init and print are gated on a wired session" in
-          # tests/context-mode-summary.venom.yml.
-          cat > "${CONTEXT_MODE_STATS_BIN}" <<'SHIM'
-          #!/bin/sh
-          if [ -f "${HOME}/second" ]; then
-            echo '{"eventDataBytes":0,"bytesAvoided":524288,"bytesReturned":0,"snapshotBytes":0}'
-          else
-            touch "${HOME}/second"
-            echo '{"eventDataBytes":0,"bytesAvoided":0,"bytesReturned":0,"snapshotBytes":0}'
-          fi
-          SHIM
-          chmod +x "${CONTEXT_MODE_STATS_BIN}"
-
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-summary.sh"
+          source "${RIOTBOX_DIR}/scripts/lib/json-write.sh"
+          source "${RIOTBOX_DIR}/container/context-mode-summary.sh"
 
           context_mode_summary_init
+          cm_store rows "${DB}" '[
+            {"session_id":"S1","agent":"claude-code","tool":"Bash","sandbox_bytes":524448,"returned_bytes":160},
+            {"session_id":"S1","agent":"claude-code","tool":"ctx_search","sandbox_bytes":0,"returned_bytes":2048}]'
           out="$(context_mode_summary_print)"
           printf '%s\n' "${out}"
           printf '%s' "${out}" | grep -q '512 KB kept out' \
-            || { echo "FAIL: report missing expected run delta: ${out}"; exit 1; }
+            || { echo "FAIL: report missing expected run figure: ${out}"; exit 1; }
 
           file="$(find "${CONTEXT_MODE_LEDGER_DIR}" -name '*.json' -print -quit)"
           [ -n "${file}" ] || { echo "FAIL: summary_print did not write a ledger record"; exit 1; }
@@ -230,13 +239,16 @@ testcases:
           [ "${count}" = "1" ] || { echo "FAIL: expected exactly one record, got ${count}"; exit 1; }
           # 524288 is the exact byte figure the printed "512 KB" humanizes —
           # tying the assertion to the raw integer catches a ledger that wrote
-          # some other run's numbers, not just a ledger that wrote nothing.
-          jq -e '.kept_out_bytes == 524288' "${file}" >/dev/null \
-            || { echo "FAIL: record kept_out_bytes does not match the printed figure: $(cat "${file}")"; exit 1; }
+          # some other run's numbers, not just a ledger that wrote nothing. The
+          # pre-run row is in the store total and nowhere else.
+          jq -e '.schema == 2 and .kept_out_bytes == 524288 and .re_read_bytes == 2048
+                 and .tool_calls == 2 and .retained_total_bytes == 528384
+                 and .baseline_unknown == false' "${file}" >/dev/null \
+            || { echo "FAIL: record does not match the store: $(cat "${file}")"; exit 1; }
           echo "wiring_seam=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "wiring_seam=pass"
+          - result.systemout ShouldMatchRegex "wiring_seam=(pass|SKIPPED)"
 
   # The ledger stamps RIOTBOX_AGENT into every record, which is what makes a
   # multi-agent history readable after the fact. Asserted rather than assumed:
@@ -250,14 +262,13 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
           export RIOTBOX_AGENT=opencode
           export RIOTBOX_SESSION_KEY=probe-session
           export CONTEXT_MODE_LEDGER_DIR="${TEST_DIR}/ledger"
-          export CONTEXT_MODE_DIR="${HOME}/.local/share/opencode/context-mode"
           # context_mode_ledger_append writes only for a wired session.
           export _CONTEXT_MODE_WIRED=1
-          mkdir -p "${CONTEXT_MODE_LEDGER_DIR}" "${CONTEXT_MODE_DIR}"
+          mkdir -p "${CONTEXT_MODE_LEDGER_DIR}"
 
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-summary.sh"
@@ -265,8 +276,8 @@ testcases:
             || { echo "FAIL: context_mode_ledger_append is not defined"; exit 1; }
 
           # baseline_unknown short-circuits context_mode_compute_deltas, which
-          # needs only .after to be an object.
-          context_mode_ledger_append '{"before":null,"after":{},"baseline_unknown":true}'
+          # then needs only .after.total_kept_out.
+          context_mode_ledger_append '{"after":{"total_kept_out":0},"baseline_unknown":true}'
 
           record="$(find "${CONTEXT_MODE_LEDGER_DIR}" -name '*.json' | head -n 1)"
           [ -n "${record}" ] || { echo "FAIL: no ledger record written"; exit 1; }

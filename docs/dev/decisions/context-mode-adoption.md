@@ -17,6 +17,8 @@ Two gates stood before implementation:
 > be wrong. For how Context Mode actually works today — what is wired, what it
 > costs, and what is still unproven — read
 > [How Context Mode works in RiotBox](../context-mode.md).
+>
+> **Superseded in part by [context-mode-2x-migration.md](context-mode-2x-migration.md)** (2026-11-06): the Node 22.5 floor and `CONTEXT_MODE_NODE` 22.x (now 24.22.2), the 1.x store, stats and doctor, and the 1.0.169 pin.
 
 **Evaluated against:** [mksglu/context-mode](https://github.com/mksglu/context-mode) npm `context-mode@1.0.169`, git `06276b95` (2026-07-28), site [context-mode.com](https://context-mode.com/).
 

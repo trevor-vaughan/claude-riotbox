@@ -95,18 +95,11 @@ if [[ -d "${HOST_CONFIG_DIR}" ]]; then
 	# across would only risk host/container ABI mismatch. Prune the
 	# node_modules tree and skip the four generated top-level files.
 	#
-	# Also prune context-mode/ and memory/, upstream's default homes for a
-	# host's opencode Context Mode session DB and ctx_* stores, and for its
-	# auto-memory: host data (verbatim tool output, and memory gathered across
-	# every host project), not config. The session keeps its own under
-	# opencode-data (agents/opencode/context-mode.sh), and a context-mode/ copy
-	# here would trip that file's one-time migration: moved into an empty
-	# store, or a both-exist warning on every later launch. Upstream reads
-	# <config>/memory only when CONTEXT_MODE_DATA_DIR is unset, i.e. RiotBox's
-	# Context Mode is off and the host opencode config loads context-mode as a
-	# plugin itself. That session starts with no auto-memory, by decision,
-	# rather than with a copy of the host's, and what it writes there stays
-	# with the session.
+	# Also prune context-mode/ and memory/, where context-mode 1.x kept a
+	# host's opencode session DB, ctx_* stores and auto-memory: host data
+	# (verbatim tool output, and memory gathered across every host project),
+	# not config, and nothing a session reads — context-mode 2.x keeps its
+	# stores under ~/.context-mode instead.
 	(
 		cd "${HOST_CONFIG_DIR}" &&
 			find -L . "${RUNTIME_PRUNE[@]}" ! -type l -print0 |

@@ -612,6 +612,13 @@ export SYFT_CHECK_FOR_APP_UPDATE=false
 export TRIVY_SKIP_VERSION_CHECK=true
 export TRIVY_DISABLE_TELEMETRY=true
 
+# context-mode has no opt-out to set here: 2.x makes no startup or background
+# calls and sends no telemetry. Its one automatic call is the version check in
+# the ctx_doctor tool (npm dist-tags, then git ls-remote), run only when the
+# agent calls that tool, with no off-switch (src/core/ops/doctor-env.ts:92,184
+# upstream; see THREAT_MODEL.md). RIOTBOX_NETWORK=none or RIOTBOX_EGRESS=1
+# (neither npm nor GitHub is on an agent's allowlist) are what stop it.
+
 # Not on Debian, but some scripts check this to skip interactive prompts
 export DEBIAN_FRONTEND=noninteractive
 
@@ -732,6 +739,7 @@ COPY --chown=llm:llm container/headroom-summary.sh /home/llm/.riotbox/headroom-s
 COPY --chown=llm:llm container/codegraph-setup.sh /home/llm/.riotbox/codegraph-setup.sh
 COPY --chown=llm:llm container/context-mode-setup.sh /home/llm/.riotbox/context-mode-setup.sh
 COPY --chown=llm:llm container/context-mode-summary.sh /home/llm/.riotbox/context-mode-summary.sh
+COPY --chown=llm:llm container/context-mode-stats.mjs /home/llm/.riotbox/context-mode-stats.mjs
 COPY --chown=llm:llm container/git-ai-setup.sh /home/llm/.riotbox/git-ai-setup.sh
 # The entrypoint sources lib/overlay-ignore.sh from this path, so the shared
 # shell library has to exist inside the image as well as on the host. The
@@ -767,34 +775,28 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
 # ── LLM CLI tool cache-bust boundary ────────────────────────────────────────
 # `task container:update` bumps LLM_TOOL_UPDATE to a fresh value, which makes
 # this RUN a cache miss and forces every layer below it (headroom, opencode,
-# Claude Code, CodeGraph, bun, Context Mode, the Context Mode plugin tree,
-# plugins) to rebuild and re-pull latest — without rebuilding the whole image.
+# Claude Code, CodeGraph, bun, Context Mode, plugins) to rebuild and re-pull
+# latest — without rebuilding the whole image.
 # A normal `task container:build` always passes the default (0), so the
 # boundary stays cached and the tools are reused. Those tool RUNs are
 # intentionally left unchanged; the boundary alone controls their freshness.
 # The list above is the inventory — deliberately not a count, because the one
 # this replaced went stale the moment a layer was added below the boundary.
 #
-# The remaining RUNs below the boundary are cheap or inert. Locking the Context
-# Mode event-bridge directories only chmods and re-asserts local paths, so an
-# update re-runs it for free. The gh/glab block does nothing unless
-# RIOTBOX_GH_GLAB=1 selected that flavor — where an update also re-installs gh
-# and glab from EPEL.
+# The remaining RUNs below the boundary are cheap or inert. The gh/glab block
+# does nothing unless RIOTBOX_GH_GLAB=1 selected that flavor — where an update
+# also re-installs gh and glab from EPEL.
 #
-# headroom, CodeGraph, bun, Context Mode and its plugin tree are
-# version-pinned, so an update re-installs them unchanged, re-fetching
-# identical bytes:
+# headroom, CodeGraph, bun and Context Mode are version-pinned, so an update
+# re-installs them unchanged, re-fetching identical bytes:
 #   * the same headroom wheels and ~350 MB of models
 #   * the same CodeGraph npm package (no model download)
 #   * the same ~34 MB bun release zip, re-downloaded and re-verified against
 #     the pinned digest
-#   * the same Context Mode npm package, which additionally re-runs
-#     `nvm install` and re-downloads its pinned Node toolchain because that too
-#     lives below the boundary
-#   * a fresh `git clone` of mksglu/context-mode at the pinned ref — re-checked
-#     against CONTEXT_MODE_PLUGIN_SHA, put back through the build assert and
-#     the routing probe — plus a re-run `npm ci` of 139 packages against the
-#     committed lockfile
+#   * the same Context Mode npm package, `npm ci` against the committed
+#     lockfile and put back through the build asserts and the routing probe,
+#     which additionally re-runs `nvm install` and re-downloads its pinned Node
+#     toolchain because that too lives below the boundary
 # The cost is accepted so `riotbox update` can add all of them to images built
 # before they existed and refresh headroom's unpinned transitive deps.
 ARG LLM_TOOL_UPDATE=0
@@ -995,10 +997,11 @@ RUN bash -o pipefail -c '\
 # and register their tools; review a new hasInstallScript entry in the core
 # lock when one appears.
 #
-# PI_NODE matches CONTEXT_MODE_NODE today, so nvm installs it once and the
-# Context Mode layer reuses it; Context Mode's Pi extension then runs on the
-# same Node ABI it was installed with. They are separate ARGs so either can
-# move without the other. Pi needs Node >= 22.19.
+# PI_NODE matches CONTEXT_MODE_NODE, so nvm installs it once and the Context
+# Mode layer reuses it. Pi needs Node >= 22.19 of its own, but Context Mode's Pi
+# extension runs in-process in Pi's Node and opens node:sqlite there, and
+# context-mode 2.x refuses anything below 24.15.0 — so that floor is Pi's too.
+# They are separate ARGs so either can move without the other, within it.
 #
 # The smoke is the compatibility gate for the floating core: it loads every
 # pinned extension into a real offline Pi session and fails the build when
@@ -1006,7 +1009,7 @@ RUN bash -o pipefail -c '\
 #
 # The trailing npm cache strip is the one "Why every npm layer empties
 # /home/llm/.npm" explains.
-ARG PI_NODE=22.23.4
+ARG PI_NODE=24.22.2
 ENV RIOTBOX_PI_DIR=/home/llm/.riotbox/pi
 COPY --chown=llm:llm container/pi/ /tmp/riotbox-pi/
 RUN bash -o pipefail -c '\
@@ -1082,17 +1085,14 @@ RUN bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && claud
 # DL3016 does not apply: the version is pinned via the build ARG.
 #
 # ── Why every npm layer empties /home/llm/.npm ──────────────────────────────
-# npm's cache is per-user, not per-install: every npm layer in this stage
-# writes the tarballs it downloaded to /home/llm/.npm/_cacache, and
-# better-sqlite3's prebuild-install drops its native binary in _prebuilds
-# beside them. Measured on npm 11.9.0 against an empty cache: 61 MB here,
-# 34 MB for the Context Mode package below, 8.3 MB for the plugin tree's
-# `npm ci`. All of it is redundant with the resolved trees those installs just
-# wrote, and /home/llm/.npm is a named-volume mount target at runtime, so no
-# session ever reads the build's copy. Each npm layer therefore empties it in
-# its OWN RUN, the way the pip and dnf layers do — a single strip at the bottom
-# would only whiteout bytes the layers above had already committed, reclaiming
-# nothing.
+# npm's cache is per-user, not per-install: every npm layer in this stage writes
+# the tarballs it downloaded to /home/llm/.npm/_cacache. Measured on npm 11.9.0
+# against an empty cache: 61 MB here. All of it is redundant with the resolved
+# trees those installs just wrote, and /home/llm/.npm is a named-volume mount
+# target at runtime, so no session ever reads the build's copy. Each npm layer
+# therefore empties it in its OWN RUN, the way the pip and dnf layers do — a
+# single strip at the bottom would only whiteout bytes the layers above had
+# already committed, reclaiming nothing.
 #
 # `find -mindepth 1 -delete` rather than `npm cache clean --force`: measured,
 # clean clears _cacache and leaves _prebuilds and _logs behind, and the
@@ -1219,162 +1219,178 @@ RUN bash -o pipefail -c '\
         echo "jsonschema reports ${v}, pinned ${JSONSCHEMA_VERSION}" >&2; exit 1; }'
 
 # ── Context Mode (opt-in at runtime via RIOTBOX_CONTEXT_MODE) ────────────────
-# Installed under its own pinned Node, not the image default. Context Mode
-# hard-fails installation on Linux below Node 22.5 — scripts/postinstall.mjs
-# calls process.exit(1), deliberately, because engines.node is cosmetic under
-# npm's default engine-strict=false. Below 22.5 there is no node:sqlite, so it
-# falls back to better-sqlite3's native addon, which SIGSEGVs under a V8
-# madvise bug (nodejs/node#62515). NODE_DEFAULT above is whatever nvm versions
-# scripts/build.sh found on the host — often 20 — so this pin is what keeps
-# the build working on a Node 20 host instead of failing for the user and not
-# for the maintainer.
+# One layer installs context-mode, stages it as every agent's Context Mode, and
+# proves the result routes. It is one package for all three agents: the npm
+# tarball carries the CLI (cli.mjs), the MCP server and hook bundles
+# (server.mjs, hook.mjs), the OpenCode adapter (opencode/plugin.js), the Pi
+# extension (pi/index.js), and the Claude Code plugin manifest
+# (.claude-plugin/plugin.json naming hooks/claude-code.json). Upstream's own
+# plugins/claude-code tree is built from that tarball (build/main-tree.mjs
+# upstream), which is why there is no separate git clone.
 #
-# The shim is what makes the pin stick at runtime. npm's own global bin shim
-# starts `#!/usr/bin/env node`, which resolves to the session default, and
-# Context Mode bakes process.execPath into every hook command it emits
-# (src/runtime.ts upstream). Exec'ing the pinned interpreter explicitly means
-# the CLI, the MCP server, and every hook run on 22.x whatever the agent's
-# default Node is.
+# ── Why the lockfile is the single pin ──────────────────────────────────────
+# `npm ci` installs a generated package.json that depends on exactly
+# CONTEXT_MODE_VERSION, against container/context-mode-package-lock.json. The
+# lockfile's integrity hash is the only pin on the bytes: npm verifies the
+# downloaded tarball against it, so a republished release fails the layer.
+# `ci` also refuses a package.json the lockfile does not satisfy (EUSAGE), so
+# an ARG bumped without regenerating the lockfile fails here rather than
+# installing the old release under a new label. The hash was transcribed from
+# one resolution, so it catches the bytes changing after review, not a
+# release that was already bad when it was recorded.
 #
-# The install paths come from `nvm which` rather than from the ARG. nvm
-# accepts a partial version — `nvm install 22` succeeds and lands whatever
-# 22.x it resolved — so building the path as v${CONTEXT_MODE_NODE} by hand
-# would leave anyone who passed the arg in the major-only form NODE_VERSIONS
-# and NODE_DEFAULT above use staring at "No such file or directory" for a
-# .../v22/bin path, with nothing in it to suggest that the format of the arg,
-# rather than a broken install, was the cause.
+# context-mode 2.x has no runtime dependencies and no install scripts. Before
+# moving the package out of node_modules the layer asserts node_modules holds
+# context-mode and nothing else (npm's own dot-entries aside) — anything npm
+# installed beside it, whether a dependency, an optional one or a peer, would be
+# stranded by the move — and it passes --ignore-scripts so a future install
+# script cannot run unreviewed at build time.
 #
-# Build-time guards on the shim template in container/context-mode-setup.sh,
-# the per-agent wiring in agents/*/context-mode.sh, and the exit report in
-# container/context-mode-summary.sh, all of which fail THIS layer rather than
-# letting a user session discover the drift. All three are sourced here — the
-# agent wiring through agents/registry.sh — so the guards assert the constants
-# and the paths a session will actually use and cannot fall out of step with
-# them. The ${VAR:?} lines are what keep that honest: the RUN is not `set -u`,
-# and cannot be because nvm.sh is not clean under it, so a renamed or emptied
-# constant would otherwise expand to nothing and let the checks below pass
-# having checked nothing at all:
+# To refresh, with the npm of the Node CONTEXT_MODE_NODE names (run it under
+# docker.io/library/node:<CONTEXT_MODE_NODE>), from an empty directory:
+#   printf '{"name":"riotbox-context-mode","private":true,"dependencies":{"context-mode":"%s"}}\n' \
+#     <VERSION> > package.json
+#   npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+#   cp package-lock.json container/context-mode-package-lock.json
+# then set CONTEXT_MODE_VERSION below to the same <VERSION>. The package.json
+# line is the one the RUN writes; keep the two identical.
 #
-#   * CONTEXT_MODE_BIN, which is where the shim is written, in place of a
-#     literal repeated across this RUN. context_mode_setup skips the wiring and
-#     leaves the session running with the feature off when that path is not
-#     executable, and it reads the path from this constant — so relocating the
-#     shim here and leaving the template alone would silently disable the
-#     feature in every session while every check in this layer still passed,
-#     each one invoking the shim by its new path, and `riotbox doctor` still
-#     passed too, because scripts/preflight.sh resolves it through PATH.
-#     Generating into the constant makes the two agree by construction, and the
-#     `-x` test after the chmod is the predicate the session itself evaluates,
-#     so an edit that puts the file anywhere else fails here instead. HOME is
-#     ENV-set to /home/llm and the image runs as llm well above this layer, so
-#     build and session expand the constant to the same path.
-#   * Every registered agent's context_mode_build_assert verb, one call per
-#     entry in AGENT_REGISTRY, each handed the installed package root. The
+# ── Why the pinned Node, and the shim ───────────────────────────────────────
+# context-mode 2.x uses node:sqlite and refuses Node below 24.15.0: its hook
+# prints "Node vX is below 24.15.0" and does nothing. NODE_DEFAULT above is
+# whatever nvm versions scripts/build.sh found on the host — often 20 — so the
+# package runs on its own pinned Node. The install paths come from `nvm which`
+# rather than from the ARG, because nvm accepts a partial version and a path
+# built as v${CONTEXT_MODE_NODE} by hand breaks on the major-only form.
+#
+# The shim at CONTEXT_MODE_BIN is what makes the pin stick for the CLI: a bare
+# `node` on PATH is the session default. The hooks and the MCP server get the
+# same pin by rewriting the bare `node` upstream's hooks/claude-code.json and
+# .claude-plugin/plugin.json invoke. Each rewrite has a `before` guard (there
+# was a bare node to replace — a reshaped file makes the substitution a silent
+# no-op otherwise) and an `after` guard (none was missed). OpenCode and Pi load
+# the package in-process, on their own runtimes: OpenCode's embedded bun, and
+# Pi's Node, which PI_NODE pins to this same version.
+#
+# ── Why the staged tree is trimmed, and what it keeps ───────────────────────
+# The tarball also ships a Gemini hooks/hooks.json. Claude Code always loads
+# <plugin>/hooks/hooks.json, and that file holds Gemini's events, so it is
+# deleted — as upstream deletes it when it builds plugins/claude-code. Nothing
+# else reads it: the CLI, OpenCode and Pi load the same package.
+#
+# .claude-plugin/marketplace.json stays, although upstream drops it from
+# plugins/claude-code (its marketplace lives at the repo root there).
+# container/plugin-setup.sh registers the staged tree as its own marketplace,
+# and that only resolves while the tree declares the plugin with source "./".
+#
+# It is staged at a VERSION-STAMPED path under RIOTBOX_CM_PLUGIN_DIR and never
+# copied into ~/.claude, which is a per-session-key bind mount.
+# container/plugin-setup.sh registers the newest stamped tree in place; see the
+# reconcile there for what happens when a rebuild moves it. Nothing at session
+# start reaches the network, so RIOTBOX_NETWORK=none holds.
+#
+# ── Why these checks ────────────────────────────────────────────────────────
+# Each runs here so an upstream move fails the build rather than a session.
+# The RUN is not `set -u` (nvm.sh is not clean under it), so the ${VAR:?} line
+# is what stops an emptied constant from letting the checks pass on nothing.
+#
+#   * The CLI answers --version with the pin, through the generated shim, and
+#     context_mode_pkg_root derives CM_PKG back from that shim — the opencode
+#     and Pi wiring build their paths from it every session.
+#   * Every registered agent's context_mode_build_assert, handed CM_PKG. The
 #     contract an agent depends on is declared in agents/<name>/context-mode.sh
-#     beside the constants that encode it: a guard kept here instead would stop
-#     guarding the day either one moved, and a third agent's guard would be a
-#     Containerfile edit rather than a manifest one. An agent with no such verb
-#     is skipped: the Context Mode verbs are optional, and an agent that never
-#     reaches Context Mode has no upstream contract to assert. A failure here
-#     always names the agent whose contract broke.
+#     beside the code that depends on it; a failure names the agent.
+#   * The OpenCode adapter imported under the pinned Node: its default export
+#     must carry id, server and setup, the shape both opencode loaders read.
+#     The opencode shim re-exports that default alone.
+#   * The staged hook table against container/context-mode-hooks-expected.json.
+#     A change there is upstream reshaping what a session intercepts — a
+#     decision to make deliberately. Regenerate it, and review the diff, with
+#       jq -S '.hooks | map_values([.[].matcher])' \
+#         "${CM_PKG}/hooks/claude-code.json" > container/context-mode-hooks-expected.json
+#   * The routing probe: the real PreToolUse command, read out of the staged
+#     hook file after the interpreter rewrite, fed a real WebFetch payload, must
+#     return a permission decision. Its control feeds a plain `ls`, which the
+#     hook allows by saying nothing, so a pass cannot come from a hook that
+#     answers every tool. PATH is scrubbed to /usr/bin:/bin, which has no Node,
+#     so a command the rewrite missed produces nothing and fails the layer
+#     instead of answering on the build's Node 20. HOME is a scratch directory,
+#     so the probe leaves no store in the image.
+#   * The stats probe. The exit report's stats shim (CONTEXT_MODE_STATS_BIN,
+#     generated here on the pinned Node) runs container/context-mode-stats.mjs,
+#     which reads upstream's events table directly. The real PostToolUse
+#     command, fed a canned Bash call with a large output in a fresh scratch
+#     HOME, must leave a store holding exactly one claude-code call, with bytes
+#     kept out; read again at the watermark that read reported, the run must
+#     be empty. Then a canned Read with the same large output, which the hook
+#     replaces, must add nothing: 2.x journals no row for a clean Read, so the
+#     report documents those savings as unmeasured and its kept-out figure as
+#     a lower bound. If upstream starts journalling them, this fails, so the
+#     report starts counting them on purpose rather than by surprise. An upstream change to the columns, to
+#     what a replaced output records, or to where the store lives would
+#     otherwise surface as sessions whose report silently stops, or lies.
+#     tests/fixtures/context-mode-2-events.sql, which the suites build their
+#     stores from, is a copy of this table; this probe is what keeps it honest.
 #
-#     claude asserts exactly one thing now: that CONTEXT_MODE_MCP_NAME still
-#     appears in hooks/core/tool-naming.mjs, the routing table naming the tools
-#     a redirect points the agent at. That table hardcodes
-#     mcp__plugin_context-mode_context-mode__<tool> under its claude-code key
-#     with nothing to steer it, so the MCP server has to be registered under
-#     that name; a pin bump that changed the prefix would leave every redirect
-#     pointing at a tool the session does not have. The grep includes the
-#     backtick that opens the template literal, so the identical string in the
-#     file's own doc table cannot satisfy it while the code drifts. Both this
-#     and the path itself are upstream internals that could be relocated
-#     without any change in behaviour; that would fail this layer too, which is
-#     the intent — the drift then gets read by a maintainer instead of by a
-#     session.
+# What this layer does NOT run: `context-mode doctor`. It checks each agent it
+# finds for the config `context-mode setup` writes, which riotbox never runs —
+# it wires per session — so it exits 1 for every agent in the image.
 #
-#     This call covers the npm package root installed above and nothing else.
-#     It stays because that package is what the `context-mode` CLI and the
-#     opencode adapter run from; the staged plugin tree a Claude session runs
-#     is asserted separately, in the staging layer below.
-#
-#     What is NOT asserted any more: the hook event set and the PreToolUse and
-#     PostToolUse matchers. Those were three equality comparisons against
-#     hooks/hooks.json, and they went with the tables they compared.
-#     context_mode_hook_table, CONTEXT_MODE_MATCHER and
-#     CONTEXT_MODE_POST_MATCHER were RiotBox's transcription of that file,
-#     asserted equal to it so a drift between the two copies failed here; the
-#     staged plugin ships hooks.json and Claude Code reads it directly, so
-#     there is no second copy left to compare. What that costs is honest and
-#     recorded: which tools are intercepted is now upstream's runtime decision
-#     on BOTH agents, with no build-time signal when it changes. See
-#     docs/dev/context-mode.md § Which tools are actually intercepted.
-#
-#     A grep is also the sounder shape. The comparisons it replaced compared
-#     two command substitutions, so a run in which both sides failed compared
-#     "" against "" and passed. A failed grep is a failed assert.
-#
-#     opencode asserts the three things its plugin shim re-exports through:
-#     build/adapters/opencode/plugin.js exists, still exports
-#     ContextModePlugin, and is still what package.json maps ./plugin to.
-#     Nothing on that path is a hook or an MCP server, so none of the claude
-#     constants have an analogue — an upstream move would surface as an
-#     opencode session whose plugin silently fails to load.
-#   * context_mode_pkg_root against CM_PKG, and after the shim is generated
-#     rather than before, because the derivation parses that shim. The opencode
-#     wiring builds the re-export path from it every session, so a change to
-#     the shim's shape would point every generated plugin at a package root
-#     that does not exist.
-#   * NOT the `hook <platform> <event>` dispatcher. There was an assertion on
-#     it — a grep of `--help` — and it has gone with the hand-authored wiring
-#     that dispatched through it. The staged plugin's hooks.json invokes
-#     hooks/<event>.mjs directly, so nothing RiotBox installs calls that
-#     subcommand any more, and a guard on a surface RiotBox does not use only
-#     buys a future build failure a maintainer has to rule out. (The string
-#     still appears in tests/context-mode.venom.yml, as fixtures for the
-#     legacy-stanza strip: recognising the shape RiotBox used to write is a
-#     contract with its own past output, not with upstream's CLI.) What that
-#     assertion was reaching for — proof that a hook routes rather than proof
-#     that the CLI runs — is guarded by the routing probe in the plugin
-#     staging layer below, which it never could be here: fed empty stdin, the
-#     dispatcher exits 0 and prints nothing for a valid event and a
-#     nonexistent one alike.
-#   * getRealBytesStats in build/session/analytics.js — the counters the
-#     generated CONTEXT_MODE_STATS_BIN shim imports — and then that shim's own
-#     output against a throwaway empty sessions directory. Upstream renaming
-#     either the module or the export would otherwise surface as sessions that
-#     silently stop printing the exit report.
-#
-# DL3016 does not apply: the version is pinned via the build ARG.
+# The lockfile and the hook expectation are COPY'd from container/ rather than
+# packaging/: packaging/ holds nfpm maintainer scripts and is deliberately NOT
+# installed to /opt/riotbox (.goreleaser.yaml contents, install.sh APP_PATHS),
+# while `riotbox build` runs from that install tree — so a COPY source there
+# resolves in the dev repo and nowhere else.
 #
 # The trailing npm cache strip is the one "Why every npm layer empties
-# /home/llm/.npm" explains. It runs last because `context-mode doctor` checks
-# the published npm version and would repopulate the cache behind an earlier
-# strip.
-ARG CONTEXT_MODE_NODE=22.23.4
-ARG CONTEXT_MODE_VERSION=1.0.169
-RUN bash -c '\
+# /home/llm/.npm" explains. It runs last, after the probes.
+ARG CONTEXT_MODE_NODE=24.22.2
+ARG CONTEXT_MODE_VERSION=2.1.4
+ENV RIOTBOX_CM_PLUGIN_DIR=/home/llm/.riotbox/context-mode-plugin
+COPY --chown=llm:llm container/context-mode-package-lock.json \
+    /tmp/context-mode-package-lock.json
+COPY --chown=llm:llm container/context-mode-hooks-expected.json \
+    /tmp/context-mode-hooks-expected.json
+RUN bash -o pipefail -c '\
     set -e; \
     export NVM_DIR=/home/llm/.nvm; \
     . "${NVM_DIR}/nvm.sh"; \
     nvm install "${CONTEXT_MODE_NODE}"; \
     CM_NODE_EXE="$(nvm which "${CONTEXT_MODE_NODE}")"; \
     CM_NODE_BIN="$(dirname "${CM_NODE_EXE}")"; \
-    CM_PKG="${CM_NODE_BIN%/bin}/lib/node_modules/context-mode"; \
-    "${CM_NODE_BIN}/npm" install -g "context-mode@${CONTEXT_MODE_VERSION}"; \
+    cm_install="$(mktemp -d)"; \
+    printf "{\"name\":\"riotbox-context-mode\",\"private\":true,\"dependencies\":{\"context-mode\":\"%s\"}}\n" "${CONTEXT_MODE_VERSION}" > "${cm_install}/package.json"; \
+    mv /tmp/context-mode-package-lock.json "${cm_install}/package-lock.json"; \
+    PATH="${CM_NODE_BIN}:${PATH}" \
+        "${CM_NODE_BIN}/npm" ci --ignore-scripts --no-audit --no-fund --prefix "${cm_install}"; \
+    cm_installed="${cm_install}/node_modules/context-mode"; \
+    [ "$(jq -r ".version" "${cm_installed}/package.json")" = "${CONTEXT_MODE_VERSION}" ] || { \
+        echo "npm ci installed context-mode $(jq -r ".version" "${cm_installed}/package.json"), not ${CONTEXT_MODE_VERSION}" >&2; \
+        exit 1; }; \
+    [ "$(cd "${cm_install}/node_modules" && find . -mindepth 1 -maxdepth 1 ! -name ".*" -printf "%f\n")" = "context-mode" ] || { \
+        echo "npm ci installed more than context-mode into node_modules (dependencies, optional or peer) — moving context-mode out of it would strand them" >&2; \
+        exit 1; }; \
+    CM_PKG="${RIOTBOX_CM_PLUGIN_DIR}/v${CONTEXT_MODE_VERSION}"; \
+    mkdir -p "${RIOTBOX_CM_PLUGIN_DIR}"; \
+    mv "${cm_install}/node_modules/context-mode" "${CM_PKG}"; \
+    rm -rf "${cm_install}"; \
+    rm -f "${CM_PKG}/hooks/hooks.json"; \
     # shellcheck disable=SC1091  # copied into the image by the COPY above \
     . /home/llm/.riotbox/context-mode-setup.sh; \
-    # shellcheck disable=SC1091  # copied into the image by the COPY above \
-    . /home/llm/.riotbox/context-mode-summary.sh; \
-    : "${CONTEXT_MODE_STATS_BIN:?is no longer defined by context-mode-summary.sh — the exit report would read a shim that was never written}"; \
     : "${CONTEXT_MODE_BIN:?is no longer defined by context-mode-setup.sh — the shim would go where no session looks for it}"; \
     printf "%s\n" \
         "#!/usr/bin/env bash" \
         "# Generated by the RiotBox image build. Pins the interpreter — see the" \
         "# Context Mode block in the Containerfile for why a bare node is wrong." \
-        "exec \"${CM_NODE_BIN}/node\" \"${CM_PKG}/cli.bundle.mjs\" \"\$@\"" \
+        "exec \"${CM_NODE_BIN}/node\" \"${CM_PKG}/cli.mjs\" \"\$@\"" \
         > "${CONTEXT_MODE_BIN}"; \
     chmod +x "${CONTEXT_MODE_BIN}"; \
     [ -x "${CONTEXT_MODE_BIN}" ]; \
+    [ "$("${CONTEXT_MODE_BIN}" --version)" = "${CONTEXT_MODE_VERSION}" ] || { \
+        echo "the context-mode shim does not answer --version with ${CONTEXT_MODE_VERSION}" >&2; \
+        exit 1; }; \
+    [ "$(context_mode_pkg_root)" = "${CM_PKG}" ] \
+        || { echo "context_mode_pkg_root derives $(context_mode_pkg_root) from the generated shim, but the package is at ${CM_PKG} — the opencode and Pi wiring would point at the wrong path" >&2; exit 1; }; \
     # shellcheck disable=SC1091  # copied into the image by the COPY above \
     . /home/llm/.riotbox/agents/registry.sh; \
     for _cm_agent in "${AGENT_REGISTRY[@]}"; do \
@@ -1382,293 +1398,19 @@ RUN bash -c '\
         agent_call "${_cm_agent}" context_mode_build_assert "${CM_PKG}" \
             || { echo "context-mode@${CONTEXT_MODE_VERSION} broke the ${_cm_agent} Context Mode contract (above)" >&2; exit 1; }; \
     done; \
-    [ "$(context_mode_pkg_root)" = "${CM_PKG}" ] \
-        || { echo "context_mode_pkg_root derives $(context_mode_pkg_root) from the generated shim, but the package is at ${CM_PKG} — the opencode shim would re-export from the wrong path" >&2; exit 1; }; \
-    [ -f "${CM_PKG}/build/session/analytics.js" ]; \
-    grep -qF "export function getRealBytesStats" "${CM_PKG}/build/session/analytics.js"; \
-    printf "%s\n" \
-        "import { getRealBytesStats } from \"${CM_PKG}/build/session/analytics.js\";" \
-        "const dir = process.argv[2];" \
-        "if (!dir) { process.exit(1); }" \
-        "try {" \
-        "  process.stdout.write(JSON.stringify(getRealBytesStats({ sessionsDir: dir })) + \"\\n\");" \
-        "} catch {" \
-        "  process.exit(1);" \
-        "}" \
-        > /home/llm/.riotbox/context-mode-stats.mjs; \
-    printf "%s\n" \
-        "#!/usr/bin/env bash" \
-        "# Generated by the RiotBox image build. Pins the interpreter for the same" \
-        "# reason the context-mode shim does; --no-warnings suppresses the" \
-        "# ExperimentalWarning node:sqlite emits, which would otherwise land in" \
-        "# the middle of the exit report." \
-        "exec \"${CM_NODE_BIN}/node\" --no-warnings \"/home/llm/.riotbox/context-mode-stats.mjs\" \"\$@\"" \
-        > "${CONTEXT_MODE_STATS_BIN}"; \
-    chmod +x "${CONTEXT_MODE_STATS_BIN}"; \
-    CM_PROBE="$(mktemp -d)"; \
-    "${CONTEXT_MODE_STATS_BIN}" "${CM_PROBE}" \
-        | jq -e "has(\"eventDataBytes\") and has(\"bytesAvoided\") \
-                 and has(\"bytesReturned\") and has(\"snapshotBytes\")" > /dev/null; \
-    rmdir "${CM_PROBE}"; \
-    "${CONTEXT_MODE_BIN}" doctor > /dev/null; \
-    find /home/llm/.npm -mindepth 1 -delete'
-
-# ── Context Mode plugin (staged, registered in place at session start) ───────
-# Upstream ships its Claude Code surface — six hook events, eleven MCP tools
-# and the eight bundled skills that surface as its /context-mode:* commands —
-# only in the marketplace plugin. The npm package installed above carries the
-# hooks and the MCP tools and nothing else, which is why a RiotBox session had
-# no /context-mode commands. There is no commands/ directory upstream: the
-# slash commands ARE the skills, declared by "skills": "./skills/" in
-# .claude-plugin/plugin.json, so staging the tree is what buys them.
-#
-# Staged into a VERSION-STAMPED path and never copied into ~/.claude. The
-# staged tree is 60 MB at v1.0.169 — 14 MB of source plus 47 MB of runtime
-# dependencies — and ~/.claude is a per-session-key bind mount, so a copy would
-# pay that disk and that startup latency again for every project set.
-# container/plugin-setup.sh registers this path directly; see the reconcile
-# there for what happens when a rebuild moves it.
-#
-# Cloned at a pinned ref at BUILD time, so no session start reaches the
-# network and RIOTBOX_NETWORK=none holds. `context-mode upgrade` — which
-# git-clones main over the installed tree — stays unsupported inside RiotBox
-# for the reason docs/dev/decisions/context-mode-adoption.md already gives.
-#
-# CONTEXT_MODE_PLUGIN_REF, CONTEXT_MODE_PLUGIN_SHA and CONTEXT_MODE_VERSION
-# must describe the same upstream code: v1.0.169 carries "version": "1.0.169"
-# in its plugin.json and its package.json, and that tag resolves to commit
-# 589d8214, so the staged tree and the npm package above are the same release.
-# Bump all three together, and regenerate the lockfile in the same pass — the
-# refresh recipe further down, just above the ARGs, is the whole procedure.
-#
-# ── Why the dependency install, not just the clone ──────────────────────────
-# A clone alone does NOT work offline, and the Node version has nothing to do
-# with it. hooks/ensure-deps.mjs gates purely on `existsSync(node_modules/
-# better-sqlite3)` — its hasModernSqlite() check only skips a SIGSEGV-prone
-# child probe, never the install, because the bundles require better-sqlite3
-# as a fallback regardless. So EVERY hook invocation on a dependency-less tree
-# shells out to `npm install better-sqlite3`. Measured on a bare clone under
-# Node 22.23.1, offline: 120 SECONDS per hook — ensure-deps' own execSync
-# timeout — after which the hook returns a decision but better-sqlite3 is
-# still absent, so the FTS5 knowledge base, which is the entire feature, never
-# comes up. PreToolUse fires on nearly every tool call. With the dependencies
-# staged the same hook answers in 62 ms and better-sqlite3 loads.
-#
-# `npm ci --omit=dev`, run with the PINNED Node's npm, is what fits:
-#   * `npm ci`, not `npm install` — upstream ships no package-lock.json, only
-#     bun.lock, so the lockfile is generated against the pinned commit and
-#     committed here as container/context-mode-package-lock.json. Without one
-#     npm resolves the `^` ranges fresh on every build, and the pinned commit
-#     would fix upstream's own code and nothing about the 139-package tree
-#     that gets installed under it. What npm ci does NOT do is catch a stale
-#     lockfile by itself: it fails only when the dependency set or its ranges
-#     disagree with package.json, and measured on npm 11.9.0 a lockfile at
-#     1.0.169 under a package.json at 1.0.170 installs green, because
-#     upstream's patch releases rarely move a `^`. The three-way version
-#     check that does catch it is in the venom shape guard over this layer.
-#   * Not `bun install` — package.json declares no trustedDependencies, so bun
-#     skips better-sqlite3's prebuild step, falls through to node-gyp against
-#     bun's spoofed `node -v v24.3.0`, and the install script exits 1.
-#   * Not the image default Node — npm's own shebang is `#!/usr/bin/env node`,
-#     and this stage's PATH already puts NODE_DEFAULT first, so invoking the
-#     pinned npm by path is not enough; CM_NODE_BIN has to lead PATH or npm
-#     runs itself under Node 20. Upstream's postinstall hard-exits on
-#     Linux + Node < 22.5 (their #564), and the prebuilt better-sqlite3 binary
-#     is ABI-matched to whatever Node installed it. It must be the same Node
-#     the patched hooks.json and plugin.json name, or ensure-deps tries to heal
-#     the ABI at hook time — over the network, offline.
-#   * --omit=dev keeps the devDependencies (typescript, tsx, vite, esbuild,
-#     rolldown) out: 60 MB staged instead of the 148 MB a full install lands.
-# What the lockfile does and does not buy, stated plainly: every version in
-# the tree is fixed and all 266 resolved entries carry an integrity hash npm
-# verifies on download, so a rebuild installs the same REGISTRY bytes and a
-# republished tarball fails the install. It cannot notice a dependency that was
-# already malicious when the lockfile was generated, because the hashes were
-# transcribed from that same resolution — the same limit the bun digests above
-# carry.
-#
-# It also does not cover every byte this layer installs. better-sqlite3 is
-# marked hasInstallScript and depends on prebuild-install, and this RUN does not
-# pass --ignore-scripts: the install fetches a prebuilt better_sqlite3.node from
-# the project's GitHub releases, outside the registry and outside the lockfile,
-# with no digest recorded anywhere in this repo. That artifact is native code
-# every hook in every enabled session loads, and the loader check below proves
-# it imports, not that it is the binary upstream published. Running with
-# --ignore-scripts is not the fix on its own: without the prebuild the install
-# falls through to node-gyp, which needs a toolchain this stage does not carry.
-# Tracked as an open item under RIOTBOX-20260312-001 in THREAT_MODEL.md.
-#
-# ── Why the interpreter substitutions ───────────────────────────────────────
-# Upstream invokes a bare `node` in two places — every hooks/hooks.json command
-# and plugin.json's mcpServers entry. NODE_VERSIONS defaults to 20, Context
-# Mode needs >= 22.5 for node:sqlite with FTS5, and the staged better-sqlite3
-# binary is built for the pinned Node's ABI. Both are rewritten to the pinned
-# interpreter. plugin.json's entry is the live one — RiotBox no longer writes
-# an mcpServers entry of its own, so the server a session talks to is the one
-# declared there.
-#
-# Each `before` guard is the one that catches upstream: it fails the build if
-# nothing invokes a bare `node` any more, which is what a rename, a switch to
-# another runtime, or a reshaped file all look like. The `after` guard is
-# narrower — it can only catch jq failing to traverse what it just matched.
-#
-# ── Why the MCP-name assert runs here too ───────────────────────────────────
-# The Context Mode layer above already calls context_mode_build_assert for
-# every registered agent that implements it, but it hands them the npm package
-# root, which is a different tree from this one. This clone is what
-# container/plugin-setup.sh registers, so its hooks/core/tool-naming.mjs is the
-# routing table a session's redirects are actually built from, its hooks.json
-# is what dispatches the events, and its plugin.json declares the MCP server.
-# Asserting the npm copy and calling the staged tree covered would rest the
-# guarantee on CONTEXT_MODE_VERSION and CONTEXT_MODE_PLUGIN_REF naming one
-# release — true today and checked by a venom case, but not something either
-# build layer can observe. So the same verb is called a second time here with
-# ${dest} as the tree root, and the artifact that executes is verified as
-# itself.
-#
-# It runs before `npm ci`, so a tree whose routing table no longer carries the
-# prefix fails without a minute of dependency install first.
-#
-# Hardcoded to claude rather than looped over AGENT_REGISTRY, unlike the layer
-# above. This tree is a Claude Code plugin — plugin.json, hooks.json,
-# CLAUDE_PLUGIN_ROOT — and no other agent reaches it, so there is no set to
-# iterate, and an agent whose contract is about the npm package would be handed
-# a root that says nothing about it.
-#
-# ── Why the routing probe ───────────────────────────────────────────────────
-# Those counts prove the STRING in hooks.json changed. They cannot prove the
-# command runs, and they cannot prove it decides anything. The guard this
-# probe replaces fed upstream's dispatcher empty stdin — which, as the layer
-# above now records, could only ever prove that the CLI runs, and a Context
-# Mode that reported itself enabled while routing nothing passed it.
-#
-# So the probe feeds the real PreToolUse command a real WebFetch payload —
-# WebFetch being a tool upstream's matcher set is supposed to intercept — and
-# requires a hookSpecificOutput.permissionDecision back. It reads the command
-# out of the staged hooks.json rather than hardcoding one, so whatever the
-# substitution above produced is exactly what gets executed.
-#
-# ── Why the sentinel directory: do not simplify this away ───────────────────
-# Every routing decision passes through mcpRedirect() in
-# hooks/core/mcp-ready.mjs, which returns null unless isMCPReady() finds a
-# live MCP server: it scans a directory for context-mode-mcp-ready-<PID>
-# files and probes each PID. No MCP server runs during a build, so a probe
-# without a sentinel gets empty output on EVERY build — a guard that fails
-# closed for a reason that has nothing to do with the tree it guards.
-# CONTEXT_MODE_MCP_SENTINEL_DIR is upstream's own override for exactly this;
-# it points at a private directory here, seeded with one sentinel naming this
-# shell's (live) PID.
-#
-# Private rather than the build's /tmp, because upstream's default scan root
-# is a hardcoded /tmp and a probe run there is satisfied by ANY unrelated
-# process's sentinel. That is not hypothetical: a probe run on a developer
-# host returned a decision and was recorded as a pass while reading that
-# session's own running context-mode server's sentinel out of the shared
-# /tmp. The empty-sentinel run below is the control that makes the seeded run
-# mean something — it asserts the probe returns NOTHING before the sentinel
-# is written, so a pass cannot be arriving from anywhere else.
-#
-# ── Why the probe scrubs node off PATH ──────────────────────────────────────
-# The hook runs with PATH=/usr/bin:/bin, which has no Node on it, so the
-# command has to name its own interpreter. Measured against v1.0.169 on this
-# image's default Node 20, an un-rewritten `node "…/pretooluse.mjs"` still
-# answers `deny` — the WebFetch route is pure JS and runHook swallows
-# everything else — so a probe that inherited the build PATH would pass on a
-# tree the substitution above had missed. It would also CORRUPT that tree:
-# ensure-deps' ABI heal fires below Node 22.5, `npm rebuild better-sqlite3`
-# runs with the build's network, and the tree comes back carrying the
-# devDependencies --omit=dev just excluded and a better-sqlite3 the pinned
-# Node can no longer load — after the loader check above has already passed.
-# With node unresolvable an un-rewritten command produces nothing and fails
-# the layer, which is the whole point.
-#
-# The probe does leave one thing behind: under the pinned Node, ensure-deps
-# copies the native binary to better_sqlite3.abi<N>.node. That is the whole of
-# what the probe changes in the staged tree — the ABI cache a session would
-# otherwise write on its first hook, pre-seeded.
-#
-# ── Why a commit SHA beside the tag ─────────────────────────────────────────
-# A git tag is mutable. Upstream can move v1.0.169, and `git clone --depth 1
-# --branch` takes whatever the tag resolves to at build time, which for a tree
-# that then executes inside every enabled session is not a pin at all.
-# CONTEXT_MODE_PLUGIN_SHA is compared against `git rev-parse HEAD` while the
-# clone still has its .git directory, so a moved tag fails the layer instead
-# of staging code nobody read. Same limit the bun digests above spell out: it
-# catches the bytes behind a fixed tag changing after the SHA was transcribed,
-# not a tag that was already pointing somewhere else when it was.
-#
-# To refresh:
-#   1. Pick a new tag at https://github.com/mksglu/context-mode/tags
-#   2. Resolve it to the commit a clone will report. Upstream's tags are
-#      ANNOTATED, so it is the ^{} deref that matters — the bare ref names the
-#      tag object, which is NOT what `git rev-parse HEAD` prints:
-#        git ls-remote https://github.com/mksglu/context-mode.git \
-#          "refs/tags/<TAG>^{}"
-#   3. Regenerate the lockfile against that tree, with an npm running on
-#      Node >= 22.5 — upstream's postinstall hard-exits below that, and the
-#      resolution npm records is what every later build then installs:
-#        git clone --depth 1 --branch <TAG> \
-#          https://github.com/mksglu/context-mode.git /tmp/cm
-#        npm install --package-lock-only --no-audit --no-fund --prefix /tmp/cm
-#        cp /tmp/cm/package-lock.json container/context-mode-package-lock.json
-#      No --omit=dev on that command. npm records the devDependencies in the
-#      lockfile either way; the flag belongs at install time, not here.
-#   4. Update CONTEXT_MODE_PLUGIN_REF + CONTEXT_MODE_PLUGIN_SHA below and
-#      CONTEXT_MODE_VERSION above, all three, to the same release.
-ARG CONTEXT_MODE_PLUGIN_REF=v1.0.169
-ARG CONTEXT_MODE_PLUGIN_SHA=589d8214d56740a28b5f7bf63167743d586b0b40
-ENV RIOTBOX_CM_PLUGIN_DIR=/home/llm/.riotbox/context-mode-plugin
-
-# In container/ rather than packaging/: packaging/ holds nfpm maintainer
-# scripts and is deliberately NOT installed to /opt/riotbox (.goreleaser.yaml
-# contents, install.sh APP_PATHS), while `riotbox build` runs from that
-# install tree — so a COPY source there resolves in the dev repo and nowhere
-# else.
-#
-# Staged outside ${dest}, not into it: `git clone` below needs an empty target
-# directory, so a COPY landing the lockfile there first would fail the clone.
-# The RUN moves it into place between the clone and npm ci, which is the only
-# directory npm ci will read a lockfile from.
-COPY --chown=llm:llm container/context-mode-package-lock.json \
-    /tmp/context-mode-package-lock.json
-
-# The matcher set the staged tree is required to ship, staged the same way and
-# for the same reason as the lockfile above: it is a build input, and a COPY is
-# the only way it reaches a build that runs from the installed app tree.
-#
-# Regenerate it with the ref bump, from the tree the clone produces:
-#   jq -S '.hooks | map_values([.[].matcher])' \
-#       "${dest}/hooks/hooks.json" > container/context-mode-hooks-expected.json
-# and review the diff — a change here is upstream reshaping what a session
-# intercepts, which is a decision to make deliberately, not a file to refresh
-# until the build goes green.
-COPY --chown=llm:llm container/context-mode-hooks-expected.json \
-    /tmp/context-mode-hooks-expected.json
-
-# The npm cache strip near the end is the one "Why every npm layer empties
-# /home/llm/.npm" explains. It runs after the loader and routing probes, which
-# are the last things in this layer that read the staged tree.
-RUN bash -o pipefail -c '\
-    set -e; \
-    export NVM_DIR=/home/llm/.nvm; \
-    . "${NVM_DIR}/nvm.sh"; \
-    CM_NODE_EXE="$(nvm which "${CONTEXT_MODE_NODE}")"; \
-    CM_NODE_BIN="$(dirname "${CM_NODE_EXE}")"; \
-    dest="${RIOTBOX_CM_PLUGIN_DIR}/${CONTEXT_MODE_PLUGIN_REF}"; \
-    mkdir -p "${dest}"; \
-    git clone --depth 1 --branch "${CONTEXT_MODE_PLUGIN_REF}" \
-        https://github.com/mksglu/context-mode.git "${dest}"; \
-    cloned="$(git -C "${dest}" rev-parse HEAD)"; \
-    [ "${cloned}" = "${CONTEXT_MODE_PLUGIN_SHA}" ] || { \
-        echo "${CONTEXT_MODE_PLUGIN_REF} resolves to ${cloned}, pinned ${CONTEXT_MODE_PLUGIN_SHA} — the tag moved, or the pin was not bumped with the ref" >&2; \
+    cm_probe="$(mktemp -d)"; \
+    HOME="${cm_probe}" "${CM_NODE_EXE}" --input-type=module -e "const d = (await import(process.argv[1])).default; if (!(d && typeof d.id === \"string\" && typeof d.server === \"function\" && typeof d.setup === \"function\")) process.exit(1);" "${CM_PKG}/opencode/plugin.js" \
+        || { echo "the OpenCode adapter default export no longer carries id, server and setup — the opencode shim re-exports it, so opencode would load no plugin" >&2; exit 1; }; \
+    pj="${CM_PKG}/.claude-plugin/plugin.json"; \
+    [ -r "${pj}" ] || { echo "the staged package has no .claude-plugin/plugin.json — nothing can register it" >&2; exit 1; }; \
+    [ "$(jq -r "[.plugins[] | select(.name == \"context-mode\") | .source] | first" "${CM_PKG}/.claude-plugin/marketplace.json")" = "./" ] || { \
+        echo "marketplace.json no longer declares context-mode with source \"./\" — container/plugin-setup.sh registers the staged tree as its own marketplace, which would not resolve" >&2; \
         exit 1; }; \
-    rm -rf "${dest}/.git"; \
-    # shellcheck disable=SC1091  # copied into the image by the COPY above \
-    . /home/llm/.riotbox/agents/registry.sh; \
-    agent_call claude context_mode_build_assert "${dest}" \
-        || { echo "the staged plugin at ${CONTEXT_MODE_PLUGIN_REF} broke the claude Context Mode contract (above) — this is the tree a session runs" >&2; exit 1; }; \
-    hooks="${dest}/hooks/hooks.json"; \
-    [ -r "${hooks}" ] || { echo "staged plugin has no hooks/hooks.json" >&2; exit 1; }; \
+    [ "$(jq -r ".hooks" "${pj}")" = "./hooks/claude-code.json" ] || { \
+        echo "plugin.json no longer names ./hooks/claude-code.json — the hook table checked below is not the one Claude Code loads" >&2; \
+        exit 1; }; \
+    hooks="${CM_PKG}/hooks/claude-code.json"; \
+    [ -r "${hooks}" ] || { echo "the staged package has no hooks/claude-code.json" >&2; exit 1; }; \
     cm_table="$(jq -Sc ".hooks | map_values([.[].matcher])" "${hooks}")"; \
     cm_expected_table="$(jq -Sc . /tmp/context-mode-hooks-expected.json)"; \
     [ "${cm_table}" = "${cm_expected_table}" ] || { \
@@ -1677,17 +1419,9 @@ RUN bash -o pipefail -c '\
         echo "  staged:   ${cm_table}" >&2; \
         exit 1; }; \
     rm -f /tmp/context-mode-hooks-expected.json; \
-    mv /tmp/context-mode-package-lock.json "${dest}/package-lock.json"; \
-    PATH="${CM_NODE_BIN}:${PATH}" \
-        "${CM_NODE_BIN}/npm" ci --omit=dev --no-audit --no-fund --prefix "${dest}"; \
-    "${CM_NODE_EXE}" -e "const { createRequire } = require(\"node:module\"); \
-        const r = createRequire(\"${dest}/package.json\"); \
-        for (const m of [\"better-sqlite3\", \"turndown\", \"turndown-plugin-gfm\", \"@mixmark-io/domino\"]) r.resolve(m); \
-        new (r(\"better-sqlite3\"))(\":memory:\").close();" \
-        || { echo "the staged plugin cannot load better-sqlite3 (or an esbuild external the bundles need) under ${CM_NODE_EXE} — every session start would run npm install at hook time" >&2; exit 1; }; \
     before="$(jq -r "[.hooks[][].hooks[].command] | map(select(startswith(\"node \"))) | length" "${hooks}")"; \
     [ "${before}" -gt 0 ] || { \
-        echo "no hooks.json command invokes a bare node — upstream changed the command shape" >&2; \
+        echo "no hooks/claude-code.json command invokes a bare node — upstream changed the command shape" >&2; \
         exit 1; }; \
     jq --arg node "${CM_NODE_EXE}" \
         "(.hooks[][].hooks[].command) |= (if startswith(\"node \") then \$node + .[4:] else . end)" \
@@ -1695,10 +1429,8 @@ RUN bash -o pipefail -c '\
     mv "${hooks}.tmp" "${hooks}"; \
     after="$(jq -r "[.hooks[][].hooks[].command] | map(select(startswith(\"node \"))) | length" "${hooks}")"; \
     [ "${after}" -eq 0 ] || { \
-        echo "${after} hooks.json commands still invoke a bare node after the substitution" >&2; \
+        echo "${after} hooks/claude-code.json commands still invoke a bare node after the substitution" >&2; \
         exit 1; }; \
-    pj="${dest}/.claude-plugin/plugin.json"; \
-    [ -r "${pj}" ] || { echo "staged plugin has no .claude-plugin/plugin.json — nothing can register it" >&2; exit 1; }; \
     [ "$(jq -r ".mcpServers[\"context-mode\"].command" "${pj}")" = "node" ] || { \
         echo "plugin.json no longer declares a bare node for the context-mode MCP server — the interpreter pin has nothing to replace" >&2; \
         exit 1; }; \
@@ -1708,77 +1440,79 @@ RUN bash -o pipefail -c '\
     [ "$(jq -r ".mcpServers[\"context-mode\"].command" "${pj}")" = "${CM_NODE_EXE}" ] || { \
         echo "plugin.json still does not name ${CM_NODE_EXE} after the substitution" >&2; \
         exit 1; }; \
-    cm_pre="$(jq -r "first(.hooks.PreToolUse[] | select(.matcher == \"WebFetch\") | .hooks[].command)" "${hooks}")"; \
+    cm_pre="$(jq -r "first(.hooks.PreToolUse[].hooks[].command)" "${hooks}")"; \
     [ -n "${cm_pre}" ] || { \
-        echo "hooks.json no longer routes WebFetch through a PreToolUse command — upstream reshaped the matcher set and the routing probe has nothing to run" >&2; \
+        echo "hooks/claude-code.json has no PreToolUse command — the routing probe has nothing to run" >&2; \
         exit 1; }; \
-    cm_probe="$(mktemp -d)"; \
-    mkdir -p "${cm_probe}/sentinel" "${cm_probe}/tmp"; \
-    cm_payload="{\"session_id\":\"riotbox-build-probe\",\"cwd\":\"${cm_probe}\",\"tool_name\":\"WebFetch\",\"tool_input\":{\"url\":\"https://example.invalid/riotbox-build-probe\"}}"; \
-    cm_route() { printf "%s" "${cm_payload}" \
-        | env PATH=/usr/bin:/bin HOME="${cm_probe}" TMPDIR="${cm_probe}/tmp" \
-              CLAUDE_PLUGIN_ROOT="${dest}" CONTEXT_MODE_PLATFORM=claude-code \
-              CONTEXT_MODE_MCP_SENTINEL_DIR="${cm_probe}/sentinel" \
+    cm_route() { printf "{\"session_id\":\"riotbox-build-probe\",\"cwd\":\"%s\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"%s\",\"tool_input\":%s}" "${cm_probe}" "$1" "$2" \
+        | env PATH=/usr/bin:/bin HOME="${cm_probe}" \
+              CLAUDE_PLUGIN_ROOT="${CM_PKG}" CLAUDE_PROJECT_DIR="${cm_probe}" \
               sh -c "${cm_pre}" \
         | jq -r ".hookSpecificOutput.permissionDecision // empty"; }; \
-    cm_decision="$(cm_route)" || cm_decision=""; \
-    [ -z "${cm_decision}" ] || { \
-        echo "the routing probe decided \"${cm_decision}\" with its sentinel directory empty — it is reading an MCP sentinel it did not seed, so a pass would prove nothing" >&2; \
+    cm_control="$(cm_route Bash "{\"command\":\"ls\"}")" || cm_control=""; \
+    [ -z "${cm_control}" ] || { \
+        echo "the routing probe decided \"${cm_control}\" for a plain ls — a hook that answers every tool would pass the WebFetch check below, so a pass would prove nothing" >&2; \
         exit 1; }; \
-    printf "%s" "$$" > "${cm_probe}/sentinel/context-mode-mcp-ready-$$"; \
-    cm_decision="$(cm_route)" || cm_decision=""; \
+    cm_decision="$(cm_route WebFetch "{\"url\":\"https://example.invalid/riotbox-build-probe\",\"prompt\":\"p\"}")" || cm_decision=""; \
     [ -n "${cm_decision}" ] || { \
         echo "the staged plugin returned no PreToolUse decision for WebFetch — Context Mode would report itself enabled and route nothing, which is the bug this probe exists to catch" >&2; \
-        if [ -s "${cm_probe}/.claude/context-mode/hook-errors.log" ]; then cat "${cm_probe}/.claude/context-mode/hook-errors.log" >&2; fi; \
+        if [ -s "${cm_probe}/.context-mode/hook-errors.log" ]; then cat "${cm_probe}/.context-mode/hook-errors.log" >&2; fi; \
         exit 1; }; \
-    rm -rf "${cm_probe}"; \
+    # shellcheck disable=SC1091  # copied into the image by the COPY above \
+    . /home/llm/.riotbox/context-mode-summary.sh; \
+    : "${CONTEXT_MODE_STATS_BIN:?is no longer defined by context-mode-summary.sh — the exit report would read a shim that was never written}"; \
+    printf "%s\n" \
+        "#!/usr/bin/env bash" \
+        "# Generated by the RiotBox image build. Pins the interpreter for the same" \
+        "# reason the context-mode shim does; --no-warnings suppresses the" \
+        "# ExperimentalWarning node:sqlite emits, which would otherwise land in" \
+        "# the middle of the exit report." \
+        "exec \"${CM_NODE_EXE}\" --no-warnings /home/llm/.riotbox/context-mode-stats.mjs \"\$@\"" \
+        > "${CONTEXT_MODE_STATS_BIN}"; \
+    chmod +x "${CONTEXT_MODE_STATS_BIN}"; \
+    cm_post="$(jq -r "first(.hooks.PostToolUse[].hooks[].command)" "${hooks}")"; \
+    [ -n "${cm_post}" ] || { \
+        echo "hooks/claude-code.json has no PostToolUse command — the stats probe has nothing to run" >&2; \
+        exit 1; }; \
+    cm_stats_home="$(mktemp -d)"; \
+    cm_stats() { "${CONTEXT_MODE_STATS_BIN}" "${cm_stats_home}/.context-mode" claude-code "$@"; }; \
+    seq 1 30000 | jq -Rs --arg cwd "${cm_probe}" "{session_id: \"riotbox-build-probe\", cwd: \$cwd, hook_event_name: \"PostToolUse\", tool_name: \"Bash\", tool_input: {command: \"seq 1 30000\"}, tool_response: {stdout: ., stderr: \"\", interrupted: false}}" \
+        | env PATH=/usr/bin:/bin HOME="${cm_stats_home}" \
+              CLAUDE_PLUGIN_ROOT="${CM_PKG}" CLAUDE_PROJECT_DIR="${cm_probe}" \
+              sh -c "${cm_post}" > /dev/null || { \
+        echo "the PostToolUse probe pipeline failed — the staged hook did not accept a canned Bash call" >&2; \
+        exit 1; }; \
+    cm_run="$(cm_stats)" || { \
+        echo "the stats shim could not read the store the PostToolUse probe wrote" >&2; \
+        if [ -s "${cm_stats_home}/.context-mode/hook-errors.log" ]; then cat "${cm_stats_home}/.context-mode/hook-errors.log" >&2; fi; \
+        exit 1; }; \
+    jq -e ".calls == 1 and .kept_out > 0 and .kept_out == .total_kept_out and .re_read == 0 and .rewound == false" > /dev/null <<<"${cm_run}" || { \
+        echo "the stats shim did not see the probe call as one claude-code call with bytes kept out: ${cm_run}" >&2; \
+        exit 1; }; \
+    cm_mark="$(jq -c .seq <<<"${cm_run}")"; \
+    cm_after="$(cm_stats "${cm_mark}")" || { \
+        echo "the stats shim could not re-read the probe store at its own watermark" >&2; \
+        exit 1; }; \
+    jq -e --argjson run "${cm_run}" ".calls == 0 and .kept_out == 0 and .total_kept_out == \$run.total_kept_out" > /dev/null <<<"${cm_after}" || { \
+        echo "the stats shim still counted the probe call above its own watermark: ${cm_after}" >&2; \
+        exit 1; }; \
+    seq 1 30000 > "${cm_probe}/cm-read-probe.txt"; \
+    jq -Rs --arg cwd "${cm_probe}" --arg f "${cm_probe}/cm-read-probe.txt" "{session_id: \"riotbox-build-probe\", cwd: \$cwd, hook_event_name: \"PostToolUse\", tool_name: \"Read\", tool_input: {file_path: \$f}, tool_response: {type: \"text\", file: {filePath: \$f, content: ., numLines: 30000, startLine: 1, totalLines: 30000}}}" \
+        < "${cm_probe}/cm-read-probe.txt" \
+        | env PATH=/usr/bin:/bin HOME="${cm_stats_home}" \
+              CLAUDE_PLUGIN_ROOT="${CM_PKG}" CLAUDE_PROJECT_DIR="${cm_probe}" \
+              sh -c "${cm_post}" > /dev/null || { \
+        echo "the PostToolUse probe pipeline failed — the staged hook did not accept a canned Read call" >&2; \
+        exit 1; }; \
+    cm_read="$(cm_stats "${cm_mark}")" || { \
+        echo "the stats shim could not read the store after the Read probe" >&2; \
+        exit 1; }; \
+    jq -e ".calls == 0 and .kept_out == 0" > /dev/null <<<"${cm_read}" || { \
+        echo "context-mode now journals a replaced Read (${cm_read}) — the exit report documents those savings as unmeasured; count them deliberately and update docs/dev/context-mode.md" >&2; \
+        exit 1; }; \
+    rm -rf "${cm_probe}" "${cm_stats_home}"; \
     find /home/llm/.npm -mindepth 1 -delete; \
-    echo "staged context-mode plugin ${CONTEXT_MODE_PLUGIN_REF} at ${dest} ($(du -sh "${dest}" | cut -f1)) — PreToolUse routes WebFetch to ${cm_decision}"'
-
-# ── Context Mode event bridge: neutralized ───────────────────────────────────
-# The PostToolUse / UserPromptSubmit / PreCompact / Stop hooks all route through
-# attributeAndInsertEvents, which POSTs every event to ${platform_url}/events
-# when a config file exists (hooks/platform-bridge.mjs). The gate is file
-# presence: absent → readConfig() null → hasPlatformConfig() false → the
-# per-event loop never runs.
-#
-# So the barrier is on the *containing directory*, not on the filename. Both
-# directories platform-bridge.mjs resolves are created root-owned and 0555
-# (XDG_CONFIG_HOME is unset in this image, so the default ~/.context-mode
-# applies; ~/.config/context-mode is covered for a session that sets it).
-# platform.json is therefore genuinely absent — the gate is closed — and
-# nothing running as llm can create it.
-#
-# Taking the platform.json name itself, with a root-owned directory, closes the
-# gate just as well but not quietly: readConfig() suppresses its warning for
-# ENOENT alone, so an unreadable file makes every guarded hook print
-# "[context-mode] cannot read …: EISDIR" to stderr. Upstream's one-shot latch
-# does not help, because each hook dispatch is a fresh node process — and
-# PostToolUse fires on nearly every tool call. An operator would reasonably
-# read that stream of warnings as a real error. An absent file is the only
-# rejection readConfig() takes silently.
-#
-# Nothing in the package writes anything else under these directories —
-# platform.json is the only file it names there — so read-only breaks nothing.
-#
-# What this is: a barrier against inadvertent activation — upstream code writing
-# the file, a stray setup flow, a copied dotfile. What it is not: a security
-# boundary. llm holds NOPASSWD sudo, and it owns the grandparents (/home/llm and
-# /home/llm/.config), so it can move a directory aside and recreate it writable
-# without root at all. Deliberate activation stays possible;
-# RIOTBOX_NETWORK=none is the hard control. See THREAT_MODEL.md.
-USER root
-RUN for d in /home/llm/.context-mode /home/llm/.config/context-mode; do \
-        mkdir -p "${d}"; \
-        chown root:root "${d}"; \
-        chmod 0555 "${d}"; \
-    done
-USER llm
-RUN for d in /home/llm/.context-mode /home/llm/.config/context-mode; do \
-        [ -d "${d}" ]; \
-        [ ! -w "${d}" ]; \
-        [ ! -e "${d}/platform.json" ]; \
-    done
+    echo "staged context-mode ${CONTEXT_MODE_VERSION} at ${CM_PKG} ($(du -sh "${CM_PKG}" | cut -f1)) — PreToolUse routes WebFetch to ${cm_decision}; the stats shim read $(jq -r .kept_out <<<"${cm_run}") B kept out from the PostToolUse probe"'
 
 # ── Pre-stage plugins (no auth needed — just clones a public GitHub repo) ────
 # Installed to a staging dir because ~/.claude is bind-mounted at runtime.

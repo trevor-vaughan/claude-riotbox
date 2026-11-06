@@ -470,8 +470,8 @@ What remains:
   session still running has that directory mounted: the removal deletes every
   file it sees there — its merged opencode config and the Context Mode plugin
   shim — and leaves it a deleted directory in which no new file can be
-  created. The Context Mode stores are not in it: they live in `opencode-data/`,
-  which the sync never replaces. Files it already holds open stay usable, but what it
+  created. The Context Mode store is not in it: it lives in the state
+  directory's `context-mode/`, which the sync never replaces. Files it already holds open stay usable, but what it
   writes to them is lost.
   Pi and Claude replace individual entries inside a directory that stays, so
   their running sessions see the new copies instead. This is a data-loss and
@@ -761,80 +761,59 @@ Context Mode is opt-in (`RIOTBOX_CONTEXT_MODE=1`) and off by default. When
 enabled it changes what a session holds on disk and what it puts on the critical
 path, in the ways set out below.
 
-**The FTS5 store holds verbatim tool output, and there is one per agent.**
-Command results, file contents, and fetched pages are written to
-`~/.claude/context-mode/` under `--agent=claude` and to
-`~/.local/share/opencode/context-mode/` under `--agent=opencode` and to
-`~/.pi/agent/context-mode/` under `--agent=pi`. Pi's extension also keeps its own
-session DB, which upstream would put at `~/.pi/context-mode/sessions`, outside
-the session mount; `CONTEXT_MODE_DATA_DIR=~/.pi/agent` pins it to
-`~/.pi/agent/context-mode/sessions`. All of these paths are inside the session's
-directories (Claude's in the session dir, opencode's and Pi's in its state dir), so they carry the same sensitivity as a session transcript and are
-deleted by the same `riotbox session-remove`. The store is per agent rather
-than shared, which means a session directory reused across agents can hold
-more than one; each extra one is not a leak past any boundary the
-first does not already cross, but it is a second copy of the same class of
-content and worth knowing about before handing a session directory to anyone.
+**The store holds verbatim tool output, and it persists per session.**
+context-mode 2.x writes command results, file contents and fetched pages to one
+SQLite database per project, `~/.context-mode/projects/<key>/context.db`,
+whichever agent runs it, where `<key>` is a hash of the project's git common
+directory. It reads none of the `CONTEXT_MODE_DIR` or `CONTEXT_MODE_PLATFORM`
+pins 1.x honoured, and RiotBox exports none of them. `~/.context-mode` is a
+read-write bind mount of the session's `<state-dir>/context-mode`: the store
+carries the same sensitivity as a session transcript, outlives the container,
+and goes with `riotbox session-reset` or `session-remove`. Only that mount
+places it. 2.1.4 also takes `CONTEXT_MODE_DATA_DIR` as its whole data root, so
+`context_mode_setup` unsets any value that reached the container before an
+agent starts. Context Mode's 1.x stores are left in place in the session's
+other mounts, unread, until the user deletes them. Upstream prunes on its own
+as well — sources not read for 30 days, and whole projects idle for 14 days with
+no live server owning them. Concurrent runs of one session share the store, and
+each sees the other's server PIDs from a different PID namespace, so one run can
+take another's live server for dead and prune under it; what goes is still only
+what upstream's retention rules select, including its 500 MB per-project cap.
+This is accepted and open: RiotBox does not share a PID namespace to close it.
+See [the 2.x migration record](docs/dev/decisions/context-mode-2x-migration.md).
 
-`container/context-mode-setup.sh` exports `CONTEXT_MODE_DIR` explicitly, from
-the path the running agent's own verb prints, rather than relying on the
-upstream default — so a change to that default alone cannot silently relocate
-that content onto the container overlay, where it would vanish at exit and
-escape session cleanup. The pin is a real defence with two stated limits:
-
-- It holds only while upstream keeps honouring a variable of that name. Unlike
-  the MCP server name, no build-time guard greps the installed bundle for it,
-  and the tests assert the exported value rather than that the package reads it
-  — so a version bump that renamed or dropped the variable would surface in a
-  user session, not at build time.
-- On the opencode path one variable does not cover everything. `CONTEXT_MODE_DIR`
-  is read by the storage resolvers behind the `ctx_*` tools, but the plugin's own
-  session database and auto-memory resolve independently, from
-  `CONTEXT_MODE_DATA_DIR` and otherwise the platform config directory
-  (`${XDG_CONFIG_HOME:-~/.config}/opencode`). RiotBox exports both, under the
-  opencode data mount (`~/.local/share/opencode`, the state dir's
-  `opencode-data/`), not the config mount the host sync replaces on relaunch.
-  Setting `CONTEXT_MODE_DIR` to somewhere else by hand would move one and not
-  the other.
-
-**Starting a session reaches no network, by construction.** Context Mode's only
-self-installing command is `context-mode upgrade` (and the `ctx_upgrade` tool
-that fronts it), which `git clone`s
-`https://github.com/mksglu/context-mode.git` and — when upstream is newer than
-the installed copy — runs `npm install`, `npm run build`, and copies the result
-over the installed tree. Invoking it per session would swap pinned, reviewed
-code for whatever is on `main`, inside a container that has the user's project
-mounted read-write, and would break `RIOTBOX_NETWORK=none`. It is never invoked.
+**Starting a session reaches no network, by construction.** Context Mode's
+self-installing commands are `context-mode upgrade`, which runs
+`npm i -g context-mode` from the registry, and `context-mode setup`, which
+rewrites each agent's config for a global install. Invoking either per session
+would swap pinned, reviewed code for whatever is published, inside a container
+that has the user's project mounted read-write, and would break
+`RIOTBOX_NETWORK=none`. Neither is ever invoked. The `ctx_upgrade` tool only
+prints the agent's own update command.
 
 Everything fetched is fetched at image build time: the npm package at
-`CONTEXT_MODE_VERSION`, and the Claude Code plugin as a `git clone` at the
-`CONTEXT_MODE_PLUGIN_REF` tag, verified against `CONTEXT_MODE_PLUGIN_SHA`
-before its `.git` directory is dropped, with `npm ci --omit=dev` against the
-committed `container/context-mode-package-lock.json` for its runtime
-dependencies. A session only writes a registry entry naming the resulting path.
+`CONTEXT_MODE_VERSION`, installed with `npm ci --ignore-scripts` against the
+committed `container/context-mode-package-lock.json`. The Claude Code plugin is
+that same package — there is no separate clone. A session only writes a
+registry entry naming the resulting path.
 
-Both halves of that pin have the same limit the release-asset digests
-elsewhere in the image have: the SHA and the lockfile's integrity hashes were
-transcribed from one resolution, so they catch the bytes behind a fixed tag or
-a published tarball changing afterwards, and cannot notice a release that was
-already compromised at the moment of transcription.
+That pin has the same limit the release-asset digests elsewhere in the image
+have: the lockfile's integrity hash was transcribed from one resolution, so it
+catches a published tarball changing afterwards, and cannot notice a release
+that was already compromised at the moment of transcription.
 
-**The lockfile does not cover the whole install.** Its 266 integrity hashes
-cover registry tarballs. `better-sqlite3` is marked `hasInstallScript` and
-depends on `prebuild-install`, and the staging layer does not pass
-`--ignore-scripts`, so the install additionally fetches a prebuilt
-`better_sqlite3.node` from that project's GitHub releases — no digest for it is
-recorded in this repo or in the lockfile, and the build's loader check proves
-the binary imports, not that it is the one upstream published. It is native code
-loaded by every hook in every enabled session. This is the one download in the
-image that RIOTBOX-20260312-001 does not yet cover; it is listed there as open,
-not closed by the lockfile above.
+**The lockfile covers the whole install.** context-mode 2.x has no runtime
+dependencies and no install scripts. The layer installs with
+`--ignore-scripts` and fails if the package ever declares a dependency, so the
+one integrity hash covers every byte it installs. The `better-sqlite3` prebuilt
+binary 1.x fetched from GitHub outside the lockfile is gone with it: 2.x uses
+Node's own `node:sqlite`.
 
 One further limit, accepted:
 
 - **A host-installed `context-mode` plugin is excluded from the host-plugin
   copy** rather than merged. A host tree has been through neither the pinned
-  clone nor the interpreter rewrite, and `plugin_setup` lets host entries win
+  install nor the interpreter rewrite, and `plugin_setup` lets host entries win
   every other merge, so without the exclusion a session would silently run
   whatever the host had.
 
@@ -853,8 +832,8 @@ process per matched tool call and one MCP child process, each a separate
 process with a stdio boundary between it and the agent. The opencode path has
 neither: riotbox writes one generated plugin file into
 `~/.config/opencode/plugins/`, opencode loads it under its own embedded bun at
-startup, and `ContextModePlugin` runs in-process for the life of the session. It
-registers the eleven `ctx_*` tools directly rather than over MCP, receives
+startup, and the adapter's default export runs in-process for the life of the
+session. It registers the nine `ctx_*` tools directly rather than over MCP, receives
 opencode's plugin input — including the `client` handle it uses to write to the
 host's log — and its `tool.execute.before` hook sits on the path of every tool
 call the agent makes, in the agent's own address space and with the agent's own
@@ -863,8 +842,8 @@ at the same pinned version, asserted by the same image build. Nothing about it
 is more trusted than before; it simply has more reach if that trust is
 misplaced, and there is no process boundary to fall back on. Pi's Context Mode
 extension also runs inside the agent process, loaded from the `packages` entry
-riotbox writes into `~/.pi/agent/settings.json`, with an MCP child process
-behind it for the `ctx_*` tools. Sessions that want the narrower surface should
+riotbox writes into `~/.pi/agent/settings.json`, and registers its `ctx_*`
+tools in-process too. Sessions that want the narrower surface should
 use `--agent=claude`, or leave the feature off.
 
 **`plugins/` is a code-execution surface inside the session's state directory.**
@@ -892,7 +871,7 @@ clobbering or deleting a file it did not create, and nothing more.
 
 **The routing block the adapter injects is never written to disk.** On the
 Claude path, what a session runs is reviewable after the fact: the hook commands
-and the `mcpServers` entry sit in the staged plugin's `hooks/hooks.json` and
+and the `mcpServers` entry sit in the staged plugin's `hooks/claude-code.json` and
 `.claude-plugin/plugin.json`, the session's `installed_plugins.json` names the
 tree they came from, and `cat` shows exactly what each one is. The opencode
 adapter instead injects its routing instructions into the system prompt at
@@ -901,33 +880,40 @@ through `experimental.chat.system.transform`, when it does not already find
 them there. Nothing in the session config records that this happened or what
 was injected — reading `opencode.jsonc` and the shim tells you the plugin is
 loaded and nothing about what it puts in front of the model. Reviewing that
-text means reading `hooks/routing-block.mjs` in the installed package at the
-pinned version.
+text means reading `opencode/plugin.js` in the installed package at the pinned
+version.
 
-**Residual outbound traffic is one unauthenticated GET, on the Claude path
-only.** The MCP server queries
-`https://registry.npmjs.org/context-mode/latest` at startup to warn about new
-versions. It carries no payload beyond the request itself and fails soft when
-unreachable — verified by running `context-mode doctor` inside a network
-namespace with no connectivity, which exits 0 with a single warning — and
-`RIOTBOX_NETWORK=none` suppresses it entirely. Unlike headroom and CodeGraph
-there is no knob to disable it: Context Mode honours no `DO_NOT_TRACK` and ships
-no telemetry setting, because it collects no telemetry to switch off. The package
-contains no analytics SDK and exactly one `fetch()` call, which backs the
-user-initiated `ctx_fetch_and_index` tool.
+**No traffic at startup; one version check, on demand.** context-mode 2.x
+makes no request when its hooks, server or in-process adapters start. Upstream
+lists every network call site in its README and enforces the list with a source
+guard test. The one an agent can reach in RiotBox without fetching on purpose is
+the version check in the `ctx_doctor` tool: one unauthenticated read of
+`https://registry.npmjs.org/-/package/context-mode/dist-tags`, then
+`git ls-remote` of the release tags if that fails. It runs only when the agent
+calls `ctx_doctor`, carries no payload beyond the request, and fails soft when
+unreachable — verified under `--network=none`, where the row reads "UNKNOWN"
+after the 10 s timeout per source. There is no knob to disable it, and
+`RIOTBOX_NETWORK=none` and `RIOTBOX_EGRESS=1` both block it. Context Mode honours no `DO_NOT_TRACK` and
+ships no telemetry setting, because it collects no telemetry to switch off. The
+other call sites are user- or agent-initiated: `ctx_index` fetching a URL it is
+given, and the `upgrade` and debug-report commands RiotBox never runs.
 
-The opencode path does not make that request, because it starts no server: the
-plugin imports the server module with `CONTEXT_MODE_EMBEDDED_PLUGIN_TOOLS=1`
-set, and that flag is what skips the startup routine the version check lives in
-(`build/server.js`). The reduction is upstream's doing rather than a control
-riotbox holds, so it is recorded here as an observation about the pinned
-version, not as a guarantee across bumps.
+**`CONTEXT_MODE_REQUIRE_SECURITY` is deliberately not set.** With it at `1`,
+context-mode denies every Claude tool call when a Claude deny-rules file exists
+but cannot be parsed. RiotBox runs Claude with `--dangerously-skip-permissions`
+and writes no deny rules, so nothing it relies on is protected, while one
+malformed project `.claude/settings.local.json` would make every call in the
+session fail.
+
+**Health is checked on RiotBox's own wiring, not `context-mode doctor`.** 2.x's
+doctor exits 1 for any agent upstream's `setup` did not configure, which is every
+agent in a RiotBox image, so it cannot gate a build or `riotbox doctor`.
 
 **Wiring outlives the image, so it is unregistered or stripped rather than
 documented away.** What a Claude session records is a *registration*: an entry
 in its `installed_plugins.json` and `known_marketplaces.json` naming a
 version-stamped path inside the image. The session directory outlives that
-image, so a rebuild at a new ref leaves the entry naming a tree that is gone,
+image, so a rebuild at a new version leaves the entry naming a tree that is gone,
 and Claude Code surfaces the plugin and then fails to load every hook in it.
 Both files are rebuilt from what is staged now at every session start, and where
 the session has no usable staged tree — the toggle off, an image carrying no
@@ -976,43 +962,15 @@ local developer tool and the OSS package has no licence-key gate — but the
 dependency is recorded here because a licence change upstream is a supply-chain
 event for this image. See `docs/dev/decisions/context-mode-adoption.md`.
 
-**Event bridge.** Four of the six hooks (`PostToolUse`, `UserPromptSubmit`,
-`PreCompact`, `Stop`) route their writes through `attributeAndInsertEvents`, which
-also POSTs every event to `${platform_url}/events` when a config file exists at
-`$XDG_CONFIG_HOME/context-mode/platform.json`, or `~/.context-mode/platform.json`
-when that variable is unset (`hooks/platform-bridge.mjs`). The gate is file
-presence: absent, and the forwarding loop never executes.
-
-RiotBox ships that file's containing directory root-owned and mode `0555` at both
-paths, and ships no `platform.json` in it. The file is therefore absent, which
-closes the gate, and absent is the only outcome `readConfig` does not warn about —
-every other rejection (unreadable, invalid JSON, wrong schema) writes a line to
-stderr, and because each hook dispatch is a fresh process, upstream's one-shot
-warning latch would not suppress the repeats. So the gate is quiet as well as
-closed. `riotbox doctor` fails when either directory has become writable or a
-`platform.json` has appeared in it.
-
-The opencode path does not reach that bridge in the pinned version, and the
-sentinel would close it anyway. Upstream's plugin comments describe
-`db.insertEvent` as "the TS-plugin equivalent of the .mjs
-attributeAndInsertEvents path", but the shipped `build/adapters/opencode/plugin.js`
-and `build/session/db.js` contain no `fetch()` and no HTTPS request between them:
-the forwarding code lives in `hooks/platform-bridge.mjs`, which only the `.mjs`
-hook dispatchers load. The sentinel is a filesystem fact rather than a code-path
-one, so it holds for any caller in the image if that changes — but the gap
-between the comment and the code is worth re-checking on a version bump.
-
-Threat addressed: inadvertent activation — upstream code writing the file, a stray
-setup flow, a dotfile copied in from a host. **Not** addressed: a deliberate actor
-inside the container. The `llm` user holds NOPASSWD `sudo`, and the sentinel's
-parent directories are `llm`-owned, so removing the directory needs no privilege
-escalation. Against that, `RIOTBOX_NETWORK=none` is the control that holds — it is
-also what suppresses the unsuppressable `registry.npmjs.org` version check
-documented above.
-
-A session that sets `XDG_CONFIG_HOME` to a writable directory moves the config path
-outside both sentinels. That requires deliberate action inside the container and is
-recorded here rather than defended against.
+**Event bridge (1.x only).** context-mode 1.x forwarded hook events to a
+platform URL when a `platform.json` existed under `~/.context-mode` or
+`$XDG_CONFIG_HOME/context-mode`, and RiotBox shipped both directories
+root-owned and read-only so the file could not appear. 2.x has no event bridge —
+`platform.json` survives only as a 1.x leftover name its doctor reports — and
+`~/.context-mode` is its data root, which has to be writable. The image
+therefore no longer creates or locks either directory, and `riotbox doctor`'s
+Context Mode probe (`scripts/lib/context-mode-probe.sh`) now checks the
+opposite: that a mounted `~/.context-mode` is writable.
 
 ## git-ai daemon and attribution store
 
@@ -1446,13 +1404,6 @@ egress proxy; without the flag the agent's HTTPS goes out directly.
     /usr/local/bin/hadolint
     https://github.com/hadolint/hadolint/releases/latest/download/hadolint-linux-x86_64`
     (accepted 2026-08-03 — see Mitigations)
-  - `/workspace/Containerfile:1401` — `"${CM_NODE_BIN}/npm" ci --omit=dev`, the
-    Context Mode plugin staging install. Not a curl-to-shell, but the same
-    missing control: `better-sqlite3` is `hasInstallScript` and its
-    `prebuild-install` dependency downloads a prebuilt `better_sqlite3.node`
-    from that project's GitHub releases — outside the lockfile's 266 integrity
-    hashes, with no digest pinned in this repo, and loaded by every Context Mode
-    hook in every enabled session (open — see Mitigations)
 
 #### Asset & Security Criteria
 
@@ -1577,15 +1528,7 @@ and exfiltrate credentials.
   verifies it against a SHA256 recorded in the `Containerfile` before use; bun
   takes its digests from the `SHASUMS256.txt` upstream publishes per release
   rather than self-computing them, and reaches the binary directly instead of
-  through `https://bun.sh/install`. **Open for the Context Mode plugin's
-  `better-sqlite3` prebuild**: the lockfile pins the registry tree but not the
-  native binary `prebuild-install` fetches from GitHub releases. Closing it means
-  either pinning that download to a digest (a `sha256sum -c` over the fetched
-  `.node`, or vendoring the tarball and pointing `prebuild-install` at it) or
-  building it from source, which needs a toolchain the staging stage does not
-  carry — `--ignore-scripts` alone falls through to node-gyp and fails the build.
-  The digest is also per-Node-ABI and per-architecture, so it is a real pin to
-  maintain, not a one-line addition. Example for
+  through `https://bun.sh/install`. Example for
   trivy: RUN curl -sfL -o /tmp/install-trivy.sh
   <https://raw.githubusercontent.com/aquasecurity/trivy/v0.58.2/contrib/install.sh>
   && \

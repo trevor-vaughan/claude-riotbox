@@ -257,17 +257,27 @@ testcases:
           TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
           mkdir -p "${TMP}/xdg" "${TMP}/etc"
           # Exported so the stub, which runs as a grandchild of this shell, can
-          # write where this shell reads.
-          export RUN_ARGV="${TMP}/run-argv"
+          # write where this shell reads. Each argument is recorded NUL-ended,
+          # so the probe script and the JSON passed with -e survive as one
+          # argument each instead of being re-split on whitespace.
+          export RUN_ARGV="${TMP}/run-argv" RUN_STORE="${TMP}/run-store"
           cat > "${TMP}/podman" <<'STUB'
           #!/usr/bin/env bash
           case "$1" in
             image) exit 0 ;;   # `podman image exists <img>`
-            # The in-image `context-mode doctor` probe. Recorded rather than
-            # merely accepted: branching on "$1" alone makes every flag on the
-            # command line invisible, so the probe's own guarantees would go
-            # unchecked.
-            run)   printf '%s\n' "$*" > "${RUN_ARGV}"; exit 0 ;;
+            run)
+              printf '%s\0' "$@" > "${RUN_ARGV}"
+              # The store mount's source, as the container would see it: it
+              # has to exist while the probe runs.
+              for a in "$@"; do
+                case "${a}" in
+                  *:/home/llm/.context-mode:z)
+                    src="${a%:/home/llm/.context-mode:z}"
+                    printf '%s\n' "${src}" > "${RUN_STORE}"
+                    [ -d "${src}" ] || exit 1 ;;
+                esac
+              done
+              exit 0 ;;
           esac
           exit 1
           STUB
@@ -275,6 +285,7 @@ testcases:
           export PATH="${TMP}:${PATH}"
           export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
           unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
           source "{{.riotbox_dir}}/scripts/preflight.sh"
           export RIOTBOX_CONTEXT_MODE=1 RIOTBOX_AGENT=claude
           unset RIOTBOX_HEADROOM
@@ -288,71 +299,53 @@ testcases:
             && { echo "FAIL: reported not-requested with the toggle on: ${out}"; exit 1; }
 
           # The [ok] above says only that podman exited 0, which the stub does
-          # unconditionally — so it survives a probe reduced to `true`, and
-          # would report a working image for one carrying no Context Mode at
-          # all. What the probe is worth is in the command it runs and the two
-          # flags it runs it under, and all three are asserted here against the
-          # recorded argv: `command -v context-mode` pins the shim on PATH, and
-          # `context-mode doctor` is what exercises the pinned Node, the
-          # installed package, and SQLite/FTS5 behind it.
-          #
-          # --network=none is what makes that a proof rather than a coincidence
-          # of a connected host: it establishes that the installed CLI runs and
-          # that its unsuppressable npm version check fails soft with no
-          # connectivity at all, so dropping the flag lets an image with a
-          # broken offline path pass on any connected host. It proves nothing
-          # about session start, which is not offline anyway — see the comment
-          # on the probe in scripts/preflight.sh. --entrypoint likewise:
-          # without it the probe runs through the riotbox entrypoint and stops
-          # testing the image contract in isolation.
+          # unconditionally. What the check is worth is in what it runs and how,
+          # so the recorded argv is read back one argument at a time.
           [ -f "${RUN_ARGV}" ] \
             || { echo "FAIL: the check never ran the in-image probe"; exit 1; }
-          run_argv="$(cat "${RUN_ARGV}")"
-          echo "RUN_ARGV=${run_argv}"
-          echo "${run_argv}" | grep -q -- "--network=none" \
-            || { echo "FAIL: probe does not run offline, so a broken offline path would pass: ${run_argv}"; exit 1; }
-          echo "${run_argv}" | grep -q -- "--entrypoint /usr/bin/bash" \
-            || { echo "FAIL: probe does not bypass the riotbox entrypoint: ${run_argv}"; exit 1; }
-          echo "${run_argv}" | grep -q -- "command -v context-mode" \
-            || { echo "FAIL: probe does not check the shim is on PATH: ${run_argv}"; exit 1; }
-          echo "${run_argv}" | grep -q -- "context-mode doctor" \
-            || { echo "FAIL: probe does not exercise the installed runtime: ${run_argv}"; exit 1; }
+          mapfile -d '' argv < "${RUN_ARGV}"
+          has_arg() { local a; for a in "${argv[@]}"; do [ "${a}" = "$1" ] && return 0; done; return 1; }
+          arg_after() { local i; for ((i = 0; i < ${#argv[@]} - 1; i++)); do
+            [ "${argv[i]}" = "$1" ] && { printf '%s' "${argv[i+1]}"; return 0; }; done; return 1; }
 
-          # The staged plugin tree is image state as well, and since the plugin
-          # adoption it is the tree a Claude session loads its hooks and MCP
-          # server from — the npm package the two lines above exercise supplies
-          # neither. An image built before the staging layer existed carries no
-          # tree at all and still passes both of them, which is the ordinary
-          # upgrade path: without these three the user gets a green
-          # "Context Mode available in image" and a session that then warns the
-          # plugin is not installed and runs with the feature off. The probe
-          # resolves the newest directory under RIOTBOX_CM_PLUGIN_DIR the way
-          # container/plugin-setup.sh does, and reads a version out of
-          # package.json the way context_mode_staged_version does, so doctor and
-          # session start read the same tree and judge it by the same rule.
-          echo "${run_argv}" | grep -q -- "RIOTBOX_CM_PLUGIN_DIR" \
-            || { echo "FAIL: probe does not look for the staged plugin tree: ${run_argv}"; exit 1; }
-          echo "${run_argv}" | grep -q -- ".claude-plugin/plugin.json" \
-            || { echo "FAIL: probe does not check the staged tree can be registered: ${run_argv}"; exit 1; }
-          # Matched on the type gate, not on "package.json": that string also
-          # appears in the better-sqlite3 line above, so a grep for it would
-          # hold against a probe that had dropped the version test entirely.
-          echo "${run_argv}" | grep -q -- "select(type ==" \
-            || { echo "FAIL: probe does not type-gate the staged tree's version the way context_mode_staged_version does: ${run_argv}"; exit 1; }
-          echo "${run_argv}" | grep -q -- "node_modules/better-sqlite3" \
-            || { echo "FAIL: probe does not check the staged tree's runtime deps: ${run_argv}"; exit 1; }
+          # Offline, and outside the riotbox entrypoint, as before.
+          has_arg "--network=none" \
+            || { echo "FAIL: probe does not run offline"; exit 1; }
+          [ "$(arg_after --entrypoint)" = "/usr/bin/bash" ] \
+            || { echo "FAIL: probe does not bypass the riotbox entrypoint"; exit 1; }
+
+          # The script the container runs is the shipped probe file, byte for
+          # byte, so the body case below tests what doctor sends.
+          [ "$(arg_after -c)" = "$(cat "{{.riotbox_dir}}/scripts/lib/context-mode-probe.sh")" ] \
+            || { echo "FAIL: the probe sent is not scripts/lib/context-mode-probe.sh"; exit 1; }
+
+          # The pins are the Containerfile's, and the hook table is the file the
+          # build compares against, so doctor and build judge one thing.
+          cf="{{.riotbox_dir}}/Containerfile"
+          pin="$(sed -n 's/^ARG CONTEXT_MODE_VERSION=//p' "${cf}" | head -1)"
+          node_pin="$(sed -n 's/^ARG CONTEXT_MODE_NODE=//p' "${cf}" | head -1)"
+          hooks="$(jq -Sc . "{{.riotbox_dir}}/container/context-mode-hooks-expected.json")"
+          [ -n "${pin}" ] && [ -n "${node_pin}" ] || { echo "FAIL: fixture cannot read the pins"; exit 1; }
+          has_arg "CM_PIN=${pin}" || { echo "FAIL: probe not handed CM_PIN=${pin}"; exit 1; }
+          has_arg "CM_NODE_PIN=${node_pin}" || { echo "FAIL: probe not handed CM_NODE_PIN=${node_pin}"; exit 1; }
+          has_arg "CM_HOOKS_EXPECTED=${hooks}" || { echo "FAIL: probe not handed the expected hook table"; exit 1; }
+
+          # The store is mounted the way a session mounts it: a host directory
+          # at ~/.context-mode, relabelled, under the launcher's keep-id user
+          # mapping — without that mapping the image user cannot write a host
+          # directory, and the probe would test a session nobody runs.
+          has_arg "--userns=keep-id:uid=$(id -u),gid=$(id -g)" \
+            || { echo "FAIL: probe does not map the user the way the launcher does"; exit 1; }
+          [ "$(arg_after --user)" = "$(id -u):$(id -g)" ] \
+            || { echo "FAIL: probe does not run as the launcher's --user"; exit 1; }
+          [ -s "${RUN_STORE}" ] || { echo "FAIL: no store mounted at /home/llm/.context-mode"; exit 1; }
+          [ ! -e "$(cat "${RUN_STORE}")" ] \
+            || { echo "FAIL: the scratch store $(cat "${RUN_STORE}") was left behind"; exit 1; }
           echo "doctor_image_ok=pass"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "[ok]"
           - result.systemout ShouldNotContainSubstring "not requested"
-          - result.systemout ShouldContainSubstring "--network=none"
-          - result.systemout ShouldContainSubstring "command -v context-mode"
-          - result.systemout ShouldContainSubstring "context-mode doctor"
-          - result.systemout ShouldContainSubstring "RIOTBOX_CM_PLUGIN_DIR"
-          - result.systemout ShouldContainSubstring ".claude-plugin/plugin.json"
-          - result.systemout ShouldContainSubstring "select(type =="
-          - result.systemout ShouldContainSubstring "node_modules/better-sqlite3"
           - result.systemout ShouldContainSubstring "doctor_image_ok=pass"
 
   # An image that was never built is a different problem from an image that was
@@ -391,10 +384,11 @@ testcases:
           - result.systemout ShouldContainSubstring "riotbox build"
           - result.systemout ShouldContainSubstring "doctor_image_missing=pass"
 
-  # The image exists but the in-image probe fails: the shim is absent, the
-  # pinned Node is gone, or SQLite/FTS5 is broken. `riotbox build` is a no-op
-  # against an image that already exists, so this arm has to say rebuild.
-  - name: doctor fails with exit 22 and names riotbox rebuild when the in-image probe fails
+  # The image exists but the in-image probe fails. `riotbox build` is a no-op
+  # against an image that already exists, so this arm has to say rebuild, and
+  # it has to say what the probe found: every check in it prints one line on
+  # stderr naming the fault, and a bare "rebuild" would hide which one.
+  - name: doctor fails with exit 22, names riotbox rebuild and the probe's finding when the in-image probe fails
     steps:
       - type: exec
         script: |
@@ -405,7 +399,10 @@ testcases:
           #!/usr/bin/env bash
           case "$1" in
             image) exit 0 ;;   # the image is there
-            run)   exit 1 ;;   # …but context-mode is missing or broken inside it
+            run)               # …but the probe inside it finds a fault
+              echo "first line of noise" >&2
+              echo "context-mode --version is '2.1.3', this riotbox pins 2.1.4" >&2
+              exit 1 ;;
           esac
           exit 1
           STUB
@@ -413,6 +410,7 @@ testcases:
           export PATH="${TMP}:${PATH}"
           export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
           unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
           source "{{.riotbox_dir}}/scripts/preflight.sh"
           export RIOTBOX_CONTEXT_MODE=1 RIOTBOX_AGENT=claude
           unset RIOTBOX_HEADROOM
@@ -422,68 +420,11 @@ testcases:
           [ "${rc}" = "22" ] || { echo "FAIL: expected 22, got ${rc}"; exit 1; }
           echo "${out}" | grep -q "riotbox rebuild" \
             || { echo "FAIL: hint does not name riotbox rebuild: ${out}"; exit 1; }
-          echo "doctor_image_probe_fails=pass"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "[fail]"
-          - result.systemout ShouldContainSubstring "riotbox rebuild"
-          - result.systemout ShouldContainSubstring "doctor_image_probe_fails=pass"
+          echo "${out}" | grep -q -F "this riotbox pins 2.1.4" \
+            || { echo "FAIL: hint does not carry the probe's finding: ${out}"; exit 1; }
 
-  # The bridge sentinel rides inside the same in-image probe rather than a
-  # second container — a session already pays for every container `riotbox
-  # doctor` starts, and both are image state. No built `riotbox` image exists
-  # in this dev container (podman build does not work here), so this proves
-  # what can be proven honestly without one, the same way the three cases
-  # above do: the stubbed `podman run` records the exact script the probe
-  # sends into the container, and this case asserts that script names both
-  # sentinel paths and both properties the doctor is supposed to catch —
-  # unwritable, and no platform.json. It then flips the same stub to fail the
-  # combined command, which is what a defeated sentinel does from outside the
-  # container indistinguishably from a broken runtime, and asserts that path
-  # reports [fail]/exit 22 with a hint naming the sentinel — proving the old
-  # runtime-only message was replaced, not left in place alongside a new one.
-  - name: doctor's in-image probe checks the bridge sentinel at both paths
-    steps:
-      - type: exec
-        script: |
-          set -e
-          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
-          mkdir -p "${TMP}/xdg" "${TMP}/etc"
-          export RUN_ARGV="${TMP}/run-argv"
-          cat > "${TMP}/podman" <<'STUB'
-          #!/usr/bin/env bash
-          case "$1" in
-            image) exit 0 ;;   # `podman image exists <img>`
-            run)   printf '%s\n' "$*" > "${RUN_ARGV}"; exit 0 ;;
-          esac
-          exit 1
-          STUB
-          chmod +x "${TMP}/podman"
-          export PATH="${TMP}:${PATH}"
-          export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
-          unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
-          source "{{.riotbox_dir}}/scripts/preflight.sh"
-          export RIOTBOX_CONTEXT_MODE=1 RIOTBOX_AGENT=claude
-          unset RIOTBOX_HEADROOM
-
-          rc=0
-          out="$(preflight_check_context_mode 2>&1)" || rc=$?
-          [ "${rc}" = "0" ] || { echo "FAIL: expected 0, got ${rc}: ${out}"; exit 1; }
-          [ -f "${RUN_ARGV}" ] \
-            || { echo "FAIL: the check never ran the in-image probe"; exit 1; }
-          run_argv="$(cat "${RUN_ARGV}")"
-          echo "RUN_ARGV=${run_argv}"
-          echo "${run_argv}" | grep -q -- '\.context-mode"' \
-            || { echo "FAIL: probe does not check \${HOME}/.context-mode: ${run_argv}"; exit 1; }
-          echo "${run_argv}" | grep -q -- '\.config/context-mode"' \
-            || { echo "FAIL: probe does not check \${HOME}/.config/context-mode: ${run_argv}"; exit 1; }
-          echo "${run_argv}" | grep -q -- '\-w "\${d}"' \
-            || { echo "FAIL: probe does not assert the sentinel dir is unwritable: ${run_argv}"; exit 1; }
-          echo "${run_argv}" | grep -q -- 'platform.json' \
-            || { echo "FAIL: probe does not check for platform.json: ${run_argv}"; exit 1; }
-
-          # Flip the stub: the combined command now fails, exactly what a
-          # defeated sentinel does from outside the container.
+          # A probe that dies without a word (podman itself failing, say) still
+          # gets a hint that says so rather than an empty one.
           cat > "${TMP}/podman" <<'STUB'
           #!/usr/bin/env bash
           case "$1" in
@@ -492,280 +433,301 @@ testcases:
           esac
           exit 1
           STUB
-          chmod +x "${TMP}/podman"
           rc=0
           out="$(preflight_check_context_mode 2>&1)" || rc=$?
-          [ "${rc}" = "22" ] || { echo "FAIL: expected 22, got ${rc}: ${out}"; exit 1; }
-          echo "${out}" | grep -q "event-bridge sentinel" \
-            || { echo "FAIL: hint does not name the sentinel: ${out}"; exit 1; }
+          echo "${out}"
+          [ "${rc}" = "22" ] || { echo "FAIL: silent probe, expected 22, got ${rc}"; exit 1; }
+          echo "${out}" | grep -q "without saying why" \
+            || { echo "FAIL: a silent probe failure is not reported as one: ${out}"; exit 1; }
           echo "${out}" | grep -q "riotbox rebuild" \
-            || { echo "FAIL: hint does not name riotbox rebuild: ${out}"; exit 1; }
-          echo "doctor_sentinel=pass"
+            || { echo "FAIL: silent probe, hint does not name riotbox rebuild: ${out}"; exit 1; }
+          echo "doctor_image_probe_fails=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "doctor_sentinel=pass"
+          - result.systemout ShouldContainSubstring "[fail]"
+          - result.systemout ShouldContainSubstring "riotbox rebuild"
+          - result.systemout ShouldContainSubstring "doctor_image_probe_fails=pass"
 
-  # The case above stubs `podman run` itself, so it can only prove the probe
-  # script *names* the right paths — the stub's own exit code decides the
-  # outcome, and the probe body never actually runs. That structurally cannot
-  # catch a bug in the body's own control flow, such as its exit status being
-  # decided by whichever assertion happens to run last rather than by the
-  # assertions actually failing. This case extracts the probe body verbatim
-  # out of scripts/preflight.sh — between its own opening `command -v
-  # context-mode` line and its closing `exit 0` — so what runs here is the
-  # shipped string, not a copy that can drift out of sync with it, and
-  # executes it directly under a real filesystem for nine directory shapes. A
-  # stub `context-mode` on PATH stands in for the pinned Node/package install
-  # the real probe also checks, so only the sentinel and staged-tree halves are
-  # exercised in isolation; `context-mode doctor` itself has no bearing on
-  # either bug this case exists to catch.
-  #
-  # The staged-tree shapes are here rather than only in the argv case above for
-  # the same reason the sentinel ones are: the stub decides that case's outcome,
-  # so it can prove the probe *mentions* RIOTBOX_CM_PLUGIN_DIR and prove nothing
-  # about whether an image carrying no tree is actually rejected.
-  - name: the probe body exits 0 on a healthy image and non-zero on every defeat
+  # The pins and the hook table the probe is handed come from the install tree
+  # doctor runs from. Without them there is nothing to compare the image to,
+  # and the check fails before starting a container rather than passing the
+  # probe empty values it would read as a mismatch. PREFLIGHT_SCRIPT_DIR is
+  # pointed at a copy of scripts/ beside a reduced tree, the only way to give
+  # the sourced file a different Containerfile.
+  - name: doctor fails with exit 22 when the install tree has no Context Mode pins or hook table
     steps:
       - type: exec
         script: |
           set -e
-          # Governs the `mkdir -p` directories and `echo >` files the fixtures
-          # are built from, so a runner with a restrictive umask does not build a
-          # tree the unprivileged uid below cannot read — every shape would then
-          # fail for that instead of for its own reason. It does not govern the
-          # fixture root: mktemp -d creates 0700 whatever the umask is, and the
-          # explicit chmod further down is what opens that one.
-          umask 022
-          TMP="$(mktemp -d)"
-          # The sentinel shapes below chmod their directories 0555 on
-          # purpose — that is the state under test — so a plain `rm -rf`
-          # in the trap cannot remove what is inside them and fails with
-          # its own exit status, which would otherwise become this step's
-          # exit code regardless of what the probe itself proved.
-          trap 'chmod -R u+w "${TMP}" 2>/dev/null; rm -rf "${TMP}"' EXIT
-
-          start_line="$(grep -n "^\s*'command -v context-mode >/dev/null || exit 1\$" \
-            "{{.riotbox_dir}}/scripts/preflight.sh" | head -1 | cut -d: -f1)"
-          end_line="$(grep -n "^\s*exit 0' >/dev/null 2>&1; then\$" \
-            "{{.riotbox_dir}}/scripts/preflight.sh" | head -1 | cut -d: -f1)"
-          [ -n "${start_line}" ] && [ -n "${end_line}" ] \
-            || { echo "FAIL: could not locate the probe body in scripts/preflight.sh"; exit 1; }
-
-          sed -n "${start_line},${end_line}p" "{{.riotbox_dir}}/scripts/preflight.sh" \
-            | sed "1s/^[[:space:]]*'//" \
-            | sed "\$s/' >\/dev\/null 2>&1; then\$//" \
-            > "${TMP}/probe_body.sh"
-          [ -s "${TMP}/probe_body.sh" ] \
-            || { echo "FAIL: extracted probe body is empty"; exit 1; }
-
-          # Stands in for a working pinned-Node/context-mode install so only
-          # the staged-tree and sentinel halves are under test.
-          mkdir -p "${TMP}/bin"
-          cat > "${TMP}/bin/context-mode" <<'STUB'
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/xdg" "${TMP}/etc" "${TMP}/tree/container"
+          export RUN_MARK="${TMP}/ran"
+          cat > "${TMP}/podman" <<'STUB'
           #!/usr/bin/env bash
-          [ "$1" = "doctor" ] && exit 0
+          case "$1" in
+            image) exit 0 ;;
+            run)   touch "${RUN_MARK}"; exit 0 ;;
+          esac
           exit 1
           STUB
-          chmod +x "${TMP}/bin/context-mode"
-          export PATH="${TMP}/bin:${PATH}"
+          chmod +x "${TMP}/podman"
+          export PATH="${TMP}:${PATH}"
+          export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          unset RIOTBOX_DOCTOR_JSON RIOTBOX_DOCTOR_QUIET
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          source "{{.riotbox_dir}}/scripts/preflight.sh"
+          export RIOTBOX_CONTEXT_MODE=1 RIOTBOX_AGENT=claude
+          unset RIOTBOX_HEADROOM
+          cp -r "{{.riotbox_dir}}/scripts" "${TMP}/tree/scripts"
+          PREFLIGHT_SCRIPT_DIR="${TMP}/tree/scripts"
 
-          # The probe resolves the staged tree under RIOTBOX_CM_PLUGIN_DIR, and
-          # this suite may itself be running inside a container that sets it.
-          # Unset so every shape below falls back to the documented default,
-          # ${HOME}/.riotbox/context-mode-plugin — which is what makes HOME the
-          # single knob each shape turns.
+          # 1. A Containerfile with no Context Mode ARGs.
+          echo "FROM scratch" > "${TMP}/tree/Containerfile"
+          cp "{{.riotbox_dir}}/container/context-mode-hooks-expected.json" "${TMP}/tree/container/"
+          rc=0
+          out="$(preflight_check_context_mode 2>&1)" || rc=$?
+          echo "${out}"
+          [ "${rc}" = "22" ] || { echo "FAIL: no pins, expected 22, got ${rc}"; exit 1; }
+          echo "${out}" | grep -q "CONTEXT_MODE_VERSION" \
+            || { echo "FAIL: no pins, hint does not name the ARG: ${out}"; exit 1; }
+          [ ! -e "${RUN_MARK}" ] || { echo "FAIL: no pins, but the probe ran anyway"; exit 1; }
+
+          # 2. Pins present, the hook table missing.
+          grep -E '^ARG CONTEXT_MODE_(VERSION|NODE)=' "{{.riotbox_dir}}/Containerfile" \
+            > "${TMP}/tree/Containerfile"
+          rm "${TMP}/tree/container/context-mode-hooks-expected.json"
+          rc=0
+          out="$(preflight_check_context_mode 2>&1)" || rc=$?
+          echo "${out}"
+          [ "${rc}" = "22" ] || { echo "FAIL: no hook table, expected 22, got ${rc}"; exit 1; }
+          echo "${out}" | grep -q "context-mode-hooks-expected.json" \
+            || { echo "FAIL: no hook table, hint does not name the file: ${out}"; exit 1; }
+          [ ! -e "${RUN_MARK}" ] || { echo "FAIL: no hook table, but the probe ran anyway"; exit 1; }
+
+          # 3. Control: both restored, the probe runs and the check passes.
+          cp "{{.riotbox_dir}}/container/context-mode-hooks-expected.json" "${TMP}/tree/container/"
+          rc=0
+          out="$(preflight_check_context_mode 2>&1)" || rc=$?
+          [ "${rc}" = "0" ] || { echo "FAIL: control, expected 0, got ${rc}: ${out}"; exit 1; }
+          [ -e "${RUN_MARK}" ] || { echo "FAIL: control, the probe never ran"; exit 1; }
+          echo "doctor_pins=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "doctor_pins=pass"
+
+  # The cases above stub `podman run`, so the probe body never executes there.
+  # This one runs scripts/lib/context-mode-probe.sh the way doctor sends it
+  # (`bash -c "<file contents>"`) against a fake image layout under a temporary
+  # HOME: the shim at ~/.local/bin/context-mode exec'ing an absolute Node
+  # against the package's cli.mjs, the staged package under
+  # ~/.riotbox/context-mode-plugin/v<pin>, and a writable ~/.context-mode. The
+  # bundles are small stand-ins run on the Node on PATH, written to answer the
+  # way 2.x does for exactly the calls the probe makes; the image build runs
+  # the same probes against the real package.
+  #
+  # Shape 1 is the positive control the others are read against: without it,
+  # a fixture the probe rejected for an unrelated reason would make every
+  # negative shape pass while discriminating nothing. Each negative shape
+  # breaks one thing and must fail with a message naming it.
+  - name: the probe body exits 0 on a healthy 2.x image and names the fault on every broken one
+    steps:
+      - type: exec
+        script: |
+          set -e
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          # shellcheck disable=SC1091
+          source "{{.riotbox_dir}}/tests/lib/context-mode-store-helpers.sh"
+          cm_require_node probe_body
+          umask 022
+          TMP="$(mktemp -d)"
+          # Shape "store not writable" chmods a directory 0555 on purpose, so
+          # a plain `rm -rf` in the trap cannot empty it.
+          trap 'chmod -R u+w "${TMP}" 2>/dev/null; rm -rf "${TMP}"' EXIT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
           unset RIOTBOX_CM_PLUGIN_DIR
+          probe="$(cat "{{.riotbox_dir}}/scripts/lib/context-mode-probe.sh")"
+          NODE_EXE="$(command -v node)"
+          PIN=2.1.4
+          NODE_PIN="$("${NODE_EXE}" --version)"; NODE_PIN="${NODE_PIN#v}"
+          HOOKS_EXPECTED="$(jq -Sc . "{{.riotbox_dir}}/container/context-mode-hooks-expected.json")"
 
-          # The probe body is only meaningful as a non-root user. `[ -w ]` is
-          # true for root on any mode, so under a root runner the sentinel loop
-          # rejects every shape and the probe can never exit 0 — the healthy
-          # shape would fail for a reason this case is not about, and, worse,
-          # every negative shape would pass without discriminating anything at
-          # all, since they assert only that the probe failed. Skipping the case
-          # is the other way to handle that and it is what this case used to do,
-          # but it silently voids the whole thing on a CI runner that happens to
-          # be uid 0.
-          #
-          # So drop instead of skip: the fixtures stay owned by the runner and
-          # are world-readable, and the probe reads them as an unprivileged uid —
-          # which is exactly how the image's llm user reads a root-owned staged
-          # tree and a root-owned sentinel directory. nobody is used rather than
-          # a created account because this needs no home, no shell and no write
-          # access anywhere. If setpriv is missing there is no honest way to run
-          # this case as root, and it says so and fails rather than passing.
+          # The probe's last check writes to ~/.context-mode, which as root
+          # passes whatever the mode, so the store-not-writable shape could
+          # never fail and would pass while proving nothing. As uid 0 the
+          # probe drops to uid 65534 instead of skipping. Fixtures stay owned
+          # by the runner and world-readable, which is how the image user reads
+          # a tree the build left; the store directory is made writable for
+          # "whoever the probe runs as" with 0777 in the healthy shapes.
           PROBE_AS=""
           if [ "$(id -u)" = "0" ]; then
             command -v setpriv >/dev/null \
-              || { echo "FAIL: running as root without setpriv — cannot drop privileges, and the probe body is meaningless as uid 0"; exit 1; }
+              || { echo "FAIL: running as root without setpriv — cannot drop privileges, and the store shape is meaningless as uid 0"; exit 1; }
             PROBE_AS="setpriv --reuid=65534 --regid=65534 --clear-groups"
             chmod 0755 "${TMP}"
-            # setpriv being present is not the same as the drop working, and a
-            # drop that does not work blames scripts/preflight.sh for an
-            # environment problem: no CAP_SETUID, a seccomp filter or a userns
-            # without subuids surfaces as "healthy shape did not exit 0, got
-            # 127", and a TMPDIR the dropped uid cannot traverse — root with
-            # TMPDIR under a 0700 home, or systemd PrivateTmp — as "got 1". The
-            # chmod above opens the fixture root but not its parents, so the
-            # second is real on a hardened runner. One line exercises the drop
-            # and the whole traversal to the fixtures, and says which it is.
-            ${PROBE_AS} test -x "${TMP}/bin/context-mode" \
-              || { echo "FAIL: dropped to uid 65534 but it cannot execute ${TMP}/bin/context-mode — check CAP_SETUID and that TMPDIR is traversable by other users; this is the test environment, not scripts/preflight.sh"; exit 1; }
+            # A drop that does not work would blame the probe for the
+            # environment: no CAP_SETUID, or a Node or TMPDIR the dropped uid
+            # cannot reach. One line exercises the drop and both traversals.
+            ${PROBE_AS} test -x "${NODE_EXE}" \
+              || { echo "FAIL: dropped to uid 65534 but it cannot execute ${NODE_EXE} — check CAP_SETUID and that its path is traversable by other users; this is the test environment, not the probe"; exit 1; }
+            ${PROBE_AS} test -r "${TMP}" \
+              || { echo "FAIL: dropped to uid 65534 but it cannot reach ${TMP} — check that TMPDIR is traversable by other users; this is the test environment, not the probe"; exit 1; }
           fi
 
-          # Unquoted on purpose: PROBE_AS is either empty or a command prefix
-          # that has to split into words.
+          # stage_image <home>: a healthy 2.x layout.
+          stage_image() {
+            local home="$1" pkg="$1/.riotbox/context-mode-plugin/v${PIN}"
+            mkdir -p "${home}/.local/bin" "${home}/.context-mode" \
+                     "${pkg}/.claude-plugin" "${pkg}/hooks" "${pkg}/opencode" "${pkg}/pi"
+            chmod 0777 "${home}/.context-mode"
+            printf '#!/usr/bin/env bash\nexec "%s" "%s/cli.mjs" "$@"\n' "${NODE_EXE}" "${pkg}" \
+              > "${home}/.local/bin/context-mode"
+            chmod +x "${home}/.local/bin/context-mode"
+            printf '{"name":"context-mode","version":"%s","type":"module"}\n' "${PIN}" > "${pkg}/package.json"
+            printf 'if (process.argv[2] === "--version") console.log("%s");\n' "${PIN}" > "${pkg}/cli.mjs"
+            echo '{"name":"context-mode","hooks":"./hooks/claude-code.json"}' > "${pkg}/.claude-plugin/plugin.json"
+            echo 'export default { id: "context-mode", server() {}, setup() {} };' > "${pkg}/opencode/plugin.js"
+            echo 'export default function piExtension() {}' > "${pkg}/pi/index.js"
+            # Answers the way the real hook does: a decision for WebFetch,
+            # nothing for a plain Bash call — and only when asked as Claude.
+            cat > "${pkg}/hook.mjs" <<'HOOK'
+          import { readFileSync } from "node:fs";
+          const i = process.argv.indexOf("--agent");
+          if (i < 0 || process.argv[i + 1] !== "claude-code") process.exit(0);
+          const ev = JSON.parse(readFileSync(0, "utf8"));
+          if (ev.hook_event_name === "PreToolUse" && ev.tool_name === "WebFetch")
+            console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" } }));
+          HOOK
+            # The table the expectation file pins, every command the rewritten
+            # absolute-Node form the build leaves.
+            jq --arg cmd "\"${NODE_EXE}\" \"\${CLAUDE_PLUGIN_ROOT}/hook.mjs\" --agent claude-code" \
+              '{hooks: map_values(map({matcher: ., hooks: [{type: "command", command: $cmd}]}))
+                | map_values(map(if .matcher == null then del(.matcher) else . end))}' \
+              "{{.riotbox_dir}}/container/context-mode-hooks-expected.json" > "${pkg}/hooks/claude-code.json"
+          }
+
+          # run_probe <home> [VAR=value ...]: the probe as doctor runs it, its
+          # stderr kept in ${TMP}/err. PATH has no Node, as in the image, where
+          # only the shim's absolute path reaches one.
           run_probe() {
-            ${PROBE_AS} env HOME="$1" bash -c "$(cat "${TMP}/probe_body.sh")"
+            local home="$1"; shift
+            ${PROBE_AS} env HOME="${home}" PATH="${home}/.local/bin:/usr/bin:/bin" TMPDIR=/tmp \
+              CM_PIN="${PIN}" CM_NODE_PIN="${NODE_PIN}" CM_HOOKS_EXPECTED="${HOOKS_EXPECTED}" "$@" \
+              bash -c "${probe}" 2>"${TMP}/err" >/dev/null
           }
 
-          # The parts of a staged tree this probe judges, and only those: the
-          # version-stamped directory the resolution picks, the package.json
-          # session start reads a version out of, the .claude-plugin/plugin.json
-          # that lets Claude Code register the tree, and an installed
-          # better-sqlite3. It is deliberately not the whole shape the staging
-          # layer leaves behind (Containerfile) — hooks.json, the rewritten
-          # interpreter pins and upstream's marketplace.json are all absent,
-          # because nothing under test reads them and a fixture carrying files no
-          # assertion touches invites a reader to think they matter here.
-          TREE=".riotbox/context-mode-plugin/v1.0.0"
-          stage_plugin() {
-            local tree="$1/${TREE}"
-            mkdir -p "${tree}/.claude-plugin" "${tree}/node_modules/better-sqlite3"
-            echo '{"name":"context-mode"}' > "${tree}/.claude-plugin/plugin.json"
-            echo '{"version":"1.0.0"}' > "${tree}/package.json"
-            echo '{"name":"better-sqlite3"}' > "${tree}/node_modules/better-sqlite3/package.json"
+          # expect_fail <shape> <home> <phrase> [VAR=value ...]
+          expect_fail() {
+            local shape="$1" home="$2" phrase="$3"; shift 3
+            local rc=0
+            run_probe "${home}" "$@" || rc=$?
+            [ "${rc}" != "0" ] || { echo "FAIL: ${shape} did not fail the probe"; exit 1; }
+            grep -q -F -- "${phrase}" "${TMP}/err" \
+              || { echo "FAIL: ${shape} failed without naming it (want '${phrase}'):"; cat "${TMP}/err"; exit 1; }
+            echo "ok: ${shape} -> $(cat "${TMP}/err")"
           }
 
-          # Every shape gets a staged tree and both sentinel directories, and
-          # then breaks exactly one thing. Shape 1 is the positive control the
-          # other eight are read against: without it, a fixture the probe would
-          # reject for some unrelated reason would make all eight pass while
-          # discriminating nothing.
+          pkg_of() { printf '%s\n' "$1/.riotbox/context-mode-plugin/v${PIN}"; }
 
-          # 1. Healthy: a staged tree, and both sentinel directories present,
-          # mode 0555, no platform.json in either. This is the shape that
-          # regressed: the probe's own last assertion is negative (absent is
-          # healthy), so a script whose exit status falls through from that
-          # assertion's status reports a perfectly good image as broken.
-          H1="${TMP}/h1"
-          mkdir -p "${H1}/.context-mode" "${H1}/.config/context-mode"
-          stage_plugin "${H1}"
-          chmod 0555 "${H1}/.context-mode" "${H1}/.config/context-mode"
-          rc=0; run_probe "${H1}" || rc=$?
-          [ "${rc}" = "0" ] \
-            || { echo "FAIL: healthy shape did not exit 0, got ${rc}"; exit 1; }
+          # 1. Healthy.
+          H="${TMP}/healthy"; stage_image "${H}"
+          rc=0; run_probe "${H}" || rc=$?
+          [ "${rc}" = "0" ] || { echo "FAIL: healthy shape exited ${rc}:"; cat "${TMP}/err"; exit 1; }
+          [ ! -s "${TMP}/err" ] || { echo "FAIL: healthy shape wrote to stderr:"; cat "${TMP}/err"; exit 1; }
+          [ -z "$(ls -A "${H}/.context-mode")" ] \
+            || { echo "FAIL: the probe left files in the store"; exit 1; }
 
-          # 2. A sentinel directory writable by the user the probe runs as. 0777
-          # rather than 0755 because that user is not the fixture's owner when
-          # this case has dropped privileges, and the property under test is
-          # "the probe can write here", not a particular mode.
-          H2="${TMP}/h2"
-          mkdir -p "${H2}/.context-mode" "${H2}/.config/context-mode"
-          stage_plugin "${H2}"
-          chmod 0777 "${H2}/.context-mode"
-          chmod 0555 "${H2}/.config/context-mode"
-          rc=0; run_probe "${H2}" || rc=$?
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: writable directory did not fail the probe"; exit 1; }
+          # 2. No CLI on PATH.
+          H="${TMP}/no-cli"; stage_image "${H}"; rm "${H}/.local/bin/context-mode"
+          expect_fail "no CLI" "${H}" "no context-mode on PATH"
 
-          # 3. platform.json present in an otherwise-correct directory. Using
-          # touch, not `: >`, per the house rule for probing state inside a
-          # Venom exec step — a redirection failure on a POSIX special
-          # builtin here would kill this whole script rather than the probe.
-          H3="${TMP}/h3"
-          mkdir -p "${H3}/.context-mode" "${H3}/.config/context-mode"
-          stage_plugin "${H3}"
-          touch "${H3}/.context-mode/platform.json"
-          chmod 0555 "${H3}/.context-mode" "${H3}/.config/context-mode"
-          rc=0; run_probe "${H3}" || rc=$?
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: a present platform.json did not fail the probe"; exit 1; }
+          # 3. The CLI is not the pinned version.
+          H="${TMP}/cli-version"; stage_image "${H}"
+          echo 'console.log("2.1.3");' > "$(pkg_of "${H}")/cli.mjs"
+          expect_fail "CLI version" "${H}" "context-mode --version is '2.1.3', this riotbox pins ${PIN}"
 
-          # 4. A sentinel directory missing entirely.
-          H4="${TMP}/h4"
-          mkdir -p "${H4}/.context-mode"
-          stage_plugin "${H4}"
-          chmod 0555 "${H4}/.context-mode"
-          rc=0; run_probe "${H4}" || rc=$?
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: a missing directory did not fail the probe"; exit 1; }
+          # 4. The CLI does not run at all.
+          H="${TMP}/cli-dead"; stage_image "${H}"
+          echo 'process.exit(3);' > "$(pkg_of "${H}")/cli.mjs"
+          expect_fail "CLI dead" "${H}" "context-mode --version failed"
 
-          # 5. No staged plugin tree at all — an image built before the staging
-          # layer existed, which is the ordinary upgrade path
-          # (container/plugin-setup.sh names that state in as many words). The
-          # npm shim and `context-mode doctor` are both intact on such an image,
-          # so this is precisely the shape the runtime half of the probe cannot
-          # see: doctor would report the image healthy and the session would then
-          # run with the feature off.
-          H5="${TMP}/h5"
-          mkdir -p "${H5}/.context-mode" "${H5}/.config/context-mode"
-          chmod 0555 "${H5}/.context-mode" "${H5}/.config/context-mode"
-          rc=0; run_probe "${H5}" || rc=$?
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: a missing staged plugin tree did not fail the probe"; exit 1; }
+          # 5. The shim runs a Node other than the pin.
+          H="${TMP}/node-pin"; stage_image "${H}"
+          expect_fail "Node pin" "${H}" "this riotbox pins v0.0.1" CM_NODE_PIN=0.0.1
 
-          # 6. A staged tree Claude Code cannot register: no
-          # .claude-plugin/plugin.json, so nothing surfaces the hooks or the MCP
-          # server the routing table steers toward.
-          H6="${TMP}/h6"
-          mkdir -p "${H6}/.context-mode" "${H6}/.config/context-mode"
-          stage_plugin "${H6}"
-          rm -f "${H6}/${TREE}/.claude-plugin/plugin.json"
-          chmod 0555 "${H6}/.context-mode" "${H6}/.config/context-mode"
-          rc=0; run_probe "${H6}" || rc=$?
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: a staged tree with no plugin.json did not fail the probe"; exit 1; }
+          # 6. A shim whose exec line names no cli.mjs, so neither the Node nor
+          # the package root can be read out of it.
+          H="${TMP}/shim-shape"; stage_image "${H}"
+          printf '#!/usr/bin/env bash\necho %s\n' "${PIN}" > "${H}/.local/bin/context-mode"
+          expect_fail "shim shape" "${H}" "cannot read the pinned Node and package root"
 
-          # 7. A staged tree with no package.json, so nothing can read a version
-          # out of it. This is the divergence the probe would otherwise carry:
-          # context_mode_staged_version refuses such a tree and
-          # context_mode_plugin_register then warns and unregisters, so a doctor
-          # that did not ask the same question would report green on a tree the
-          # session is about to refuse — the exact symptom the staged-tree half
-          # of this probe exists to remove.
-          H7="${TMP}/h7"
-          mkdir -p "${H7}/.context-mode" "${H7}/.config/context-mode"
-          stage_plugin "${H7}"
-          rm -f "${H7}/${TREE}/package.json"
-          chmod 0555 "${H7}/.context-mode" "${H7}/.config/context-mode"
-          rc=0; run_probe "${H7}" || rc=$?
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: a staged tree with no package.json did not fail the probe"; exit 1; }
+          # 7. The OpenCode adapter's default export has lost setup.
+          H="${TMP}/opencode"; stage_image "${H}"
+          echo 'export default { id: "context-mode", server() {} };' > "$(pkg_of "${H}")/opencode/plugin.js"
+          expect_fail "OpenCode export" "${H}" "OpenCode adapter"
 
-          # 8. A staged tree whose npm ci never landed. Every hook the session
-          # runs would try to install better-sqlite3 at hook time, in a session
-          # that may have no network at all.
-          H8="${TMP}/h8"
-          mkdir -p "${H8}/.context-mode" "${H8}/.config/context-mode"
-          stage_plugin "${H8}"
-          rm -rf "${H8}/${TREE}/node_modules"
-          chmod 0555 "${H8}/.context-mode" "${H8}/.config/context-mode"
-          rc=0; run_probe "${H8}" || rc=$?
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: a staged tree with no better-sqlite3 did not fail the probe"; exit 1; }
+          # 8. The OpenCode adapter is gone.
+          H="${TMP}/opencode-gone"; stage_image "${H}"; rm "$(pkg_of "${H}")/opencode/plugin.js"
+          expect_fail "OpenCode missing" "${H}" "OpenCode adapter"
 
-          # 9. A staged tree whose version is present but not a string. This is
-          # the shape the type gate exists for, and the only one that tells a
-          # real mirror of context_mode_staged_version from a bare
-          # `[ -r package.json ]`: shape 7 removes the file, which either would
-          # catch. jq -r would render 123 as the string "123" and the session
-          # would register the tree as a version it does not declare, which is
-          # the one thing reading the version prevents — so upstream refuses it,
-          # context_mode_plugin_register unregisters, and a doctor without the
-          # gate reports green on a tree the session is about to drop.
-          H9="${TMP}/h9"
-          mkdir -p "${H9}/.context-mode" "${H9}/.config/context-mode"
-          stage_plugin "${H9}"
-          echo '{"version":123}' > "${H9}/${TREE}/package.json"
-          chmod 0555 "${H9}/.context-mode" "${H9}/.config/context-mode"
-          rc=0; run_probe "${H9}" || rc=$?
-          [ "${rc}" != "0" ] \
-            || { echo "FAIL: a staged tree with a non-string version did not fail the probe"; exit 1; }
+          # 9. No Pi extension.
+          H="${TMP}/pi"; stage_image "${H}"; rm "$(pkg_of "${H}")/pi/index.js"
+          expect_fail "Pi extension" "${H}" "pi/index.js"
 
+          # 10. No staged tree where the session looks for one.
+          H="${TMP}/no-tree"; stage_image "${H}"; mkdir -p "${H}/empty"
+          expect_fail "no staged tree" "${H}" "no staged Claude plugin tree" RIOTBOX_CM_PLUGIN_DIR="${H}/empty"
+
+          # 11. A staged version that is not a string, which
+          # context_mode_staged_version refuses and a session would unregister.
+          H="${TMP}/tree-version"; stage_image "${H}"
+          echo '{"version":214,"type":"module"}' > "$(pkg_of "${H}")/package.json"
+          expect_fail "staged version type" "${H}" "declares no version"
+
+          # 12. A staged tree at another version than the pin.
+          H="${TMP}/tree-pin"; stage_image "${H}"
+          echo '{"version":"2.1.3","type":"module"}' > "$(pkg_of "${H}")/package.json"
+          expect_fail "staged version pin" "${H}" "is context-mode 2.1.3, this riotbox pins ${PIN}"
+
+          # 13. No plugin manifest, so nothing can register the tree.
+          H="${TMP}/manifest"; stage_image "${H}"; rm "$(pkg_of "${H}")/.claude-plugin/plugin.json"
+          expect_fail "plugin manifest" "${H}" ".claude-plugin/plugin.json"
+
+          # 14. A hook table that differs from the expectation file.
+          H="${TMP}/table"; stage_image "${H}"
+          jq 'del(.hooks.UserPromptSubmit)' "$(pkg_of "${H}")/hooks/claude-code.json" > "${TMP}/t.json"
+          mv "${TMP}/t.json" "$(pkg_of "${H}")/hooks/claude-code.json"
+          expect_fail "hook table" "${H}" "context-mode-hooks-expected.json"
+
+          # 15. A hook that answers nothing: the session would route nothing.
+          H="${TMP}/hook-silent"; stage_image "${H}"; echo '' > "$(pkg_of "${H}")/hook.mjs"
+          expect_fail "silent hook" "${H}" "no PreToolUse decision for WebFetch"
+
+          # 16. A hook that answers every tool, which would pass shape 15's
+          # check while proving nothing.
+          H="${TMP}/hook-all"; stage_image "${H}"
+          echo 'console.log(JSON.stringify({hookSpecificOutput:{permissionDecision:"deny"}}));' \
+            > "$(pkg_of "${H}")/hook.mjs"
+          expect_fail "indiscriminate hook" "${H}" "for a plain ls"
+
+          # 17. A hook command that still invokes a bare node. PATH holds no
+          # Node, so it answers nothing, as it would on the image.
+          H="${TMP}/bare-node"; stage_image "${H}"
+          jq '(.hooks[][].hooks[].command) |= sub("^\"[^\"]*\""; "node")' \
+            "$(pkg_of "${H}")/hooks/claude-code.json" > "${TMP}/t.json"
+          mv "${TMP}/t.json" "$(pkg_of "${H}")/hooks/claude-code.json"
+          expect_fail "bare node" "${H}" "no PreToolUse decision for WebFetch"
+
+          # 18. A store the session user cannot write.
+          H="${TMP}/store-ro"; stage_image "${H}"; chmod 0555 "${H}/.context-mode"
+          expect_fail "read-only store" "${H}" "${H}/.context-mode is not writable"
+
+          # 19. No store at all.
+          H="${TMP}/store-gone"; stage_image "${H}"; rmdir "${H}/.context-mode"
+          expect_fail "missing store" "${H}" "${H}/.context-mode is not writable"
           echo "probe_body=pass"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "probe_body=pass"
+          - result.systemout ShouldMatchRegex "probe_body=(pass|SKIPPED)"
 
   # Context Mode is wired per agent through the optional registry verbs (see
   # docs/dev/agent-contract.md), so an agent implementing none of them
@@ -830,11 +792,11 @@ testcases:
           echo "${out}" | grep -q "no Context Mode support" \
             && { echo "FAIL: called a supported agent unsupported: ${out}"; exit 1; }
 
-          # Unsupported: the same agent with its storage verb taken away. That
+          # Unsupported: the same agent with its contract verb taken away. That
           # verb, not the wire verb, is what the check probes — Claude Code has
-          # no wire verb at all now, and probing for one would report the
-          # default agent as unsupported on an image where the feature works.
-          unset -f agent_opencode_context_mode_store_dir
+          # no wire verb at all, and probing for one would report the default
+          # agent as unsupported on an image where the feature works.
+          unset -f agent_opencode_context_mode_build_assert
           rc=0
           out="$(preflight_check_context_mode 2>&1)" || rc=$?
           # ok, not fail: a fail carries an exit code and would make

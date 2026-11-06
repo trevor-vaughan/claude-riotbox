@@ -9,6 +9,8 @@ hook stanzas and the `mcpServers` entry RiotBox used to write by hand.
 > **Frozen record.** Written after implementation, from what the work turned up.
 > For the current implementation, read
 > [How Context Mode works in RiotBox](../context-mode.md).
+>
+> **Superseded in part by [context-mode-2x-migration.md](context-mode-2x-migration.md)** (2026-11-06): the tag-plus-SHA git clone and the `npm ci` plugin tree are gone (the plugin is staged from the npm package alone), and `context-mode doctor` is no longer a health gate.
 
 ## TL;DR
 

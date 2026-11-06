@@ -154,8 +154,7 @@ agent_opencode_headroom_argv() {
 # Container-side runtime setup. setup.sh places AGENTS.md and a merged
 # opencode.jsonc (combining host opencode.json + opencode.jsonc with
 # riotbox-mandatory overrides) on every container start; both are idempotent.
-# Then move Context Mode stores an earlier release left under the config dir
-# (see context-mode.sh). Finally strip any GitHub/GitLab MCP entry an earlier
+# Then strip any GitHub/GitLab MCP entry an earlier
 # image left in the persisted opencode.jsonc, which opencode_setup merges back
 # in. AGENTS.md gets the egress prompt section at every start, egress or
 # not, in its session-agnostic form: every session of the project shares the
@@ -169,7 +168,6 @@ agent_opencode_container_setup() {
 	# From scripts/lib/egress-prompt.sh, which container/entrypoint.sh sources.
 	egress_prompt_apply_shared "${HOME}/.config/opencode/AGENTS.md"
 	opencode_strip_forge_mcp_entries
-	_agent_opencode_cm_migrate_store
 }
 
 # Host-side config sync. sync-settings.sh copies the host opencode config

@@ -9,6 +9,8 @@ names no agent.
 > **Frozen design record.** The body below is as written, with corrections made
 > during implementation marked inline. For the current implementation, read
 > [How Context Mode works in RiotBox](../context-mode.md).
+>
+> **Superseded in part by [context-mode-2x-migration.md](context-mode-2x-migration.md)** (2026-11-06): the 1.x adapter (`build/adapters/opencode/plugin.js`, `ContextModePlugin`), `CONTEXT_MODE_DIR` and both store locations. 2.x has one `opencode/plugin.js` and one store at `~/.context-mode`.
 
 ## Purpose
 
