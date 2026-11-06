@@ -1,0 +1,33 @@
+tests/opencode.venom.yml
+  s_12396f456952ef::t_9e835c1ea77d8c 122-125,128
+docs/dev/agent-contract.md
+  s_12396f456952ef::t_3a7b078b84c126 599
+docs/dev/context-mode.md
+  s_12396f456952ef::t_3a7b078b84c126 636
+README.md
+  s_12396f456952ef::t_006bceb4768e9f 1845-1846
+  s_12396f456952ef::t_a0878cf0149b77 1836-1844
+  s_12396f456952ef::t_3a7b078b84c126 2771
+tests/context-mode-opencode.venom.yml
+  s_12396f456952ef::t_230a97f6518b05 738-742,744-748,756,763,765-766,769-772,775
+docs/dev/decisions/context-mode-opencode.md
+  s_12396f456952ef::t_3a7b078b84c126 288-294,356
+agents/opencode/manifest.sh
+  s_12396f456952ef::t_4495d37e0d003b 88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e80469bf8b005a5b8221f3f04260e88c959429e3",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
