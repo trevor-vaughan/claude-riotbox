@@ -1,0 +1,25 @@
+docs/dev/agent-contract.md
+  s_12396f456952ef::t_459c7e759adb82 164-167
+README.md
+  s_12396f456952ef::t_3c7b17037565b2 201,208
+  s_12396f456952ef::t_459c7e759adb82 202-207,209-211,628-630
+  s_12396f456952ef::t_761cb8005e1fb4 631
+THREAT_MODEL.md
+  s_12396f456952ef::t_459c7e759adb82 210-213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "02594a2e83d7597c05094e9d71f67a4bad67702e",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
