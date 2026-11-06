@@ -1,0 +1,51 @@
+internal/egress/inject/vouch_e2e_test.go
+  s_216e8ef1c0dbfa::t_1ab3e37928a5dc 18-19,21
+internal/egress/pod/inject_e2e_test.go
+  s_216e8ef1c0dbfa::t_1ab3e37928a5dc 25
+tests/lib/egress-e2e-helpers.sh
+  s_216e8ef1c0dbfa::t_1ab3e37928a5dc 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6940223e524559b6f6f61f9b32fe735bc0d4276e",
+  "prompts": {},
+  "sessions": {
+    "s_216e8ef1c0dbfa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "75b2ded0-6884-4bc1-b64c-fbb30eb34206",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+tests/lib/egress-e2e-helpers.sh
+  s_216e8ef1c0dbfa::t_7298dd781abfe5 14,19,23,25,27
+  s_216e8ef1c0dbfa::t_84676d641c0a17 16-17
+  s_216e8ef1c0dbfa::t_0c8bbc8d8601e0 135-137,139-144
+  s_216e8ef1c0dbfa::t_198ab64028f807 15,21
+internal/egress/pod/inject_e2e_test.go
+  s_216e8ef1c0dbfa::t_7298dd781abfe5 26
+internal/egress/inject/vouch_e2e_test.go
+  s_216e8ef1c0dbfa::t_7298dd781abfe5 22
+  s_216e8ef1c0dbfa::t_198ab64028f807 18-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "435aa7f652d0ac57a30463aa3a9b92f7268f26c7",
+  "prompts": {},
+  "sessions": {
+    "s_216e8ef1c0dbfa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "75b2ded0-6884-4bc1-b64c-fbb30eb34206",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
