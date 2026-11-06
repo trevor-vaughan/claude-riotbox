@@ -1,0 +1,101 @@
+tests/opencode.venom.yml
+  s_12396f456952ef::t_9e835c1ea77d8c 122-125,128
+  s_12396f456952ef::t_8ec638d0f8df91 870-904,1313-1335
+  s_12396f456952ef::t_8c54f65b6b1be6 1336
+  s_12396f456952ef::t_2e2dcefbbcfa67 323,327
+  s_12396f456952ef::t_a600fc40b1c94b 807-838,854
+  s_12396f456952ef::t_3f3ffafc043d78 249-259,261
+docs/dev/agent-contract.md
+  s_12396f456952ef::t_3a7b078b84c126 605
+  s_12396f456952ef::t_459c7e759adb82 167-169
+  s_12396f456952ef::t_c2194cec957208 164
+  s_12396f456952ef::t_78959d4662b79e 165-166
+docs/dev/context-mode.md
+  s_12396f456952ef::t_3a7b078b84c126 639
+  s_12396f456952ef::t_956be545ee9dac 137-139,141-146
+README.md
+  s_12396f456952ef::t_006bceb4768e9f 1864-1865
+  s_12396f456952ef::t_a0878cf0149b77 1855-1863
+  s_12396f456952ef::t_3a7b078b84c126 2790
+  s_12396f456952ef::t_98fe2f98e182eb 1180
+  s_12396f456952ef::t_96cc058d928835 282
+  s_12396f456952ef::t_51dccbe51e6e7f 952-956
+  s_12396f456952ef::t_3c7b17037565b2 201,208
+  s_12396f456952ef::t_459c7e759adb82 202-207,209-211,628-630
+  s_12396f456952ef::t_761cb8005e1fb4 631
+tests/context-mode-opencode.venom.yml
+  s_12396f456952ef::t_230a97f6518b05 738-742,744-748,756,763,765-766,769-772,775
+docs/dev/decisions/context-mode-opencode.md
+  s_12396f456952ef::t_3a7b078b84c126 288-294,356
+agents/opencode/manifest.sh
+  s_12396f456952ef::t_4495d37e0d003b 88
+  s_12396f456952ef::t_98fe2f98e182eb 199-202,213
+tests/egress-launch.venom.yml
+  s_12396f456952ef::t_b17a67b7405ce0 59
+tests/egress-manifests.venom.yml
+  s_12396f456952ef::t_b17a67b7405ce0 46-49
+THREAT_MODEL.md
+  s_12396f456952ef::t_0de72a10100732 224
+  s_12396f456952ef::t_b0b42ad5f677b9 201-206
+  s_12396f456952ef::t_a24fdd32eff25d 208
+  s_12396f456952ef::t_459c7e759adb82 210-211,214-215
+  s_12396f456952ef::t_49615424a851cf 777-778
+  s_12396f456952ef::t_c2194cec957208 212-213
+container/opencode/smoke.sh
+  s_12396f456952ef::t_eebac6bfc1f8c5 99-115,118,123-127,129,131,133,135,137-141,145-156,189-211,214-218,225,227,229-234,236,239-240,242-246,248-250,257-263
+  s_12396f456952ef::t_bc05e75006c8b2 34-35,39-44,48-52,54-59
+  s_12396f456952ef::t_a9fe437a801f3f 164
+  s_12396f456952ef::t_00a85937edb9df 142,144,213,237,241,251-253
+  s_12396f456952ef::t_15905bb7581297 122,157-158,212
+  s_12396f456952ef::t_0a23baecd51032 128,130,132,134,136,143
+  s_12396f456952ef::t_a768e5f43da86d 162
+  s_12396f456952ef::t_1d40c78e2d1711 178
+  s_12396f456952ef::t_889dfce1be4460 183
+  s_12396f456952ef::t_d8a1422c1fe1de 159-161,163,173-177,179-182,184-188
+  s_12396f456952ef::t_eacb8162d2dbe8 119-121
+  s_12396f456952ef::t_52a98ec6291d08 33,36-38,45-47,53,116,165-172,219-224,226,228,238
+  s_12396f456952ef::t_b55efc910dc1ec 117,235,247,254-256
+Containerfile
+  s_12396f456952ef::t_5f360fc3cae3b3 1531-1539
+  s_12396f456952ef::t_2e2dcefbbcfa67 920,929-933,958
+  s_12396f456952ef::t_5b5a011187db6f 778-779,798-800
+  s_12396f456952ef::t_49615424a851cf 803-804
+agents/opencode/headroom-exec.sh
+  s_12396f456952ef::t_7c0c86fb0a55c9 110-111
+agents/opencode/sync-settings.sh
+  s_12396f456952ef::t_5a437e8b9221a6 103-107
+  s_12396f456952ef::t_5f7897cc4fca66 66
+agents/opencode/setup.sh
+  s_12396f456952ef::t_48fc3b074825a9 73-86
+tests/container-tasks.venom.yml
+  s_12396f456952ef::t_9d220b59ca3ec7 15,83
+bin/riotbox
+  s_12396f456952ef::t_e1f4f546248e12 199
+agents/opencode/context-mode.sh
+  s_12396f456952ef::t_956be545ee9dac 29-30,87-90
+docs/dev/decisions/opencode-v2.md
+  s_12396f456952ef::t_a2384d23f2578c 35
+  s_12396f456952ef::t_c2194cec957208 1-34,36-42
+docs/dev/decisions/pi-support.md
+  s_12396f456952ef::t_7e966a295ec90c 16-17
+docs/dev/decisions/README.md
+  s_12396f456952ef::t_c2194cec957208 26
+.github/workflows/test.yml
+  s_12396f456952ef::t_d13fadf7ce9a73 78-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3c20e5dc9add3dd92a516353386d9707d6da95e4",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
