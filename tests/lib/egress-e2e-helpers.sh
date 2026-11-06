@@ -9,22 +9,22 @@ _E2E_HELPERS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 E2E_CORE="$(cd "${_E2E_HELPERS_DIR}/../.." && pwd)/libexec/riotbox-core"
 E2E_OS_DIR="$(cd "${_E2E_HELPERS_DIR}/../.." && pwd)/os"
 E2E_EGRESS_OS_LIB="$(cd "${_E2E_HELPERS_DIR}/../.." && pwd)/scripts/lib/egress-os.sh"
-E2E_AGENT_IMAGE="quay.io/centos/centos:stream10@sha256:99b8fe27dd4958b5dc2630ce35f5f6a7ff7bf9b2b1a72078102fde50d3277550"
+E2E_AGENT_IMAGE="quay.io/centos/centos:stream10"
 # shellcheck disable=SC2034  # consumed by tests/egress-e2e.venom.yml
-E2E_BUSYBOX_IMAGE="docker.io/library/busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
-# Stock distro images for the OS plugin cases, pinned by digest (resolved
-# 2026-10-27). Debian and Ubuntu ship without ca-certificates; e2e_with_ca
-# derives an image with it.
+E2E_BUSYBOX_IMAGE="docker.io/library/busybox:1.37"
+# Stock distro images for the OS plugin cases. Like every test image here, they
+# track their tag, not a digest. Debian and Ubuntu ship without
+# ca-certificates; e2e_with_ca derives an image with it.
 # shellcheck disable=SC2034  # consumed by tests/egress-e2e.venom.yml
-E2E_FEDORA_IMAGE="docker.io/library/fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80"
+E2E_FEDORA_IMAGE="docker.io/library/fedora:44"
 # shellcheck disable=SC2034
-E2E_UBI_IMAGE="registry.access.redhat.com/ubi9/ubi@sha256:48393e4261b2544f652c915b3e052256ddf66ee95cd04dc0362191f302c4e94a"
+E2E_UBI_IMAGE="registry.access.redhat.com/ubi9/ubi:latest"
 # shellcheck disable=SC2034
-E2E_DEBIAN_IMAGE="docker.io/library/debian:trixie@sha256:15a71cc87173e191d5046f9c4288db4e8954b67f92e48d9587087826b0afe562"
+E2E_DEBIAN_IMAGE="docker.io/library/debian:trixie"
 # shellcheck disable=SC2034
-E2E_UBUNTU_IMAGE="docker.io/library/ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c"
+E2E_UBUNTU_IMAGE="docker.io/library/ubuntu:24.04"
 # shellcheck disable=SC2034
-E2E_ARCH_IMAGE="docker.io/library/archlinux:latest@sha256:52dfbd5afb23a220d5ee92dafcb4c788d96c026ed04179890c23adef4c897fa0"
+E2E_ARCH_IMAGE="docker.io/library/archlinux:latest"
 
 # e2e_require
 #   Skip the case (print SKIP and OK, exit 0) unless RIOTBOX_EGRESS_E2E=1.
@@ -132,11 +132,16 @@ e2e_eventually() {
 #   Print an image that is <image> plus ca-certificates, deriving it once
 #   (podman run on the default network, then commit; `podman build` is not
 #   used, as it fails in the dev container). apt over HTTPS needs the CA
-#   bundle, which the stock Debian and Ubuntu images lack.
+#   bundle, which the stock Debian and Ubuntu images lack. The derived tag is
+#   keyed on the base's image ID, not its name: the base is a floating tag, so
+#   a newer pull must produce a new derived image rather than reuse a stale one.
 e2e_with_ca() {
-	local base="$1" hash tag c rc
-	hash="$(printf '%s' "${base}" | sha256sum)"
-	tag="localhost/riotbox-e2e-ca:${hash:0:12}"
+	local base="$1" id tag c rc
+	if ! podman image exists "${base}"; then
+		podman pull -q "${base}" >/dev/null || return 1
+	fi
+	id="$(podman image inspect --format '{{.Id}}' "${base}")" || return 1
+	tag="localhost/riotbox-e2e-ca:${id:0:12}"
 	if ! podman image exists "${tag}"; then
 		c="rbx-e2e-ca-$$"
 		if ! podman run --name "${c}" "${base}" sh -c 'apt-get update -qq && apt-get install -y -qq ca-certificates >/dev/null' >&2; then
