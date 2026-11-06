@@ -1,0 +1,27 @@
+agents/opencode/sync-settings.sh
+  s_12396f456952ef::t_5a437e8b9221a6 103-107
+  s_12396f456952ef::t_5f7897cc4fca66 66
+agents/opencode/setup.sh
+  s_12396f456952ef::t_48fc3b074825a9 73-86
+tests/opencode.venom.yml
+  s_12396f456952ef::t_8ec638d0f8df91 827-861,1270-1292
+  s_12396f456952ef::t_8c54f65b6b1be6 1293
+THREAT_MODEL.md
+  s_12396f456952ef::t_b0b42ad5f677b9 201-206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fe1622c8bb7c60dc9d456e8e124f628111110e63",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
