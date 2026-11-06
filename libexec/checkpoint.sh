@@ -15,7 +15,9 @@ set -euo pipefail
 # commit-tree runs no hooks and does not sign.
 #
 # A directory that is not yet a git repo can be initialized on the spot (see
-# RIOTBOX_GIT_INIT below); an empty repo with no commits, and a bare repo with
+# RIOTBOX_GIT_INIT below), and one that merely sits inside another repo is
+# never checkpointed through that repo without an interactive "yes" (see
+# enclosing_repo_choice); an empty repo with no commits, and a bare repo with
 # no worktree to snapshot, are both skipped gracefully. Every per-project
 # failure warns and moves to the next project — a checkpoint problem must never
 # take the launch down with it, so this script exits 0 even after warning.
@@ -228,6 +230,43 @@ maybe_init_git_repo() {
 		return 0
 	fi
 	return 1
+}
+
+# Decide what to checkpoint for a directory that has no repo of its own but
+# sits inside one. `git -C` discovers the enclosing repo, so without asking the
+# snapshot silently covered the whole parent worktree — and reported every
+# sibling repo in it as an "embedded git repository". Follows the
+# RIOTBOX_GIT_INIT contract of maybe_init_git_repo:
+#   1     → create a repo in <dir>
+#   0     → no repo
+#   unset → ask on an interactive terminal (default: no repo); non-interactive
+#           callers get no repo. Using the parent is only ever an explicit,
+#           interactive choice.
+# Prints "parent", "create" or "none". The prompt goes to stderr so the answer
+# can be captured.
+enclosing_repo_choice() {
+	local dir="$1" top="$2" answer=""
+	case "${RIOTBOX_GIT_INIT:-}" in
+	1) answer=2 ;;
+	0) ;;
+	*)
+		if [[ -t 0 ]]; then
+			{
+				printf "  %s is inside the git repository %s.\n" "${dir}" "${top}"
+				printf "    1) Use %s for checkpoints\n" "${top}"
+				printf "    2) Create a new git repository in %s\n" "${dir}"
+				printf "    3) Do not use a git repository for this run\n"
+				printf "  Choice [1/2/3] (default 3): "
+			} >&2
+			read -r answer || answer=""
+		fi
+		;;
+	esac
+	case "${answer}" in
+	1) echo parent ;;
+	2) echo create ;;
+	*) echo none ;;
+	esac
 }
 
 # Report a failed backup as loudly as the exposure deserves, then print the
@@ -711,6 +750,32 @@ for dir in "${PROJECT_DIRS[@]}"; do
 	if [[ "$(git -C "${dir}" rev-parse --is-bare-repository)" == "true" ]]; then
 		echo "  WARNING: ${dir} is a bare git repo (no worktree) — no checkpoint protection!" >&2
 		continue
+	fi
+
+	# PROJECT_DIRS are physical paths, as is --show-toplevel, so a plain string
+	# comparison tells a repo's own top level from a directory inside it.
+	if ! top="$(git -C "${dir}" rev-parse --show-toplevel)"; then
+		echo "  WARNING: ${dir} has no git worktree — no checkpoint protection!" >&2
+		continue
+	fi
+	if [[ "${top}" != "${dir}" ]]; then
+		case "$(enclosing_repo_choice "${dir}" "${top}")" in
+		parent)
+			dir="${top}"
+			project_name="$(basename "${dir}")"
+			;;
+		create)
+			# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+			if ! RIOTBOX_GIT_INIT=1 maybe_init_git_repo "${dir}"; then
+				echo "  WARNING: ${dir}: git init failed — no checkpoint protection!" >&2
+				continue
+			fi
+			;;
+		*)
+			echo "  WARNING: ${dir} is not a git repo (it is inside ${top}) — no checkpoint protection!" >&2
+			continue
+			;;
+		esac
 	fi
 
 	# Ensure .git/info/exclude has the managed block so runtime artifacts

@@ -315,3 +315,191 @@ testcases:
           - result.systemout ShouldNotContainSubstring "Create one"
           - result.systemout ShouldContainSubstring "STUB-LAUNCH reached"
           - result.systemout ShouldContainSubstring "run_no_prompt_ok=true"
+
+  # -- Project dir inside a parent repo, with no repo of its own --
+
+  - name: Subdir of a repo non-interactive default checkpoints nothing and leaves both repos untouched
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_with_subdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${SUB_DIR}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" </dev/null 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          echo "${out}" | grep -qF "${SUB_DIR} is not a git repo (it is inside ${REPO_DIR})"
+          [ ! -e "${SUB_DIR}/.git" ]
+          [ -z "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox)" ]
+          echo "subdir_noninteractive_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "embedded git repository"
+          - result.systemout ShouldNotContainSubstring "Choice [1/2/3]"
+          - result.systemout ShouldContainSubstring "subdir_noninteractive_ok=true"
+
+  - name: Subdir of a repo with RIOTBOX_GIT_INIT=1 gets its own repo and checkpoint
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_with_subdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${SUB_DIR}" \
+                 RIOTBOX_GIT_INIT=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" </dev/null 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -d "${SUB_DIR}/.git" ]
+          ref="$(git -C "${SUB_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          git -C "${SUB_DIR}" show "${ref}:main.go" | grep -q 'code'
+          [ -z "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox)" ]
+          echo "subdir_init1_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "git-init"
+          - result.systemout ShouldNotContainSubstring "embedded git repository"
+          - result.systemout ShouldContainSubstring "subdir_init1_ok=true"
+
+  - name: Subdir of a repo with RIOTBOX_GIT_INIT=0 does not prompt even with a tty attached
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_with_subdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${SUB_DIR}" RIOTBOX_GIT_INIT=0
+          # "1" is the safety net: a regression that prompts would pick the
+          # parent, which the ref check below catches.
+          out="$(run_under_pty "1" bash "{{.riotbox_dir}}/libexec/checkpoint.sh")" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ ! -e "${SUB_DIR}/.git" ]
+          [ -z "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox)" ]
+          echo "subdir_init0_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "Choice [1/2/3]"
+          - result.systemout ShouldContainSubstring "is not a git repo"
+          - result.systemout ShouldContainSubstring "subdir_init0_ok=true"
+
+  - name: Subdir of a repo prompt default (Enter) uses no git repo
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_with_subdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${SUB_DIR}"
+          unset RIOTBOX_GIT_INIT
+          out="$(run_under_pty "" bash "{{.riotbox_dir}}/libexec/checkpoint.sh")" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          # The prompt names both full paths.
+          echo "${out}" | grep -qF "${SUB_DIR} is inside the git repository ${REPO_DIR}."
+          echo "${out}" | grep -qF "1) Use ${REPO_DIR} for checkpoints"
+          echo "${out}" | grep -qF "2) Create a new git repository in ${SUB_DIR}"
+          echo "${out}" | grep -qF "3) Do not use a git repository for this run"
+          [ ! -e "${SUB_DIR}/.git" ]
+          [ -z "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox)" ]
+          echo "subdir_prompt_default_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Choice [1/2/3] (default 3)"
+          - result.systemout ShouldNotContainSubstring "embedded git repository"
+          - result.systemout ShouldContainSubstring "subdir_prompt_default_ok=true"
+
+  - name: Subdir of a repo prompt answered 1 checkpoints the parent repo
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_with_subdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${SUB_DIR}"
+          unset RIOTBOX_GIT_INIT
+          out="$(run_under_pty "1" bash "{{.riotbox_dir}}/libexec/checkpoint.sh")" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ ! -e "${SUB_DIR}/.git" ]
+          ref="$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          git -C "${REPO_DIR}" show "${ref}:sub/main.go" | grep -q 'code'
+          # Backed up under the parent's key, the same store a launch from the
+          # parent itself would use.
+          [ -d "$(backup_path "${REPO_DIR}")" ]
+          echo "subdir_prompt_parent_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "subdir_prompt_parent_ok=true"
+
+  - name: Subdir of a repo prompt answered 2 creates a repo in the subdir
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_with_subdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${SUB_DIR}"
+          unset RIOTBOX_GIT_INIT
+          out="$(run_under_pty "2" bash "{{.riotbox_dir}}/libexec/checkpoint.sh")" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -d "${SUB_DIR}/.git" ]
+          ref="$(git -C "${SUB_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          [ -n "${ref}" ]
+          [ -z "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox)" ]
+          echo "subdir_prompt_create_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "git-init"
+          - result.systemout ShouldNotContainSubstring "embedded git repository"
+          - result.systemout ShouldContainSubstring "subdir_prompt_create_ok=true"
+
+  - name: Subdir of a repo prompt with an unrecognised answer uses no git repo
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_with_subdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${SUB_DIR}"
+          unset RIOTBOX_GIT_INIT
+          out="$(run_under_pty "y" bash "{{.riotbox_dir}}/libexec/checkpoint.sh")" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ ! -e "${SUB_DIR}/.git" ]
+          [ -z "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox)" ]
+          echo "subdir_prompt_other_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "is not a git repo"
+          - result.systemout ShouldContainSubstring "subdir_prompt_other_ok=true"
+
+  - name: A project inside a .git directory warns and does not stop the next project
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_with_subdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}/.git ${REPO_DIR}" \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" </dev/null 2>&1)" && rc=0 || rc=$?
+          echo "${out}"
+          echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          echo "${out}" | grep -qF "${REPO_DIR}/.git has no git worktree"
+          [ -n "$(git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)" ]
+          echo "inside_gitdir_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "inside_gitdir_ok=true"
