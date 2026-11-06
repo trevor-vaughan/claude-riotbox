@@ -1,0 +1,29 @@
+README.md
+  s_d456378ece8ac7::t_cddc55fb1fcd1d 314-315,2368-2378
+bin/riotbox
+  s_d456378ece8ac7::t_8cbb6c9bd1e331 100-101,373-374
+libexec/checkpoints.sh
+  s_d456378ece8ac7::t_febe1016749e88 4,25-29,75-76,85-94,307-426,505-659,728-730,802,805-806,872-879,888-889,918-1253,1265-1266
+tests/backup-prune.venom.yml
+  s_d456378ece8ac7::t_516f8a0e05013c 1-372
+tests/lib/git-test-helpers.sh
+  s_d456378ece8ac7::t_9c31c3e18ee3a2 402-427
+tests/wrapper.venom.yml
+  s_d456378ece8ac7::t_4594b357c6e96c 508-509,516-517
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1703c090a058f7206bf8ac54c4e9400cd9d9f891",
+  "prompts": {},
+  "sessions": {
+    "s_d456378ece8ac7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ec1de57b-7fd5-439f-81c0-4afb71617905",
+        "model": "unknown"
+      },
+      "human_author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
