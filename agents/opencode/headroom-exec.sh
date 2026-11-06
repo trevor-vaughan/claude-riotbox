@@ -37,7 +37,7 @@
 # HEADROOM_MEMORY_DB_PATH (~/.headroom/memory.db, the state-dir mount),
 # which `headroom proxy` reads as its --memory-db-path. Without --memory,
 # `wrap opencode` touches the CWD nowhere (its only $PWD writes are under
-# `if memory:`, cli/wrap.py:7919, 7983).
+# `if memory:`, cli/wrap.py:8654, 8730).
 #
 # The delegated flags, all load-bearing:
 #   --no-proxy    we started the proxy; without this upstream starts a second

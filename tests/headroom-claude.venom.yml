@@ -5,13 +5,15 @@ vars:
   shared_helpers: "{{.root}}/tests/lib/wrapper-shared.sh"
 
 # Pins agents/claude/headroom-exec.sh. `headroom wrap claude` is not used: it
-# writes .claude/settings.local.json, its lock and a SessionStart hook into
-# the CWD, which in a session is the caller's checkout (cli/wrap.py:5253,
-# 1672). The helper instead starts `headroom proxy --memory --no-learn`
-# (shared with opencode, agents/lib/headroom-proxy.sh), registers headroom's
-# MCP retrieve tool at user scope, and runs claude with the routing env that
-# wrap would have exported. --no-learn because the traffic learner writes
-# learned patterns into the project (learn/writer.py:279-286).
+# writes .headroom/ (--memory) and, with --project-settings (the default
+# through 0.40.0), .claude/settings.local.json, its lock and a SessionStart
+# hook into the CWD, which in a session is the caller's checkout
+# (cli/wrap.py:6187, 6171, 1964). The helper instead starts `headroom proxy
+# --memory --no-learn` (shared with opencode, agents/lib/headroom-proxy.sh),
+# registers headroom's MCP retrieve tool at user scope, and runs claude with
+# the routing env that wrap would have exported. --no-learn because the
+# traffic learner writes learned patterns into the project
+# (learn/writer.py:574-581).
 #
 # Every case takes its ports from the kernel at runtime (PORT, and PORT+1
 # where that is verified free), so parallel runs cannot meet on a fixed
@@ -304,7 +306,7 @@ testcases:
           printf '#!/usr/bin/env bash\necho FAKE_REAL_opencode_INVOKED\n' >"${TEST_DIR}/realbin/opencode"
           chmod +x "${TEST_DIR}/realbin/opencode"
           opencode run x 2>&1
-          # The proxy fixes its upstream at start (proxy/server.py:6495):
+          # The proxy fixes its upstream at start (proxy/server.py:7400):
           # reusing opencode's would send Foundry requests, and the Azure
           # credentials, to api.anthropic.com.
           CLAUDE_CODE_USE_FOUNDRY=1 ANTHROPIC_FOUNDRY_RESOURCE=myres claude -p x 2>&1 | port_names
@@ -328,7 +330,7 @@ testcases:
           claude -p x 2>&1 | argv_line
           grep -F 'HRENV' "${HOME}/headroom-calls.log" | head -1
           # A custom Vertex gateway becomes the proxy's upstream
-          # (cli/wrap.py:1161-1180). A second free port, so a fresh proxy
+          # (cli/wrap.py:1414-1433). A second free port, so a fresh proxy
           # starts with that environment.
           rm -f "${HOME}/headroom-calls.log"
           ANTHROPIC_VERTEX_BASE_URL=https://gw.example/v1 HEADROOM_PORT="$(free_port)" claude -p x >/dev/null 2>&1

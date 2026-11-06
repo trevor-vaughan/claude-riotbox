@@ -175,8 +175,8 @@ FAKE
 #   Replace ${TEST_DIR}/realbin/headroom for the opencode suite: every call
 #   appends FAKE_HEADROOM_ARGV=<argv> to ${HOME}/headroom-calls.log; `proxy`
 #   first models where headroom keeps memory (HEADROOM_MEMORY_DB_PATH, else
-#   $PWD/.headroom/memory.db, proxy/server.py:1332-1336; per-project DBs in
-#   memories/ beside it, proxy/memory_handler.py:409-413), then execs a
+#   $PWD/.headroom/memory.db, proxy/server.py:1464-1468; per-project DBs in
+#   memories/ beside it, proxy/memory_handler.py:188-192), then execs a
 #   headroom fake listener on its --port; `wrap opencode` runs the post-`--`
 #   arguments through opencode, as upstream's launch does.
 install_opencode_headroom_fakes() {

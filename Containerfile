@@ -119,9 +119,9 @@ RUN bash -o pipefail -c '\
 #      curl -fsSL https://github.com/git-ai-project/git-ai/releases/download/v<VER>/SHA256SUMS \
 #        | grep -E 'git-ai-linux-(x64|arm64)$'
 #   3. Update GIT_AI_VERSION + GIT_AI_SHA256_AMD64 + GIT_AI_SHA256_ARM64 below
-ARG GIT_AI_VERSION=v1.7.5
-ARG GIT_AI_SHA256_AMD64=6cf68a83cc948fbd4675e46bc5e3c50973c04257bb43a954a6712a2107206695
-ARG GIT_AI_SHA256_ARM64=b340005b4d1c7d4c1c3383d94b092627bced9b4f2f767e2125927c58279cdba9
+ARG GIT_AI_VERSION=v1.7.6
+ARG GIT_AI_SHA256_AMD64=f6cda0cb43c1c9a3d68e7efe2d79577680ea6f382c31bf36a2162906f93f6c1c
+ARG GIT_AI_SHA256_ARM64=1326abd5547636e6b6b297ad79afc955e57e82361efac320d4f860147b95a87a
 RUN bash -o pipefail -c '\
     ARCH=$(uname -m | sed "s/x86_64/amd64/" | sed "s/aarch64/arm64/") && \
     case "${ARCH}" in \
@@ -148,7 +148,7 @@ FROM quay.io/centos/centos:stream10 AS runtime
 # Dockerfile SHELL directive (which OCI image config doesn't support).
 
 # ── Build args (populated by build.sh from host introspection) ────────────────
-ARG NVM_INSTALLER_VERSION=0.40.8
+ARG NVM_INSTALLER_VERSION=0.41.0
 ARG NODE_VERSIONS="20"
 ARG NODE_DEFAULT="20"
 ARG UV_VERSION="latest"
@@ -812,12 +812,12 @@ RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 # The smoke test then runs the proxy the way a session does — `headroom
 # proxy --memory --no-learn`, offline, HEADROOM_MEMORY_DB_PATH set, in a
 # throwaway HOME — and waits for /livez to answer as headroom
-# (proxy/server.py:3832-3847) and for its log to say the memory backend came
+# (proxy/server.py:4437-4452) and for its log to say the memory backend came
 # up at that path with the ONNX embedder ("Memory: Initialized LocalBackend at
-# <db> (embedder: onnx)", proxy/memory_handler.py:398-401) and that the
+# <db> (embedder: onnx)", proxy/memory_handler.py:408-411) and that the
 # embedder then really encoded something ("Memory: embedder warm-up encode
-# complete", :2367). The first line is logged before the model loads, and a
-# failed warm-up only logs "Memory: embedder warm-up failed" (:2370) and
+# complete", :2147). The first line is logged before the model loads, and a
+# failed warm-up only logs "Memory: embedder warm-up failed" (:2150) and
 # carries on, so the smoke fails on that line at once. That proves the
 # pre-warmed model cache and the memory path end to end, and a pin that
 # regresses the embedder to the torch default (excluded here) fails THIS layer
@@ -854,7 +854,7 @@ RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 # an image-wide ENV: in a session the canary is what catches a degraded ONNX
 # runtime before live traffic depends on it, which is the whole reason it
 # exists. tests/headroom.venom.yml pins both halves of that.
-ARG HEADROOM_VERSION=0.39.0
+ARG HEADROOM_VERSION=0.43.0
 # DL3001: the `kill` stops the smoke test's own background proxy, not a
 # service in the image.
 # hadolint ignore=DL3001
@@ -1006,7 +1006,7 @@ RUN bash -o pipefail -c '\
 #
 # The trailing npm cache strip is the one "Why every npm layer empties
 # /home/llm/.npm" explains.
-ARG PI_NODE=22.23.3
+ARG PI_NODE=22.23.4
 ENV RIOTBOX_PI_DIR=/home/llm/.riotbox/pi
 COPY --chown=llm:llm container/pi/ /tmp/riotbox-pi/
 RUN bash -o pipefail -c '\
@@ -1103,7 +1103,7 @@ RUN bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && claud
 # config" mkdir, and NPM_CONFIG_CACHE is pinned to it by the "Tool configs"
 # block. Dropping it from that mkdir list fails the first npm layer instead of
 # silently skipping the strip, which is the behaviour to keep.
-ARG CODEGRAPH_VERSION=1.6.0
+ARG CODEGRAPH_VERSION=1.6.2
 RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
     CODEGRAPH_NO_DOWNLOAD=1 codegraph version && \
     codegraph telemetry off && \
@@ -1157,12 +1157,12 @@ RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
 # untranslated (x86_64, aarch64) rather than venom's sed to amd64/arm64, and
 # each arm sets upstream's asset name beside the digest that goes with it, so
 # the two cannot drift apart. And BUN_VERSION is bare where VENOM_VERSION
-# carries a leading v — `bun --version` prints 1.4.2, so the bare form is what
+# carries a leading v — `bun --version` prints 1.4.4, so the bare form is what
 # the check at the end can compare against, and the URL puts the v back as part
 # of the bun-v${BUN_VERSION} tag.
-ARG BUN_VERSION=1.4.2
-ARG BUN_SHA256_AMD64=c678040f14fe0440eb839d37cbd0ce4c051a32da72806ac97de6a6aab6bf728f
-ARG BUN_SHA256_ARM64=54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7
+ARG BUN_VERSION=1.4.4
+ARG BUN_SHA256_AMD64=e0446eb55995772eb9894bebae9a6be368d985a8b9271ee124486f9946eedd76
+ARG BUN_SHA256_ARM64=baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e
 RUN bash -o pipefail -c '\
     set -e; \
     case "$(uname -m)" in \
@@ -1196,9 +1196,9 @@ RUN bash -o pipefail -c '\
 #   3. Update JSONSCHEMA_VERSION + JSONSCHEMA_SHA256_AMD64 + JSONSCHEMA_SHA256_ARM64
 # JSONSCHEMA_VERSION is bare: it is both the asset's name and what
 # `jsonschema version` prints, which the check at the end compares.
-ARG JSONSCHEMA_VERSION=17.3.1
-ARG JSONSCHEMA_SHA256_AMD64=a857fcfe35e3f1506a256192be9704dc8e0a8983a39519bbf4ff9e68b17d4550
-ARG JSONSCHEMA_SHA256_ARM64=d42a1e6a28e3e1d9c0c3ffa10d380c90e23e3cfcd0f8278dc3bbe1ad354f4529
+ARG JSONSCHEMA_VERSION=17.3.2
+ARG JSONSCHEMA_SHA256_AMD64=ff660a20e5c9273742d5d73de9da2cffbdb91208293f90a8c3ea64a09ad7ed69
+ARG JSONSCHEMA_SHA256_ARM64=f8ede4a0b7e26e024d791c6c1af7e8d3d1c444a88dfc901cfb9d3f04825ec643
 RUN bash -o pipefail -c '\
     set -e; \
     case "$(uname -m)" in \
@@ -1350,7 +1350,7 @@ RUN bash -o pipefail -c '\
 # /home/llm/.npm" explains. It runs last because `context-mode doctor` checks
 # the published npm version and would repopulate the cache behind an earlier
 # strip.
-ARG CONTEXT_MODE_NODE=22.23.3
+ARG CONTEXT_MODE_NODE=22.23.4
 ARG CONTEXT_MODE_VERSION=1.0.169
 RUN bash -c '\
     set -e; \

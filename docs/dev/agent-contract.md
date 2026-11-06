@@ -345,9 +345,11 @@ takes the normal inject-and-exec path.
 The one rule above all others: **headroom must write nothing into the CWD**,
 which in a session is the caller's bind-mounted project. That rules out
 emitting `headroom wrap <tool>` directly for every tool checked so far:
-`wrap claude` writes `.claude/settings.local.json`, lock, marker and owner
-files and a `SessionStart` hook there, and `wrap opencode --memory` appends
-to `AGENTS.md` (headroom 0.39.0). So the verb emits an executable helper
+`wrap claude --memory` creates `.headroom/` there, `wrap claude
+--project-settings` (the default through 0.40.0) writes
+`.claude/settings.local.json`, lock, marker and owner files and a
+`SessionStart` hook there, and `wrap opencode --memory` appends to
+`AGENTS.md` (headroom 0.43.0). So the verb emits an executable helper
 co-located in your agent's directory, followed by the caller args verbatim:
 
 ```bash
@@ -779,7 +781,7 @@ upstream writes for each one has a different shape:
   tighter gate leaves that file alone and only takes the file whose shape matches
   what a real `git-ai install-hooks` run produces.
 - **`agents/pi/git-ai.sh`** is content-gated too, but upstream's Pi template
-  (v1.7.5) carries no banner. It removes `~/.pi/agent/extensions/git-ai.ts`
+  (v1.7.5, v1.7.6) carries no banner. It removes `~/.pi/agent/extensions/git-ai.ts`
   only when the file's first 12 lines hold **both** of two template lines
   exactly as upstream writes them: the comment
   `// Optional user-owned override file. Managed installer never writes it.` as

@@ -14,14 +14,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Unlike its opencode plugin, upstream's Pi extension template
-# (agent-support/pi/git-ai.ts, v1.7.5) carries no banner. Two lines of the
+# (agent-support/pi/git-ai.ts, v1.7.5 and v1.7.6) carries no banner. Two lines of the
 # template identify it instead, and BOTH must match exactly as upstream writes
 # them: the comment as a whole line at column 0, the binary line anchored at
 # column 0. A free-substring match over-removes — it deletes a user's own
 # git-ai.ts that merely quotes the comment (the same bug agents/opencode/git-ai.sh
 # was fixed for; see its header). Anything lacking either line is left alone.
 #
-# Upstream places both lines at 7-8 in v1.7.5; the 12-line window leaves slack
+# Upstream places both lines at 7-8 in v1.7.5 and v1.7.6; the 12-line window leaves slack
 # for a few added header lines without reaching into unrelated code.
 _GIT_AI_PI_OVERRIDE_COMMENT='// Optional user-owned override file. Managed installer never writes it.'
 _GIT_AI_PI_BIN_LINE_RE="^const GIT_AI_BIN = '"

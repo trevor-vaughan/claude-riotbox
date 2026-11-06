@@ -953,7 +953,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "PASS"
 
-  # git-ai v1.7.5's Pi extension (agent-support/pi/git-ai.ts) has no banner,
+  # git-ai v1.7.5 and v1.7.6 Pi extension (agent-support/pi/git-ai.ts) has no banner,
   # so the strip identifies it by two template lines that must BOTH appear.
   - name: the pi strip removes only the generated extension
     steps:

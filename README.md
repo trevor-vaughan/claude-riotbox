@@ -241,9 +241,9 @@ Pi core tracks the latest release, like opencode and Claude Code: each image bui
 
 | Extension | Provides |
 |---|---|
-| `pi-subagents@0.77.0` | `subagent` tool — delegate work to child agents |
-| `@juicesharp/rpiv-ask-user-question@2.13.8` | `ask_user_question` tool — structured questions instead of guesses |
-| `@juicesharp/rpiv-todo@2.13.8` | `todo` tool and `/todos` |
+| `pi-subagents@0.85.0` | `subagent` tool — delegate work to child agents |
+| `@juicesharp/rpiv-ask-user-question@2.15.0` | `ask_user_question` tool — structured questions instead of guesses |
+| `@juicesharp/rpiv-todo@2.15.0` | `todo` tool and `/todos` |
 
 Pi runs without approval prompts and trusts every project: a project's `.pi/` settings, extensions, skills, prompt templates and MCP servers load without a prompt. As with the other agents, the container is the security boundary.
 
@@ -327,7 +327,7 @@ The image comes with a broad set of tools pre-installed so the agent can start w
 
 - [`lola`](https://github.com/LobsterTrap/lola) — AI Skills Package Manager (cross-assistant skill distribution)
 - [`context-mode`](https://github.com/mksglu/context-mode) — context-window optimization (opt-in per session, see [Context Mode](#context-mode-opt-in))
-- [`git-ai`](https://github.com/git-ai-project/git-ai) v1.7.5 — AI-authorship attribution via git notes, pinned per-arch and SHA256-verified (**on by default**, see [AI-authorship attribution](#ai-authorship-attribution-git-ai))
+- [`git-ai`](https://github.com/git-ai-project/git-ai) v1.7.6 — AI-authorship attribution via git notes, pinned per-arch and SHA256-verified (**on by default**, see [AI-authorship attribution](#ai-authorship-attribution-git-ai))
 - [`bun`](https://github.com/oven-sh/bun) — JS/TS runtime, pinned and SHA256-verified. It is here for Context Mode's `ctx_execute` sandbox, which cannot run TypeScript snippets without it; it is on `PATH` and usable directly. Context Mode's Claude hooks do **not** use it — they run the image's pinned Node.
 - [`jsonschema`](https://github.com/sourcemeta/jsonschema) — JSON Schema validator, linter and formatter CLI, pinned and SHA256-verified. It replaces the `python3-jsonschema` library the image used to carry.
 
@@ -958,7 +958,7 @@ unless you push them deliberately.
 
 ## Headroom context compression (opt-in)
 
-[Headroom](https://github.com/chopratejas/headroom) compresses tool outputs,
+[Headroom](https://github.com/headroomlabs-ai/headroom) compresses tool outputs,
 logs, and conversation history before they reach the model — typically a
 60–95% token reduction. RiotBox ships it in the image (pinned version,
 telemetry permanently off) and activates it per session:
@@ -981,8 +981,8 @@ What changes when enabled:
   directory.
 - Headroom writes nothing into your project. RiotBox starts `headroom proxy`
   itself and points the agent at it, instead of using `headroom wrap`,
-  because `wrap claude` writes `.claude/settings.local.json` and lock, marker
-  and hook entries into the working directory.
+  because `wrap claude` can write `.headroom/`, `.claude/settings.local.json`
+  and lock, marker and hook entries into the working directory.
 - Failure learning (headroom's `--learn`) is off. It writes what it learns
   into the project (`CLAUDE.local.md` for Claude, `AGENTS.md` for opencode),
   and headroom has no setting to send it anywhere else.
