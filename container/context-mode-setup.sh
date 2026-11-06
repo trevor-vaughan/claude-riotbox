@@ -3,8 +3,7 @@
 # context-mode-setup.sh — Context Mode wiring for a RiotBox session.
 #
 # Sourced by entrypoint.sh. Provides:
-#   context_mode_setup — when RIOTBOX_CONTEXT_MODE=1, point the FTS5 store at
-#                        the session directory and drive the running agent's
+#   context_mode_setup — when RIOTBOX_CONTEXT_MODE=1, drive the running agent's
 #                        Context Mode verbs to write whatever form of wiring
 #                        that agent needs. Otherwise strip wiring an earlier
 #                        session left behind. No agent name of its own: the set
@@ -22,11 +21,7 @@
 # agents/registry.sh. What each agent asserts is stated there and deliberately
 # not copied here — a second list in this header would go stale the first time
 # one of them moved, which is the failure the constants below already argue
-# against. The one thing worth knowing at this distance: on the Claude side the
-# MCP server name is now the whole of it. The matcher and hook-event
-# comparisons that used to sit beside it went with the hand-authored wiring, so
-# nothing asserts the intercepted tool set any more on either agent — see
-# docs/dev/context-mode.md, "Which tools are actually intercepted".
+# against.
 #
 # Nothing here writes JSON: that moved to agents/claude/context-mode.sh with the
 # rest of the Claude wiring. It does READ two JSON documents it does not own —
@@ -39,16 +34,29 @@
 # while the build sources them and calls nothing that writes, and the same
 # writer is shared with codegraph-setup.sh, so no single caller can own it.
 #
-# Why nothing here runs the vendor installer: `context-mode upgrade` is the
-# only command that configures hooks, and it git-clones
-# https://github.com/mksglu/context-mode.git and — when upstream is newer —
-# npm-installs, builds, and copies the result over the installed package tree.
-# Running that at session start would swap pinned, reviewed code for whatever
-# is on main, inside a container holding the user's project, and would break
-# RIOTBOX_NETWORK=none. Claude Code instead gets upstream's marketplace plugin,
-# cloned at a pinned ref at BUILD time and registered against the session by
-# container/plugin-setup.sh; opencode gets a generated shim that re-exports the
-# installed adapter. Neither path reaches the network at session start.
+# Why nothing here runs the vendor installer: `context-mode setup` writes each
+# agent's config for a global npm install, and `context-mode upgrade` runs
+# `npm i -g context-mode` from the registry. Running either at session start
+# would swap pinned, reviewed code for whatever is published, inside a container
+# holding the user's project, and would break RIOTBOX_NETWORK=none. Instead the
+# image installs the package once from a committed lockfile; Claude Code gets
+# that package registered as its plugin by container/plugin-setup.sh, opencode
+# a generated shim that re-exports its adapter, and Pi an entry naming its root.
+# None of the three reaches the network at session start.
+#
+# Where the stores go is not decided here. context-mode 2.x keeps every store
+# under ~/.context-mode. It reads neither CONTEXT_MODE_DIR nor
+# CONTEXT_MODE_PLATFORM, and CONTEXT_MODE_DATA_DIR now names its whole data root
+# rather than the parent directory the 1.x pin pointed it at, so exporting the
+# values the 1.x integration exported would move the store, not pin it. This
+# file exports none of them.
+#
+# CONTEXT_MODE_REQUIRE_SECURITY is deliberately not set either. With it at 1,
+# context-mode denies every Claude tool call whenever a Claude deny-rules file
+# exists but cannot be parsed (src/core/policy/decide.ts:57-61 upstream). RiotBox
+# runs Claude with --dangerously-skip-permissions and writes no deny rules, so
+# nothing it relies on is protected, and one malformed user settings file would
+# brick the session. tests/context-mode.venom.yml asserts it stays unexported.
 #
 # Why per session rather than at build time: ~/.claude is replaced by a session
 # bind mount (scripts/mount-projects.sh), so agent config written into the
@@ -56,27 +64,27 @@
 # plugin-setup.sh run here.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# The shim the image build installs. It execs the pinned Node 22 against the
-# CLI bundle; see the Context Mode block in the Containerfile for why a bare
-# `node` is wrong. Overridable so the behavior can be tested without the image.
+# The shim the image build installs. It execs the pinned Node 24 against the
+# package's cli.mjs; see the Context Mode block in the Containerfile for why a
+# bare `node` is wrong. Overridable so the behavior can be tested without the image.
 CONTEXT_MODE_BIN="${CONTEXT_MODE_BIN:-${HOME}/.local/bin/context-mode}"
 
 # The vendored package root, derived from the shim the image build generates
 # at CONTEXT_MODE_BIN. Deriving beats hardcoding: the path embeds
-# ARG CONTEXT_MODE_NODE, and a second copy of that version in shell would rot
+# ARG CONTEXT_MODE_VERSION, and a second copy of that version in shell would rot
 # silently the first time the ARG moves. The build asserts this derivation
 # against the true CM_PKG (see the Context Mode block in the Containerfile),
 # so a shim whose shape changes fails the build rather than a session.
 #
 # Prints the absolute package root on stdout; returns 1 and prints nothing when
-# the shim is absent or does not carry a cli.bundle.mjs exec line.
+# the shim is absent or does not carry a cli.mjs exec line.
 context_mode_pkg_root() {
 	local bundle
 	[[ -r "${CONTEXT_MODE_BIN}" ]] || return 1
 	# sed exits 0 when it matches nothing, so the `|| return 1` below fires only
 	# on a genuine read error — the emptiness check after it is what rejects a
 	# shim this pattern cannot parse.
-	bundle="$(sed -n 's|^exec "[^"]*" "\(.*\)/cli\.bundle\.mjs".*|\1|p' "${CONTEXT_MODE_BIN}")" || return 1
+	bundle="$(sed -n 's|^exec "[^"]*" "\(.*\)/cli\.mjs".*|\1|p' "${CONTEXT_MODE_BIN}")" || return 1
 	[[ -n "${bundle}" ]] || return 1
 	printf '%s\n' "${bundle}"
 }
@@ -159,7 +167,14 @@ context_mode_plugin_installed() {
 
 context_mode_setup() {
 	local agent="${RIOTBOX_AGENT:-claude}"
-	local other store data_root platform
+	local other store found=()
+
+	# 2.1.4 reads CONTEXT_MODE_DATA_DIR as its whole data root, so a value that
+	# reached the container — a passthrough entry, an extra -e — would move
+	# every store off the ~/.context-mode session mount without a word. The
+	# mount is the only placement RiotBox relies on. Cleared before the
+	# feature check: a plugin copied in from the host runs either way.
+	unset CONTEXT_MODE_DATA_DIR
 
 	# Only the literal "1" enables the feature, matching RIOTBOX_HEADROOM.
 	# Anything else is off — and `riotbox doctor` fails loudly on an
@@ -170,19 +185,36 @@ context_mode_setup() {
 		return 0
 	fi
 
+	# Where the 1.x integration pinned each agent's store. 2.x neither reads
+	# nor imports them, and they are left for the user to delete: say where
+	# they are, in one line. A directory with nothing in it is not a store.
+	for store in "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/context-mode" \
+		"${HOME}/.pi/agent/context-mode" \
+		"${HOME}/.local/share/opencode/context-mode"; do
+		[[ -d "${store}" && ! -L "${store}" ]] || continue
+		# shellcheck disable=SC2312  # a find that cannot list it prints nothing, and the store goes unnamed — advisory only
+		[[ -n "$(find "${store}" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]] || continue
+		found+=("${store}")
+	done
+	if [[ ${#found[@]} -gt 0 ]]; then
+		echo "  [context-mode] NOTE: context-mode 1.x stores are no longer read; left in place: ${found[*]}" >&2
+	fi
+
 	# An agent contributes Context Mode support by implementing the optional
 	# verbs, probed here the way container/agent-wrapper.sh probes headroom_argv.
-	# The storage verb is the one every supported agent has: Claude Code no
-	# longer has a wire verb — the plugin is the wiring, registered by
-	# container/plugin-setup.sh — while opencode still generates a plugin shim
-	# of its own. Warn and degrade for an agent with neither shape, the way that
-	# wrapper does when an agent has no headroom support: wiring another agent's
-	# form would not be a harmless no-op, because the config it writes lives in
-	# the user's bind-mounted session directory and nothing regenerates it, so
-	# the dead stanzas would outlive the session that wrote them while the
-	# toggle, `riotbox doctor`, and the launcher all still reported the feature
-	# as on.
-	if ! declare -F "agent_${agent}_context_mode_store_dir" >/dev/null; then
+	# The contract verb is the one every supported agent has: an agent whose
+	# support rests on an upstream contract declares that contract in
+	# context_mode_build_assert, and an agent that never reaches Context Mode
+	# has none. It is deliberately not the wire verb: Claude Code has none — the
+	# plugin is the wiring, registered by container/plugin-setup.sh — so a probe
+	# on `wire` would read the best-supported agent as unsupported. Warn and
+	# degrade for an agent without it, the way that wrapper does when an agent
+	# has no headroom support: wiring another agent's form would not be a
+	# harmless no-op, because the config it writes lives in the user's
+	# bind-mounted session directory and nothing regenerates it, so the dead
+	# stanzas would outlive the session that wrote them while the toggle,
+	# `riotbox doctor`, and the launcher all still reported the feature as on.
+	if ! declare -F "agent_${agent}_context_mode_build_assert" >/dev/null; then
 		echo "  [context-mode] WARN: agent '${agent}' has no Context Mode support in riotbox." >&2
 		echo "  [context-mode] Wiring skipped." >&2
 		context_mode_strip_all
@@ -193,93 +225,6 @@ context_mode_setup() {
 		echo "  [context-mode] WARN: context-mode is not on PATH — wiring skipped." >&2
 		context_mode_strip_all
 		return 0
-	fi
-
-	# Pin the FTS5 store inside the session directory. The agent names the path
-	# because it follows that agent's config dir; upstream's own default already
-	# resolves there — it keys off the platform config dir, which RiotBox points
-	# at the session bind mount — but naming it explicitly means a change to
-	# that default alone cannot silently move a store holding verbatim tool
-	# output onto the container overlay, where it would vanish at exit and
-	# escape `riotbox session-remove`. The pin holds only while upstream keeps
-	# honouring a variable of this name: unlike the MCP server name, nothing in
-	# the image build greps the installed bundle for it, so a version bump that
-	# renamed or dropped it would surface in a user session, not at build time.
-	#
-	# A relative or empty answer is a bug in the agent's verb rather than
-	# something to pass on: upstream resolves a relative CONTEXT_MODE_DIR
-	# against whatever directory the hook happened to start in, which is the
-	# user's project, so the store would land in the repo being worked on.
-	store="$(agent_call "${agent}" context_mode_store_dir)"
-	if [[ -z "${store}" ]] || [[ "${store}" != /* ]]; then
-		echo "  [context-mode] WARN: agent '${agent}' produced no absolute store path" >&2
-		echo "  [context-mode] ('${store}') — wiring skipped." >&2
-		context_mode_strip_all
-		return 0
-	fi
-
-	# CONTEXT_MODE_DIR pins the sessions/ and content/ stores behind the ctx_*
-	# tools, and nothing else. An agent reaching Context Mode through an
-	# in-process plugin has a second store — the plugin's own session DB, which
-	# holds the same verbatim tool output — and upstream resolves that one
-	# through the adapter's getSessionDir(). That reads CONTEXT_MODE_DATA_DIR, a
-	# different variable, and falls back to the agent's own config dir. Where
-	# RiotBox already pins that config dir (CLAUDE_CONFIG_DIR, exported by
-	# entrypoint.sh) the fallback is pinned with it and there is nothing to add;
-	# where upstream derives it from something RiotBox does not set (opencode
-	# reads XDG_CONFIG_HOME, unset in the image, so it lands on ~/.config by
-	# default), the DB sits in the session directory by coincidence and this
-	# second variable is what turns that into a guarantee. So the agent decides:
-	# it implements the verb only where the pin is missing, and no session
-	# carries an export that explains nothing.
-	#
-	# The value is the PARENT of the store directory rather than the store
-	# itself. Upstream appends "context-mode/sessions" to this root, while
-	# CONTEXT_MODE_DIR names that "context-mode" directory outright; handing the
-	# store over would bury the DB one directory below the ctx_* stores it
-	# belongs beside. Same absolute-path guard as above and for the same reason:
-	# upstream resolves a relative value against the process's directory, which
-	# is the user's project.
-	data_root=""
-	if declare -F "agent_${agent}_context_mode_data_dir" >/dev/null; then
-		data_root="$(agent_call "${agent}" context_mode_data_dir)"
-		if [[ -z "${data_root}" ]] || [[ "${data_root}" != /* ]]; then
-			echo "  [context-mode] WARN: agent '${agent}' produced no absolute data root" >&2
-			echo "  [context-mode] ('${data_root}') — wiring skipped." >&2
-			context_mode_strip_all
-			return 0
-		fi
-	fi
-
-	# Pin the platform token before anything dispatches a hook. Probed like
-	# context_mode_data_dir: an agent that does not implement the verb keeps
-	# upstream's own detection rather than being handed a wrong answer.
-	# An empty answer is a bug in the verb, not something to export — an empty
-	# CONTEXT_MODE_PLATFORM reads to upstream as "unset" on some paths and as a
-	# platform named "" on others.
-	platform=""
-	if declare -F "agent_${agent}_context_mode_platform" >/dev/null; then
-		platform="$(agent_call "${agent}" context_mode_platform)"
-		if [[ -z "${platform}" ]]; then
-			echo "  [context-mode] WARN: agent '${agent}' produced no platform token." >&2
-			echo "  [context-mode] Wiring skipped." >&2
-			context_mode_strip_all
-			return 0
-		fi
-	fi
-
-	# All three values are validated before any is exported, so a session that
-	# gives up above leaves no storage variable behind for a later reader to
-	# mistake for the feature being on.
-	CONTEXT_MODE_DIR="${store}"
-	export CONTEXT_MODE_DIR
-	if [[ -n "${data_root}" ]]; then
-		CONTEXT_MODE_DATA_DIR="${data_root}"
-		export CONTEXT_MODE_DATA_DIR
-	fi
-	if [[ -n "${platform}" ]]; then
-		CONTEXT_MODE_PLATFORM="${platform}"
-		export CONTEXT_MODE_PLATFORM
 	fi
 
 	# At most one agent's wiring exists in a session directory at a time. The
@@ -327,11 +272,6 @@ context_mode_setup() {
 		if ! context_mode_plugin_installed; then
 			echo "  [context-mode] WARN: no Context Mode plugin is installed and enabled in this session." >&2
 			echo "  [context-mode] The session runs with the feature off." >&2
-			# The storage pins stay exported on the way out rather than being
-			# unset with the flag. They say where an FTS5 store goes, not that
-			# anything was wired, and unsetting them would move a store holding
-			# verbatim tool output onto the container overlay, out of reach of
-			# `riotbox session-remove`, for whatever writes to it next.
 			return 0
 		fi
 	fi

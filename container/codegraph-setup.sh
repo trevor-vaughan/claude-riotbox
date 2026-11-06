@@ -39,7 +39,8 @@ CODEGRAPH_WORKSPACE="${CODEGRAPH_WORKSPACE:-/workspace}"
 #
 # RiotBox used to run that installer every session and relocate its entry into
 # ${CLAUDE_CONFIG_DIR}/.claude.json, the file Claude Code actually reads — the
-# installer writes to ${HOME}/.claude.json and does not honor CLAUDE_CONFIG_DIR.
+# installer wrote to ${HOME}/.claude.json; codegraph before 1.6.1 did not honor
+# CLAUDE_CONFIG_DIR.
 # It no longer does either: the server conflicts with Context Mode, and
 # `codegraph explore` answers the same questions from the shell. What is left is
 # taking back what RiotBox wrote.
@@ -135,13 +136,13 @@ codegraph_strip_mcp_entry() {
 # It is left as accepted residue and documented in THREAT_MODEL.md — inert prose
 # naming tools nothing registers, where this file holds an executable hook.
 #
-# The path is under ${HOME}, not ${CLAUDE_CONFIG_DIR}: codegraph 1.5.0 writes
-# settings.json to os.homedir()/.claude and ignores CLAUDE_CONFIG_DIR (checked
-# by running the installer with the two pointed at separate trees — the
-# CLAUDE_CONFIG_DIR tree stayed empty). entrypoint.sh sets CLAUDE_CONFIG_DIR to
-# ${HOME}/.claude, so in a real session these are one file, but ${HOME} is the
-# only one the installer can reach and therefore the only one that can hold a
-# stale hook.
+# The filter targets ${HOME}/.claude/settings.json. That is the same file
+# CLAUDE_CONFIG_DIR names in a real session: entrypoint.sh:54 exports it as
+# ${HOME}/.claude. codegraph 1.5.0 and earlier ignored CLAUDE_CONFIG_DIR and
+# wrote os.homedir()/.claude (a 1.5.0 observation: run with the two pointed at
+# separate trees, the CLAUDE_CONFIG_DIR tree stayed empty); 1.6.1+ honours it.
+# Both resolve to the same file, so this path also covers wiring left by older
+# images.
 #
 # Silent when there is nothing to remove: now that no image wires CodeGraph, the
 # overwhelmingly common case is a session that never had it, and that session

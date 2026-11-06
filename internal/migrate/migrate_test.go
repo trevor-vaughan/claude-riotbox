@@ -417,6 +417,17 @@ var _ = Describe("SessionState (migrate_session_state)", func() {
 		Expect(errOut.String()).To(BeEmpty())
 	})
 
+	// context-mode 2.x does not read a 1.x store, and the user chose to leave
+	// old stores where they are rather than import them: the Claude one sits
+	// in the session dir, but it is not a pair.
+	It("leaves a context-mode 1.x store in the session dir untouched", func() {
+		write(session+"/context-mode/sessions/one.db", "verbatim tool output")
+		Expect(migrate.SessionState(errOut, libDir, session, state)).To(Succeed())
+		Expect(read(session + "/context-mode/sessions/one.db")).To(Equal("verbatim tool output"))
+		Expect(exists(state)).To(BeFalse())
+		Expect(errOut.String()).To(BeEmpty())
+	})
+
 	It("creates a private state dir, migrates every pair and records each in order", func() {
 		for _, name := range []string{"headroom", "git-ai", ".config-opencode", ".local-share-opencode", ".pi-agent"} {
 			write(session+"/"+name+"/data", name)

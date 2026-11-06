@@ -3,43 +3,24 @@
 # agents/pi/context-mode.sh — Context Mode wiring for Pi.
 #
 # Sourced by agents/pi/manifest.sh, which exposes the optional Context Mode
-# verbs (context_mode_store_dir, context_mode_data_dir, context_mode_platform,
-# context_mode_wire, context_mode_strip, and the build-time
+# verbs (context_mode_wire, context_mode_strip, and the build-time
 # context_mode_build_assert). container/context-mode-setup.sh drives them and
 # holds no agent names of its own.
 #
 # Pi reaches Context Mode as a Pi package: the installed context-mode package
-# root declares `pi.extensions` (build/adapters/pi/extension.js) in its
-# package.json, and Pi loads it when the root is listed in settings.json
-# `packages`. That list is RiotBox-owned — agents/pi/setup.sh rewrites it on
-# every container start, before context_mode_setup runs — so wiring is one
-# entry appended to it and stripping is that entry removed.
+# root declares `pi.extensions` (pi/index.js) in its package.json, and Pi loads
+# it when the root is listed in settings.json `packages`. That list is
+# RiotBox-owned — agents/pi/setup.sh rewrites it on every container start,
+# before context_mode_setup runs — so wiring is one entry appended to it and
+# stripping is that entry removed.
+#
+# The extension runs in-process, in Pi's own Node, and keeps its stores under
+# ~/.context-mode like every context-mode 2.x entry — which is why PI_NODE
+# carries context-mode's Node floor (see the Pi block in the Containerfile).
 # ─────────────────────────────────────────────────────────────────────────────
 
 _agent_pi_cm_settings_path() {
 	printf '%s\n' "${HOME}/.pi/agent/settings.json"
-}
-
-agent_pi_context_mode_store_dir() {
-	printf '%s\n' "${HOME}/.pi/agent/context-mode"
-}
-
-# See agents/claude/context-mode.sh for why this is pinned rather than
-# detected. It matters more for Pi than for most: upstream's detection picks
-# "pi" whenever ~/.pi exists, and in RiotBox it exists in every session,
-# because host_sync mounts ~/.pi/agent for every registered agent.
-agent_pi_context_mode_platform() {
-	printf 'pi\n'
-}
-
-# The root CONTEXT_MODE_DATA_DIR is pinned to. Without it, PiAdapter puts its
-# session DB under ~/.pi/context-mode/sessions — outside the ~/.pi/agent
-# session bind mount, on the container overlay, where verbatim tool output
-# would vanish at exit and escape `riotbox session-remove`. The value is the
-# parent of context_mode_store_dir's path, because BaseAdapter builds the DB
-# directory as <root>/context-mode/sessions.
-agent_pi_context_mode_data_dir() {
-	printf '%s\n' "${HOME}/.pi/agent"
 }
 
 # Append the vendored context-mode package root to settings.json `packages`.
@@ -86,22 +67,33 @@ agent_pi_context_mode_wire() {
 }
 
 # Remove the context-mode entry from settings.json `packages`. Idempotent,
-# always returns 0, silent when there was nothing to remove. The entry is
-# recognised by its last path segment being exactly `context-mode`, so a user
-# entry that merely contains the name (my-context-mode-tools, context-mode-fork/x)
-# is never removed. `packages` is RiotBox-owned (setup.sh replaces it on every
-# start) and the image's own extensions are not named context-mode.
+# always returns 0, silent when there was nothing to remove. Two shapes are
+# RiotBox's:
+#   * any path under RIOTBOX_CM_PLUGIN_DIR/ — where the image stages the 2.x
+#     package as v<version>, and what context_mode_pkg_root resolves. Matching
+#     the directory rather than this image's exact path keeps an entry an
+#     older image wrote, naming its own version, strippable after a bump;
+#   * a path whose last segment is exactly `context-mode` — the 1.x package
+#     root under nvm's node_modules, still in session directories that
+#     outlive the image that wired them.
+# A user entry that merely contains the name (my-context-mode-tools,
+# context-mode-fork/x) matches neither and is never removed. `packages` is
+# RiotBox-owned (setup.sh replaces it on every start) and the image's own
+# extensions live elsewhere. The default matches container/plugin-setup.sh's.
 agent_pi_context_mode_strip() {
-	local settings doc
+	local settings doc staged ours
 	settings="$(_agent_pi_cm_settings_path)"
 	[[ -f "${settings}" ]] || return 0
+	staged="${RIOTBOX_CM_PLUGIN_DIR:-${HOME}/.riotbox/context-mode-plugin}/"
+	# shellcheck disable=SC2016  # $dir is a jq variable, not a shell one
+	ours='type == "string" and (startswith($dir) or test("(^|/)context-mode/?$"))'
 
 	# An unreadable or non-object file is left alone; there is nothing this
 	# verb could safely edit in it.
-	jq -e '(.packages // []) | type == "array" and any(.[]; type == "string" and test("(^|/)context-mode/?$"))' \
+	jq -e --arg dir "${staged}" "(.packages // []) | type == \"array\" and any(.[]; ${ours})" \
 		"${settings}" >/dev/null 2>&1 || return 0
 
-	if ! doc="$(jq '.packages |= map(select((type == "string" and test("(^|/)context-mode/?$")) | not))' "${settings}")" ||
+	if ! doc="$(jq --arg dir "${staged}" ".packages |= map(select((${ours}) | not))" "${settings}")" ||
 		! json_write_atomic "${settings}" "${doc}"; then
 		echo "  [context-mode] WARN: could not remove the context-mode package from ${settings}." >&2
 		return 0
@@ -119,40 +111,21 @@ agent_pi_context_mode_build_assert() {
 
 	# Strict on purpose: if upstream adds a second Pi extension, a human should
 	# review it rather than have it loaded silently.
-	if ! jq -e '.pi.extensions == ["./build/adapters/pi/extension.js"]' "${pkg}/package.json" >/dev/null 2>&1; then
-		echo "context-mode's package.json no longer declares pi.extensions as [\"./build/adapters/pi/extension.js\"] — the package root agent_pi_context_mode_wire lists would load a different extension, or none" >&2
+	if ! jq -e '.pi.extensions == ["./pi/index.js"]' "${pkg}/package.json" >/dev/null 2>&1; then
+		echo "context-mode's package.json no longer declares pi.extensions as [\"./pi/index.js\"] — the package root agent_pi_context_mode_wire lists would load a different extension, or none" >&2
 		return 1
 	fi
 
-	if [[ ! -f "${pkg}/build/adapters/pi/extension.js" ]]; then
-		echo "context-mode no longer ships build/adapters/pi/extension.js — Pi would load a package with no Context Mode extension" >&2
+	if [[ ! -f "${pkg}/pi/index.js" ]]; then
+		echo "context-mode no longer ships pi/index.js — Pi would load a package with no Context Mode extension" >&2
 		return 1
 	fi
 
-	# CONTEXT_MODE_DATA_DIR only relocates the session DB because PiAdapter
-	# inherits BaseAdapter.getSessionDir(). An override of its own (method,
-	# async method, or property assignment) could ignore the variable and put
-	# verbatim tool output back on the container overlay. A missing file must
-	# fail: grep would exit 2 and read as "no override".
-	local adapter_index="${pkg}/build/adapters/pi/index.js"
-	if [[ ! -f "${adapter_index}" ]]; then
-		echo "context-mode no longer ships build/adapters/pi/index.js — the getSessionDir() override check cannot run, so CONTEXT_MODE_DATA_DIR may no longer pin Pi's session DB inside the ~/.pi/agent session mount" >&2
-		return 1
-	fi
-	# shellcheck disable=SC2312  # grep -v finding no lines leaves grep -q no input, so no override is found only when the file is all comments — the file exists (checked above)
-	if grep -vE '^[[:space:]]*//' "${adapter_index}" | grep -qE 'getSessionDir[[:space:]]*(\(|=)'; then
-		echo "context-mode's PiAdapter now overrides getSessionDir() — CONTEXT_MODE_DATA_DIR may no longer pin its session DB inside the ~/.pi/agent session mount" >&2
-		return 1
-	fi
-
-	# The pi case of getAdapter() must dynamically import ./pi/index.js and name
-	# PiAdapter on a non-comment line within its block. -A12 leaves room for the
-	# comments upstream puts above the import.
-	local detect="${pkg}/build/adapters/detect.js"
-	# shellcheck disable=SC2312  # a missing detect.js or case leaves the later greps no input, so the mapping reads as gone — the direction that reports rather than passes
-	if ! grep -qE "import\\(['\"]\\./pi/index\\.js['\"]\\)" "${detect}" ||
-		! grep -A12 -E "case ['\"]pi['\"]:" "${detect}" | grep -vE '^[[:space:]]*//' | grep -qF 'PiAdapter'; then
-		echo "context-mode's getAdapter() in build/adapters/detect.js no longer maps the platform id \"pi\" to PiAdapter — CONTEXT_MODE_PLATFORM=pi would hand Pi sessions another platform's adapter and storage" >&2
+	# Pi calls the extension module's default export. The bundle ends in one
+	# `export { … }` list, where it is spelled `<name> as default`; an inline
+	# `export default` is accepted too.
+	if ! grep -qE '(^|[[:space:],{])[A-Za-z_$][A-Za-z0-9_$]* as default([[:space:],}]|$)|^export default ' "${pkg}/pi/index.js"; then
+		echo "context-mode's pi/index.js has no default export — Pi would load the package and register no extension" >&2
 		return 1
 	fi
 }

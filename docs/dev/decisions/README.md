@@ -22,10 +22,12 @@ they turned out to be wrong.
 | [Where should the state RiotBox mounts into a session live?](session-state-dir.md) | 2026-10-13 | **Beside the session dir**, in a never-mounted `riotbox-state/<key>/` |
 | [Should the session-state and overlay core stay in bash?](session-core-language.md) | 2026-10-22 | **No** — port the core to a Go binary, one subsystem at a time; Ginkgo for its tests |
 | [How should a session's egress be confined?](egress-proxy.md) | 2026-10-23 | **Envoy per session**, agent on an internal network only; credentials later |
+| [Migrating Context Mode from 1.x to 2.x](context-mode-2x-migration.md) | 2026-11-06 | **Migrate inside #60** — Node 24, a mounted shared store, npm-only plugin, stats rebuilt on `context.db` |
+| [Moving RiotBox from OpenCode 1 to OpenCode 2](opencode-v2.md) | 2026-11-06 | **V2 only** — floating install with a 2.0.0 floor, a build-time plugin smoke as the gate, hosted fallback model disabled |
 
 For how the Context Mode integration actually behaves today, read
-[../context-mode.md](../context-mode.md) instead of any of the four records
-above.
+[../context-mode.md](../context-mode.md) instead of any of the Context Mode
+records above.
 
 ## Open questions
 

@@ -37,7 +37,7 @@
 # HEADROOM_MEMORY_DB_PATH (~/.headroom/memory.db, the state-dir mount),
 # which `headroom proxy` reads as its --memory-db-path. Without --memory,
 # `wrap opencode` touches the CWD nowhere (its only $PWD writes are under
-# `if memory:`, cli/wrap.py:7919, 7983).
+# `if memory:`, cli/wrap.py:8654, 8730).
 #
 # The delegated flags, all load-bearing:
 #   --no-proxy    we started the proxy; without this upstream starts a second
@@ -107,5 +107,7 @@ if [[ -f "${config}" ]] && body="$(grep -v '^//' "${config}" 2>/dev/null)"; then
 fi
 
 # ── 3. Delegate routing and launch ───────────────────────────────────────────
+# container/opencode/smoke.sh (the image build's plugin gate) repeats these
+# wrap flags to start opencode's service the way a session would; change both.
 exec headroom wrap opencode --no-proxy --no-mcp --no-serena \
 	--port "${port}" -- "${USER_ARGS[@]}"

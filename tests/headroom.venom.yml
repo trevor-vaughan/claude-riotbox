@@ -121,7 +121,7 @@ testcases:
           FAKE
           chmod +x "${TEST_DIR}/realbin/headroom"
           # Recorder in place of the copied helper: the wrapper must exec it,
-          # never `headroom wrap claude`, which writes .claude/settings.local.json
+          # never `headroom wrap claude`, which can write .claude/settings.local.json
           # and a SessionStart hook into the CWD (the caller's checkout).
           cat > "${TEST_DIR}/home/.riotbox/agents/claude/headroom-exec.sh" <<'REC'
           #!/usr/bin/env bash
@@ -226,11 +226,12 @@ testcases:
           trap 'kill_fakes; rm -rf "${TEST_DIR}"' EXIT
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM HEADROOM_MEMORY_DB_PATH
           install_generic_wrapper_for claude
-          # Models where headroom 0.39.0 writes. The proxy keeps memory at
+          # Models where headroom 0.43.0 writes. The proxy keeps memory at
           # HEADROOM_MEMORY_DB_PATH, else $PWD/.headroom/memory.db
-          # (proxy/server.py:1332-1336); `wrap claude` writes
-          # .claude/settings.local.json and its lock in $PWD (cli/wrap.py:
-          # 5253, 1672). ~/.headroom stands for the state-dir mount.
+          # (proxy/server.py:1464-1468); `wrap claude --project-settings`
+          # (the default through 0.40.0) writes .claude/settings.local.json
+          # and its lock in $PWD (cli/wrap.py:6171, 1964). ~/.headroom stands
+          # for the state-dir mount.
           cat > "${TEST_DIR}/realbin/headroom" <<'FAKE'
           #!/usr/bin/env bash
           case "${1:-}" in

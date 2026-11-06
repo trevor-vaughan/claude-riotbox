@@ -251,9 +251,9 @@ testcases:
                    project_set:"riotbox", agent:"claude", kept_out_bytes:1048576,
                    re_read_bytes:0, hook_log_bytes:0, retained_total_bytes:1048576,
                    baseline_unknown:false}' > "${LEDGER}/good.json"
-          # schema 2, renamed fields — this reader must not guess at the
+          # schema 3, renamed fields — this reader must not guess at the
           # rename and must not silently drop the 5 MB into "unreadable".
-          jq -nc '{schema:2, started_at:"2026-07-02T10:00:00Z",
+          jq -nc '{schema:3, started_at:"2026-07-02T10:00:00Z",
                    ended_at:"2026-07-02T10:00:00Z", session_id:"s2",
                    project_set:"riotbox", agent:"claude",
                    bytes_withheld:5242880, baseline_unknown:false}' \
@@ -280,6 +280,138 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "newerschema=pass"
+
+  # Schema 1 records were measured by context-mode 1.x (bytesAvoided), schema 2
+  # records by 2.x (events rows). Both are kept-out figures under the same
+  # rule, so they are summed — but a reader comparing months must be able to
+  # see where the measurement changed, so every view names the 1.x share and
+  # its last date, and --runs marks each 1.x row. The hook log is a 1.x-only
+  # counter: it is shown only when 1.x records exist, and says so.
+  - name: schema 1 and 2 records are aggregated together and the 1.x boundary is labelled
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          v1() {
+            jq -nc --arg sid "$1" --argjson kept "$2" --argjson reread "$3" \
+                   --argjson hooklog "$4" --arg ended "$5" \
+              '{schema:1, started_at:$ended, ended_at:$ended, session_id:$sid,
+                project_set:"riotbox", agent:"claude", kept_out_bytes:$kept,
+                re_read_bytes:$reread, hook_log_bytes:$hooklog,
+                retained_total_bytes:($kept + 7), baseline_unknown:false}' \
+              > "${LEDGER}/${5//[:-]/}-$1.json"
+          }
+          v2() {
+            jq -nc --arg sid "$1" --argjson kept "$2" --argjson reread "$3" \
+                   --argjson calls "$4" --arg ended "$5" --argjson unknown "$6" \
+              '{schema:2, started_at:$ended, ended_at:$ended, session_id:$sid,
+                project_set:"riotbox", agent:"claude", kept_out_bytes:$kept,
+                re_read_bytes:$reread, tool_calls:$calls,
+                retained_total_bytes:9, baseline_unknown:$unknown}' \
+              > "${LEDGER}/${5//[:-]/}-$1.json"
+          }
+          v1 s1 1048576 1024 2048 "2026-10-01T10:00:00Z"
+          v1 s2 0       0    4096 "2026-11-04T10:00:00Z"
+          v2 s3 2097152 2048 12   "2026-11-06T10:00:00Z" false
+          v2 s4 null    null null "2026-11-07T10:00:00Z" true
+
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}")"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -q '4 runs  2026-10-01 → 2026-11-07' \
+            || { echo "FAIL: header wrong: ${out}"; exit 1; }
+          # kept out: 1048576 + 0 + 2097152 = 3.0 MB; re-read 1024 + 2048 = 3.0 KB
+          printf '%s' "${out}" | grep -qx ' kept out  3.0 MB' \
+            || { echo "FAIL: kept-out total does not sum both schemas: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -qx ' re-read   3.0 KB' \
+            || { echo "FAIL: re-read total does not sum both schemas: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -qx ' hook log  6.0 KB (disk, not tokens; 1.x runs only)' \
+            || { echo "FAIL: hook log not labelled 1.x-only: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -qx ' 2 runs through 2026-11-04 measured by context-mode 1.x (1.0 MB of kept out)' \
+            || { echo "FAIL: 1.x boundary not labelled: ${out}"; exit 1; }
+          printf '%s' "${out}" | grep -qx ' 1 run excluded (baseline unknown)' \
+            || { echo "FAIL: unknown schema-2 run not excluded: ${out}"; exit 1; }
+
+          out_json="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --json)"
+          printf '%s\n' "${out_json}"
+          printf '%s' "${out_json}" | jq -e '.runs == 4 and .measured == 3 and .excluded == 1
+              and .kept == 3145728 and .reread == 3072 and .hooklog == 6144
+              and .v1_runs == 2 and .v1_kept == 1048576
+              and .v1_last == "2026-11-04T10:00:00Z"' >/dev/null \
+            || { echo "FAIL: --json totals wrong: ${out_json}"; exit 1; }
+
+          runs="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --runs)"
+          printf '%s\n' "${runs}"
+          printf '%s\n' "${runs}" | grep '2026-10-01T10:00:00Z' | grep -q '1.0 MB (1.x)$' \
+            || { echo "FAIL: 1.x run not marked in --runs: ${runs}"; exit 1; }
+          printf '%s\n' "${runs}" | grep '2026-11-06T10:00:00Z' | grep -q '(1.x)' \
+            && { echo "FAIL: 2.x run marked as 1.x: ${runs}"; exit 1; }
+          printf '%s' "${runs}" | grep -q 'measured by context-mode 1.x' \
+            || { echo "FAIL: --runs does not label the boundary: ${runs}"; exit 1; }
+          runs_json="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --runs --json)"
+          printf '%s' "${runs_json}" | jq -e 'map(.schema) == [2, 2, 1, 1]' >/dev/null \
+            || { echo "FAIL: --runs --json does not carry the schema: ${runs_json}"; exit 1; }
+
+          byp="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --by-project)"
+          printf '%s\n' "${byp}"
+          printf '%s' "${byp}" | grep -q 'measured by context-mode 1.x' \
+            || { echo "FAIL: --by-project does not label the boundary: ${byp}"; exit 1; }
+          # --by-project --json carries the boundary per project, as every
+          # other view does: how many of its runs and how much of its kept-out
+          # total 1.x measured.
+          v2 o1 4096 0 1 "2026-11-06T11:00:00Z" false
+          jq -c '.project_set = "other"' "${LEDGER}/20261106T110000Z-o1.json" > "${LEDGER}/o1.tmp"
+          mv "${LEDGER}/o1.tmp" "${LEDGER}/20261106T110000Z-o1.json"
+          byp_json="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --by-project --json)"
+          printf '%s\n' "${byp_json}"
+          printf '%s' "${byp_json}" | jq -e '
+              (map(select(.project_set == "riotbox"))[0] | .v1_runs == 2 and .v1_kept == 1048576)
+              and (map(select(.project_set == "other"))[0] | .v1_runs == 0 and .v1_kept == 0)' >/dev/null \
+            || { echo "FAIL: --by-project --json lacks the 1.x markers: ${byp_json}"; exit 1; }
+          rm -f "${LEDGER}/20261106T110000Z-o1.json"
+
+          # A 2.x-only ledger has no boundary to label and no hook log to show.
+          rm -f "${LEDGER}"/*s1.json "${LEDGER}"/*s2.json
+          out="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}")"
+          printf '%s\n' "${out}"
+          printf '%s' "${out}" | grep -q '1\.x\|hook log' \
+            && { echo "FAIL: 2.x-only ledger mentions 1.x or a hook log: ${out}"; exit 1; }
+          echo "mixedschema=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "mixedschema=pass"
+
+  # The schema-2 promise mirrors schema 1's: baseline_unknown false means the
+  # three run fields were measured, so a null among them is a malformed
+  # record, skipped and disclosed — not a run that saved nothing.
+  - name: a schema 2 record that breaks its promise is skipped, not counted
+    steps:
+      - type: exec
+        script: |
+          set -e
+          LEDGER="$(mktemp -d)"
+          trap 'rm -rf "${LEDGER}"' EXIT
+          jq -nc '{schema:2, started_at:"2026-11-06T10:00:00Z", ended_at:"2026-11-06T10:00:00Z",
+                   session_id:"good", project_set:"riotbox", agent:"claude",
+                   kept_out_bytes:1048576, re_read_bytes:0, tool_calls:3,
+                   retained_total_bytes:1048576, baseline_unknown:false}' > "${LEDGER}/good.json"
+          for field in kept_out_bytes re_read_bytes tool_calls; do
+            jq -c --arg f "${field}" '.session_id = $f | .[$f] = null' "${LEDGER}/good.json" \
+              > "${LEDGER}/bad-${field}.json"
+          done
+          # A schema-2 record carrying only the 1.x field set is not schema 2.
+          jq -c '.session_id = "v1shape" | del(.tool_calls) | .hook_log_bytes = 5' \
+            "${LEDGER}/good.json" > "${LEDGER}/bad-v1shape.json"
+          out_json="$(bash "{{.riotbox_dir}}/scripts/ctx-stats.sh" --ledger-dir "${LEDGER}" --json)"
+          printf '%s\n' "${out_json}"
+          printf '%s' "${out_json}" | jq -e '.runs == 1 and .kept == 1048576 and .zero_saving == 0
+              and .skipped_files == 4' >/dev/null \
+            || { echo "FAIL: broken schema-2 records were counted: ${out_json}"; exit 1; }
+          echo "schema2promise=pass"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "schema2promise=pass"
 
   - name: --json emits a stable, typed shape for a populated and an empty ledger
     steps:

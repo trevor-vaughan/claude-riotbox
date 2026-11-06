@@ -572,7 +572,7 @@ testcases:
           fi
           mapfile -d '' -t argv < <(agent_call claude headroom_argv -p "do work")
           echo "argv=${argv[*]}"
-          # `headroom wrap claude` writes .claude/settings.local.json and a
+          # `headroom wrap claude` can write .claude/settings.local.json and a
           # SessionStart hook into the CWD, the caller's checkout.
           [ "${argv[0]}" = "${RIOTBOX_DIR}/agents/claude/headroom-exec.sh" ] \
             || { echo "FAIL: argv[0] is not the claude headroom helper" >&2; exit 1; }

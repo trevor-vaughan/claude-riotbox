@@ -7,7 +7,8 @@
 #                    opencode.jsonc into a single ~/.config/opencode/opencode.jsonc
 #                    with riotbox-mandatory overrides applied (permission=allow,
 #                    share=disabled, autoupdate=false, instructions includes
-#                    AGENTS.md).
+#                    AGENTS.md, disabled_providers includes the hosted
+#                    `opencode` provider unless the host config opts in).
 #
 # Idempotent: safe to run on every container start. Regenerates the merged
 # opencode.jsonc each call so content matches current host config + overrides.
@@ -69,6 +70,20 @@ opencode_setup() {
 
 	mkdir -p "${opencode_dir}"
 
+	# ── service.json: OpenCode V2's background-service config, reset each start.
+	# V2 reads it from its config dir (packages/cli/src/services/
+	# service-config.ts:130, the dir from util/src/global.ts:79). Its keys
+	# include `env`, copied into the service process, and `remote`, an
+	# internet tunnel to the service. This dir persists across sessions, so a
+	# value one session's agent wrote would apply to every later session.
+	# Only this file: the registration of the same name under XDG_STATE_HOME
+	# is per-container state and is not touched. sync-settings.sh never
+	# copies the host's.
+	local service_config="${OPENCODE_CONFIG_DIR:-${opencode_dir}}/service.json"
+	if ! rm -f -- "${service_config}"; then
+		echo "  [opencode] WARN: could not remove ${service_config}; its settings stay in force." >&2
+	fi
+
 	# ── AGENTS.md: render from RIOTBOX_PROMPT override, or copy from template
 	if [[ -n "${RIOTBOX_PROMPT:-}" ]] && [[ -f "${RIOTBOX_PROMPT}" ]]; then
 		local os_pretty="Linux"
@@ -128,6 +143,18 @@ opencode_setup() {
 	# every hook fired twice. Drop the npm entry; the shim is the one riotbox
 	# can pin. With Context Mode off there is no shim, so the entry is the
 	# user's own plugin choice and stays.
+	#
+	# disabled_providers handling: with no credentials, OpenCode V2 does not
+	# fail; it falls back to the hosted free models of its built-in `opencode`
+	# provider (opencode.ai) and sends the prompt and code context there. Deny
+	# that provider so a session with nothing configured errors instead. V2
+	# turns each disabled_providers entry into a `provider.use` deny policy
+	# (packages/core/src/config/normalize.ts, normalizePolicies). A user who
+	# wants the hosted models opts in by naming the provider in their own
+	# config: a top-level `model` or `small_model` on `opencode/...`, a
+	# `provider`/`providers` entry keyed `opencode`, or `opencode` in
+	# `enabled_providers`. Then no disable is written. Their own
+	# disabled_providers entries are kept; `opencode` is appended once.
 	local drop_cm=false
 	if [[ "${RIOTBOX_CONTEXT_MODE:-0}" = "1" ]]; then
 		drop_cm=true
@@ -164,6 +191,21 @@ opencode_setup() {
                                     else true
                                     end)]
            else .
+           end)
+        | (if ([.model, .small_model]
+               | any(.[]; (type == "string" and startswith("opencode/"))
+                          or (type == "object" and .providerID == "opencode")))
+              or ([.provider, .providers]
+                  | any(.[]; type == "object" and has("opencode")))
+              or ((.enabled_providers | type) == "array"
+                  and (.enabled_providers | index("opencode")) != null)
+           then .
+           elif (.disabled_providers | type) == "array"
+           then (if (.disabled_providers | index("opencode")) == null
+                 then .disabled_providers += ["opencode"]
+                 else .
+                 end)
+           else .disabled_providers = ["opencode"]
            end)
         | (if has("$schema") then . else .["$schema"] = $schema end)
         ')"
@@ -207,6 +249,7 @@ opencode_setup() {
 //   share        = "disabled"  (no session telemetry from the container)
 //   autoupdate   = false       (the image pins opencode at build time)
 //   instructions = [AGENTS.md] (riotbox autonomy prompt always loaded)
+//   disabled_providers += "opencode" (no hosted-model fallback unless you name it)
 // Edit your host opencode.json/opencode.jsonc to change anything else.
 BANNER
 		printf '%s\n' "${merged}"

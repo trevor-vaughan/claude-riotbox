@@ -23,9 +23,6 @@ Function names are mechanical: `agent_<name>_<verb>`.
 | [`host_sync`](#agent_name_host_sync) | yes | host, before launch |
 | [`env_vars`](#agent_name_env_vars) | yes | host, building passthrough |
 | [`headroom_argv`](#agent_name_headroom_argv) | no | wrapper, when `RIOTBOX_HEADROOM=1` |
-| [`context_mode_store_dir`](#agent_name_context_mode_store_dir) | no | session start |
-| [`context_mode_data_dir`](#agent_name_context_mode_data_dir) | no | session start |
-| [`context_mode_platform`](#agent_name_context_mode_platform) | no | session start |
 | [`context_mode_wire`](#agent_name_context_mode_wire) | no | session start |
 | [`context_mode_strip`](#agent_name_context_mode_strip) | no | session start |
 | [`context_mode_build_assert`](#agent_name_context_mode_build_assert) | no | image build |
@@ -157,12 +154,18 @@ A flag the CLI no longer recognises is **loud but late**. opencode's
 parser is strict, so an unknown flag exits 1 with usage: an upstream
 rename does not degrade the session, it breaks it, at the moment the
 user tries to work. So the `Containerfile` asserts the flag at build
-time — it requires opencode >= 1.18.0 (the release that added `--auto`)
+time — it requires OpenCode 2 (>= 2.0.0, which carries `--auto`)
 *and* greps the installed binary's help for the flag at both sites the
 wrapper injects into, `opencode run --help` and root `--help`. That
 moves the failure from the user's session to the image build, where it
 names what moved. Same reasoning as
 `agent_<name>_context_mode_build_assert` below.
+
+The floor and the gate are recorded in
+[decisions/opencode-v2.md](decisions/opencode-v2.md). The same gate covers the
+wired plugins: `container/opencode/smoke.sh` loads
+Context Mode, git-ai and headroom into the real OpenCode 2 binary at build time
+and fails the image build if any of them does not load.
 
 For opencode the injected flag is not the only thing granting autonomy —
 `agents/opencode/setup.sh` also forces `permission = "allow"` into the
@@ -345,9 +348,11 @@ takes the normal inject-and-exec path.
 The one rule above all others: **headroom must write nothing into the CWD**,
 which in a session is the caller's bind-mounted project. That rules out
 emitting `headroom wrap <tool>` directly for every tool checked so far:
-`wrap claude` writes `.claude/settings.local.json`, lock, marker and owner
-files and a `SessionStart` hook there, and `wrap opencode --memory` appends
-to `AGENTS.md` (headroom 0.39.0). So the verb emits an executable helper
+`wrap claude --memory` creates `.headroom/` there, `wrap claude
+--project-settings` (the default through 0.40.0) writes
+`.claude/settings.local.json`, lock, marker and owner files and a
+`SessionStart` hook there, and `wrap opencode --memory` appends to
+`AGENTS.md` (headroom 0.43.0). So the verb emits an executable helper
 co-located in your agent's directory, followed by the caller args verbatim:
 
 ```bash
@@ -411,18 +416,21 @@ and the untouched-project run), `tests/headroom-claude.venom.yml` and
 
 ## Optional verbs: Context Mode
 
-Six optional verbs carry [Context Mode](../../README.md#context-mode-opt-in)
-support for an agent. Five run per session; the sixth runs at image build
-time. Claude implements four of them, opencode and Pi all six:
+Three optional verbs carry [Context Mode](../../README.md#context-mode-opt-in)
+support for an agent. Two run per session; the third runs at image build
+time. Claude implements two of them, opencode and Pi all three:
 
 | Verb | When | Contract |
 |------|------|----------|
-| `context_mode_store_dir` | session start | Print this agent's absolute `CONTEXT_MODE_DIR` on stdout. No side effects. |
-| `context_mode_data_dir` | session start | Print the absolute root this agent's `CONTEXT_MODE_DATA_DIR` pins. Implement only where the pin is otherwise missing. |
-| `context_mode_platform` | session start | Print the upstream platform token this agent runs as, exported as `CONTEXT_MODE_PLATFORM`. Every agent should implement it. |
 | `context_mode_wire` | session start | Write this agent's wiring. All-or-nothing: return 0 only when every artifact landed. Omit it when the agent's support arrives some other way. |
 | `context_mode_strip` | session start | Remove any wiring this agent could be carrying — from `context_mode_wire`, or from an older release that wrote some. Idempotent, always returns 0. |
 | `context_mode_build_assert "$tree_root"` | image build | Assert the upstream contract this agent's support depends on. Non-zero fails the build. |
+
+None of them says where Context Mode keeps its stores. context-mode 2.x keeps
+every store under `~/.context-mode` whichever agent runs it, so there is
+nothing per agent to pin. The 1.x verbs that did (`context_mode_store_dir`,
+`context_mode_data_dir`, `context_mode_platform`) are gone, and no session
+exports the variables they fed.
 
 Every caller probes with `declare -F agent_<name>_<verb>` before calling —
 `container/context-mode-setup.sh` at session start, `scripts/preflight.sh`
@@ -432,46 +440,32 @@ is not an error: the session warns naming the agent, strips any wiring an
 earlier session left in the same session directory, and runs with the
 feature off.
 
-**`context_mode_store_dir` is the verb that answers "does this agent have
-Context Mode support at all."** It is what `container/context-mode-setup.sh`
-probes before anything else, and what `scripts/preflight.sh` reports on. It
-is deliberately not `context_mode_wire`: Claude Code reaches Context Mode
-through a plugin the image stages and `container/plugin-setup.sh` registers,
-so it has no wire verb, and a probe on `wire` would read the best-supported
-agent as unsupported.
+**`context_mode_build_assert` is the verb that answers "does this agent have
+Context Mode support at all."** An agent whose support rests on an upstream
+contract declares that contract here, and an agent that never reaches Context
+Mode has none. It is what `container/context-mode-setup.sh` probes before
+anything else, and what `scripts/preflight.sh` reports on. It is deliberately
+not `context_mode_wire`: Claude Code reaches Context Mode through a plugin the
+image stages and `container/plugin-setup.sh` registers, so it has no wire
+verb, and a probe on `wire` would read the best-supported agent as
+unsupported.
 
 **Implementing `context_mode_wire` obliges the agent to implement
-`context_mode_store_dir` and `context_mode_strip` as well.** The
-orchestrator asks for the store path *before* it wires and gives up when the
-answer is unusable, so a `wire` without `store_dir` never runs; and every
-give-up path — including the ones inside `wire` itself — calls the stripper,
-so a `wire` without `strip` leaves wiring behind that nothing removes, for
-the life of a session directory that outlives the image that wrote it.
+`context_mode_build_assert` and `context_mode_strip` as well.** The
+orchestrator gives up before wiring an agent it does not count as supported,
+so a `wire` without `build_assert` never runs; and every give-up path —
+including the ones inside `wire` itself — calls the stripper, so a `wire`
+without `strip` leaves wiring behind that nothing removes, for the life of a
+session directory that outlives the image that wrote it.
 
 The reverse does not hold. **`context_mode_strip` outlives the wiring it
-undoes**, and Claude is the worked example: it has `store_dir`, `platform`,
-`strip` and `build_assert`, and no `wire`. Session directories outlive
-images, one wired by
-an older release still holds that release's hook stanzas, and `settings.json`
-is never synced from the host — so the stripper is the only thing that
-converges a reused directory on one form of wiring. Delete a `wire` verb;
-keep its `strip` for as long as a session directory might still carry what
-it wrote.
-
-`context_mode_data_dir` is per-agent by design and Claude does not implement
-it. See its section below for when an agent needs it.
-
-`context_mode_platform` is optional to the orchestrator — an agent that omits
-it keeps upstream's own `detectPlatform()` — but omitting it is almost always
-a bug, because that detection is exactly what this verb exists to defeat.
-Every riotbox image ships more than one agent, so the detection has more than
-one config to pick from, and a wrong pick sends `getPluginRoot()` to a
-package cache no riotbox install populates. The import fails onto a stderr
-the hook dispatcher has already redirected to `/dev/null`. Nothing warns,
-nothing routes, and the toggle, `riotbox doctor` and the exit report all
-still say the feature is on — so unlike the other five, this one fails
-silently rather than loudly. Implement it in every agent that implements
-`context_mode_store_dir`.
+undoes**, and Claude is the worked example: it has `strip` and
+`build_assert`, and no `wire`. Session directories outlive images, one wired
+by an older release still holds that release's hook stanzas, and
+`settings.json` is never synced from the host — so the stripper is the only
+thing that converges a reused directory on one form of wiring. Delete a
+`wire` verb; keep its `strip` for as long as a session directory might still
+carry what it wrote.
 
 Put the bodies in `agents/<name>/context-mode.sh` and have `manifest.sh`
 source it:
@@ -484,117 +478,19 @@ source "${_AGENT_<NAME>_DIR}/context-mode.sh"
 
 That keeps the upstream constants, whatever depends on them, and the build
 guard that asserts them in one file. `agents/claude/context-mode.sh` (no
-wiring — a store path, a platform token, and a stripper for what an older
-release wrote), `agents/opencode/context-mode.sh` (one generated plugin
-file) and `agents/pi/context-mode.sh` (one entry in a RiotBox-owned
-`packages` list) are the three worked examples, and they are deliberately
-different shapes — the registry contract is about the lifecycle, not about
-what wiring looks like.
-
-### `agent_<name>_context_mode_store_dir`
-
-```bash
-agent_<name>_context_mode_store_dir() {
-    printf '%s\n' "${<NAME>_CONFIG_DIR:-${HOME}/.config/<name>}/context-mode"
-}
-```
-
-Print the absolute path the session exports as `CONTEXT_MODE_DIR`, and do
-nothing else — no `mkdir`, no writes, nothing that assumes the feature is
-enabled. `container/context-mode-setup.sh` rejects an empty or relative
-answer (warn, strip, run with the feature off) instead of exporting it:
-upstream resolves a relative `CONTEXT_MODE_DIR` against whatever directory
-the hook happened to start in, which is the user's project, so the store
-would land in the repo being worked on.
-
-Point it inside the agent's config directory, which riotbox replaces with
-the session bind mount. The store holds verbatim tool output, so it has to
-be somewhere `riotbox session-remove` deletes and somewhere that cannot
-vanish onto the container overlay at exit.
-
-### `agent_<name>_context_mode_data_dir`
-
-```bash
-agent_<name>_context_mode_data_dir() {
-    printf '%s\n' "${<NAME>_CONFIG_DIR:-${HOME}/.config/<name>}"
-}
-```
-
-`CONTEXT_MODE_DIR` pins the `sessions/` and `content/` stores behind the
-`ctx_*` tools, and nothing else. An agent whose Context Mode support runs as
-an in-process plugin has a second store — the plugin's own session DB — and
-upstream resolves that through the adapter's `getSessionDir()`, which reads
-`CONTEXT_MODE_DATA_DIR` and otherwise falls back to the agent's config
-directory. Implement this verb when riotbox does not already pin that
-fallback:
-
-- **Claude does not implement it.** `resolveClaudeConfigDir()` reads
-  `CLAUDE_CONFIG_DIR`, which `container/entrypoint.sh` exports at the session
-  bind mount, so the DB is already pinned and a second variable would only be
-  one more thing for a future reader to explain.
-- **opencode does.** `OpenCodeAdapter.getConfigDir()` reads
-  `XDG_CONFIG_HOME`, which the image never sets, and falls back to
-  `~/.config/opencode`: the config mount, which holds the host config copy
-  that the sync rewrites on every relaunch when the host has a
-  `~/.config/opencode`. The DB
-  holds verbatim tool output that has to persist with the session, so the verb
-  pins it under the data mount, `~/.local/share/opencode`.
-- **Pi does.** PiAdapter's default DB root is `~/.pi/context-mode` — outside
-  the `~/.pi/agent` session mount — so without the pin its verbatim tool
-  output would land on the container overlay.
-
-**Print the parent of `context_mode_store_dir`'s path, not the same path.**
-Upstream builds the DB directory as `<root>/context-mode/sessions`, whereas
-`CONTEXT_MODE_DIR` names that `context-mode` directory outright. Returning
-the store path here puts the DB at `<store>/context-mode/sessions`, one level
-below the `ctx_*` stores instead of beside them.
-`container/context-mode-setup.sh` rejects an empty or relative answer the
-same way it rejects one from `store_dir`, and validates both before it
-exports either, so a session that gives up leaves no storage variable behind.
-
-Note that upstream's `getMemoryDir()` follows this root too: auto-memory
-moves from `<config>/memory` to `<config>/context-mode/memory`. That is
-harmless for an agent adopting Context Mode for the first time and worth
-checking for one that has been storing memory under the old path.
-
-### `agent_<name>_context_mode_platform`
-
-```bash
-agent_<name>_context_mode_platform() {
-    printf '<upstream platform token>\n'
-}
-```
-
-Print the token upstream keys its hook dispatch and adapter detection off —
-`claude-code` for Claude, `opencode` for opencode, `pi` for Pi — and nothing
-else. The session exports it as `CONTEXT_MODE_PLATFORM`, which is the same
-remedy upstream applies to its own Copilot CLI bundle for the same reason.
-
-**Pin it rather than letting upstream detect it.** `hookDispatch` resolves
-the hook script through `getPluginRoot()`, which branches on
-`detectPlatform()`. Every riotbox image ships every supported agent, so that
-detection has several configs to choose between and no way to know which
-agent is running; when it lands on an in-process plugin platform it returns
-`~/.cache/<platform>/packages/context-mode@latest/node_modules/context-mode`,
-a path no riotbox install populates. The import throws — into a stderr
-`hookDispatch` closed and reopened on `/dev/null` before dispatching. The
-session routes nothing and reports itself healthy, which is why this verb
-matters more than its "optional" status suggests.
-
-`container/context-mode-setup.sh` probes for it the way it probes
-`context_mode_data_dir`, so an agent that does not implement it keeps
-upstream's detection instead of being handed a wrong answer. An answer that
-is *empty* is a different thing — a bug in the verb — and is rejected the
-way an empty store path is: warn, strip, run with the feature off. It is not
-exported empty, because upstream reads an empty `CONTEXT_MODE_PLATFORM` as
-"unset" on some paths and as a platform named `""` on others.
+wiring — a build assert, and a stripper for what an older release wrote),
+`agents/opencode/context-mode.sh` (one generated plugin file) and
+`agents/pi/context-mode.sh` (one entry in a RiotBox-owned `packages` list)
+are the three worked examples, and they are deliberately different shapes —
+the registry contract is about the lifecycle, not about what wiring looks
+like.
 
 ### `agent_<name>_context_mode_wire`
 
 Implement this only when riotbox has to author something for the agent to
 reach Context Mode. Claude Code does not: the image stages upstream's
-marketplace plugin and `container/plugin-setup.sh` registers it against the
-session, so there is nothing left for a wire verb to write and the verb was
+package, which carries its Claude Code plugin manifest, and
+`container/plugin-setup.sh` registers it against the session, so there is nothing left for a wire verb to write and the verb was
 removed. opencode still needs one, because its support is a plugin file in
 the session config directory that only riotbox can put there. So does Pi: its
 support is an entry in `settings.json` `packages`, a list `agents/pi/setup.sh`
@@ -684,16 +580,13 @@ agent_<name>_context_mode_build_assert() {
 }
 ```
 
-Called for every registered agent that implements it, at least once, by the
-Context Mode layer in the `Containerfile`, with the installed `context-mode`
-package root as `$1`.
-Treat `$1` as "the root of an upstream tree", not as "the npm package": the
-plugin-staging layer calls claude's verb a second time with the staged plugin
-clone as `$1`, because that clone — not the npm package — is what
-`container/plugin-setup.sh` registers and what a Claude session's hooks and MCP
-server run from. An agent whose artifact is staged separately owes the same
-second call; asserting one copy and calling the other covered rests the
-guarantee on two pins naming the same release, which no build layer can see.
+Called once for every registered agent that implements it, by the Context
+Mode layer in the `Containerfile`, with the staged `context-mode` package as
+`$1` — the one tree the CLI shim, the opencode shim, the Pi `packages` entry
+and the Claude Code registration all point at. An agent whose artifact is
+staged separately owes a call against that artifact too: asserting one copy
+and calling another covered rests the guarantee on two pins naming the same
+release, which no build layer can see.
 Assert every upstream contract this agent's wiring silently depends on —
 a file the wiring re-exports, a symbol it names, a config key it reproduces
 — and on any mismatch print a diagnostic that names the *consequence* (not
@@ -709,7 +602,7 @@ either one moves.
 Contract coverage lives in `tests/context-mode.venom.yml` (the Claude
 path, plus the strip-every-other-agent rule),
 `tests/context-mode-opencode.venom.yml` (the opencode path, including the
-foreign-file refusal and the `--pure` warning),
+foreign-file refusal),
 `tests/context-mode-pi.venom.yml` (the Pi path, including the strip that
 leaves user entries merely containing `context-mode`), and
 `tests/doctor-context-mode.venom.yml` (the preflight check for an agent
@@ -779,7 +672,7 @@ upstream writes for each one has a different shape:
   tighter gate leaves that file alone and only takes the file whose shape matches
   what a real `git-ai install-hooks` run produces.
 - **`agents/pi/git-ai.sh`** is content-gated too, but upstream's Pi template
-  (v1.7.5) carries no banner. It removes `~/.pi/agent/extensions/git-ai.ts`
+  (v1.7.5, v1.7.6) carries no banner. It removes `~/.pi/agent/extensions/git-ai.ts`
   only when the file's first 12 lines hold **both** of two template lines
   exactly as upstream writes them: the comment
   `// Optional user-owned override file. Managed installer never writes it.` as

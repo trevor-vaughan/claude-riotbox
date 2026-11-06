@@ -39,8 +39,8 @@
 # around the toggle — a future one wanting it has to add it and say why.
 #
 # One caller does resolve that path outside this function, and it is not a lapse
-# in the rule above: preflight_check_context_mode in scripts/preflight.sh
-# reimplements this lookup in the probe script it sends into the image. It has
+# in the rule above: the doctor probe in scripts/lib/context-mode-probe.sh
+# reimplements this lookup inside the image. It has
 # to. That probe runs inside a container where nothing in this file is sourced,
 # and it asks a different question — is this image's staged tree usable at all —
 # from the per-session one answered here, whose toggle test would reduce a
@@ -76,7 +76,7 @@ context_mode_staged_path() {
 # used to ask this too and now reads what the registration wrote instead; the
 # argument for that is at the gate, and is not repeated here.
 #
-# A second copy of this test lives in the doctor probe in scripts/preflight.sh,
+# A second copy of this test lives in the doctor probe in scripts/lib/context-mode-probe.sh,
 # for the reason given on context_mode_staged_path above, and is bound by the
 # same rule from a distance: doctor must never accept a tree this function would
 # refuse, or it reports green on one the session is about to unregister. Loosen
@@ -99,12 +99,13 @@ context_mode_staged_version() {
 # Register the image-staged Context Mode plugin against this session's plugin
 # registry, without copying it.
 #
-# The staged tree is ~60 MB and ~/.claude is a bind mount of the host session
-# directory, so a copy would cost that much host disk per project-set key. The
+# The staged tree is ~6 MB at context-mode 2.1.4 and ~/.claude is a bind mount
+# of the host session directory, so a copy would cost that much host disk per
+# project-set key. The
 # registry entry names the image path instead, and the tree is read in place.
 #
 # The path a session records can outlive the image that provided it: the staged
-# tree is version-stamped, so a rebuild at a new ref leaves an older session
+# tree is version-stamped, so a rebuild at a new version leaves an older session
 # directory pointing at a directory that is gone. Rather than trust the recorded
 # value, this rebuilds the entry from whatever is staged now — which makes it
 # both the installer and the reconciler, and makes a second call in the same
@@ -251,8 +252,8 @@ context_mode_plugin_register() {
 	# The staged tree is its own marketplace: upstream's .claude-plugin/
 	# marketplace.json declares the plugin with source "./", so the marketplace
 	# install location and the plugin install path are the same directory.
-	# autoUpdate stays false — the image pins the ref, and an update would go to
-	# the network from a session that may have none.
+	# autoUpdate stays false — the image pins the version, and an update would go
+	# to the network from a session that may have none.
 	local markets_updated
 	if ! markets_updated="$(jq -c --arg path "${staged}" '
 		.["context-mode"] = {source: {source: "github", repo: "mksglu/context-mode"},
@@ -650,14 +651,12 @@ plugin_setup() {
 		# the finished tree, below.
 		#
 		# The image's staged Context Mode tree is authoritative where this session
-		# has registered it: it carries the pinned-interpreter rewrite and the
-		# offline dependency install that a host tree has never been through. A
-		# host copy still invokes a bare `node`, which here resolves to the image
-		# default Node 20 — below the node:sqlite floor Context Mode needs —
-		# sending every hook into ensure-deps.mjs, where an image built with
-		# RIOTBOX_NETWORK=none spends 120 seconds per invocation and never
-		# succeeds. Skipping it also keeps the 60 MB out of a session directory
-		# that would only ignore it.
+		# has registered it: it carries the pinned-interpreter rewrite a host tree
+		# has never been through. A host copy still invokes a bare `node`, which
+		# here resolves to the image default Node 20 — below the 24.15.0 floor
+		# context-mode 2.x runs on, so every hook prints that it is below the
+		# floor and does nothing. Skipping it also keeps the copy out of a session
+		# directory that would only ignore it.
 		#
 		# Empty unless both registry documents already name the tree
 		# context_mode_staged_path resolves now — the literal test, and not quite

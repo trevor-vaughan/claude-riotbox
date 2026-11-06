@@ -17,30 +17,36 @@
 # ── Why not `headroom wrap claude` ───────────────────────────────────────────
 #
 # wrap writes into the working directory, which in a session is the caller's
-# checkout (headroom 0.39.0): .claude/settings.local.json with the proxy's
+# checkout (headroom 0.43.0): with --memory, a .headroom/ directory
+# (cli/wrap.py:6187); with --project-settings (the default through 0.40.0),
+# .claude/settings.local.json with the proxy's
 # ANTHROPIC_BASE_URL and ENABLE_TOOL_SEARCH, its .headroom_wrap_settings.lock,
 # .headroom_wrap_marker.json and .headroom_wrap_owners.json beside it, and a
 # SessionStart hook running `headroom wrap selfheal` that only `headroom
-# unwrap claude` removes (cli/wrap.py:5253, 5450-5490, 1672). This helper does
+# unwrap claude` removes (cli/wrap.py:6171, 6392-6446, 1964). This helper does
 # what wrap does for a launch, minus those writes:
 #
 #   kept    the proxy (labelled agent_type claude, as wrap labels it); the
-#           MCP retrieve tool (cli/wrap.py:1923, registered at user scope, in
+#           MCP retrieve tool (cli/wrap.py:2217, registered at user scope, in
 #           ~/.claude.json — the session dir, never the project), without
 #           which the proxy's "[Retrieve more: hash=…]" markers point at
 #           nothing; the routing env for the launch (below); ENABLE_TOOL_SEARCH
-#           (cli/wrap.py:388): Claude Code turns on-demand tool loading off
+#           (cli/wrap.py:420): Claude Code turns on-demand tool loading off
 #           behind a custom base URL unless it is set, inflating the context;
-#           the same two keys as settings env (cli/wrap.py:1781, 1815) for
+#           the same two keys as settings env (cli/wrap.py:2072, 2106) for
 #           the daemon's background sessions (below), passed as --settings.
 #   dropped the settings.local.json writes, which wrap makes for those
 #           sessions (issues #951, #2492): writing the session dir's user
 #           settings instead would route every session of the project through
 #           a port only this container serves; the
 #           selfheal hook, which only exists to undo those writes; the
-#           X-Headroom-Project header (cli/wrap.py:2975), a savings label from
+#           X-Headroom-Project header (cli/wrap.py:3449), a savings label from
 #           the CWD's name, which in a session is always "workspace"; the
-#           runtime-env push (cli/wrap.py:4072), which hot-syncs output-shaper
+#           X-Headroom-Cwd and X-Headroom-Session-Token headers (cli/wrap.py:
+#           3449, 3489), which route memory by launch directory: without them
+#           the proxy reads that directory from Claude Code's system prompt
+#           (memory/storage_router.py:47-49); the
+#           runtime-env push (cli/wrap.py:4820), which hot-syncs output-shaper
 #           knobs from the caller's environment into a reused proxy: a proxy
 #           is reused only when its recorded launch config (the provider
 #           routing) matches, and every agent in a container starts from the
@@ -50,7 +56,7 @@
 #           shutdown: the proxy lives as long as the container, as for
 #           opencode.
 #
-# Routing env, as wrap sets it (cli/wrap.py:5316-5338, 5429-5443, 1133-1180):
+# Routing env, as wrap sets it (cli/wrap.py:6234-6256, 6376-6390, 1376-1433):
 #   Vertex  (CLAUDE_CODE_USE_VERTEX)   ANTHROPIC_VERTEX_BASE_URL=<proxy>; the
 #           proxy gets VERTEX_TARGET_API_URL for a custom gateway, none for
 #           Google's own endpoint (it derives the regional host per request),
@@ -60,6 +66,9 @@
 #           <proxy>/anthropic; the proxy gets the real endpoint as
 #           --anthropic-api-url. ENABLE_TOOL_SEARCH defaults to false here.
 #   else    ANTHROPIC_BASE_URL=<proxy>.
+# Not ported: since 0.40.0 wrap also makes a pre-set ANTHROPIC_BASE_URL that
+# is not this proxy the proxy's upstream (cli/wrap.py:6008); here it is
+# replaced by the proxy URL, as in 0.39.0.
 #
 # Background sessions (Claude Code 2.1.304): /bg in a session and `claude
 # --bg` hand the session to the on-demand `claude daemon`, which often runs it
@@ -100,7 +109,7 @@ _trim() {
 }
 
 # _normalize_api_url <url>: upstream's _normalize_proxy_api_url
-# (cli/wrap.py:3649) — trimmed, trailing slashes and one trailing /v1 off.
+# (cli/wrap.py:4188) — trimmed, trailing slashes and one trailing /v1 off.
 _normalize_api_url() {
 	local u
 	u="$(_trim "$1")"
@@ -129,7 +138,7 @@ fi
 # on <port> (headroom_proxy_select runs it per candidate port, in a
 # subshell, to compare launch configs, then here for the port chosen). The
 # Vertex target depends on the port: a target that is the proxy itself is
-# dropped (_vertex_target_api_url_from_claude_env, cli/wrap.py:1161).
+# dropped (_vertex_target_api_url_from_claude_env, cli/wrap.py:1414).
 _claude_proxy_plan() {
 	local url="http://127.0.0.1:$1" vertex_target="" explicit vertex_url
 	local proxy_norm explicit_norm vertex_norm default_norm
@@ -169,7 +178,7 @@ headroom_proxy_ensure claude _claude_proxy_plan || _fallback "${HEADROOM_PROXY_F
 proxy_url="http://127.0.0.1:${HEADROOM_PROXY_PORT}"
 
 # ── 2. MCP retrieve tool ─────────────────────────────────────────────────────
-# `claude mcp add -s user` under the hood (mcp_registry/claude.py:196), so it
+# `claude mcp add -s user` under the hood (mcp_registry/claude.py:272), so it
 # lands in ~/.claude.json. Idempotent: an existing matching entry is kept.
 mcp_log="${HOME}/.headroom/logs/mcp-install.log"
 if ! headroom mcp install --agent claude --proxy-url "${proxy_url}" >>"${mcp_log}" 2>&1; then

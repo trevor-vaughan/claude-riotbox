@@ -3,14 +3,14 @@
 # agents/claude/context-mode.sh — Context Mode support for Claude Code.
 #
 # Sourced by agents/claude/manifest.sh, which exposes the optional Context Mode
-# verbs. RiotBox no longer authors Claude Code's wiring: upstream's marketplace
-# plugin supplies the hooks and the MCP server, staged in the image and
-# registered against the session by container/plugin-setup.sh. What is left
-# here is the storage pin, the platform pin, the build-time contract check, and
-# a stripper for the wiring the previous release wrote by hand.
+# verbs. RiotBox does not author Claude Code's wiring: upstream's plugin — the
+# npm package, which carries .claude-plugin/plugin.json — supplies the hooks and
+# the MCP server, staged in the image and registered against the session by
+# container/plugin-setup.sh. What is left here is the build-time contract check
+# and a stripper for the wiring an older release wrote by hand.
 #
-# The constant below is asserted against upstream's routing table at image
-# build time, so an upstream rename fails the build rather than a user session.
+# The constant below is asserted against upstream's hook bundle at image build
+# time, so an upstream rename fails the build rather than a user session.
 #
 # See docs/dev/decisions/context-mode-native-plugin.md for the plugin adoption
 # this file was cut down by, and docs/dev/decisions/context-mode-opencode.md for
@@ -22,16 +22,17 @@
 # Claude Code exposes an MCP server's tools as `mcp__<server>__<tool>` — the
 # same convention that makes CodeGraph's tools `mcp__codegraph__*`. Context
 # Mode's routing hardcodes the tool names it tells the agent to call, and for
-# the claude-code platform that table reads
+# the claude-code agent that prefix reads
 # `mcp__plugin_context-mode_context-mode__<tool>`
-# (hooks/core/tool-naming.mjs upstream) — the shape Claude Code produces for a
-# server that arrives via Context Mode's own *plugin*, which namespaces it as
+# (src/adapters/claude-code.ts upstream, bundled into hook.mjs) — the shape
+# Claude Code produces for a server that arrives via Context Mode's own
+# *plugin*, which namespaces it as
 # `plugin_<plugin>_<server>`. There is no env var or flag to steer it.
 #
 # The registered plugin now provides that server, so the name comes out right
 # by construction and nothing here writes it. Two things still read the
-# constant. agent_claude_context_mode_build_assert greps a copy of upstream's
-# routing table for it, so a pin bump that changed the prefix fails the build
+# constant. agent_claude_context_mode_build_assert greps upstream's hook
+# bundle for it, so a pin bump that changed the prefix fails the build
 # instead of leaving every redirect pointing at a tool the session does not
 # have; and the strip verb below uses it to find the entry the previous release
 # registered under the same name in .claude.json, which has to go or the
@@ -208,46 +209,27 @@ agent_claude_context_mode_strip() {
 	echo "  [context-mode] ${config_dir}." >&2
 }
 
-agent_claude_context_mode_store_dir() {
-	printf '%s\n' "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/context-mode"
-}
-
-# The platform token upstream keys its hook dispatch and adapter detection off.
-#
-# Pinned rather than detected. Every RiotBox image ships Claude Code and
-# opencode, and upstream's detectPlatform() resolves that ambiguity from
-# whichever config it finds — the same co-install case its own Copilot bundle
-# pins this variable for. When it guesses an in-process plugin platform,
-# getPluginRoot() returns ~/.cache/<platform>/packages/context-mode@latest/...,
-# a path no RiotBox install populates, and the hook's import throws into a
-# stderr hookDispatch has already pointed at /dev/null: a session that routes
-# nothing and reports itself healthy.
-agent_claude_context_mode_platform() {
-	printf 'claude-code\n'
-}
-
 # Build-time contract check for the Claude path.
 #
 # What is left to assert once RiotBox stops authoring hooks: the MCP server
-# name the routing table steers toward still appears where the hooks look it
-# up. The matcher and hook-table equality checks that used to live here went
-# with the tables they compared — upstream's hooks.json is now the only
-# definition of both, so there is nothing on our side to drift from it.
+# name the redirects steer toward still appears where the hooks build them.
+# Upstream's hook file (hooks/claude-code.json) defines the events and the
+# matchers; the Containerfile compares it against a committed expectation.
 #
-# A failed grep is a failed assert, which is the property the comparisons it
-# replaced did not have: they compared two command substitutions, so a run in
-# which both sides failed compared "" against "" and passed.
+# The grep includes both quotes of the string literal the minified bundle
+# spells the prefix as, so the same name inside a longer string — a deny
+# message naming one tool — cannot satisfy it while the prefix itself drifts.
+# A failed grep is a failed assert, missing file included.
 #
-# $1 is the root of a tree carrying upstream's hooks/ — the npm package root or
-# the staged plugin clone. The verb takes it as an argument rather than deriving
-# one because it is called on more than one of them; the staging layer in the
-# Containerfile is where that is spelled out. The diagnostic names the root it
-# read, since nothing obliges a caller to say which tree it handed over.
+# $1 is the root of the package tree. The verb takes it as an argument rather
+# than deriving one so the build hands it exactly the tree it just staged. The
+# diagnostic names the root it read, since nothing obliges a caller to say
+# which tree it handed over.
 agent_claude_context_mode_build_assert() {
 	local root="${1:?upstream tree root required}"
 
-	if ! grep -qF "\`mcp__${CONTEXT_MODE_MCP_NAME}__" "${root}/hooks/core/tool-naming.mjs"; then
-		echo "CONTEXT_MODE_MCP_NAME no longer appears in hooks/core/tool-naming.mjs — sessions would register an MCP server the routing table cannot steer (${root})" >&2
+	if ! grep -qF "\"mcp__${CONTEXT_MODE_MCP_NAME}__\"" "${root}/hook.mjs"; then
+		echo "CONTEXT_MODE_MCP_NAME no longer appears in hook.mjs — sessions would register an MCP server the redirects cannot steer to (${root})" >&2
 		return 1
 	fi
 }

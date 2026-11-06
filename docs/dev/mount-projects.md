@@ -37,7 +37,8 @@ subshell and inspect the failure.
 The session dir is mounted read-write at `~/.claude`, so the container can
 replace anything inside it with a symlink before the next launch, and podman
 would mount whatever the link names. Every other mount source RiotBox creates
-for a session — headroom, git-ai, each `overlay/<name>`, and every directory an
+for a session — headroom, git-ai, the Context Mode store, each `overlay/<name>`,
+and every directory an
 agent's `host_sync` copies — comes from `RIOTBOX_STATE_DIR`
 (`${XDG_DATA_HOME}/riotbox-state/<key>/`), which is never mounted whole. Host
 files bind-mounted in place (credentials, `auth.json`, `~/.claude/plugins/`) and

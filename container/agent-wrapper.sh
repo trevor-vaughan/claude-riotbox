@@ -49,7 +49,7 @@ fi
 # optimization layer, never a reason to lose a session.
 #
 # HEADROOM_MEMORY_DB_PATH puts headroom's memory into ~/.headroom, the
-# session's state-dir mount. Unset, headroom 0.39.0 keeps it in
+# session's state-dir mount. Unset, headroom 0.43.0 keeps it in
 # $PWD/.headroom (proxy/server.py) — in a session, the caller's checkout for
 # one project and the image's own /workspace, lost at exit, for a set. The
 # proxy keeps its per-project DBs in memories/ beside this file. Exported

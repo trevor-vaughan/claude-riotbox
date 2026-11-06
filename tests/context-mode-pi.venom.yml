@@ -8,7 +8,10 @@ vars:
 # array of ~/.pi/agent/settings.json. Each case sources the verb file directly.
 
 testcases:
-  - name: store, data and platform pin Pi's storage inside the session mount
+  # context-mode 2.x reads none of CONTEXT_MODE_DIR, CONTEXT_MODE_DATA_DIR's
+  # 1.x meaning or CONTEXT_MODE_PLATFORM, so the verbs that produced them are
+  # gone rather than left to export values nothing reads.
+  - name: Pi carries no store, data or platform verb
     steps:
       - type: exec
         script: |
@@ -17,23 +20,15 @@ testcases:
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
-          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          PKG="${HOME}/nvm/lib/node_modules/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/pi" "${HOME}/.pi/agent"
-          echo '{"pi":{"extensions":["./build/adapters/pi/extension.js"]}}' > "${PKG}/package.json"
-          printf '' > "${PKG}/build/adapters/pi/extension.js"
-          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
-          chmod +x "${CONTEXT_MODE_BIN}"
-          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
-          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/pi/context-mode.sh"
-          [[ "$(agent_pi_context_mode_store_dir)" == "${HOME}/.pi/agent/context-mode" ]] || { echo "FAIL: store"; exit 1; }
-          [[ "$(agent_pi_context_mode_data_dir)" == "${HOME}/.pi/agent" ]] || { echo "FAIL: data root"; exit 1; }
-          [[ "$(agent_pi_context_mode_platform)" == "pi" ]] || { echo "FAIL: platform"; exit 1; }
-          echo "PINS_OK"
+          declare -F agent_pi_context_mode_build_assert >/dev/null || { echo "FAIL: build_assert missing"; exit 1; }
+          for verb in store_dir data_dir platform; do
+            if declare -F "agent_pi_context_mode_${verb}" >/dev/null; then echo "FAIL: ${verb} still defined"; exit 1; fi
+          done
+          echo "NO_PINS_OK"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "PINS_OK"
+          - result.systemout ShouldContainSubstring "NO_PINS_OK"
 
   - name: wire appends the package root once and keeps existing packages
     steps:
@@ -45,11 +40,12 @@ testcases:
           export HOME="${TEST_DIR}"
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          PKG="${HOME}/nvm/lib/node_modules/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/pi" "${HOME}/.pi/agent"
-          echo '{"pi":{"extensions":["./build/adapters/pi/extension.js"]}}' > "${PKG}/package.json"
-          printf '' > "${PKG}/build/adapters/pi/extension.js"
-          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          PKG="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/pi" "${HOME}/.pi/agent"
+          echo '{"pi":{"extensions":["./pi/index.js"]}}' > "${PKG}/package.json"
+          printf '' > "${PKG}/pi/index.js"
+          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
@@ -74,11 +70,12 @@ testcases:
           export HOME="${TEST_DIR}"
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          PKG="${HOME}/nvm/lib/node_modules/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/pi" "${HOME}/.pi/agent"
-          echo '{"pi":{"extensions":["./build/adapters/pi/extension.js"]}}' > "${PKG}/package.json"
-          printf '' > "${PKG}/build/adapters/pi/extension.js"
-          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          PKG="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/pi" "${HOME}/.pi/agent"
+          echo '{"pi":{"extensions":["./pi/index.js"]}}' > "${PKG}/package.json"
+          printf '' > "${PKG}/pi/index.js"
+          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
@@ -102,11 +99,12 @@ testcases:
           export HOME="${TEST_DIR}"
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          PKG="${HOME}/nvm/lib/node_modules/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/pi" "${HOME}/.pi/agent"
-          echo '{"pi":{"extensions":["./build/adapters/pi/extension.js"]}}' > "${PKG}/package.json"
-          printf '' > "${PKG}/build/adapters/pi/extension.js"
-          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          PKG="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/pi" "${HOME}/.pi/agent"
+          echo '{"pi":{"extensions":["./pi/index.js"]}}' > "${PKG}/package.json"
+          printf '' > "${PKG}/pi/index.js"
+          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
@@ -129,11 +127,12 @@ testcases:
           export HOME="${TEST_DIR}"
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          PKG="${HOME}/nvm/lib/node_modules/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/pi" "${HOME}/.pi/agent"
-          echo '{"pi":{"extensions":["./build/adapters/pi/extension.js"]}}' > "${PKG}/package.json"
-          printf '' > "${PKG}/build/adapters/pi/extension.js"
-          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          PKG="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/pi" "${HOME}/.pi/agent"
+          echo '{"pi":{"extensions":["./pi/index.js"]}}' > "${PKG}/package.json"
+          printf '' > "${PKG}/pi/index.js"
+          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
@@ -161,11 +160,12 @@ testcases:
           export HOME="${TEST_DIR}"
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          PKG="${HOME}/nvm/lib/node_modules/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/pi" "${HOME}/.pi/agent"
-          echo '{"pi":{"extensions":["./build/adapters/pi/extension.js"]}}' > "${PKG}/package.json"
-          printf '' > "${PKG}/build/adapters/pi/extension.js"
-          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          PKG="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/pi" "${HOME}/.pi/agent"
+          echo '{"pi":{"extensions":["./pi/index.js"]}}' > "${PKG}/package.json"
+          printf '' > "${PKG}/pi/index.js"
+          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
@@ -179,6 +179,47 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "STRIP_ANCHOR_OK"
 
+  # A session directory outlives the image that wired it, so strip has to take
+  # out the entry this image's wire writes, the entry an image staging an
+  # older version wrote, and the 1.x entry (the package's last path segment
+  # was `context-mode` then) — and still leave a user's look-alike path.
+  - name: strip removes the entry wire wrote, an older staged version's and the 1.x one
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TEST_DIR="$(mktemp -d)"
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          export HOME="${TEST_DIR}"
+          unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
+          export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          PKG="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/pi" "${HOME}/.pi/agent"
+          echo '{"pi":{"extensions":["./pi/index.js"]}}' > "${PKG}/package.json"
+          printf '' > "${PKG}/pi/index.js"
+          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          chmod +x "${CONTEXT_MODE_BIN}"
+          source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
+          source "{{.riotbox_dir}}/container/context-mode-setup.sh"
+          source "{{.riotbox_dir}}/agents/pi/context-mode.sh"
+          echo '{"packages":["/x/ext"]}' > "${HOME}/.pi/agent/settings.json"
+          agent_pi_context_mode_wire 2>/dev/null
+          jq -e --arg p "${PKG}" '.packages == ["/x/ext", $p]' "${HOME}/.pi/agent/settings.json" >/dev/null \
+            || { echo "FAIL: wire did not add ${PKG}"; cat "${HOME}/.pi/agent/settings.json"; exit 1; }
+          agent_pi_context_mode_strip 2>/dev/null
+          jq -e '.packages == ["/x/ext"]' "${HOME}/.pi/agent/settings.json" >/dev/null \
+            || { echo "FAIL: strip left the entry wire wrote"; cat "${HOME}/.pi/agent/settings.json"; exit 1; }
+          jq -n --arg old "${RIOTBOX_CM_PLUGIN_DIR}/v2.1.3" --arg v1 "/home/llm/.nvm/versions/node/v22.23.4/lib/node_modules/context-mode" \
+            '{packages: ["/x/ext", $old, $v1, "/x/context-mode-plugin-tools"]}' > "${HOME}/.pi/agent/settings.json"
+          agent_pi_context_mode_strip 2>/dev/null
+          jq -e '.packages == ["/x/ext", "/x/context-mode-plugin-tools"]' "${HOME}/.pi/agent/settings.json" >/dev/null \
+            || { echo "FAIL: older staged or 1.x entry survived, or a user entry went"; cat "${HOME}/.pi/agent/settings.json"; exit 1; }
+          echo "STRIP_ROUNDTRIP_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "STRIP_ROUNDTRIP_OK"
+
   - name: wire refuses an empty settings.json and leaves it untouched
     steps:
       - type: exec
@@ -189,11 +230,12 @@ testcases:
           export HOME="${TEST_DIR}"
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          PKG="${HOME}/nvm/lib/node_modules/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/pi" "${HOME}/.pi/agent"
-          echo '{"pi":{"extensions":["./build/adapters/pi/extension.js"]}}' > "${PKG}/package.json"
-          printf '' > "${PKG}/build/adapters/pi/extension.js"
-          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          PKG="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/pi" "${HOME}/.pi/agent"
+          echo '{"pi":{"extensions":["./pi/index.js"]}}' > "${PKG}/package.json"
+          printf '' > "${PKG}/pi/index.js"
+          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
@@ -216,11 +258,12 @@ testcases:
           export HOME="${TEST_DIR}"
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          PKG="${HOME}/nvm/lib/node_modules/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/pi" "${HOME}/.pi/agent"
-          echo '{"pi":{"extensions":["./build/adapters/pi/extension.js"]}}' > "${PKG}/package.json"
-          printf '' > "${PKG}/build/adapters/pi/extension.js"
-          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          PKG="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/pi" "${HOME}/.pi/agent"
+          echo '{"pi":{"extensions":["./pi/index.js"]}}' > "${PKG}/package.json"
+          printf '' > "${PKG}/pi/index.js"
+          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
@@ -243,11 +286,12 @@ testcases:
           export HOME="${TEST_DIR}"
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          PKG="${HOME}/nvm/lib/node_modules/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/pi" "${HOME}/.pi/agent"
-          echo '{"pi":{"extensions":["./build/adapters/pi/extension.js"]}}' > "${PKG}/package.json"
-          printf '' > "${PKG}/build/adapters/pi/extension.js"
-          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          PKG="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/pi" "${HOME}/.pi/agent"
+          echo '{"pi":{"extensions":["./pi/index.js"]}}' > "${PKG}/package.json"
+          printf '' > "${PKG}/pi/index.js"
+          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
@@ -271,53 +315,42 @@ testcases:
           export HOME="${TEST_DIR}"
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          PKG="${HOME}/nvm/lib/node_modules/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/pi" "${HOME}/.pi/agent"
-          echo '{"pi":{"extensions":["./build/adapters/pi/extension.js"]}}' > "${PKG}/package.json"
-          printf '' > "${PKG}/build/adapters/pi/extension.js"
-          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          PKG="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/pi" "${HOME}/.pi/agent"
+          echo '{"pi":{"extensions":["./pi/index.js"]}}' > "${PKG}/package.json"
+          printf '' > "${PKG}/pi/index.js"
+          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
           source "{{.riotbox_dir}}/agents/pi/context-mode.sh"
           T="${TEST_DIR}/t"
-          mk() { rm -rf "${T}"; mkdir -p "${T}/build/adapters/pi"
-            echo '{"pi":{"extensions":["./build/adapters/pi/extension.js"]}}' > "${T}/package.json"
-            : > "${T}/build/adapters/pi/extension.js"
-            echo 'export class PiAdapter extends BaseAdapter {}' > "${T}/build/adapters/pi/index.js"
-            printf '%s\n' 'switch (p) {' '        case "pi": {' '            // PiAdapter pins storage.' '            const { PiAdapter } = await import("./pi/index.js");' '            return new PiAdapter();' '        }' > "${T}/build/adapters/detect.js"; }
+          mk() { rm -rf "${T}"; mkdir -p "${T}/pi"
+            echo '{"pi":{"extensions":["./pi/index.js"]}}' > "${T}/package.json"
+            printf '%s\n' 'function piExtension(pi) {}' 'export {' '  piExtension as default' '};' > "${T}/pi/index.js"; }
           # expect_fail <label> <phrase>: build_assert must fail AND name <phrase> on stderr.
           expect_fail() {
             if agent_pi_context_mode_build_assert "${T}" 2>"${TEST_DIR}/err"; then echo "FAIL: $1 accepted"; exit 1; fi
             grep -qF -- "$2" "${TEST_DIR}/err" || { echo "FAIL: $1 failed for the wrong reason"; cat "${TEST_DIR}/err"; exit 1; }
           }
           mk; agent_pi_context_mode_build_assert "${T}" || { echo "FAIL: good tree rejected"; exit 1; }
-          mk; echo '{"pi":{"extensions":["./other.js"]}}' > "${T}/package.json"
+          mk; echo '{"pi":{"extensions":["./pi/index.js","./other.js"]}}' > "${T}/package.json"
           expect_fail manifest 'no longer declares pi.extensions'
-          mk; rm "${T}/build/adapters/pi/extension.js"
-          expect_fail extension-file 'no longer ships build/adapters/pi/extension.js'
-          mk; rm "${T}/build/adapters/pi/index.js"
-          expect_fail index-missing 'no longer ships build/adapters/pi/index.js'
-          mk; printf '%s\n' '    getSessionDir() { return "/x"; }' >> "${T}/build/adapters/pi/index.js"
-          expect_fail override 'overrides getSessionDir()'
-          mk; printf '%s\n' '    async getSessionDir() { return "/x"; }' >> "${T}/build/adapters/pi/index.js"
-          expect_fail async-override 'overrides getSessionDir()'
-          mk; printf '%s\n' '    getSessionDir = () => "/x";' >> "${T}/build/adapters/pi/index.js"
-          expect_fail arrow-override 'overrides getSessionDir()'
-          mk; printf '%s\n' 'class A{x(){}}getSessionDir(){return 1}' >> "${T}/build/adapters/pi/index.js"
-          expect_fail minified-override 'overrides getSessionDir()'
-          mk; printf '%s\n' '    // getSessionDir() is inherited' >> "${T}/build/adapters/pi/index.js"
-          agent_pi_context_mode_build_assert "${T}" || { echo "FAIL: comment mention rejected"; exit 1; }
-          mk; echo 'switch (p) {}' > "${T}/build/adapters/detect.js"
-          expect_fail detect 'maps the platform id'
-          mk; printf '%s\n' 'switch (p) {' '        case "pi": {' '            // PiAdapter pins storage.' '            return null;' '        }' > "${T}/build/adapters/detect.js"
-          expect_fail comment-only-detect 'maps the platform id'
+          mk; echo '{"pi":{"extensions":["./build/adapters/pi/extension.js"]}}' > "${T}/package.json"
+          expect_fail manifest-1x 'no longer declares pi.extensions'
+          mk; rm "${T}/pi/index.js"
+          expect_fail extension-file 'no longer ships pi/index.js'
+          mk; printf '%s\n' 'export function piExtension(pi) {}' > "${T}/pi/index.js"
+          expect_fail no-default 'no default export'
+          mk; printf '%s\n' 'export default function piExtension(pi) {}' > "${T}/pi/index.js"
+          agent_pi_context_mode_build_assert "${T}" || { echo "FAIL: inline default export rejected"; exit 1; }
           echo "BUILD_ASSERT_OK"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "BUILD_ASSERT_OK"
 
-  - name: setup wires pi and exports its store, data root and platform
+  - name: setup wires pi and exports no 1.x storage or platform variable
     steps:
       - type: exec
         script: |
@@ -327,11 +360,12 @@ testcases:
           export HOME="${TEST_DIR}"
           unset CONTEXT_MODE_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM
           export CONTEXT_MODE_BIN="${HOME}/.local/bin/context-mode"
-          PKG="${HOME}/nvm/lib/node_modules/context-mode"
-          mkdir -p "${HOME}/.local/bin" "${PKG}/build/adapters/pi" "${HOME}/.pi/agent"
-          echo '{"pi":{"extensions":["./build/adapters/pi/extension.js"]}}' > "${PKG}/package.json"
-          printf '' > "${PKG}/build/adapters/pi/extension.js"
-          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.bundle.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
+          export RIOTBOX_CM_PLUGIN_DIR="${HOME}/.riotbox/context-mode-plugin"
+          PKG="${RIOTBOX_CM_PLUGIN_DIR}/v2.1.4"
+          mkdir -p "${HOME}/.local/bin" "${PKG}/pi" "${HOME}/.pi/agent"
+          echo '{"pi":{"extensions":["./pi/index.js"]}}' > "${PKG}/package.json"
+          printf '' > "${PKG}/pi/index.js"
+          printf '%s\n' '#!/usr/bin/env bash' "exec \"/n/bin/node\" \"${PKG}/cli.mjs\" \"\$@\"" > "${CONTEXT_MODE_BIN}"
           chmod +x "${CONTEXT_MODE_BIN}"
           source "{{.riotbox_dir}}/scripts/lib/json-write.sh"
           source "{{.riotbox_dir}}/container/context-mode-setup.sh"
@@ -339,9 +373,10 @@ testcases:
           echo '{"packages":["/x/ext"]}' > "${HOME}/.pi/agent/settings.json"
           export RIOTBOX_CONTEXT_MODE=1 RIOTBOX_AGENT=pi
           context_mode_setup >/dev/null 2>&1
-          [[ "${CONTEXT_MODE_DIR:-}" == "${HOME}/.pi/agent/context-mode" ]] || { echo "FAIL: store '${CONTEXT_MODE_DIR:-}'"; exit 1; }
-          [[ "${CONTEXT_MODE_DATA_DIR:-}" == "${HOME}/.pi/agent" ]] || { echo "FAIL: data '${CONTEXT_MODE_DATA_DIR:-}'"; exit 1; }
-          [[ "${CONTEXT_MODE_PLATFORM:-}" == "pi" ]] || { echo "FAIL: platform"; exit 1; }
+          [[ "${_CONTEXT_MODE_WIRED:-}" == "1" ]] || { echo "FAIL: not marked wired"; exit 1; }
+          for v in CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR CONTEXT_MODE_PLATFORM; do
+            [[ -z "${!v+x}" ]] || { echo "FAIL: ${v} exported as '${!v}'"; exit 1; }
+          done
           jq -e --arg p "${PKG}" '.packages == ["/x/ext", $p]' "${HOME}/.pi/agent/settings.json" >/dev/null || { echo "FAIL: not wired"; exit 1; }
           export RIOTBOX_CONTEXT_MODE=0
           context_mode_setup >/dev/null 2>&1
@@ -350,3 +385,26 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "SETUP_PI_OK"
+
+  # The Pi extension runs in-process, in Pi's own Node, and opens node:sqlite
+  # there; context-mode 2.x refuses anything below 24.15.0. So PI_NODE carries
+  # the same floor as CONTEXT_MODE_NODE, and the two stay equal so nvm installs
+  # one Node and the extension runs on the version the package was installed
+  # and probed with.
+  - name: Pi runs on the Node context-mode 2.x requires
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cf="{{.riotbox_dir}}/Containerfile"
+          pi_node="$(sed -nE 's/^ARG PI_NODE=(.+)$/\1/p' "${cf}")"
+          cm_node="$(sed -nE 's/^ARG CONTEXT_MODE_NODE=(.+)$/\1/p' "${cf}")"
+          [[ -n "${pi_node}" && -n "${cm_node}" ]] || { echo "FAIL: PI_NODE or CONTEXT_MODE_NODE has no value"; exit 1; }
+          printf '24.15.0\n%s\n' "${pi_node}" | sort -VC \
+            || { echo "FAIL: PI_NODE=${pi_node} is below 24.15.0, so Pi cannot load the context-mode extension"; exit 1; }
+          [[ "${pi_node}" == "${cm_node}" ]] \
+            || { echo "FAIL: PI_NODE=${pi_node} differs from CONTEXT_MODE_NODE=${cm_node}"; exit 1; }
+          echo "PI_NODE_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "PI_NODE_OK"

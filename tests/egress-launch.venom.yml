@@ -56,7 +56,7 @@ testcases:
           egress_test_env "${TMP}"
           RIOTBOX_EGRESS=1 RIOTBOX_AGENT=opencode egress_launch
           name="$(egress_agent_name)"
-          grep -qx "models.dev" "${EGRESS_ROOT}/${name}/agent.conf" || { echo "BAD: opencode hosts missing" >&2; exit 1; }
+          grep -qx "models.opencode.ai" "${EGRESS_ROOT}/${name}/agent.conf" || { echo "BAD: opencode hosts missing" >&2; exit 1; }
           if grep -qx "claude.ai" "${EGRESS_ROOT}/${name}/agent.conf"; then echo "BAD: claude's hosts leaked into an opencode session" >&2; exit 1; fi
           echo OK
         assertions:

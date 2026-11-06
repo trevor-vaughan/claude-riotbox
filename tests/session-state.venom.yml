@@ -645,6 +645,42 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "SETUP_STATE_LINKS_OK"
 
+  # context-mode 2.x keeps its whole store under ~/.context-mode. The mount is
+  # there whatever RIOTBOX_CONTEXT_MODE says: a Context Mode plugin copied in
+  # from the host runs without it and writes the same store.
+  - name: setup_projects mounts a state-dir context-mode store at ~/.context-mode and replaces a link there
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export RIOTBOX_DIR="{{.riotbox_dir}}"
+          source "{{.riotbox_dir}}/tests/lib/session-state-helpers.sh"
+          setup_state_test
+          trap 'rm -rf "${T}"' EXIT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          RIOTBOX_DRY_RUN=1 setup_projects "${PROJ}" 2>/dev/null
+          printf '%s\n' "${PROJECT_VOLUME_FLAGS}" | grep -qF -- "-v ${STATE}/context-mode:/home/llm/.context-mode:z" \
+            || { echo "FAIL: dry run does not show the store mount"; echo "${PROJECT_VOLUME_FLAGS}"; exit 1; }
+          [ ! -e "${STATE}" ] || { echo "FAIL: dry run created the state dir"; exit 1; }
+          mkdir -p "${STATE}"
+          ln -s "${VICTIM}" "${STATE}/context-mode"
+          for cm in 1 0; do
+            RIOTBOX_CONTEXT_MODE="${cm}" setup_projects "${PROJ}" 2>"${T}/err"
+            assert_victim_intact
+            [ -d "${STATE}/context-mode" ] && [ ! -L "${STATE}/context-mode" ] \
+              || { echo "FAIL: RIOTBOX_CONTEXT_MODE=${cm}: the store is not a real state-dir directory"; exit 1; }
+            printf '%s\n' "${PROJECT_VOLUME_FLAGS}" | grep -qF -- "-v ${STATE}/context-mode:/home/llm/.context-mode:z" \
+              || { echo "FAIL: RIOTBOX_CONTEXT_MODE=${cm}: no read-write store mount"; echo "${PROJECT_VOLUME_FLAGS}"; exit 1; }
+            touch "${STATE}/context-mode/kept"
+          done
+          [ -f "${STATE}/context-mode/kept" ] || { echo "FAIL: a relaunch emptied the store"; exit 1; }
+          [ ! -e "${SESSION}/context-mode" ] || { echo "FAIL: a store dir was created in the session dir"; exit 1; }
+          echo "CM_STORE_MOUNT_OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "CM_STORE_MOUNT_OK"
+
   - name: launch.sh pre-labels the state dir as well as the session dir
     steps:
       - type: exec

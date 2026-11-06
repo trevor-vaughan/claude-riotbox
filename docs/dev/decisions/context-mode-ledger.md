@@ -9,6 +9,8 @@ outside `RIOTBOX_DATA_DIR`, and add `riotbox ctx-stats` to aggregate them.
 > during review, listed under [What actually shipped](#what-actually-shipped).
 > For the current implementation, read
 > [How Context Mode works in RiotBox](../context-mode.md).
+>
+> **Superseded in part by [context-mode-2x-migration.md](context-mode-2x-migration.md)** (2026-11-06): the counters this design reads no longer exist; the capture is rebuilt on `context.db` (ledger schema 2). The addendum at the end of this record covers the format.
 
 ## TL;DR
 
@@ -170,3 +172,87 @@ Six changes, all made during review and all in the same direction: refusing to p
 **`project_set` is type- and emptiness-checked.** With `IFS=$'\t'`, tab is IFS whitespace, so an empty field collapses and shifts every column — a 1 MB run printed its byte figure in the run-count column and `0 B` in the byte column, while the aggregate view reported the same ledger correctly. Not reachable from the shipped writer, but the reader's posture is to distrust the file on disk, and it already type-checks `ended_at` for the same reason.
 
 Three of these were found by mutation testing rather than by reading: the reviewers changed the code to be wrong and checked whether any test noticed. Summing `retained_total_bytes` instead of `kept_out_bytes`, dropping excluded runs from the run count, and removing `--by-project`'s exclusion of unmeasured runs all passed a green suite before the fixtures were made able to tell the difference.
+
+## Addendum: schema 2, for context-mode 2.x
+
+**Date:** 2026-11-05 · **Refs:** #60
+
+context-mode 2.x is a rewrite. The 1.x counters this design read
+(`getRealBytesStats` over `sessions/`) no longer exist, so from the 2.x upgrade
+until this change an enabled session printed no report and wrote no record. The
+sections above describe schema 1 as it shipped and are left as written.
+
+**What 2.x measures.** 2.x keeps one store per project at
+`~/.context-mode/projects/<key>/context.db` and writes `events` rows for shell
+commands, edits, tool errors and `ctx_*` calls: `sandbox_bytes` is what the
+call produced, `returned_bytes` is what the model received. A clean `Read`,
+`Grep` or `WebFetch` gets no row even when the hook replaces its output; it is
+recorded only in `sources`. Schema-2 kept-out figures are therefore a lower
+bound, and `tool_calls` counts only the journalled kinds. There is no bookkeeping counter to exclude any more, so the
+rule from schema 1 — count only bytes genuinely withheld from the model —
+becomes a choice of rows. *Kept out* is the per-row
+`MAX(sandbox_bytes − returned_bytes, 0)` over work calls. *Re-read* is the
+`returned_bytes` of `ctx_search` and `ctx_resume`. The diagnostic tools and
+`ctx_index` count as neither. The SQL and the reasons for each exclusion are
+in `container/context-mode-stats.mjs` and the header of
+`container/context-mode-summary.sh`.
+
+**How a run is scoped.** The start snapshot is no longer a set of counters to
+subtract. It is each store's `AUTOINCREMENT` counter, used as a watermark:
+rows above it, written by the run's agent, are the run's. A store whose counter
+falls below its watermark was recreated during the run and has not grown past
+it, and the run is recorded as `baseline_unknown`. A recreated store that has
+already grown past its watermark is not detected. Concurrent runs of the same agent on one project set
+cannot be told apart: no column identifies a run. Each one's record includes
+the other's rows, which schema 1 also did, because its counters were
+store-wide.
+
+**Schema 2.** Same file, name and location. Two fields differ:
+
+```json
+{
+  "schema": 2,
+  "started_at": "2026-11-06T09:02:11Z",
+  "ended_at": "2026-11-06T09:48:03Z",
+  "session_id": "a3f9c1d4e8b27f60",
+  "project_set": "riotbox",
+  "agent": "claude",
+  "kept_out_bytes": 285914,
+  "re_read_bytes": 4096,
+  "tool_calls": 10,
+  "retained_total_bytes": 437014,
+  "baseline_unknown": false
+}
+```
+
+- `hook_log_bytes` is gone. It measured 1.x's `session_events` volume, and 2.x
+  has no such counter. `tool_calls` takes its place as the proof of life:
+  the number of tool calls the run's agent recorded — shell commands, edits,
+  tool errors and `ctx_*` calls, the only kinds 2.x journals. It is a count,
+  not bytes.
+- `retained_total_bytes` is kept out over every row the stores hold for the
+  agent. It is no longer a seven-day figure. 2.x never ages out events: only
+  `ctx_purge` and the dead-project sweep (a project idle for 14 days with no
+  live owner) remove them. A drop between consecutive runs is one of those.
+
+`baseline_unknown: true` keeps its meaning, a run with no usable start, and its
+pairing with null run fields (`kept_out_bytes`, `re_read_bytes`,
+`tool_calls`).
+
+**The reader.** `ctx-stats` accepts schema 1 and schema 2. Each schema has its
+own promise check: with `baseline_unknown: false`, schema 1 needs numeric
+`kept_out_bytes`, `re_read_bytes` and `hook_log_bytes`, and schema 2 needs
+numeric `kept_out_bytes`, `re_read_bytes` and `tool_calls`. Schema 3 and later
+are disclosed as "from a newer schema". Kept-out and re-read figures from both
+schemas are summed, because both follow the withheld-bytes rule. The reader
+still labels the boundary, so a month-over-month comparison cannot mistake a
+measurement change for a behaviour change:
+
+- every view prints `N runs through <date> measured by context-mode 1.x (<bytes>
+  of kept out)` when any schema-1 records exist;
+- `--runs` marks each schema-1 row `(1.x)`, and `--runs --json` carries
+  `schema`;
+- `--json` adds `v1_runs`, `v1_kept` and `v1_last`, and `--by-project --json`
+  adds `v1_runs` and `v1_kept` to each project;
+- the hook-log line appears only when schema-1 records exist, labelled
+  `1.x runs only`.

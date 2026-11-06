@@ -12,7 +12,7 @@ vars:
 #   - the old docker namespace no longer resolves.
 #   - the LLM_TOOL_UPDATE cache-bust boundary is wired: build.sh passes the
 #     arg with a default of 0, and the Containerfile declares the ARG above
-#     the opencode install so bumping it invalidates only the tail layers.
+#     the OpenCode V2 install so bumping it invalidates only the tail layers.
 # These run against the repo checkout (no image build), so they are safe for
 # `task test:direct`.
 
@@ -80,7 +80,7 @@ testcases:
         script: |
           set -euo pipefail
           cd "{{.root}}"
-          awk '/ARG LLM_TOOL_UPDATE/{a=NR} /opencode\.ai\/install/{o=NR} END{exit !(a>0 && a<o)}' Containerfile
+          awk '/ARG LLM_TOOL_UPDATE/{a=NR} /^[^#]*opencode\.ai\/v2\/install/{o=NR} END{exit !(a>0 && a<o)}' Containerfile
           echo "boundary-ok"
         assertions:
           - result.code ShouldEqual 0

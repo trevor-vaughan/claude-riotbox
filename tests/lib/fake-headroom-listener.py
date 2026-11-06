@@ -6,7 +6,7 @@ usage: fake-headroom-listener.py <port> [headroom|foreign] [lifetime]
 Serves HTTP on 127.0.0.1:<port> for <lifetime> seconds (default 30), then
 exits whatever happened, so no case can leave one behind. http.server reads
 each request whole, however the client segments it. "headroom" answers like
-headroom 0.39.0's /livez (proxy/server.py:3832-3847):
+headroom 0.43.0's /livez (proxy/server.py:4437-4452):
 {"service":"headroom-proxy","status":"healthy"}. "foreign" answers like any
 other dev server on the port (wrangler dev defaults to 8787).
 

@@ -7,9 +7,15 @@
 # feature actually withheld over time. Runs entirely on the host: no container
 # is started, and the session stores are never touched.
 #
-# Why this exists rather than a scan of the stores: upstream prunes
-# session_events after seven days (cleanupOldSessions(7), hardcoded), so the
-# counters cannot be re-derived later. The records are the only durable copy.
+# Why this exists rather than a scan of the stores: upstream prunes them.
+# context-mode 1.x deleted session_events after seven days, and 2.x deletes a
+# whole project store after 14 idle days with no live owner, and every row on
+# ctx_purge. The records are the only durable copy.
+#
+# Two record schemas are read side by side: schema 1, measured by context-mode
+# 1.x, and schema 2, measured by 2.x. Their kept-out and re-read figures follow
+# the same rule and are summed; every view also names the 1.x share, so the
+# point where the measurement changed stays visible.
 #
 # -E (errtrace): without it the ERR trap is NOT inherited by functions or
 # subshells, so a failure inside a helper would exit silently with no line
@@ -86,8 +92,15 @@ _print_empty_state() {
 # disclose them the same way the aggregate view always has — a by-project or
 # per-run table that stayed silent about them would silently regress the
 # disclosure guarantee _print_empty_state already enforces for the zero-rows
-# case.
+# case. The 1.x boundary is disclosed here for the same reason: a total that
+# mixes two measurements has to say so in every view that shows one. Reads
+# v1_runs/v1_kept/v1_last, computed once after the records are collected.
 _print_disclosures() {
+	# shellcheck disable=SC2312  # _plural and _humanize_bytes are display helpers that return 0 on every path
+	if [[ "${v1_runs}" -gt 0 ]]; then
+		printf ' %s %s through %s measured by context-mode 1.x (%s of kept out)\n' \
+			"${v1_runs}" "$(_plural "${v1_runs}" run runs)" "${v1_last%T*}" "$(_humanize_bytes "${v1_kept}")"
+	fi
 	# shellcheck disable=SC2312  # _plural picks one of two literals and always ends in a successful printf
 	if [[ "${newer_schema}" -gt 0 ]]; then
 		printf ' %s %s from a newer schema (upgrade riotbox)\n' \
@@ -171,22 +184,24 @@ done
 # silently vanishes from "kept out", and calling a newer schema "unreadable"
 # implies corruption when the actual fix is "upgrade riotbox".
 #
-# The schema check is strict equality (.schema == 1), not `has("schema")`: a
-# schema-2 record with renamed fields still has a `schema` key, so
-# `has("schema")` alone would let it reach the reduce below, where `// 0`
-# would render its absent kept_out_bytes as a run that saved nothing while its
-# actual bytes vanish from the total — confidently wrong rather than visibly
-# excluded.
+# The schema check is strict equality (.schema == 1 or == 2), not
+# `has("schema")`: a schema-3 record with renamed fields still has a `schema`
+# key, so `has("schema")` alone would let it reach the reduce below, where
+# `// 0` would render its absent kept_out_bytes as a run that saved nothing
+# while its actual bytes vanish from the total — confidently wrong rather than
+# visibly excluded.
 #
-# A record is valid only when it is schema 1, ended_at is a string (first/last
+# A record is valid only when it is schema 1 or 2, ended_at is a string (first/last
 # ordering below is a string comparison; a non-string would poison it silently
 # rather than sort predictably), project_set is a non-empty string (--by-project
 # and --runs group and print it as a bare field via `IFS=$'\t' read`, which
 # collapses an empty column and shifts every field after it — the same "poison
 # it silently rather than fail visibly" exposure as ended_at, just discovered
-# later), AND — when baseline_unknown is false — the three delta fields are
-# actually numbers. baseline_unknown:false is this schema's promise that those
-# deltas were measured; null deltas paired with that promise break the
+# later), AND — when baseline_unknown is false — the three run fields are
+# actually numbers: kept_out_bytes, re_read_bytes and hook_log_bytes in schema
+# 1, kept_out_bytes, re_read_bytes and tool_calls in schema 2.
+# baseline_unknown:false is each schema's promise that those
+# fields were measured; null fields paired with that promise break the
 # promise, and are not a genuine zero-saving run. The `// 0` fallback in the
 # aggregation below would otherwise launder such a record into one.
 # baseline_unknown:true records skip that delta check because the writer
@@ -200,16 +215,16 @@ if [[ -d "${LEDGER_DIR}" ]]; then
 	# shellcheck disable=SC2312  # find/sort exit codes are masked deliberately — an unreadable ledger yields no records and the loop runs zero times
 	while IFS= read -r -d '' record_file; do
 		class="$(jq -r '
-			if (type == "object") and (.schema == 1) and
+			if (type == "object") and (.schema == 1 or .schema == 2) and
 			   ((.ended_at | type) == "string") and
 			   ((.project_set | type) == "string") and (.project_set != "") and
 			   ((.baseline_unknown == true) or
 			    ((.baseline_unknown == false) and
 			     ((.kept_out_bytes | type) == "number") and
 			     ((.re_read_bytes | type) == "number") and
-			     ((.hook_log_bytes | type) == "number")))
+			     ((if .schema == 1 then .hook_log_bytes else .tool_calls end | type) == "number")))
 			then "valid"
-			elif (type == "object") and ((.schema | type) == "number") and (.schema > 1)
+			elif (type == "object") and ((.schema | type) == "number") and (.schema > 2)
 			then "newer"
 			else "skip"
 			end' "${record_file}" 2>/dev/null)" || class="skip"
@@ -227,6 +242,17 @@ if [[ -d "${LEDGER_DIR}" ]]; then
 	done < <(find "${LEDGER_DIR}" -maxdepth 1 -type f -name '*.json' -print0 2>/dev/null | sort -z)
 fi
 
+# The 1.x share, for _print_disclosures and the aggregate's --json. Captured
+# into a variable before it is read, for the reason the aggregate view gives:
+# a jq failure must be fatal, not an empty line that reads as zero.
+V1_ROW="$(jq -rn '
+	reduce (inputs | select(.schema == 1)) as $r ({runs: 0, kept: 0, last: null};
+		.runs += 1
+		| .kept += (if $r.baseline_unknown == true then 0 else $r.kept_out_bytes end)
+		| .last = (if .last == null or $r.ended_at > .last then $r.ended_at else .last end))
+	| [.runs, .kept, (.last // "-")] | @tsv' < "${STREAM}")"
+IFS=$'\t' read -r v1_runs v1_kept v1_last <<<"${V1_ROW}"
+
 # shellcheck disable=SC2249  # VIEW is closed by construction: the three arms below are the only values assigned to it (the default at the top and the two --by-project/--runs branches)
 case "${VIEW}" in
 aggregate)
@@ -236,7 +262,8 @@ aggregate)
 	# reduce zero times and returns the initial state as-is — the same shape
 	# a populated ledger produces, just zeroed, so `--json` never has two
 	# different contracts for "no runs" and "some runs".
-	AGG="$(jq -n --argjson skipped "${skipped}" --argjson newer "${newer_schema}" '
+	AGG="$(jq -n --argjson skipped "${skipped}" --argjson newer "${newer_schema}" \
+		--argjson v1runs "${v1_runs}" --argjson v1kept "${v1_kept}" --arg v1last "${v1_last}" '
 		reduce inputs as $r (
 			{runs: 0, measured: 0, excluded: 0, zero_saving: 0,
 			 kept: 0, reread: 0, hooklog: 0, first: null, last: null};
@@ -251,7 +278,9 @@ aggregate)
 				| .hooklog += ($r.hook_log_bytes // 0)
 				| (if ($r.kept_out_bytes // 0) == 0 then .zero_saving += 1 else . end)
 			  end
-		) + {skipped_files: $skipped, newer_schema_files: $newer}' < "${STREAM}")"
+		) + {skipped_files: $skipped, newer_schema_files: $newer,
+		     v1_runs: $v1runs, v1_kept: $v1kept,
+		     v1_last: (if $v1last == "-" then null else $v1last end)}' < "${STREAM}")"
 
 	if [[ "${AS_JSON}" -eq 1 ]]; then
 		printf '%s\n' "${AGG}"
@@ -291,8 +320,12 @@ aggregate)
 	printf ' kept out  %s\n' "$(_humanize_bytes "${kept}")"
 	# shellcheck disable=SC2312  # _humanize_bytes is a display formatter — its awk exits 0 on every path
 	printf ' re-read   %s\n' "$(_humanize_bytes "${reread}")"
+	# The hook log is a 1.x counter with no 2.x equivalent, so it appears only
+	# when 1.x records do, and says whose it is.
 	# shellcheck disable=SC2312  # _humanize_bytes is a display formatter — its awk exits 0 on every path
-	printf ' hook log  %s (disk, not tokens)\n' "$(_humanize_bytes "${hooklog}")"
+	if [[ "${v1_runs}" -gt 0 ]]; then
+		printf ' hook log  %s (disk, not tokens; 1.x runs only)\n' "$(_humanize_bytes "${hooklog}")"
+	fi
 	# shellcheck disable=SC2312  # _plural picks one of two literals and always ends in a successful printf
 	printf ' %s %s saved nothing\n' "${zero_saving}" "$(_plural "${zero_saving}" run runs)"
 	# shellcheck disable=SC2312  # _plural picks one of two literals and always ends in a successful printf
@@ -314,7 +347,9 @@ by-project)
 			project_set: .[0].project_set,
 			runs: length,
 			measured: (map(select(.baseline_unknown != true)) | length),
-			kept: (map(select(.baseline_unknown != true) | (.kept_out_bytes // 0)) | add // 0)
+			kept: (map(select(.baseline_unknown != true) | (.kept_out_bytes // 0)) | add // 0),
+			v1_runs: (map(select(.schema == 1)) | length),
+			v1_kept: (map(select(.schema == 1 and .baseline_unknown != true) | .kept_out_bytes) | add // 0)
 		  })
 		| sort_by(-.kept)
 	' < "${STREAM}")"
@@ -360,7 +395,7 @@ runs)
 	RUNS_JSON="$(jq -s --arg limit "${RUNS_LIMIT}" '
 		sort_by(.ended_at) | reverse
 		| (if $limit == "all" then . else .[0:($limit | tonumber)] end)
-		| map({ended_at, project_set, session_id, kept_out_bytes, baseline_unknown})
+		| map({schema, ended_at, project_set, session_id, kept_out_bytes, baseline_unknown})
 	' < "${STREAM}")"
 
 	if [[ "${AS_JSON}" -eq 1 ]]; then
@@ -378,14 +413,19 @@ runs)
 
 	printf '── context-mode runs ────────────────────────────────\n'
 	# shellcheck disable=SC2312  # a jq failure in the feeding process substitution yields no rows — the table simply prints none
-	while IFS=$'\t' read -r ended project_set kept unknown; do
+	while IFS=$'\t' read -r ended project_set kept unknown schema; do
 		if [[ "${unknown}" == "true" ]]; then
 			display="baseline unknown"
 		else
 			display="$(_humanize_bytes "${kept}")"
 		fi
+		# Each row says which measurement it is, so the boundary is visible
+		# where the rows cross it, not only in the footer.
+		if [[ "${schema}" == "1" ]]; then
+			display+=" (1.x)"
+		fi
 		printf ' %s  %-20s  %s\n' "${ended}" "${project_set}" "${display}"
-	done < <(jq -r '.[] | [.ended_at, .project_set, (.kept_out_bytes // 0), (.baseline_unknown | tostring)] | @tsv' <<<"${RUNS_JSON}")
+	done < <(jq -r '.[] | [.ended_at, .project_set, (.kept_out_bytes // 0), (.baseline_unknown | tostring), .schema] | @tsv' <<<"${RUNS_JSON}")
 	_print_disclosures
 	printf ' ledger: %s\n' "${LEDGER_DIR}"
 	;;

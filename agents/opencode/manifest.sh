@@ -63,23 +63,29 @@ agent_opencode_audit_argv() {
 # root help documents the default command.
 #
 # Position therefore matters, and getting it wrong breaks opencode outright.
-# Verified against 1.18.13:
+# Verified against v2.2.5 (`opencode --version`):
 #
-#   opencode --auto run "hi"   -> exit 1, prints root help
-#   opencode run --auto "hi"   -> parses
-#   opencode --auto            -> parses (default [project] command)
+#   opencode --auto run "hi"      -> exit 1, run's help plus
+#                                    "Unrecognized flag: --auto in command opencode run"
+#   opencode --auto models        -> exit 1, same error naming `opencode models`
+#   opencode run --auto "hi"      -> parses (runs the prompt)
+#   opencode run --auto --help    -> run's help, exit 0
+#   opencode --auto --help        -> root help, exit 0
+#   opencode --auto               -> parses (TUI starts in auto mode)
 #
-# The root parser consumes --auto for the default command and then treats
-# `run` as that command's [project] positional, so the subcommand is never
-# dispatched. Every sibling subcommand (`models`, `auth`, ...) breaks the same
-# way, including ones upstream adds after this comment was written.
+# V2 dispatches the subcommand and then rejects --auto as a flag that
+# subcommand does not own. (1.18.13 broke differently: its root parser took
+# `run` as the default command's [project] positional and printed root help.)
+# Every sibling subcommand (`models`, `auth`, ...) breaks the same way,
+# including ones upstream adds after this comment was written. V2 also has no
+# `--pure` flag, at the root or on `run`.
 #
 # That last point sets the rule. We cannot ask "is there a subcommand?" without
 # tracking upstream's command list, and a list that falls behind would inject
 # at the root in front of a subcommand we do not know — the exact breakage this
 # guards against. So the test is "does argv carry a POSITIONAL token?":
 #
-#   no positional (bare, `--pure`, `--print-logs`)  -> root, TUI takes it
+#   no positional (bare, `--print-logs`)            -> root, TUI takes it
 #   `run` present                                   -> immediately after `run`
 #   any other positional (`models`, `/workspace`)   -> inject nothing
 #
@@ -113,21 +119,6 @@ agent_opencode_wrapper_inject() {
 			printf '%s\0' --auto
 		fi
 	done
-	# `opencode --pure` runs without external plugins, so the Context Mode
-	# plugin shim never loads. Say so: the session would otherwise report the
-	# feature as wired and report a zero saving, which is exactly the "did it
-	# engage at all?" ambiguity the exit report exists to remove. Warn and
-	# continue — --pure is the user's explicit instruction, not ours to drop.
-	# stderr only: stdout is the NUL-terminated argv the wrapper reads back.
-	if [[ "${RIOTBOX_CONTEXT_MODE:-0}" = "1" ]]; then
-		for arg in "$@"; do
-			if [[ "${arg}" = "--pure" ]]; then
-				echo "  [context-mode] WARN: opencode --pure disables external plugins," >&2
-				echo "  [context-mode] so Context Mode will not engage this session." >&2
-				break
-			fi
-		done
-	fi
 	# Env hints go to the wrapper-allocated sidecar file (one KEY=VAL per
 	# line). The wrapper reads + exports it after we return. Stderr is
 	# reserved for user-facing diagnostics.
@@ -154,8 +145,7 @@ agent_opencode_headroom_argv() {
 # Container-side runtime setup. setup.sh places AGENTS.md and a merged
 # opencode.jsonc (combining host opencode.json + opencode.jsonc with
 # riotbox-mandatory overrides) on every container start; both are idempotent.
-# Then move Context Mode stores an earlier release left under the config dir
-# (see context-mode.sh). Finally strip any GitHub/GitLab MCP entry an earlier
+# Then strip any GitHub/GitLab MCP entry an earlier
 # image left in the persisted opencode.jsonc, which opencode_setup merges back
 # in. AGENTS.md gets the egress prompt section at every start, egress or
 # not, in its session-agnostic form: every session of the project shares the
@@ -169,7 +159,6 @@ agent_opencode_container_setup() {
 	# From scripts/lib/egress-prompt.sh, which container/entrypoint.sh sources.
 	egress_prompt_apply_shared "${HOME}/.config/opencode/AGENTS.md"
 	opencode_strip_forge_mcp_entries
-	_agent_opencode_cm_migrate_store
 }
 
 # Host-side config sync. sync-settings.sh copies the host opencode config
@@ -207,7 +196,10 @@ EOF
 # agent_opencode_egress_hosts — the hosts opencode must reach through the
 # RIOTBOX_EGRESS=1 proxy (docs/dev/agent-contract.md): the API host of each
 # provider whose key env_vars passes through, in the same order, then
-# models.dev, the model catalogue opencode fetches at start.
+# models.opencode.ai, the model catalogue opencode 2 fetches at start
+# (defaultSource, packages/core/src/models-dev.ts:494 in anomalyco/opencode;
+# overridable only via OPENCODE_MODELS_URL). V1's models.dev is no longer
+# contacted, so it is not listed.
 agent_opencode_egress_hosts() {
 	cat <<'EOF'
 api.anthropic.com
@@ -218,6 +210,6 @@ api.groq.com
 api.mistral.ai
 api.deepseek.com
 api.x.ai
-models.dev
+models.opencode.ai
 EOF
 }

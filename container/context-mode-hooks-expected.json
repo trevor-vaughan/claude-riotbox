@@ -1,28 +1,14 @@
 {
   "PostToolUse": [
-    "Bash|Read|Write|Edit|NotebookEdit|Glob|Grep|TodoWrite|TaskCreate|TaskUpdate|EnterPlanMode|ExitPlanMode|Skill|Agent|AskUserQuestion|EnterWorktree|mcp__"
-  ],
-  "PreCompact": [
-    ""
+    "^(Bash|PowerShell|Read|Grep|WebFetch|Write|Edit|NotebookEdit|mcp__plugin_context-mode_context-mode__ctx_.*|mcp__.*)$"
   ],
   "PreToolUse": [
-    "Bash",
-    "WebFetch",
-    "Read",
-    "Grep",
-    "Agent",
-    "mcp__plugin_context-mode_context-mode__ctx_execute",
-    "mcp__plugin_context-mode_context-mode__ctx_execute_file",
-    "mcp__plugin_context-mode_context-mode__ctx_batch_execute",
-    "mcp__"
+    "^(Bash|PowerShell|Read|Grep|WebFetch|Write|Edit|NotebookEdit|mcp__plugin_context-mode_context-mode__ctx_.*)$"
   ],
   "SessionStart": [
-    ""
-  ],
-  "Stop": [
-    ""
+    null
   ],
   "UserPromptSubmit": [
-    ""
+    null
   ]
 }

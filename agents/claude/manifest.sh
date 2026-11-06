@@ -82,8 +82,10 @@ agent_claude_wrapper_inject() {
 # Optional verb: argv for headroom interposition (RIOTBOX_HEADROOM=1).
 # Helper-shaped, like opencode's: headroom-exec.sh starts the proxy, then
 # runs claude with the routing env pointing at it. `headroom wrap claude`
-# is not used because it writes .claude/settings.local.json, lock and
-# marker files and a SessionStart hook into the CWD, the caller's checkout;
+# is not used because it writes .headroom/ (--memory) and, with
+# --project-settings (the default through headroom 0.40.0),
+# .claude/settings.local.json, lock and marker files and a SessionStart hook
+# into the CWD, the caller's checkout;
 # the helper's header lists what it keeps from wrap and what it drops.
 # See docs/dev/agent-contract.md.
 agent_claude_headroom_argv() {

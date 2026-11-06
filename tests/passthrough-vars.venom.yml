@@ -79,6 +79,25 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "-e ANTHROPIC_API_KEY"
 
+  # context-mode 2.1.4 reads CONTEXT_MODE_DATA_DIR as its whole data root; one
+  # that reached the container would move the store off its session mount. The
+  # entrypoint unsets it as well (tests/context-mode.venom.yml); this pins that
+  # the default set never forwards it in the first place.
+  - name: U26 registry default path does not forward CONTEXT_MODE_DATA_DIR
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.riotbox_dir}}"
+          unset RIOTBOX_PASSTHROUGH_VARS RIOTBOX_PASSTHROUGH_EXTRA_VARS
+          export CONTEXT_MODE_DATA_DIR=/elsewhere
+          source libexec/passthrough-vars.sh
+          FLAGS="$(passthrough_flags)"
+          echo "FLAGS=[${FLAGS}]"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldNotContainSubstring "CONTEXT_MODE_DATA_DIR"
+
   - name: U4 KEY=literal exports KEY into launcher env and emits -e KEY
     steps:
       - type: exec
