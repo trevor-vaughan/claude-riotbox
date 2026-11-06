@@ -311,6 +311,8 @@ The `pi` command also runs with `PI_TELEMETRY=0` and `PI_SKIP_VERSION_CHECK=1`. 
 | `riotbox checkpoints [dir...]`        | List the pre-session snapshots RiotBox holds for a project (read-only; defaults to the current directory) — see [Recovery](#recovery)       |
 | `riotbox checkpoint-tag <ts> [dir]`   | Promote snapshot `<ts>` to a real tag `riotbox-snapshot/<ts>` that ordinary git commands can see                                            |
 | `riotbox checkpoint-prune [dir...]`   | Delete snapshot refs; needs one selector: `--keep <N>`, `--older-than <N>d`, or `--legacy` (old `riotbox-checkpoint/*` tags)                |
+| `riotbox backups`                     | List checkpoint backup stores, largest first, with snapshot counts and whether each project still exists                                    |
+| `riotbox backup-prune [dir...]`       | Free backup space; one selector: `--keep <N>`, `--older-than <N>d` (then `git gc`), or `--orphans` (whole stores); `--all` for every store  |
 | `riotbox audit "<task>" [dir]`        | Read-only session for inspecting untrusted code (workspace mounted RO)                                                                      |
 | `riotbox install-hooks [global]`      | Install the pre-push hook that blocks container-identity commits ([details](#reclaiming-authorship))                                        |
 | `riotbox agents`                      | List registered agents (riotbox name + binary)                                                                                              |
@@ -2362,6 +2364,17 @@ appears in `git tag`, it changes what `git describe --tags` reports, and
 when you no longer want them; it needs an explicit selector (`--keep <N>`,
 `--older-than <N>d`, or `--legacy`), it never writes to the backup store, and
 it marks any ref the store has no copy of before asking you to confirm.
+
+**Reclaiming backup space.** `riotbox checkpoint-prune` never touches the backup
+stores, so they keep every snapshot ever taken. `riotbox backups` shows each
+store's size. `riotbox backup-prune --keep <N>` or `--older-than <N>d` deletes
+snapshot refs from the stores for the current project (or every store with
+`--all`), marks any the project no longer holds as the only copy, and runs
+`git gc` so the space is actually freed. A store never shrinks below the size of
+the project's own history, because it mirrors the branches, tags and notes too.
+`riotbox backup-prune --orphans` deletes whole stores whose project is gone. A
+project on an unmounted drive or in a moved directory also counts as gone, so
+read the list before confirming.
 
 ### Upgrading from checkpoint tags
 

@@ -399,3 +399,29 @@ ai_note_paths() {
 	git notes --ref=ai list "${1}" >/dev/null 2>&1 || return 0
 	git notes --ref=ai show "${1}" | sed -n '/^---$/q; /^[^ \t]/p'
 }
+
+# make_backed_up_project <riotbox-dir> <name> [timestamp...]
+# Create ${TEST_DIR}/<name> as a repo with one commit, add a snapshot ref for
+# each timestamp, then run checkpoint.sh once, so a backup store holds all of
+# them plus that run's own (clean-tree) snapshot. Needs TEST_DIR and the test
+# git profile (init_test_workdir). Fails with FIXTURE INVALID when no store
+# was created.
+make_backed_up_project() {
+	local riotbox_dir="$1" name="$2"
+	shift 2
+	local dir="${TEST_DIR}/${name}" ts
+	git init -q "${dir}"
+	printf '%s\n' "${name}" >"${dir}/README"
+	git -C "${dir}" add README
+	git -C "${dir}" commit -qm initial
+	for ts in "$@"; do
+		git -C "${dir}" update-ref --create-reflog "refs/riotbox/checkpoints/${ts}" HEAD
+	done
+	ROOT_DIR="${riotbox_dir}" RIOTBOX_PROJECTS="${dir}" RIOTBOX_CHECKPOINT_QUIET=1 \
+		bash "${riotbox_dir}/libexec/checkpoint.sh" </dev/null >/dev/null 2>&1
+	# shellcheck disable=SC2310,SC2312  # backup_path prints a path; a failure yields one that does not exist, which the test below rejects
+	if [[ ! -d "$(backup_path "${dir}")" ]]; then
+		echo "FIXTURE INVALID: no backup store for ${dir}" >&2
+		return 1
+	fi
+}

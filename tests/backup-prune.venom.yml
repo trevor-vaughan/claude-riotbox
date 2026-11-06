@@ -1,0 +1,372 @@
+name: Backup store listing and pruning
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+  helpers: "{{.root}}/tests/lib/git-test-helpers.sh"
+
+testcases:
+  # -- riotbox backups --
+
+  - name: backups lists every store largest first with its status and snapshot count
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          B="${XDG_DATA_HOME}/riotbox/backups"
+          make_backed_up_project "${R}" small
+          make_backed_up_project "${R}" big 20250101-000000 20250102-000000
+          # Incompressible, so the store really is the largest.
+          head -c 3000000 /dev/urandom >"${TEST_DIR}/big/blob"
+          git -C "${TEST_DIR}/big" add blob
+          git -C "${TEST_DIR}/big" commit -qm blob
+          git -C "${TEST_DIR}/big" push -q "$(backup_path "${TEST_DIR}/big")" '+refs/heads/*:refs/heads/*'
+          make_backed_up_project "${R}" gone
+          rm -rf "${TEST_DIR}/gone"
+          make_backed_up_project "${R}" unrepo
+          rm -rf "${TEST_DIR}/unrepo/.git"
+          git init -q --bare "${B}/noorigin.git"
+          mkdir -p "${B}/junk.git"
+          out="$(ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backups 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          printf '%s\n' "${out}" | grep -qE "^[0-9.]+ MB +3 +20250101-000000 +[0-9]{8}-[0-9]{6} +ok +${TEST_DIR}/big$"
+          printf '%s\n' "${out}" | grep -qE " 1 +[0-9]{8}-[0-9]{6} +[0-9]{8}-[0-9]{6} +ok +${TEST_DIR}/small$"
+          big_line="$(printf '%s\n' "${out}" | grep -n " ${TEST_DIR}/big$" | cut -d: -f1)"
+          small_line="$(printf '%s\n' "${out}" | grep -n " ${TEST_DIR}/small$" | cut -d: -f1)"
+          [ "${big_line}" -lt "${small_line}" ]
+          printf '%s\n' "${out}" | grep -qE " ORPHAN +${TEST_DIR}/gone \(missing\)$"
+          printf '%s\n' "${out}" | grep -qE " ORPHAN +${TEST_DIR}/unrepo \(not a repo\)$"
+          printf '%s\n' "${out}" | grep -qE " ORPHAN +${B}/noorigin.git \(no origin\)$"
+          printf '%s\n' "${out}" | grep -qE " not a store +${B}/junk.git$"
+          printf '%s\n' "${out}" | grep -qE "^Total: [0-9.]+ [KMG]B in 6 store\(s\)$"
+          echo "listing_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "listing_ok=true"
+
+  - name: backups with no stores says so and succeeds
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          out="$(ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backups 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          printf '%s\n' "${out}" | grep -qF "No backup stores under ${XDG_DATA_HOME}/riotbox/backups."
+          echo "empty_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "empty_ok=true"
+
+  - name: backups rejects arguments with a usage error
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backups extra >/dev/null 2>&1 && rc=0 || rc=$?
+          echo "rc=${rc}"
+          [ "${rc}" -eq 2 ]
+          echo "args_rejected_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "args_rejected_ok=true"
+
+  # -- riotbox backup-prune: snapshot selectors --
+
+  - name: backup-prune --keep prunes the current project's store and nothing else
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          P="${TEST_DIR}/p"
+          make_backed_up_project "${R}" p 20250101-000000 20250102-000000
+          S="$(backup_path "${P}")"
+          git -C "${P}" tag v1
+          git -C "${P}" notes add -m note HEAD
+          git -C "${P}" push -q "${S}" refs/tags/v1 refs/notes/commits
+          cd "${P}"
+          out="$(ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backup-prune --keep 1 --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          left="$(git -C "${S}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints)"
+          echo "left=${left}"
+          [ "$(printf '%s\n' "${left}" | wc -l)" -eq 1 ]
+          if printf '%s\n' "${left}" | grep -q '2025010'; then echo "FAIL: kept an old snapshot"; exit 1; fi
+          [ "$(git -C "${P}" for-each-ref refs/riotbox/checkpoints | wc -l)" -eq 3 ]
+          git -C "${S}" rev-parse --verify -q refs/heads/main >/dev/null
+          git -C "${S}" rev-parse --verify -q refs/tags/v1 >/dev/null
+          git -C "${S}" rev-parse --verify -q refs/notes/commits >/dev/null
+          echo "keep_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Deleted 2 ref(s)"
+          - result.systemout ShouldContainSubstring "keep_ok=true"
+
+  - name: backup-prune --older-than deletes by name age and never touches unrecognised refs
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          P="${TEST_DIR}/p"
+          make_backed_up_project "${R}" p 20200101-000000
+          S="$(backup_path "${P}")"
+          git -C "${S}" update-ref refs/riotbox/checkpoints/20251301-000000 refs/heads/main
+          git -C "${S}" update-ref refs/riotbox/checkpoints/handmade refs/heads/main
+          out="$(ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backup-prune "${P}" --older-than 30d --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          if git -C "${S}" rev-parse --verify -q refs/riotbox/checkpoints/20200101-000000 >/dev/null; then echo "FAIL: old ref kept"; exit 1; fi
+          git -C "${S}" rev-parse --verify -q refs/riotbox/checkpoints/20251301-000000 >/dev/null
+          git -C "${S}" rev-parse --verify -q refs/riotbox/checkpoints/handmade >/dev/null
+          [ "$(git -C "${S}" for-each-ref refs/riotbox/checkpoints | wc -l)" -eq 3 ]
+          echo "older_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "unrecognised, never deleted"
+          - result.systemout ShouldContainSubstring "older_ok=true"
+
+  - name: backup-prune --all prunes every store
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          make_backed_up_project "${R}" a 20200101-000000
+          make_backed_up_project "${R}" b 20200101-000000
+          cd "${TEST_DIR}"
+          out="$(ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backup-prune --all --keep 0 --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ "$(git -C "$(backup_path "${TEST_DIR}/a")" for-each-ref refs/riotbox/checkpoints | wc -l)" -eq 0 ]
+          [ "$(git -C "$(backup_path "${TEST_DIR}/b")" for-each-ref refs/riotbox/checkpoints | wc -l)" -eq 0 ]
+          echo "all_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Deleted 4 ref(s)"
+          - result.systemout ShouldContainSubstring "all_ok=true"
+
+  - name: backup-prune marks a snapshot the project no longer holds as the only copy
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          P="${TEST_DIR}/p"
+          make_backed_up_project "${R}" p 20200101-000000
+          git -C "${P}" update-ref -d refs/riotbox/checkpoints/20200101-000000
+          out="$(ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backup-prune "${P}" --keep 0 --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          printf '%s\n' "${out}" | grep -qE 'refs/riotbox/checkpoints/20200101-000000 +[0-9a-f]{7}  ← ONLY COPY$'
+          [ "$(printf '%s\n' "${out}" | grep -c '← ONLY COPY$')" -eq 1 ]
+          echo "only_copy_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "1 of the 2 ref(s) above are the only copy left."
+          - result.systemout ShouldContainSubstring "only_copy_ok=true"
+
+  - name: backup-prune reclaims the space a dirty snapshot held
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          P="${TEST_DIR}/p"
+          make_backed_up_project "${R}" p
+          S="$(backup_path "${P}")"
+          # Untracked and under the 10 MB cap, so the next snapshot captures it.
+          head -c 3000000 /dev/urandom >"${P}/blob"
+          sleep 1   # a new second, so the second snapshot gets its own name
+          ROOT_DIR="${R}" RIOTBOX_PROJECTS="${P}" RIOTBOX_CHECKPOINT_QUIET=1 \
+            bash "${R}/libexec/checkpoint.sh" </dev/null >/dev/null 2>&1
+          before="$(du -sb "${S}" | cut -f1)"
+          echo "before=${before}"
+          [ "${before}" -gt 3000000 ] || { echo "FIXTURE INVALID: blob not in store" >&2; exit 1; }
+          out="$(ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backup-prune "${P}" --keep 0 --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          after="$(du -sb "${S}" | cut -f1)"
+          echo "after=${after}"
+          [ $((before - after)) -gt 2000000 ]
+          echo "reclaimed_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "freed"
+          - result.systemout ShouldNotContainSubstring "FIXTURE INVALID"
+          - result.systemout ShouldContainSubstring "reclaimed_ok=true"
+
+  - name: backup-prune for a project with no store has nothing to delete
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          git init -q "${TEST_DIR}/plain"
+          out="$(ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backup-prune "${TEST_DIR}/plain" --keep 0 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          printf '%s\n' "${out}" | grep -qF "Note: ${TEST_DIR}/plain has no backup store."
+          printf '%s\n' "${out}" | grep -qF "Nothing to delete."
+          echo "no_store_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "no_store_ok=true"
+
+  - name: backup-prune usage errors exit 2 before touching anything
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          P="${TEST_DIR}/p"
+          make_backed_up_project "${R}" p 20200101-000000
+          S="$(backup_path "${P}")"
+          for args in "" "--keep 1 --older-than 3d" "--keep 1 --orphans" "--all ${P} --keep 0" \
+                      "--orphans ${P}" "--keep x" "--older-than 3" "--bogus --keep 0"; do
+            # shellcheck disable=SC2086  # word splitting of args is the point
+            ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backup-prune ${args} --force </dev/null >/dev/null 2>&1 && rc=0 || rc=$?
+            echo "args='${args}' rc=${rc}"
+            [ "${rc}" -eq 2 ]
+          done
+          [ "$(git -C "${S}" for-each-ref refs/riotbox/checkpoints | wc -l)" -eq 2 ]
+          echo "usage_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "usage_ok=true"
+
+  - name: backup-prune without a terminal or --force refuses and deletes nothing
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          P="${TEST_DIR}/p"
+          make_backed_up_project "${R}" p 20200101-000000
+          out="$(ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backup-prune "${P}" --keep 0 </dev/null 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 1 ]
+          [ "$(git -C "$(backup_path "${P}")" for-each-ref refs/riotbox/checkpoints | wc -l)" -eq 2 ]
+          echo "notty_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "refusing to delete 2 ref(s) without confirmation"
+          - result.systemout ShouldContainSubstring "notty_ok=true"
+
+  - name: backup-prune declined at the prompt deletes nothing
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          P="${TEST_DIR}/p"
+          make_backed_up_project "${R}" p 20200101-000000
+          export ROOT_DIR="${R}"
+          out="$(run_under_pty "n" bash "${R}/libexec/checkpoints.sh" backup-prune "${P}" --keep 0)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ "$(git -C "$(backup_path "${P}")" for-each-ref refs/riotbox/checkpoints | wc -l)" -eq 2 ]
+          echo "declined_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Delete 2 ref(s)? [y/N]"
+          - result.systemout ShouldContainSubstring "Aborted."
+          - result.systemout ShouldContainSubstring "declined_ok=true"
+
+  # -- riotbox backup-prune --orphans --
+
+  - name: backup-prune --orphans deletes only stores whose project is gone
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          B="${XDG_DATA_HOME}/riotbox/backups"
+          make_backed_up_project "${R}" live
+          make_backed_up_project "${R}" gone
+          gone_store="$(backup_path "${TEST_DIR}/gone")"
+          rm -rf "${TEST_DIR}/gone"
+          mkdir -p "${B}/junk.git"
+          out="$(ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backup-prune --orphans --force 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ ! -e "${gone_store}" ]
+          [ -d "$(backup_path "${TEST_DIR}/live")" ]
+          [ -d "${B}/junk.git" ]
+          printf '%s\n' "${out}" | grep -qF "${gone_store}"
+          echo "orphans_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "unmounted drive"
+          - result.systemout ShouldContainSubstring "Deleted 1 store(s)"
+          - result.systemout ShouldContainSubstring "orphans_ok=true"
+
+  - name: backup-prune --orphans with no orphans has nothing to delete
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          make_backed_up_project "${R}" live
+          out="$(ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backup-prune --orphans --all 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ]
+          [ -d "$(backup_path "${TEST_DIR}/live")" ]
+          echo "no_orphans_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "Nothing to delete."
+          - result.systemout ShouldContainSubstring "no_orphans_ok=true"
+
+  - name: backup-prune --orphans without a terminal or --force refuses
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          R="{{.riotbox_dir}}"
+          make_backed_up_project "${R}" gone
+          gone_store="$(backup_path "${TEST_DIR}/gone")"
+          rm -rf "${TEST_DIR}/gone"
+          out="$(ROOT_DIR="${R}" bash "${R}/libexec/checkpoints.sh" backup-prune --orphans </dev/null 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 1 ]
+          [ -d "${gone_store}" ]
+          echo "orphans_notty_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "refusing to delete 1 store(s) without confirmation"
+          - result.systemout ShouldContainSubstring "orphans_notty_ok=true"
