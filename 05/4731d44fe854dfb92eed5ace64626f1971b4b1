@@ -1,0 +1,28 @@
+agents/opencode/manifest.sh
+  s_12396f456952ef::t_98fe2f98e182eb 199-202,213
+tests/egress-launch.venom.yml
+  s_12396f456952ef::t_b17a67b7405ce0 59
+tests/egress-manifests.venom.yml
+  s_12396f456952ef::t_b17a67b7405ce0 46-49
+README.md
+  s_12396f456952ef::t_98fe2f98e182eb 1161
+  s_12396f456952ef::t_96cc058d928835 271
+THREAT_MODEL.md
+  s_12396f456952ef::t_0de72a10100732 213
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "054731d44fe854dfb92eed5ace64626f1971b4b1",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
