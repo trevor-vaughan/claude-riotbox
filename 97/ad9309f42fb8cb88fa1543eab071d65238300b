@@ -1,0 +1,33 @@
+docs/dev/context-mode.md
+  s_12396f456952ef::t_8ce6901cd1e711 270-277,606
+scripts/preflight.sh
+  s_12396f456952ef::t_78674952132c6f 400-407,409-414,416-418,420-465,467,470
+README.md
+  s_12396f456952ef::t_aa3536a4586bfa 2525
+  s_12396f456952ef::t_af429b0db3ef3d 2770
+tests/doctor-context-mode.venom.yml
+  s_12396f456952ef::t_cef05fb6b5d070 260-263,268-280,288,302-303,306-343,387-391,402-405,413,423-443,451-457,463-464,468-469,477,481-482,484-486,489-498,501-513,516-526,528-532,537-540,543-544,546,548-560,564,567-573,576-605,608-615,618-627,629-726,730
+scripts/lib/context-mode-probe.sh
+  s_12396f456952ef::t_ef51c94ca8dd8e 1,3-114
+  s_12396f456952ef::t_d03047eefeeb70 2
+container/plugin-setup.sh
+  s_12396f456952ef::t_02f889977501b3 42-43,79
+THREAT_MODEL.md
+  s_12396f456952ef::t_0bc8bc3ba77150 958-960
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "97ad9309f42fb8cb88fa1543eab071d65238300b",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
