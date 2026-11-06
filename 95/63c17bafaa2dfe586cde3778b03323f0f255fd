@@ -1,0 +1,19 @@
+Containerfile
+  s_12396f456952ef::t_2d1cd0be4a99aa 1160,1163-1165
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "16b0674dcfb13474846caa63996b70cd9c91b854",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
