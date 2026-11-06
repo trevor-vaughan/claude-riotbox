@@ -1,0 +1,24 @@
+tests/backup-prune.venom.yml
+  s_fa73f14b5507dc::t_1c9539731b0144 303-372
+  s_fa73f14b5507dc::t_7f12533d029227 82-302
+libexec/checkpoints.sh
+  s_fa73f14b5507dc::t_1c9539731b0144 901-916,918-958,960-977
+  s_fa73f14b5507dc::t_368a2895c76871 917,959,1074,1097,1211,1218
+  s_fa73f14b5507dc::t_e539298de76cda 978-1073,1075-1096,1098-1210,1212-1217,1219-1236,1249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "953ee2a1cf6c5de24336f097a9c5bd7eaaede818",
+  "prompts": {},
+  "sessions": {
+    "s_fa73f14b5507dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1152dff9-ece2-40e2-9324-8c296718baeb",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}

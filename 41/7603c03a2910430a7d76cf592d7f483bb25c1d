@@ -1,0 +1,29 @@
+libexec/checkpoints.sh
+  s_fa73f14b5507dc::t_712ca51d9802bc 4,25-29,75-76,85-93
+  s_fa73f14b5507dc::t_f9f37acffe3b47 94
+tests/wrapper.venom.yml
+  s_fa73f14b5507dc::t_f76be955415ab4 516-517
+  s_fa73f14b5507dc::t_0a997d3531aea3 508-509
+bin/riotbox
+  s_fa73f14b5507dc::t_712ca51d9802bc 100-101,373-374
+README.md
+  s_fa73f14b5507dc::t_e8c233cb0f2722 300-301
+  s_fa73f14b5507dc::t_712ca51d9802bc 2367-2376
+  s_fa73f14b5507dc::t_32ec5904ec4edc 2377
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d34994573bb2ed52baf84a292ee7310883ef0d2a",
+  "prompts": {},
+  "sessions": {
+    "s_fa73f14b5507dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1152dff9-ece2-40e2-9324-8c296718baeb",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
