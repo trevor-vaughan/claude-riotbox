@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # ─────────────────────────────────────────────────────────────────────────────
-# checkpoints.sh — find, keep and delete RiotBox checkpoint snapshots.
+# checkpoints.sh — find, keep and delete RiotBox checkpoint snapshots and backups.
 #
 # checkpoint.sh stores each pre-session snapshot at
 # refs/riotbox/checkpoints/<timestamp>. That namespace sits outside refs/heads
@@ -22,6 +22,11 @@ set -euo pipefail
 #                                  snapshot to a real, visible tag.
 #   prune [project...] <selector>  (riotbox checkpoint-prune) Delete snapshot
 #                                  refs; one selector required.
+#   backups                        (riotbox backups) Read-only listing of the
+#                                  backup stores, largest first.
+#   backup-prune [project...] <selector>
+#                                  (riotbox backup-prune) Delete snapshot refs
+#                                  in backup stores, or orphaned stores; gc.
 #
 # Exit codes: 0 success, 1 operational failure, 2 usage error — matching
 # bin/riotbox's own unknown-command exit 2.
@@ -67,6 +72,8 @@ _usage() {
 Usage: riotbox checkpoints [project...]
        riotbox checkpoint-tag <timestamp> [project]
        riotbox checkpoint-prune [project...] <selector> [--force]
+       riotbox backups
+       riotbox backup-prune [project...] <selector> [--all] [--force]
 
   checkpoints [project...]           List checkpoint snapshots (read-only).
   checkpoint-tag <ts> [project]      Tag a snapshot as riotbox-snapshot/<ts>.
@@ -74,6 +81,16 @@ Usage: riotbox checkpoints [project...]
                                        --keep <N>          keep the N newest per project
                                        --older-than <N>d   keep those newer than N days
                                        --legacy            delete legacy riotbox-checkpoint/* tags
+                                     Add --force (-f) to skip the confirmation.
+  backups                            List backup stores: size, snapshots, project, status.
+  backup-prune [project...]          Delete snapshot refs from backup stores, then git gc.
+                                     Exactly one selector:
+                                       --keep <N>          keep the N newest per store
+                                       --older-than <N>d   keep those newer than N days
+                                       --orphans           delete whole stores whose project
+                                                           is gone (an unmounted drive or a
+                                                           moved directory counts as gone)
+                                     --all prunes every store instead of the named projects.
                                      Add --force (-f) to skip the confirmation.
 
 Projects default to the current directory.
@@ -287,6 +304,126 @@ cmd_tag() {
 	echo "        publishes it."
 }
 
+# Print a byte count the way checkpoint.sh reports sizes: one decimal from a
+# gigabyte up, whole megabytes below that, whole kilobytes under a megabyte.
+_human_size() {
+	awk -v b="$1" 'BEGIN {
+		if (b >= 1073741824) printf "%.1f GB\n", b / 1073741824
+		else if (b >= 1048576) printf "%.0f MB\n", b / 1048576
+		else printf "%.0f KB\n", b / 1024
+	}'
+}
+
+# Print the on-disk size of a store in bytes; fail when du cannot read it.
+_store_bytes() {
+	local out
+	out="$(du -sb -- "$1" 2>/dev/null)" || return 1
+	printf '%s\n' "${out%%[[:space:]]*}"
+}
+
+# Classify a directory under backups/ by what it is and whether its project
+# still exists. Prints one of:
+#   not a store  not a bare repository; never touched
+#   no origin    a store with no recorded project
+#   missing      the recorded project directory is gone
+#   not a repo   the directory exists but git finds no repository there
+#   ok           the project is still a repository
+#
+# "not a repo" lets git walk up from the project directory, so a project that
+# lost its .git but sits inside another repository still answers ok. That errs
+# toward keeping the store: --orphans deletes what this calls orphaned, and a
+# store that is wrongly kept costs disk, while one wrongly deleted costs the
+# only copy.
+_store_status() {
+	local store="$1" origin
+	# A bare repo answers "." only when the probed directory IS the git dir;
+	# a plain directory inside some other repository answers with a path.
+	if [[ "$(git -C "${store}" rev-parse --git-dir 2>/dev/null || true)" != "." ]]; then
+		echo "not a store"
+		return 0
+	fi
+	origin="$(git -C "${store}" config --get remote.origin.url 2>/dev/null || true)"
+	if [[ -z "${origin}" ]]; then
+		echo "no origin"
+	elif [[ ! -d "${origin}" ]]; then
+		echo "missing"
+	elif ! git -C "${origin}" rev-parse --git-dir >/dev/null 2>&1; then
+		echo "not a repo"
+	else
+		echo "ok"
+	fi
+}
+
+cmd_backups() {
+	if [[ $# -gt 0 ]]; then
+		echo "ERROR: backups takes no arguments (got: $*)." >&2
+		_usage >&2
+		return 2
+	fi
+
+	resolve_data_roots
+	local root="${RIOTBOX_DATA_DIR}/backups"
+	local -a stores=()
+	local store
+	for store in "${root}"/*.git; do
+		[[ -d "${store}" ]] || continue
+		stores+=("${store}")
+	done
+	if [[ ${#stores[@]} -eq 0 ]]; then
+		echo "No backup stores under ${root}."
+		return 0
+	fi
+
+	# Each row is prefixed with its byte count so the rows can be sorted
+	# largest first; the prefix is cut before printing.
+	local -a rows=() snaps=()
+	local status bytes size origin project label count oldest newest total=0
+	for store in "${stores[@]}"; do
+		status="$(_store_status "${store}")"
+		# shellcheck disable=SC2310  # a failed du is handled by the else branch (size shown as ?), so set -e being off here is intended
+		if bytes="$(_store_bytes "${store}")"; then
+			size="$(_human_size "${bytes}")"
+			total=$((total + bytes))
+		else
+			size="?"
+			bytes=0
+		fi
+
+		count=0
+		oldest="-"
+		newest="-"
+		project="${store}"
+		if [[ "${status}" == "not a store" ]]; then
+			label="not a store"
+		else
+			# shellcheck disable=SC2312  # for-each-ref or grep finding nothing yields no snapshots, which the count reports
+			mapfile -t snaps < <(git -C "${store}" for-each-ref --sort=-refname --format='%(refname:lstrip=3)' "${SNAPSHOT_NS}" 2>/dev/null | grep -E "${TS_RE}")
+			count=${#snaps[@]}
+			if [[ ${count} -gt 0 ]]; then
+				newest="${snaps[0]}"
+				oldest="${snaps[count - 1]}"
+			fi
+			origin="$(git -C "${store}" config --get remote.origin.url 2>/dev/null || true)"
+			project="${origin:-${store}}"
+			if [[ "${status}" == "ok" ]]; then
+				label="ok"
+			else
+				label="ORPHAN"
+				project="${project} (${status})"
+			fi
+		fi
+		rows+=("${bytes}"$'\t'"$(printf '%-8s  %-9s  %-15s  %-15s  %-11s  %s' \
+			"${size}" "${count}" "${oldest}" "${newest}" "${label}" "${project}")")
+	done
+
+	printf '%-8s  %-9s  %-15s  %-15s  %-11s  %s\n' SIZE SNAPSHOTS OLDEST NEWEST STATUS PROJECT
+	# shellcheck disable=SC2312  # printf into sort/cut cannot fail on in-memory rows
+	printf '%s\n' "${rows[@]}" | sort -t $'\t' -k1,1nr | cut -f2-
+	# shellcheck disable=SC2312  # _human_size is awk on a number — it cannot fail
+	echo "Total: $(_human_size "${total}") in ${#stores[@]} store(s)"
+	echo "ORPHAN also covers a project on an unmounted drive or in a moved directory."
+}
+
 _prune_usage_err() {
 	echo "ERROR: $1" >&2
 	_usage >&2
@@ -365,6 +502,161 @@ _backup_stores_for() {
 	printf '%s\n' "${stores[@]}"
 }
 
+# Validate the argument of a --keep or --older-than selector BEFORE anything is
+# selected, so a typo can never delete the wrong set. Prints the cutoff epoch
+# for --older-than and nothing for any other selector. Returns 2 on a usage
+# error, 1 when the cutoff cannot be computed (no GNU date).
+_selector_cutoff() {
+	local selector="$1" keep="$2" older="$3"
+	case "${selector}" in
+	keep)
+		if [[ ! "${keep}" =~ ^[0-9]+$ ]]; then
+			_prune_usage_err "--keep needs a non-negative integer (got: '${keep}')"
+			return 2
+		fi
+		;;
+	older)
+		if [[ ! "${older}" =~ ^[0-9]+d$ ]]; then
+			_prune_usage_err "--older-than needs a whole number of days like 30d (got: '${older}')"
+			return 2
+		fi
+		if ! date -d "${older%d} days ago" +%s 2>/dev/null; then
+			echo "ERROR: could not compute the cutoff date for --older-than ${older}." >&2
+			return 1
+		fi
+		;;
+	*)
+		# --legacy and --orphans take no argument, so there is nothing to
+		# validate before the selection runs.
+		;;
+	esac
+}
+
+# Split newest-first snapshot refs into SELECTED_REFS (to delete) and
+# UNRECOGNISED_REFS (never deleted) for one selector. Globals, because bash
+# cannot return two arrays.
+_select_refs() {
+	local selector="$1" keep="$2" cutoff="$3"
+	shift 3
+	SELECTED_REFS=()
+	UNRECOGNISED_REFS=()
+
+	local -a candidates=()
+	local ref
+	for ref in "$@"; do
+		if [[ "${ref##*/}" =~ ${TS_RE} ]]; then
+			candidates+=("${ref}")
+		else
+			UNRECOGNISED_REFS+=("${ref}")
+		fi
+	done
+
+	# shellcheck disable=SC2249  # selector is closed by construction: the option parsers assign only these values, and --orphans never reaches a ref selection
+	case "${selector}" in
+	keep)
+		local index=0
+		for ref in "${candidates[@]}"; do
+			index=$((index + 1))
+			if [[ ${index} -gt ${keep} ]]; then
+				SELECTED_REFS+=("${ref}")
+			fi
+		done
+		;;
+	older)
+		# The age comes from the ref NAME, never the commit date: a
+		# clean-tree snapshot points at HEAD, whose date belongs to the
+		# user's own commit and may be years old (or, after a rebase,
+		# newer than the session that snapshotted it).
+		#
+		# checkpoint.sh writes the name with a bare `date +%Y%m%d-%H%M%S`,
+		# so it carries no zone and is read back in whatever zone the
+		# pruning shell is in. A snapshot named in one zone and pruned in
+		# another shifts by up to ~26h, which against a day-granularity
+		# cutoff can move a borderline snapshot to the other side of it.
+		# Erring by a day on a retention window is acceptable; erring by
+		# the years a commit date can be off is not.
+		local ts epoch
+		for ref in "${candidates[@]}"; do
+			ts="${ref##*/}"
+			if ! epoch="$(date -d "${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:9:2}:${ts:11:2}:${ts:13:2}" +%s 2>/dev/null)"; then
+				# Right shape, impossible date (20261301-000000). Its age
+				# is unknowable, so it is not ours to delete either.
+				UNRECOGNISED_REFS+=("${ref}")
+				continue
+			fi
+			if [[ "${epoch}" -lt "${cutoff}" ]]; then
+				SELECTED_REFS+=("${ref}")
+			fi
+		done
+		;;
+	legacy)
+		SELECTED_REFS=("${candidates[@]}")
+		;;
+	esac
+}
+
+# Ask before deleting. <what> names the set, e.g. "3 ref(s)". Returns 0 to go
+# ahead, 3 when the user declined (already reported), and 1 when there is no
+# terminal to ask on and --force was not given.
+_confirm_delete() {
+	local what="$1" force="$2"
+	if [[ "${force}" == true ]]; then
+		return 0
+	fi
+	if [[ ! -t 0 ]]; then
+		echo "ERROR: refusing to delete ${what} without confirmation." >&2
+		echo "Re-run this from a terminal, or pass --force." >&2
+		return 1
+	fi
+	local answer
+	read -rp "Delete ${what}? [y/N] " answer || answer=""
+	if [[ ! "${answer}" =~ ^[Yy]$ ]]; then
+		echo "Aborted."
+		return 3
+	fi
+}
+
+# Delete one snapshot ref, guarded by the sha the user was shown. Returns 1,
+# after warning, when the ref no longer points there.
+_delete_snapshot_ref() {
+	local repo="$1" target="$2" expected="$3"
+
+	# Empty the reflog BEFORE deleting the ref, and in that order only.
+	#
+	# checkpoint.sh creates snapshot refs with --create-reflog, and a
+	# reflog keeps its objects reachable for gc.reflogExpireUnreachable
+	# (30 days by default) — a prune that leaves one behind frees no disk
+	# space at all, which is the whole point of pruning. git 2.52 drops the
+	# reflog along with the ref on both ref backends, but a reflog that
+	# outlives its ref cannot be cleaned up afterwards: `git reflog expire`
+	# on a deleted ref fails with "reflog could not be found" and the
+	# objects stay pinned. Expiring first works on every backend, and costs
+	# nothing if the ref then survives: a snapshot ref is written exactly
+	# once, so its reflog only ever records its own creation.
+	#
+	# The `reflog exists` guard is not decoration — refs outside
+	# refs/heads, refs/remotes and refs/notes get no reflog unless one is
+	# asked for, so a hand-made snapshot ref legitimately has none, and
+	# expiring a missing reflog is an error rather than a no-op.
+	if git -C "${repo}" reflog exists "${target}" 2>/dev/null; then
+		if ! git -C "${repo}" reflog expire --expire=now --expire-unreachable=now --rewrite "${target}"; then
+			echo "  WARNING: could not expire the reflog of ${target} in ${repo};" >&2
+			echo "           deleting it anyway, but its objects stay reachable until" >&2
+			echo "           gc.reflogExpireUnreachable elapses (30 days by default)." >&2
+		fi
+	fi
+
+	# The expected old value is the sha shown in the selection above, so a
+	# ref that moved between the listing and the confirmation is refused
+	# rather than deleted blind — and a ref already deleted by an earlier
+	# pass fails loudly instead of being silently counted twice.
+	if ! git -C "${repo}" update-ref -d "${target}" "${expected}"; then
+		echo "  WARNING: could not delete ${target} in ${repo}" >&2
+		echo "           It no longer points at ${expected:0:7}, so it is not the ref that was listed." >&2
+		return 1
+	fi
+}
+
 # Select and delete snapshot refs. Nothing is deleted without an explicit
 # selector, and nothing is deleted without confirmation unless --force is given.
 cmd_prune() {
@@ -433,29 +725,9 @@ cmd_prune() {
 
 	# Validate the selector's argument BEFORE anything is selected, so a typo
 	# can never delete the wrong set.
-	local cutoff=""
-	case "${selector}" in
-	keep)
-		if [[ ! "${keep}" =~ ^[0-9]+$ ]]; then
-			_prune_usage_err "--keep needs a non-negative integer (got: '${keep}')"
-			return 2
-		fi
-		;;
-	older)
-		if [[ ! "${older}" =~ ^[0-9]+d$ ]]; then
-			_prune_usage_err "--older-than needs a whole number of days like 30d (got: '${older}')"
-			return 2
-		fi
-		if ! cutoff="$(date -d "${older%d} days ago" +%s 2>/dev/null)"; then
-			echo "ERROR: could not compute the cutoff date for --older-than ${older}." >&2
-			return 1
-		fi
-		;;
-	*)
-		# --legacy reaches here. It takes no argument, so there is nothing to
-		# validate before the selection below runs.
-		;;
-	esac
+	local cutoff
+	# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+	cutoff="$(_selector_cutoff "${selector}" "${keep}" "${older}")" || return $?
 
 	local joined=""
 	if [[ ${#projects[@]} -gt 0 ]]; then
@@ -527,59 +799,11 @@ cmd_prune() {
 		# shellcheck disable=SC2312  # _backup_stores_for prints the store list; mapfile captures its stdout deliberately
 		mapfile -t backup_dirs < <(_backup_stores_for "${dir}")
 
-		local -a found=() candidates=() unrecognised=() chosen=()
+		local -a found=()
 		# shellcheck disable=SC2312  # for-each-ref failure yields no refs; nothing is then selected for deletion
 		mapfile -t found < <(git -C "${dir}" for-each-ref --sort=-refname --format='%(refname)' "${namespace}" 2>/dev/null)
-		for ref in "${found[@]}"; do
-			if [[ "${ref##*/}" =~ ${TS_RE} ]]; then
-				candidates+=("${ref}")
-			else
-				unrecognised+=("${ref}")
-			fi
-		done
-
-		# shellcheck disable=SC2249  # selector is closed by construction: the three arms below are the only values the option parser assigns, and an empty one already returned 2
-		case "${selector}" in
-		keep)
-			local index=0
-			for ref in "${candidates[@]}"; do
-				index=$((index + 1))
-				if [[ ${index} -gt ${keep} ]]; then
-					chosen+=("${ref}")
-				fi
-			done
-			;;
-		older)
-			# The age comes from the ref NAME, never the commit date: a
-			# clean-tree snapshot points at HEAD, whose date belongs to the
-			# user's own commit and may be years old (or, after a rebase,
-			# newer than the session that snapshotted it).
-			#
-			# checkpoint.sh writes the name with a bare `date +%Y%m%d-%H%M%S`,
-			# so it carries no zone and is read back in whatever zone the
-			# pruning shell is in. A snapshot named in one zone and pruned in
-			# another shifts by up to ~26h, which against a day-granularity
-			# cutoff can move a borderline snapshot to the other side of it.
-			# Erring by a day on a retention window is acceptable; erring by
-			# the years a commit date can be off is not.
-			local ts epoch
-			for ref in "${candidates[@]}"; do
-				ts="${ref##*/}"
-				if ! epoch="$(date -d "${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:9:2}:${ts:11:2}:${ts:13:2}" +%s 2>/dev/null)"; then
-					# Right shape, impossible date (20261301-000000). Its age
-					# is unknowable, so it is not ours to delete either.
-					unrecognised+=("${ref}")
-					continue
-				fi
-				if [[ "${epoch}" -lt "${cutoff}" ]]; then
-					chosen+=("${ref}")
-				fi
-			done
-			;;
-		legacy)
-			chosen=("${candidates[@]}")
-			;;
-		esac
+		_select_refs "${selector}" "${keep}" "${cutoff}" "${found[@]}"
+		local -a chosen=("${SELECTED_REFS[@]}") unrecognised=("${UNRECOGNISED_REFS[@]}")
 
 		if [[ ${#chosen[@]} -eq 0 ]]; then
 			echo "    nothing to delete"
@@ -645,19 +869,14 @@ cmd_prune() {
 	fi
 
 	# ── Confirmation ──────────────────────────────────────────────────
-	if [[ "${force}" != true ]]; then
-		if [[ ! -t 0 ]]; then
-			echo "ERROR: refusing to delete ${#to_delete[@]} ref(s) without confirmation." >&2
-			echo "Re-run this from a terminal, or pass --force." >&2
-			return 1
-		fi
-		local answer
-		read -rp "Delete ${#to_delete[@]} ref(s)? [y/N] " answer || answer=""
-		if [[ ! "${answer}" =~ ^[Yy]$ ]]; then
-			echo "Aborted."
-			return 0
-		fi
-	fi
+	local confirmed=0
+	# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+	_confirm_delete "${#to_delete[@]} ref(s)" "${force}" || confirmed=$?
+	case "${confirmed}" in
+	0) ;;
+	3) return 0 ;;
+	*) return 1 ;;
+	esac
 
 	# ── Deletion ──────────────────────────────────────────────────────
 	local entry repo target expected deleted=0 failures=0
@@ -666,38 +885,8 @@ cmd_prune() {
 	for entry in "${to_delete[@]}"; do
 		IFS=$'\t' read -r repo target expected <<<"${entry}"
 
-		# Empty the reflog BEFORE deleting the ref, and in that order only.
-		#
-		# checkpoint.sh creates snapshot refs with --create-reflog, and a
-		# reflog keeps its objects reachable for gc.reflogExpireUnreachable
-		# (30 days by default) — a prune that leaves one behind frees no disk
-		# space at all, which is the whole point of pruning. git 2.52 drops the
-		# reflog along with the ref on both ref backends, but a reflog that
-		# outlives its ref cannot be cleaned up afterwards: `git reflog expire`
-		# on a deleted ref fails with "reflog could not be found" and the
-		# objects stay pinned. Expiring first works on every backend, and costs
-		# nothing if the ref then survives: a snapshot ref is written exactly
-		# once, so its reflog only ever records its own creation.
-		#
-		# The `reflog exists` guard is not decoration — refs outside
-		# refs/heads, refs/remotes and refs/notes get no reflog unless one is
-		# asked for, so a hand-made snapshot ref legitimately has none, and
-		# expiring a missing reflog is an error rather than a no-op.
-		if git -C "${repo}" reflog exists "${target}" 2>/dev/null; then
-			if ! git -C "${repo}" reflog expire --expire=now --expire-unreachable=now --rewrite "${target}"; then
-				echo "  WARNING: could not expire the reflog of ${target} in ${repo};" >&2
-				echo "           deleting it anyway, but its objects stay reachable until" >&2
-				echo "           gc.reflogExpireUnreachable elapses (30 days by default)." >&2
-			fi
-		fi
-
-		# The expected old value is the sha shown in the selection above, so a
-		# ref that moved between the listing and the confirmation is refused
-		# rather than deleted blind — and a ref already deleted by an earlier
-		# pass fails loudly instead of being silently counted twice.
-		if ! git -C "${repo}" update-ref -d "${target}" "${expected}"; then
-			echo "  WARNING: could not delete ${target} in ${repo}" >&2
-			echo "           It no longer points at ${expected:0:7}, so it is not the ref that was listed." >&2
+		# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+		if ! _delete_snapshot_ref "${repo}" "${target}" "${expected}"; then
 			failures=$((failures + 1))
 			continue
 		fi
@@ -726,6 +915,342 @@ cmd_prune() {
 	fi
 }
 
+# List, confirm and delete every store whose project no longer exists.
+_prune_orphan_stores() {
+	local force="$1"
+	local root="${RIOTBOX_DATA_DIR}/backups"
+	local -a orphans=()
+	local store status origin bytes total=0
+
+	echo "Backup stores under ${root} whose project no longer exists:"
+	for store in "${root}"/*.git; do
+		[[ -d "${store}" ]] || continue
+		status="$(_store_status "${store}")"
+		case "${status}" in
+		ok | "not a store") continue ;;
+		*) ;;
+		esac
+		origin="$(git -C "${store}" config --get remote.origin.url 2>/dev/null || true)"
+		# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+		bytes="$(_store_bytes "${store}")" || bytes=0
+		total=$((total + bytes))
+		# shellcheck disable=SC2312  # _human_size is awk on a number — it cannot fail
+		printf '  %s  %s  %s (%s)\n' "${store}" "$(_human_size "${bytes}")" "${origin:--}" "${status}"
+		orphans+=("${store}")
+	done
+
+	if [[ ${#orphans[@]} -eq 0 ]]; then
+		echo "  none"
+		echo ""
+		echo "Nothing to delete."
+		return 0
+	fi
+	echo ""
+	echo "A project on an unmounted drive or in a moved directory is listed here too:"
+	echo "its store is the only copy of its snapshots outside the container."
+	# shellcheck disable=SC2312  # _human_size is awk on a number — it cannot fail
+	echo "Total: $(_human_size "${total}")"
+	echo ""
+
+	local confirmed=0
+	# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+	_confirm_delete "${#orphans[@]} store(s)" "${force}" || confirmed=$?
+	case "${confirmed}" in
+	0) ;;
+	3) return 0 ;;
+	*) return 1 ;;
+	esac
+
+	local deleted=0 failures=0 freed=0
+	for store in "${orphans[@]}"; do
+		# Re-checked at deletion time, because rm -rf is the one step here that
+		# cannot be taken back: the store must still sit directly in backups/,
+		# still be a bare repo, and its project must still be gone — a drive
+		# remounted while the prompt was open turns an orphan back into a backup.
+		status="$(_store_status "${store}")"
+		if [[ "$(dirname -- "${store}")" != "${root}" || "${store}" != *.git ||
+			"${status}" == "ok" || "${status}" == "not a store" ]]; then
+			echo "  WARNING: ${store} is no longer an orphaned backup store — skipping." >&2
+			continue
+		fi
+		# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+		bytes="$(_store_bytes "${store}")" || bytes=0
+		if ! rm -rf -- "${store}"; then
+			echo "  WARNING: could not delete ${store} completely." >&2
+			failures=$((failures + 1))
+			continue
+		fi
+		deleted=$((deleted + 1))
+		freed=$((freed + bytes))
+	done
+	# shellcheck disable=SC2312  # _human_size is awk on a number — it cannot fail
+	echo "Deleted ${deleted} store(s); freed $(_human_size "${freed}")."
+
+	if [[ ${failures} -gt 0 ]]; then
+		echo "ERROR: ${failures} store(s) could not be deleted (see the warnings above)." >&2
+		return 1
+	fi
+}
+
+# Delete snapshot refs from backup stores, or whole orphaned stores, then gc.
+# Unlike checkpoint-prune this DOES write to the stores: reclaiming their space
+# is its whole purpose. Branches, tags and notes in a store are never touched.
+cmd_backup_prune() {
+	local selector="" keep="" older="" all=false force=false
+	local -a projects=()
+	local one="exactly one of --keep, --older-than or --orphans may be given"
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--keep)
+			if [[ -n "${selector}" ]]; then
+				_prune_usage_err "${one}"
+				return 2
+			fi
+			if [[ $# -lt 2 ]]; then
+				_prune_usage_err "--keep needs a count, e.g. --keep 5"
+				return 2
+			fi
+			selector="keep"
+			keep="$2"
+			shift 2
+			;;
+		--older-than)
+			if [[ -n "${selector}" ]]; then
+				_prune_usage_err "${one}"
+				return 2
+			fi
+			if [[ $# -lt 2 ]]; then
+				_prune_usage_err "--older-than needs an age in days, e.g. --older-than 30d"
+				return 2
+			fi
+			selector="older"
+			older="$2"
+			shift 2
+			;;
+		--orphans)
+			if [[ -n "${selector}" ]]; then
+				_prune_usage_err "${one}"
+				return 2
+			fi
+			selector="orphans"
+			shift
+			;;
+		--all)
+			all=true
+			shift
+			;;
+		--force | -f)
+			force=true
+			shift
+			;;
+		-h | --help)
+			_usage
+			return 0
+			;;
+		-*)
+			_prune_usage_err "unknown option '$1'"
+			return 2
+			;;
+		*)
+			projects+=("$1")
+			shift
+			;;
+		esac
+	done
+
+	if [[ -z "${selector}" ]]; then
+		_prune_usage_err "backup-prune needs a selector: --keep <N>, --older-than <N>d or --orphans"
+		return 2
+	fi
+	if [[ ${#projects[@]} -gt 0 && "${selector}" == "orphans" ]]; then
+		_prune_usage_err "--orphans checks every store; it takes no project paths"
+		return 2
+	fi
+	if [[ ${#projects[@]} -gt 0 && "${all}" == true ]]; then
+		_prune_usage_err "--all and project paths cannot be combined"
+		return 2
+	fi
+
+	local cutoff
+	# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+	cutoff="$(_selector_cutoff "${selector}" "${keep}" "${older}")" || return $?
+
+	resolve_data_roots
+	if [[ "${selector}" == "orphans" ]]; then
+		_prune_orphan_stores "${force}"
+		return
+	fi
+
+	local -a stores=()
+	local store
+	if [[ "${all}" == true ]]; then
+		for store in "${RIOTBOX_DATA_DIR}"/backups/*.git; do
+			[[ -d "${store}" ]] || continue
+			# shellcheck disable=SC2312  # _store_status prints a status on every path
+			# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+			[[ "$(_store_status "${store}")" != "not a store" ]] || continue
+			stores+=("${store}")
+		done
+	else
+		local joined=""
+		if [[ ${#projects[@]} -gt 0 ]]; then
+			joined="${projects[*]}"
+		fi
+		# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+		resolve_projects "${joined}" || return 1
+
+		# A repo and its linked worktrees, or two paths into one project, can
+		# name the same store; it is pruned once.
+		local dir any seen=":"
+		local -a found_stores=()
+		for dir in "${PROJECT_DIRS[@]}"; do
+			# shellcheck disable=SC2312  # _backup_stores_for prints the store list; mapfile captures its stdout deliberately
+			mapfile -t found_stores < <(_backup_stores_for "${dir}")
+			any=false
+			for store in "${found_stores[@]}"; do
+				[[ -d "${store}" ]] || continue
+				# shellcheck disable=SC2312  # _store_status prints a status on every path
+				# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+				[[ "$(_store_status "${store}")" != "not a store" ]] || continue
+				any=true
+				if [[ "${seen}" != *":${store}:"* ]]; then
+					seen="${seen}${store}:"
+					stores+=("${store}")
+				fi
+			done
+			if [[ "${any}" != true ]]; then
+				echo "Note: ${dir} has no backup store." >&2
+			fi
+		done
+	fi
+
+	_prune_store_snapshots "${selector}" "${keep}" "${cutoff}" "${force}" "${stores[@]}"
+}
+
+# Select, confirm and delete snapshot refs in the given stores, then gc each
+# store something was deleted from and report the space freed.
+_prune_store_snapshots() {
+	local selector="$1" keep="$2" cutoff="$3" force="$4"
+	shift 4
+	local -a stores=("$@")
+
+	echo "Snapshot refs to delete from the backup stores under ${RIOTBOX_DATA_DIR}/backups."
+	echo "Branches, tags and notes in the stores are never touched. A ref marked"
+	echo "ONLY COPY is no longer in the project repository; deleting it is irreversible."
+	echo ""
+
+	local -a to_delete=() found=()
+	local store status origin ref sha marker kept only=0
+	for store in "${stores[@]}"; do
+		echo "  ${store}"
+		status="$(_store_status "${store}")"
+		origin="$(git -C "${store}" config --get remote.origin.url 2>/dev/null || true)"
+		echo "    project: ${origin:--} (${status})"
+		# shellcheck disable=SC2312  # for-each-ref failure yields no refs; nothing is then selected for deletion
+		mapfile -t found < <(git -C "${store}" for-each-ref --sort=-refname --format='%(refname)' "${SNAPSHOT_NS}" 2>/dev/null)
+		_select_refs "${selector}" "${keep}" "${cutoff}" "${found[@]}"
+
+		if [[ ${#SELECTED_REFS[@]} -eq 0 ]]; then
+			echo "    nothing to delete"
+		fi
+		for ref in "${SELECTED_REFS[@]}"; do
+			if ! sha="$(git -C "${store}" rev-parse --verify --quiet "${ref}" 2>/dev/null)"; then
+				echo "    ${ref}  ← vanished since it was listed — skipping"
+				continue
+			fi
+			# The project is the other copy. Compare the object, not just the
+			# name: a project ref with that name at another commit is not a
+			# copy of what is about to be deleted.
+			marker=""
+			if [[ "${status}" != "ok" ]] ||
+				[[ "$(git -C "${origin}" rev-parse --verify --quiet "${ref}" 2>/dev/null || true)" != "${sha}" ]]; then
+				marker="  ← ONLY COPY"
+				only=$((only + 1))
+			fi
+			printf '    %-46s  %s%s\n' "${ref}" "${sha:0:7}" "${marker}"
+			to_delete+=("${store}"$'\t'"${ref}"$'\t'"${sha}")
+		done
+
+		kept=$((${#found[@]} - ${#SELECTED_REFS[@]}))
+		if [[ ${kept} -gt 0 ]]; then
+			echo "    keeping ${kept} other ref(s) here"
+		fi
+		if [[ ${#UNRECOGNISED_REFS[@]} -gt 0 ]]; then
+			echo "    unrecognised, never deleted (not a YYYYMMDD-HHMMSS timestamp):"
+			for ref in "${UNRECOGNISED_REFS[@]}"; do
+				echo "      ${ref}"
+			done
+		fi
+	done
+
+	echo ""
+	if [[ ${#to_delete[@]} -eq 0 ]]; then
+		echo "Nothing to delete."
+		return 0
+	fi
+	if [[ ${only} -gt 0 ]]; then
+		echo "${only} of the ${#to_delete[@]} ref(s) above are the only copy left."
+		echo "Deleting those is irreversible."
+		echo ""
+	fi
+
+	local confirmed=0
+	# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+	_confirm_delete "${#to_delete[@]} ref(s)" "${force}" || confirmed=$?
+	case "${confirmed}" in
+	0) ;;
+	3) return 0 ;;
+	*) return 1 ;;
+	esac
+
+	local entry repo target expected deleted=0 failures=0 gc_seen=":"
+	local -a gc_stores=()
+	for entry in "${to_delete[@]}"; do
+		IFS=$'\t' read -r repo target expected <<<"${entry}"
+		# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+		if ! _delete_snapshot_ref "${repo}" "${target}" "${expected}"; then
+			failures=$((failures + 1))
+			continue
+		fi
+		deleted=$((deleted + 1))
+		if [[ "${gc_seen}" != *":${repo}:"* ]]; then
+			gc_seen="${gc_seen}${repo}:"
+			gc_stores+=("${repo}")
+		fi
+	done
+
+	# gc --prune=now is safe against a launch pushing to the same store at the
+	# same moment: receive-pack keeps incoming objects in a quarantine
+	# directory until its ref update lands, so gc never sees them unreachable.
+	local before after freed=0
+	for store in "${gc_stores[@]}"; do
+		# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+		before="$(_store_bytes "${store}")" || before=""
+		if ! git -C "${store}" gc --quiet --prune=now; then
+			echo "  WARNING: git gc failed in ${store}; its space is not reclaimed yet." >&2
+			failures=$((failures + 1))
+			continue
+		fi
+		# shellcheck disable=SC2310  # checking function return — set -e suppression is intentional
+		after="$(_store_bytes "${store}")" || after=""
+		if [[ -n "${before}" && -n "${after}" ]]; then
+			# shellcheck disable=SC2312  # _human_size is awk on a number — it cannot fail
+			echo "  ${store}: $(_human_size "${before}") → $(_human_size "${after}")"
+			if [[ ${after} -lt ${before} ]]; then
+				freed=$((freed + before - after))
+			fi
+		fi
+	done
+	# shellcheck disable=SC2312  # _human_size is awk on a number — it cannot fail
+	echo "Deleted ${deleted} ref(s) from the backup stores; freed $(_human_size "${freed}")."
+
+	if [[ ${failures} -gt 0 ]]; then
+		echo "ERROR: ${failures} deletion(s) or gc run(s) failed (see the warnings above)." >&2
+		return 1
+	fi
+}
+
 main() {
 	local cmd="${1:-}"
 	if [[ -z "${cmd}" ]]; then
@@ -737,6 +1262,8 @@ main() {
 	list) cmd_list "$@" ;;
 	tag) cmd_tag "$@" ;;
 	prune) cmd_prune "$@" ;;
+	backups) cmd_backups "$@" ;;
+	backup-prune) cmd_backup_prune "$@" ;;
 	-h | --help | help) _usage ;;
 	*)
 		echo "checkpoints: unknown subcommand '${cmd}'" >&2

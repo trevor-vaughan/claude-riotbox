@@ -97,6 +97,8 @@ Checkpoint commands:
   checkpoints [dir...]              List pre-session snapshots
   checkpoint-tag <ts> [dir]         Tag a snapshot for rescue
   checkpoint-prune [dir...] <sel>   Remove snapshots (--keep N | --older-than Nd | --legacy)
+  backups                           List backup stores: size, snapshots, project, status
+  backup-prune [dir...] <sel>       Free backup space (--keep N | --older-than Nd | --orphans; --all)
 
 Setup / maintenance:
   mounts                       Show what would be mounted from your home dir
@@ -368,6 +370,8 @@ overlay-reject) exec "${SCRIPTS}/overlay.sh" reject "$@" ;;
 checkpoints) exec "${LIBEXEC}/checkpoints.sh" list "$@" ;;
 checkpoint-tag) exec "${LIBEXEC}/checkpoints.sh" tag "$@" ;;
 checkpoint-prune) exec "${LIBEXEC}/checkpoints.sh" prune "$@" ;;
+backups) exec "${LIBEXEC}/checkpoints.sh" backups "$@" ;;
+backup-prune) exec "${LIBEXEC}/checkpoints.sh" backup-prune "$@" ;;
 
 reown) exec "${SCRIPTS}/reown-commits.sh" "$@" ;;
 repair-notes) exec "${SCRIPTS}/repair-ai-notes.sh" "$@" ;;
