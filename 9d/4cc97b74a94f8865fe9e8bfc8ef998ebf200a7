@@ -1,0 +1,22 @@
+agents/opencode/headroom-exec.sh
+  s_12396f456952ef::t_7c0c86fb0a55c9 110-111
+container/opencode/smoke.sh
+  s_12396f456952ef::t_52a98ec6291d08 33,36-38,45-47,53,116,165-172,219-224,226,228,238
+  s_12396f456952ef::t_b55efc910dc1ec 117,235,247,254-256
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9d4cc97b74a94f8865fe9e8bfc8ef998ebf200a7",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
