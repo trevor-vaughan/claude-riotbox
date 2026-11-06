@@ -1,0 +1,22 @@
+Containerfile
+  s_12396f456952ef::t_2e2dcefbbcfa67 917,926-930,955
+tests/opencode.venom.yml
+  s_12396f456952ef::t_2e2dcefbbcfa67 315,319
+  s_12396f456952ef::t_a600fc40b1c94b 799-830,846
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "10865db66aa1d4175d3700b038aed16946ce4a48",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
