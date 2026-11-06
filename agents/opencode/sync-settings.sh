@@ -63,7 +63,7 @@ ensure_real_dir "${STATE_DATA}"
 # runtime (see the exclusion notes below). The re-sync leaves them in place.
 RUNTIME_ENTRIES=(
 	node_modules package.json package-lock.json bun.lock .gitignore
-	context-mode memory
+	context-mode memory service.json
 )
 RUNTIME_PRUNE=()
 for entry in "${RUNTIME_ENTRIES[@]}"; do
@@ -100,6 +100,11 @@ if [[ -d "${HOST_CONFIG_DIR}" ]]; then
 	# (verbatim tool output, and memory gathered across every host project),
 	# not config, and nothing a session reads — context-mode 2.x keeps its
 	# stores under ~/.context-mode instead.
+	#
+	# And skip service.json, OpenCode V2's background-service config. Its
+	# `env` and `remote` (an internet tunnel) keys would apply to every
+	# session's service; agents/opencode/setup.sh removes the session's own
+	# copy at every start, so the host's must not arrive here either.
 	(
 		cd "${HOST_CONFIG_DIR}" &&
 			find -L . "${RUNTIME_PRUNE[@]}" ! -type l -print0 |

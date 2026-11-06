@@ -43,7 +43,10 @@ testcases:
           has claude platform.claude.com
           has claude mcp-proxy.anthropic.com
           has opencode api.openai.com
-          has opencode models.dev
+          has opencode models.opencode.ai
+          if agent_call opencode egress_hosts | grep -qx models.dev; then
+            echo "BAD: opencode 2 does not use models.dev" >&2; exit 1
+          fi
           has pi api.anthropic.com
           if agent_call pi egress_hosts | grep -qx models.dev; then
             echo "BAD: pi does not use models.dev" >&2; exit 1

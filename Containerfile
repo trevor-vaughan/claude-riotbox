@@ -775,8 +775,8 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
 # ── LLM CLI tool cache-bust boundary ────────────────────────────────────────
 # `task container:update` bumps LLM_TOOL_UPDATE to a fresh value, which makes
 # this RUN a cache miss and forces every layer below it (headroom, opencode,
-# Claude Code, CodeGraph, bun, Context Mode, plugins) to rebuild and re-pull
-# latest — without rebuilding the whole image.
+# Pi, Claude Code, CodeGraph, bun, Context Mode, the OpenCode plugin smoke,
+# plugins) to rebuild and re-pull latest — without rebuilding the whole image.
 # A normal `task container:build` always passes the default (0), so the
 # boundary stays cached and the tools are reused. Those tool RUNs are
 # intentionally left unchanged; the boundary alone controls their freshness.
@@ -795,10 +795,13 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=1 \
 #     the pinned digest
 #   * the same Context Mode npm package, `npm ci` against the committed
 #     lockfile and put back through the build asserts and the routing probe,
-#     which additionally re-runs `nvm install` and re-downloads its pinned Node
-#     toolchain because that too lives below the boundary
+#     which additionally re-runs `nvm install`; PI_NODE equals
+#     CONTEXT_MODE_NODE, so the Pi layer re-downloads the pinned Node and
+#     Context Mode's `nvm install` reuses it
 # The cost is accepted so `riotbox update` can add all of them to images built
 # before they existed and refresh headroom's unpinned transitive deps.
+# The OpenCode plugin smoke is what makes `update` re-gate V2: it re-loads all
+# three plugins against the freshly installed opencode.
 ARG LLM_TOOL_UPDATE=0
 RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 
@@ -898,32 +901,42 @@ sys.exit(0 if b.get('service') == 'headroom-proxy' and b.get('status') == 'healt
     rm -rf /home/llm/.cache/huggingface/xet
 
 # ── opencode (installed alongside Claude Code) ───────────────────────────────
-# The official installer hardcodes the install target at $HOME/.opencode/bin
-# and modifies .bashrc to extend PATH. Skip the .bashrc modification with
+# The image installs OpenCode 2 from the V2 installer. The V1 installer
+# (opencode.ai/install) refuses to install 2.x, so it cannot be used here.
+# The V2 installer hardcodes the install target at $HOME/.opencode/bin and
+# modifies .bashrc to extend PATH. Skip the .bashrc modification with
 # --no-modify-path (we manage PATH explicitly in the image), then move the
 # binary into the existing user-local bin dir so no extra PATH entry is
-# needed. The .opencode/bin directory itself is left in place — empty after
-# the move and harmless.
+# needed. The installer also drops an `opencode2` shim beside the binary that
+# execs its sibling `opencode`. The move strands it, so it would dangle, and
+# nothing uses it; remove it. The now-empty .opencode/bin directory is not on
+# PATH and is left in place, harmless.
 #
-# Deliberately unpinned: the installer resolves the latest GitHub release, and
-# we want opencode to track upstream. The 1.18.0 floor is the version that
-# introduced --auto, the flag agents/opencode/manifest.sh injects for
-# autonomous runs. opencode's parser is strict, so a build without --auto
-# would fail loudly — but it would fail in the user's session, at the moment
-# they tried to work. Assert it here instead, where the failure names what
-# moved and costs a rebuild rather than a debugging session.
+# Deliberately unpinned: the installer resolves the latest release, and we want
+# opencode to track upstream. The 2.0.0 floor is there because V1 plugins do not
+# load in V2, so an image that quietly resolved to 1.x would ship sessions with
+# the wired plugins doing nothing. Whether the wired plugins still load in a
+# newer 2.x is checked against the real binary by container/opencode/smoke.sh,
+# which the smoke layer below runs. The floor also covers --auto, the flag
+# agents/opencode/manifest.sh injects for autonomous runs. opencode's parser is
+# strict, so a build without --auto would fail loudly, but in the user's
+# session, at the moment they tried to work. Assert it here instead, where the
+# failure names what moved and costs a rebuild rather than a debugging session.
 #
-# sort -VC compares whole lines, so any --version output that is not a bare
-# X.Y.Z (a `v` prefix, a banner) sorts above the floor and passes the check
-# vacuously. Pull the bare version out first and fail the build when there
-# isn't one, so a change in upstream's output format cannot silently retire
-# the guard.
+# The version command prints `opencode vX.Y.Z`, and sort -VC compares whole
+# lines, so any output that is not a bare X.Y.Z (the word, the `v`, a banner)
+# sorts above the floor and passes the check vacuously. Pull the bare version
+# out first, accepting `opencode vX.Y.Z`, `opencode X.Y.Z`, `vX.Y.Z` and
+# `X.Y.Z`, and fail the build when there isn't one, so a change in upstream's
+# output format cannot silently retire the guard. sed takes the first matching
+# line and quits, reading a here-string: there is no pipe, so no stage can die
+# of SIGPIPE under pipefail and end the build without this message.
 #
 # The floor alone only catches a downgrade, and downgrades cannot happen while
-# the install is unpinned — opencode only moves forward. The move that CAN
-# happen is upstream renaming or dropping --auto in a release well above the
-# floor, which sails past the version check. So also probe the installed
-# binary for the flag itself. `--help` is written to STDERR, hence the 2>&1.
+# the install is unpinned. The move that CAN happen is upstream renaming or
+# dropping --auto in a release well above the floor, which sails past the
+# version check. So also probe the installed binary for the flag itself.
+# `--help` is written to STDERR, hence the 2>&1.
 #
 # Probe BOTH sites the wrapper injects into, because --auto is registered per
 # command, not globally: `run` (every headless riotbox run/resume/audit) and
@@ -938,16 +951,17 @@ sys.exit(0 if b.get('service') == 'headroom-proxy' and b.get('status') == 'healt
 # hits this can see what upstream actually renamed it to.
 RUN bash -o pipefail -c '\
     set -e; \
-    curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path; \
+    curl -fsSL https://opencode.ai/v2/install | bash -s -- --no-modify-path; \
     mv /home/llm/.opencode/bin/opencode /home/llm/.local/bin/opencode; \
+    rm -f /home/llm/.opencode/bin/opencode2; \
     v_raw="$(/home/llm/.local/bin/opencode --version)"; \
-    echo "installed opencode ${v_raw}"; \
-    v="$(printf "%s\n" "${v_raw}" | grep -xE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)" || true; \
+    v="$(sed -nE "/^(opencode )?v?([0-9]+\.[0-9]+\.[0-9]+)$/{s//\2/p;q}" <<<"${v_raw}")"; \
     [ -n "${v}" ] || { \
         echo "cannot read a bare X.Y.Z version out of opencode --version: ${v_raw}" >&2; \
         exit 1; }; \
-    printf "1.18.0\n%s\n" "${v}" | sort -VC || { \
-        echo "opencode ${v} predates the --auto flag (need >= 1.18.0)" >&2; \
+    echo "installed opencode ${v}"; \
+    printf "2.0.0\n%s\n" "${v}" | sort -VC || { \
+        echo "opencode ${v} is not OpenCode 2 (this image requires OpenCode 2, >= 2.0.0)" >&2; \
         exit 1; }; \
     for scope in "run" ""; do \
         h="$(/home/llm/.local/bin/opencode ${scope} --help 2>&1)" || { \
@@ -1513,6 +1527,15 @@ RUN bash -o pipefail -c '\
     rm -rf "${cm_probe}" "${cm_stats_home}"; \
     find /home/llm/.npm -mindepth 1 -delete; \
     echo "staged context-mode ${CONTEXT_MODE_VERSION} at ${CM_PKG} ($(du -sh "${CM_PKG}" | cut -f1)) — PreToolUse routes WebFetch to ${cm_decision}; the stats shim read $(jq -r .kept_out <<<"${cm_run}") B kept out from the PostToolUse probe"'
+
+# OpenCode V2 compatibility gate: load every plugin RiotBox wires into the
+# real (floating) opencode and fail here, not in a user's session, when one
+# no longer loads. Runs after every layer that installs opencode or a wired
+# plugin (git-ai, headroom, context-mode). Offline: no provider key, no proxy.
+# See container/opencode/smoke.sh.
+COPY --chown=llm:llm container/opencode/smoke.sh /tmp/riotbox-opencode-smoke.sh
+RUN bash /tmp/riotbox-opencode-smoke.sh /home/llm/.riotbox && \
+    rm -f /tmp/riotbox-opencode-smoke.sh
 
 # ── Pre-stage plugins (no auth needed — just clones a public GitHub repo) ────
 # Installed to a staging dir because ~/.claude is bind-mounted at runtime.

@@ -1,0 +1,102 @@
+name: opencode-smoke
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# container/opencode/smoke.sh's check half: given `opencode api plugin.list`
+# JSON and the plugin IDs riotbox wires, pass only when every expected plugin
+# is present and active and no plugin failed. The real-binary half is
+# exercised by the image build (Containerfile) — this suite pins the decision.
+# Fixtures follow the response shape captured from OpenCode v2.2.5:
+# {"location":{"directory":...},"data":[Plugin.Info...]}.
+
+testcases:
+  - name: passes when every expected plugin is active
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          export HOME="$(mktemp -d)"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          source "{{.riotbox_dir}}/container/opencode/smoke.sh"
+          printf '%s' '{"location":{"directory":"/tmp/p"},"data":[{"id":"opencode.agent","source":{"type":"builtin"},"features":{"server":true},"state":{"status":"active"}},{"id":"context-mode","source":{"type":"local","path":"/x"},"features":{"server":true},"state":{"status":"active"}},{"id":"git-ai","source":{"type":"local","path":"/y"},"features":{"server":true},"state":{"status":"active"}}]}' > "${HOME}/list.json"
+          opencode_smoke_check "${HOME}/list.json" context-mode git-ai
+        assertions:
+          - result.code ShouldEqual 0
+
+  - name: fails and names the plugin when one failed to load
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          export HOME="$(mktemp -d)"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          source "{{.riotbox_dir}}/container/opencode/smoke.sh"
+          declare -F opencode_smoke_check >/dev/null || { echo "FAIL - opencode_smoke_check missing"; exit 99; }
+          printf '%s' '{"location":{"directory":"/tmp/p"},"data":[{"id":"context-mode","source":{"type":"local","path":"/x"},"features":{"server":true},"state":{"status":"active"}},{"source":{"type":"local","path":"/p/git-ai.ts"},"features":{"server":true},"state":{"status":"failed","error":"Plugin must export a default definition with an id and an effect or setup function.","ref":"err_de92ee70"}}]}' > "${HOME}/list.json"
+          opencode_smoke_check "${HOME}/list.json" context-mode git-ai
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring /p/git-ai.ts
+          - result.systemerr ShouldContainSubstring 'Plugin must export a default definition'
+
+  - name: fails when an expected plugin is absent
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          export HOME="$(mktemp -d)"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          source "{{.riotbox_dir}}/container/opencode/smoke.sh"
+          declare -F opencode_smoke_check >/dev/null || { echo "FAIL - opencode_smoke_check missing"; exit 99; }
+          printf '%s' '{"location":{"directory":"/tmp/p"},"data":[{"id":"context-mode","source":{"type":"local","path":"/x"},"features":{"server":true},"state":{"status":"active"}}]}' > "${HOME}/list.json"
+          opencode_smoke_check "${HOME}/list.json" context-mode headroom
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring headroom
+
+  # V2 answers plugin.list from its current inventory without waiting for
+  # activation, so a request that lands too early gets an empty list.
+  - name: fails on an empty list answered before activation
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          export HOME="$(mktemp -d)"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          source "{{.riotbox_dir}}/container/opencode/smoke.sh"
+          declare -F opencode_smoke_check >/dev/null || { echo "FAIL - opencode_smoke_check missing"; exit 99; }
+          printf '%s' '{"location":{"directory":"/tmp/p"},"data":[]}' > "${HOME}/list.json"
+          opencode_smoke_check "${HOME}/list.json" context-mode
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring context-mode
+
+  - name: fails on output that is not a plugin list
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          export HOME="$(mktemp -d)"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          source "{{.riotbox_dir}}/container/opencode/smoke.sh"
+          declare -F opencode_smoke_check >/dev/null || { echo "FAIL - opencode_smoke_check missing"; exit 99; }
+          printf '%s' 'Error: server did not start' > "${HOME}/list.json"
+          opencode_smoke_check "${HOME}/list.json" context-mode
+        assertions:
+          - result.code ShouldEqual 1
+          - result.systemerr ShouldContainSubstring 'not a plugin list'
+
+  - name: fails when no plugin IDs are expected
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          export HOME="$(mktemp -d)"
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
+          source "{{.riotbox_dir}}/container/opencode/smoke.sh"
+          declare -F opencode_smoke_check >/dev/null || { echo "FAIL - opencode_smoke_check missing"; exit 99; }
+          printf '%s' '{"location":{"directory":"/tmp/p"},"data":[]}' > "${HOME}/list.json"
+          opencode_smoke_check "${HOME}/list.json"
+        assertions:
+          - result.code ShouldEqual 2

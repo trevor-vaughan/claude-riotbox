@@ -154,12 +154,18 @@ A flag the CLI no longer recognises is **loud but late**. opencode's
 parser is strict, so an unknown flag exits 1 with usage: an upstream
 rename does not degrade the session, it breaks it, at the moment the
 user tries to work. So the `Containerfile` asserts the flag at build
-time — it requires opencode >= 1.18.0 (the release that added `--auto`)
+time — it requires OpenCode 2 (>= 2.0.0, which carries `--auto`)
 *and* greps the installed binary's help for the flag at both sites the
 wrapper injects into, `opencode run --help` and root `--help`. That
 moves the failure from the user's session to the image build, where it
 names what moved. Same reasoning as
 `agent_<name>_context_mode_build_assert` below.
+
+The floor and the gate are recorded in
+[decisions/opencode-v2.md](decisions/opencode-v2.md). The same gate covers the
+wired plugins: `container/opencode/smoke.sh` loads
+Context Mode, git-ai and headroom into the real OpenCode 2 binary at build time
+and fails the image build if any of them does not load.
 
 For opencode the injected flag is not the only thing granting autonomy —
 `agents/opencode/setup.sh` also forces `permission = "allow"` into the
@@ -596,7 +602,7 @@ either one moves.
 Contract coverage lives in `tests/context-mode.venom.yml` (the Claude
 path, plus the strip-every-other-agent rule),
 `tests/context-mode-opencode.venom.yml` (the opencode path, including the
-foreign-file refusal and the `--pure` warning),
+foreign-file refusal),
 `tests/context-mode-pi.venom.yml` (the Pi path, including the strip that
 leaves user entries merely containing `context-mode`), and
 `tests/doctor-context-mode.venom.yml` (the preflight check for an agent

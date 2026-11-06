@@ -25,7 +25,7 @@ Finally...it was fun!
 ## How it works
 
 1. **`scripts/build.sh`** introspects your local environment (nvm, uv, Go, Rust/rustup, Ruby/RVM, UID, tool configs) and passes them as build args.
-1. The **Containerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. The agent CLIs are installed last — opencode via its [installer](https://opencode.ai/install), Pi from the lockfile pi.dev publishes for each release, then Claude Code via the [official installer](https://claude.ai/install.sh) — for
+1. The **Containerfile** uses a multi-stage build: a `tools` stage downloads standalone binaries (trivy, grype, syft, task, venom), and the `runtime` stage assembles the final CentOS Stream 10 image with all toolchains. The agent CLIs are installed last — OpenCode 2 via its [V2 installer](https://opencode.ai/v2/install), Pi from the lockfile pi.dev publishes for each release, then Claude Code via the [official installer](https://claude.ai/install.sh) — for
    optimal layer caching.
 1. At runtime your project directory is bind-mounted into the container. Auth credentials are synced into an isolated session directory: `~/.claude/.credentials.json` is bind-mounted read-write (so token refreshes write back to the host), and `~/.claude.json` is copied so each container gets a writable snapshot without host contention.
 1. **A single generic wrapper** (`container/agent-wrapper.sh`) shadows the real agent binaries via per-agent symlinks under `~/.riotbox/bin/`. The wrapper detects which agent it's running as from its own filename, looks up that agent's manifest at `agents/<name>/manifest.sh`, and applies the manifest's flag-injection rules. The RiotBox autonomy prompt lives at `/etc/claude-code/CLAUDE.md`
@@ -198,6 +198,17 @@ riotbox shell
 
 Default is `claude` if `--agent` is omitted. You can persist a default in `~/.config/riotbox/config` by uncommenting the `RIOTBOX_AGENT` line.
 
+Which integrations each agent gets (`on` means RiotBox wires it for that agent):
+
+| Integration | `--agent=claude` | `--agent=opencode` (OpenCode 2) | `--agent=pi` |
+|---|---|---|---|
+| [Context Mode](#context-mode-opt-in) | on | on | on |
+| [git-ai](#ai-authorship-attribution-git-ai) | on | on | on |
+| [Headroom](#headroom-context-compression-opt-in) | on | on | off |
+| [CodeGraph](#codegraph-code-intelligence) CLI (no MCP server) | on | on | on |
+
+The image build loads Context Mode, git-ai and headroom into the real OpenCode 2 binary (`container/opencode/smoke.sh`) and fails if any of them does not load, so none of them is switched off for OpenCode.
+
 > Want to add another agent (aider, goose, cursor-agent, codex, …)? See [`docs/dev/adding-an-agent.md`](docs/dev/adding-an-agent.md). The agent registry at `agents/registry.sh` is the single source of truth — adding an agent is a manifest plus a Containerfile install line, no edits to dispatch sites or wrappers.
 
 ### Opencode auth
@@ -219,6 +230,9 @@ Your host `~/.config/opencode/` (agents, commands, themes, `opencode.json`, `ope
 - `share = "disabled"` — no session telemetry from the container.
 - `autoupdate = false` — the image pins opencode at build time.
 - `instructions` includes `~/.config/opencode/AGENTS.md` — the RiotBox autonomy prompt is always loaded.
+- `disabled_providers` includes `opencode` — unless your config opts in (see below).
+
+With no provider credentials, OpenCode 2 does not stop. It falls back to the free models of its built-in hosted `opencode` provider (shown as `build · big-pickle`) and sends your prompt and code to `opencode.ai`. RiotBox turns that fallback off, so a session with nothing configured fails with `Error: No model is available for session …`. Your own `disabled_providers` entries are kept. To use the hosted models on purpose, name the provider in your host config. Any one of these works: a top-level `model` or `small_model` such as `"opencode/big-pickle"`, a `provider` (or `providers`) entry keyed `opencode`, or `opencode` in `enabled_providers`. When your config names it, RiotBox writes no disable. A per-agent `model` alone does not count as opting in, so add `"provider": {"opencode": {}}` if only an agent uses it.
 
 A banner comment in the generated `opencode.jsonc` records these forced keys. To change anything else (model, theme, agents, commands, etc.), edit your host `opencode.json` or `opencode.jsonc`; the next launch picks up the change.
 
@@ -265,7 +279,7 @@ A host `AGENTS.md` takes the place of RiotBox's autonomy prompt, as it does for 
 - `packages` — the preinstalled extensions above (plus Context Mode when `RIOTBOX_CONTEXT_MODE=1`). Host entries are dropped with a notice: local paths name host directories, and npm/git entries would install unpinned code at startup. Put extensions you want in the container in `extensions/` instead.
 - `defaultProjectTrust = "always"`, `enableInstallTelemetry = false`, `enableAnalytics = false`.
 
-The `pi` command also runs with `PI_TELEMETRY=0` and `PI_SKIP_VERSION_CHECK=1`. Pi's model catalog refresh from pi.dev stays on, like opencode's models.dev fetch.
+The `pi` command also runs with `PI_TELEMETRY=0` and `PI_SKIP_VERSION_CHECK=1`. Pi's model catalog refresh from pi.dev stays on, like opencode's models.opencode.ai fetch.
 
 `riotbox tokscale` always counts Pi usage in RiotBox sessions. For your native Pi sessions on the host it relies on tokscale, which looks for them through `PI_CONFIG_DIR`, not `PI_CODING_AGENT_DIR`. If you relocated your Pi directory, native usage is missed unless you also set `PI_CONFIG_DIR`; the value tokscale expects has not been verified.
 
@@ -611,6 +625,10 @@ diff -rq <old> <new>
 - No output, or only `Only in <new>` lines: the old copy is the incomplete one, or holds nothing the new one lacks. Delete it: `rm -rf <old>`.
 - Both kinds, or `differ` lines you cannot explain (the session may have changed files in the new copy since): merge what the new copy lacks without overwriting anything, check the differing files by hand, then delete the old copy: `cp -a --update=none <old>/. <new>/` (with GNU coreutils older than 9.3, use `cp -a --no-clobber` instead).
 
+### Upgrading to OpenCode 2
+
+The first OpenCode 2 launch in an existing session imports that session's OpenCode 1 session database into V2's format. The import is one-way. To roll back, use an older image with a fresh session. Context Mode 1.x stores are left unread, and startup prints a notice naming them.
+
 ### Upgrading from a release without hashed session keys
 
 Releases before this one keyed a session by its project paths alone, so projects whose paths differ only by `-` for `/` shared one session. Each session moves to its new key once, at the first launch, `riotbox overlay-diff`, `overlay-accept`, `overlay-reject`, `riotbox session-migrate`, or `riotbox session-remove`/`session-reset` by path for its project set, and prints `Notice: moved <old> to <new>`. Until then `riotbox session-list` shows it under its old key, and `riotbox session-remove <old key>` removes it.
@@ -931,7 +949,11 @@ What lands where:
   disable it — the four settings above do not cover it. Commit and token figures
   do not depend on it: each usage row stores the cost computed from the release's
   *embedded* price table when the row was written. `riotbox git-ai` reads with the
-  network removed for this reason; a session container does not.
+  network removed for this reason; a session container does not. Under
+  `RIOTBOX_EGRESS=1` an opencode session's allowlist no longer includes
+  `models.dev` (OpenCode 2 fetches its catalogue from `models.opencode.ai`), so
+  git-ai's fetch is refused there. That is harmless for the same reason: the
+  stored costs come from the embedded table.
 
 **Prompts are kept out of the note.** The `authorship/3.0.0` schema carries a
 `prompts` object alongside `sessions`, and git-ai can populate it with your
@@ -1155,7 +1177,7 @@ Unless strict mode is on, the allowlist is the union of:
   connectors you added on claude.ai (Gmail, Drive and the like) and so lets
   the agent use those accounts; put `-mcp-proxy.anthropic.com` in your
   `egress.conf` to keep them out. opencode and Pi: the API host of each provider
-  whose key they pass through (opencode also `models.dev`). Vertex and
+  whose key they pass through (opencode also `models.opencode.ai`). Vertex and
   Bedrock hosts are not included; add them yourself if you use them.
 - What `/etc/riotbox/egress.conf` (system) and
   `${XDG_CONFIG_HOME:-~/.config}/riotbox/egress.conf` (yours) allow. Both
@@ -1830,17 +1852,17 @@ What changes when enabled:
   download is checked against a SHA256 — see [Pre-installed
   tools](#pre-installed-tools). This is separate from the bun opencode embeds:
   the hooks on the Claude path do not use either, they run the pinned Node.
-- **Two degradations are specific to opencode, and neither is a riotbox bug:**
-  - *Weaker session-resume attribution.* opencode has no `SessionStart` hook
-    upstream — the adapter cites issues #14808 and #5409 for it. The adapter
-    compensates with plugin-init cleanup and a resume snapshot injected into the
-    system prompt, but continuity across sessions is not as strong as on Claude
-    Code, where `SessionStart` replays the store directly.
-  - *`opencode --pure` turns it off entirely.* That flag runs opencode without
-    external plugins, so the shim never loads and nothing engages. RiotBox warns
-    on stderr when it sees `--pure` with `RIOTBOX_CONTEXT_MODE=1` and then
-    continues unchanged — `--pure` is your explicit instruction, not riotbox's to
-    override.
+- **One degradation is specific to opencode, and it is not a riotbox bug:**
+  *weaker session-resume attribution.* opencode has no `SessionStart` hook
+  upstream — the adapter cites issues #14808 and #5409 for it. The adapter
+  compensates with plugin-init cleanup and a resume snapshot injected into the
+  system prompt, but continuity across sessions is not as strong as on Claude
+  Code, where `SessionStart` replays the store directly.
+- **OpenCode 2 has no `--pure`.** OpenCode 1's `--pure` ran without external
+  plugins, which also switched Context Mode off. OpenCode 2 rejects the flag
+  (`Unrecognized flag: --pure in command opencode run`, exit 1) and has no flag
+  that replaces it. To run a session without Context Mode, launch it with
+  `RIOTBOX_CONTEXT_MODE=0`.
 - `riotbox doctor` reports the agent as well as the image. Ask for Context Mode
   with an agent that has no support in riotbox and the check passes with a
   message saying the session will run with the feature off, rather than reporting
@@ -2779,7 +2801,7 @@ cat ~/.claude/debug/latest
   - **`--agent=opencode`** — unchanged: `  [context-mode] opencode plugin shim wired at <path>.` on stderr.
   - **`--agent=pi`** — `  [context-mode] pi package wired in /home/llm/.pi/agent/settings.json.` on stderr.
 
-  Either way, every give-up path explains itself on **stderr** as `[context-mode] WARN:` or `[plugins] WARNING:` — streams an autonomous run usually discards. Re-run capturing them: `RIOTBOX_CONTEXT_MODE=1 riotbox run "…" 2>/tmp/rb.err; grep -E 'context-mode|Context Mode' /tmp/rb.err`. Most common causes: the selected agent has no Context Mode support in riotbox (the warning names it), the session config could not be written, the image is older than the plugin-staging layer and staged nothing (`riotbox doctor` catches that one and tells you to rebuild), or — on opencode — `--pure` was on the command line, which disables external plugins outright.
+  Either way, every give-up path explains itself on **stderr** as `[context-mode] WARN:` or `[plugins] WARNING:` — streams an autonomous run usually discards. Re-run capturing them: `RIOTBOX_CONTEXT_MODE=1 riotbox run "…" 2>/tmp/rb.err; grep -E 'context-mode|Context Mode' /tmp/rb.err`. Most common causes: the selected agent has no Context Mode support in riotbox (the warning names it), the session config could not be written, or the image is older than the plugin-staging layer and staged nothing (`riotbox doctor` catches that one and tells you to rebuild).
 - **Is the exit report zero rather than absent?** `this run 0 B kept out · 7 tool calls recorded` means the hooks ran and withheld nothing — the feature engaged and saved nothing. Kept out only moves when a large shell output is replaced or routed through the sandbox tools; a session of small tool results has nothing to redirect, and replaced `Read`, `Grep` and `WebFetch` outputs are not measured at all. **No report at all** is the different problem, and it points back to the support check above.
 - **Do not read `riotbox doctor` as proof the session works.** Its probe runs the image with `--entrypoint /usr/bin/bash`, which bypasses `container/entrypoint.sh` — the file where the per-session wiring actually happens. A green check proves that the image's `context-mode` CLI and Node are the versions this riotbox pins, and that the OpenCode adapter and Pi extension are present. It also proves the staged plugin tree routes a `PreToolUse` call, with the hook table the build was reviewed against, and that a mounted `~/.context-mode` store is writable. Finally, it proves the agent you selected has Context Mode support at all. It proves nothing else about your session.
 - **Compare against `/context-mode:ctx-stats` and expect disagreement.** Upstream's headline nets re-reads against savings within each session, counts `ctx_doctor` reports and `ctx_index` input as saved, and reports a percentage of what the tools produced. RiotBox counts only bytes a call produced and the model never received, and reports re-reads separately.

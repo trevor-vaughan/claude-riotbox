@@ -26,8 +26,8 @@
 _AGENT_OPENCODE_CM_MARKER='// riotbox-generated: context-mode shim — do not edit.'
 
 # Absolute path of the shim. opencode auto-loads every file under the global
-# plugins/ directory at startup — plural, verified against opencode 1.18.10;
-# a file in the singular plugin/ is never read.
+# plugins/ directory at startup. V2 reads both plugin/ and plugins/
+# (packages/core/src/plugin/source-directory.ts:7); RiotBox writes the plural.
 _agent_opencode_cm_shim_path() {
 	printf '%s\n' "${OPENCODE_CONFIG_DIR:-${HOME}/.config/opencode}/plugins/riotbox-context-mode.js"
 }
@@ -84,9 +84,10 @@ agent_opencode_context_mode_wire() {
 		'// array would make opencode bun-install context-mode from the registry at' \
 		'// startup, which needs network (RIOTBOX_NETWORK=none forbids it) and floats' \
 		'// the version off the image pin. Regenerated every session start.' \
-		'// The default export alone: opencode 1.x falls back to calling every' \
-		'// function export as a plugin, and the adapter also exports server,' \
-		'// setup and setupLegacy by name, which would register it three times.' \
+		'// The default export alone: opencode 2 loads only a default export with an' \
+		'// id and a setup or effect function (packages/core/src/plugin/module.ts),' \
+		'// so named re-exports of the adapter'"'"'s server, setup and setupLegacy' \
+		'// would be unused.' \
 		"export { default } from \"${adapter}\"" \
 		>"${tmp}"; then
 		rm -f "${tmp}"

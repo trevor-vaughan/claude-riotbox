@@ -13,6 +13,8 @@ is deferred.
 > above. For how Pi behaves today, read [README § Using pi](../../../README.md#using-pi),
 > [THREAT_MODEL § Pi auth surface](../../../THREAT_MODEL.md#pi-auth-surface) and the
 > headers of the files under `agents/pi/` and `container/pi/`.
+>
+> **Superseded in part by [context-mode-2x-migration.md](context-mode-2x-migration.md)** (2026-11-06): D6's `PI_NODE=22.23.4` and "Pi needs Node 22.19". Both pins are now 24.22.2, see [§ 2 there](context-mode-2x-migration.md#2-node-both-pins-move-to-24222-in-the-commit-that-moves-the-pin).
 
 ## Context
 

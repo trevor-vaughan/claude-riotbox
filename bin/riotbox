@@ -196,7 +196,7 @@ print_command_help() {
 		echo "           to latest; Pi's extensions stay at their pins. Reuses every"
 		echo "           other cached layer. Re-installing at a pin is not free:"
 		echo "           headroom re-fetches ~350 MB of models and Context Mode re-runs"
-		echo "           'nvm install' for its pinned Node 22 toolchain, so budget a"
+		echo "           'nvm install' for its pinned Node 24 toolchain, so budget a"
 		echo "           large download on a metered or slow link."
 		echo "Environment knobs:"
 		echo "  NODE_VERSIONS_MAX=<N>|all  Cap baked-in Node versions (default 3)"

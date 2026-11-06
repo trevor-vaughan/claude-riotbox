@@ -285,6 +285,13 @@ always-print exit report exists to prevent. `agent_opencode_wrapper_inject` warn
 when `--pure` appears in argv and `RIOTBOX_CONTEXT_MODE=1`. It warns and continues:
 `--pure` is an explicit user instruction and RiotBox does not override it.
 
+> **Superseded.** OpenCode 2 has no `--pure`: `opencode run --pure hi` exits 1 with
+> `Unrecognized flag: --pure in command opencode run` before any plugin loads, so no
+> session can run silently without Context Mode. The guard was removed and the wrapper
+> passes the token through. V2 has no flag that skips external plugins; its config can
+> remove a single plugin with a `-<id>` entry in `plugin`/`plugins` (upstream
+> `packages/core/src/config/plugin/source.ts:120-122`, `packages/core/src/plugin/supervisor.ts:35-40`).
+
 The warning goes to **stderr, and argv is returned unchanged**. That verb's stdout
 is the NUL-terminated argv the wrapper reads back with `mapfile -d ''`
 (`container/agent-wrapper.sh:90`); a stray line on stdout becomes an argument.
@@ -346,6 +353,7 @@ opencode process is started, matching the existing Context Mode suites:
   keeps it when off, and retains its banner-plus-body shape either way
 - a registered agent with no `context_mode_wire` verb warns, strips, and runs off
 - `--pure` plus `RIOTBOX_CONTEXT_MODE=1` warns on stderr and leaves argv byte-identical
+  (superseded on OpenCode 2: no warning, argv byte-identical)
 
 Extended rather than duplicated: `tests/context-mode.venom.yml` for the moved Claude
 path and the strip-all-others rule, `tests/context-mode-ledger.venom.yml` for a

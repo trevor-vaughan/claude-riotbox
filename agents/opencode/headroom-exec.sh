@@ -107,5 +107,7 @@ if [[ -f "${config}" ]] && body="$(grep -v '^//' "${config}" 2>/dev/null)"; then
 fi
 
 # ── 3. Delegate routing and launch ───────────────────────────────────────────
+# container/opencode/smoke.sh (the image build's plugin gate) repeats these
+# wrap flags to start opencode's service the way a session would; change both.
 exec headroom wrap opencode --no-proxy --no-mcp --no-serena \
 	--port "${port}" -- "${USER_ARGS[@]}"

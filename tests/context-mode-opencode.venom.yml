@@ -735,17 +735,17 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "NO_PLUGIN_KEY_OK"
 
-  # `opencode --pure` runs without external plugins, so the shim never loads and
-  # Context Mode does not engage. The warning is the only signal a user gets;
-  # without it the session reports the feature as wired and a zero saving, which
-  # is precisely the "did it engage at all?" ambiguity the exit report removes.
+  # OpenCode 2 has no `--pure`: `opencode run --pure hi` exits 1 with
+  # `Unrecognized flag: --pure in command opencode run` before any session or
+  # plugin starts, so there is no silently Context-Mode-less session left to warn
+  # about. V1 ran without external plugins and riotbox warned; on V2 the wrapper
+  # passes the token through untouched and opencode refuses it loudly.
   #
-  # The hard constraint in all four cases below: this verb's *stdout* is the
-  # NUL-terminated argv the wrapper reads back with `mapfile -d ''`
-  # (container/agent-wrapper.sh), so a stray line on stdout becomes a
-  # command-line argument. The warning belongs on stderr and argv must come
-  # back byte-identical.
-  - name: --pure with Context Mode on warns without touching argv
+  # The hard constraint: this verb's *stdout* is the NUL-terminated argv the
+  # wrapper reads back with `mapfile -d ''` (container/agent-wrapper.sh), so a
+  # stray line on stdout becomes a command-line argument. argv must come back
+  # byte-identical.
+  - name: --pure with Context Mode on passes through without a Context Mode warning
     steps:
       - type: exec
         script: |
@@ -753,113 +753,23 @@ testcases:
           TEST_DIR="$(mktemp -d)"
           trap 'rm -rf "${TEST_DIR}"' EXIT
           export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
+          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT _CONTEXT_MODE_WIRED
           export RIOTBOX_CONTEXT_MODE=1
 
           source "{{.riotbox_dir}}/agents/registry.sh"
           declare -F agent_opencode_wrapper_inject >/dev/null \
             || { echo "FAIL: agent_opencode_wrapper_inject is not defined"; exit 1; }
 
-          mapfile -d '' -t argv < <(agent_call opencode wrapper_inject run --pure "hi" 2>/dev/null)
-
-          [ "${#argv[@]}" -eq 4 ] \
-            || { echo "FAIL: ${#argv[@]} argv elements, want 4: $(printf '<%s>' "${argv[@]}")"; exit 1; }
-          [ "${argv[0]}" = "run" ] || { echo "FAIL: argv[0]='${argv[0]}', want 'run'"; exit 1; }
-          [ "${argv[1]}" = "--auto" ] \
-            || { echo "FAIL: argv[1]='${argv[1]}', want '--auto'"; exit 1; }
-          [ "${argv[2]}" = "--pure" ] || { echo "FAIL: argv[2]='${argv[2]}', want '--pure'"; exit 1; }
-          [ "${argv[3]}" = "hi" ] || { echo "FAIL: argv[3]='${argv[3]}', want 'hi'"; exit 1; }
-          echo "PURE_ARGV_INTACT_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "PURE_ARGV_INTACT_OK"
-
-  - name: --pure warning names the conflict on stderr
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export RIOTBOX_CONTEXT_MODE=1
-
-          source "{{.riotbox_dir}}/agents/registry.sh"
-
-          agent_call opencode wrapper_inject run --pure "hi" \
-            >/dev/null 2>"${TEST_DIR}/err"
-
-          grep -qF -- '--pure' "${TEST_DIR}/err" \
-            || { echo "FAIL: the warning does not name --pure: $(cat "${TEST_DIR}/err")"; exit 1; }
-          grep -qF 'Context Mode' "${TEST_DIR}/err" \
-            || { echo "FAIL: the warning does not name Context Mode: $(cat "${TEST_DIR}/err")"; exit 1; }
-          echo "PURE_WARNS_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "PURE_WARNS_OK"
-
-  - name: no warning without --pure
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-          export RIOTBOX_CONTEXT_MODE=1
-
-          source "{{.riotbox_dir}}/agents/registry.sh"
-
-          agent_call opencode wrapper_inject run "hi" \
-            >/dev/null 2>"${TEST_DIR}/err"
+          mapfile -d '' -t argv < <(agent_call opencode wrapper_inject run --pure "hi" 2>"${TEST_DIR}/err")
 
           [ ! -s "${TEST_DIR}/err" ] \
-            || { echo "FAIL: warned about --pure on an invocation without it: $(cat "${TEST_DIR}/err")"; exit 1; }
-          echo "NO_PURE_QUIET_OK"
+            || { echo "FAIL: wrote to stderr: $(cat "${TEST_DIR}/err")"; exit 1; }
+          [ "${#argv[@]}" -eq 4 ] \
+            || { echo "FAIL: ${#argv[@]} argv elements, want 4: $(printf '<%s>' "${argv[@]}")"; exit 1; }
+          [ "${argv[0]}" = "run" ] && [ "${argv[1]}" = "--auto" ] \
+            && [ "${argv[2]}" = "--pure" ] && [ "${argv[3]}" = "hi" ] \
+            || { echo "FAIL: argv is $(printf '<%s>' "${argv[@]}")"; exit 1; }
+          echo "PURE_PASSTHROUGH_OK"
         assertions:
           - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "NO_PURE_QUIET_OK"
-
-  # Context Mode is opt-in, so the overwhelming majority of sessions run with the
-  # flag off or unset. If the gate were wrong in that direction every --pure user
-  # would get a warning about a feature they never asked for, which is how
-  # riotbox's stderr becomes noise people learn to skip. Both spellings of "off"
-  # are pinned because unset is the default a user never touches. argv is checked
-  # here too: the guard sits between the argv loop and the env-hint block, so a
-  # botched gate can drop or duplicate tokens on the quiet path as easily as on
-  # the loud one.
-  - name: --pure with Context Mode off is silent
-    steps:
-      - type: exec
-        script: |
-          set -euo pipefail
-          TEST_DIR="$(mktemp -d)"
-          trap 'rm -rf "${TEST_DIR}"' EXIT
-          export HOME="${TEST_DIR}"
-          unset CONTEXT_MODE_DIR CONTEXT_MODE_DATA_DIR RIOTBOX_CONTEXT_MODE RIOTBOX_AGENT
-
-          source "{{.riotbox_dir}}/agents/registry.sh"
-
-          for state in explicit-zero unset; do
-            if [ "${state}" = "explicit-zero" ]; then
-              export RIOTBOX_CONTEXT_MODE=0
-            else
-              unset RIOTBOX_CONTEXT_MODE
-            fi
-
-            mapfile -d '' -t argv < <(agent_call opencode wrapper_inject run --pure "hi" 2>"${TEST_DIR}/err")
-
-            [ ! -s "${TEST_DIR}/err" ] \
-              || { echo "FAIL (${state}): warned with the feature off: $(cat "${TEST_DIR}/err")"; exit 1; }
-            [ "${#argv[@]}" -eq 4 ] \
-              || { echo "FAIL (${state}): ${#argv[@]} argv elements, want 4"; exit 1; }
-            [ "${argv[0]}" = "run" ] && [ "${argv[1]}" = "--auto" ] \
-              && [ "${argv[2]}" = "--pure" ] && [ "${argv[3]}" = "hi" ] \
-              || { echo "FAIL (${state}): argv is $(printf '<%s>' "${argv[@]}")"; exit 1; }
-          done
-          echo "PURE_OFF_SILENT_OK"
-        assertions:
-          - result.code ShouldEqual 0
-          - result.systemout ShouldContainSubstring "PURE_OFF_SILENT_OK"
+          - result.systemout ShouldContainSubstring "PURE_PASSTHROUGH_OK"

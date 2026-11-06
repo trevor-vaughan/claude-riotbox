@@ -134,13 +134,16 @@ No hooks, no MCP server. RiotBox writes a single file,
 adapter (`opencode/plugin.js`) by absolute path. Notes that cost time to
 establish:
 
-- **The directory is `plugins/`, plural.** A file placed in the singular
-  `plugin/` never loads.
+- **The directory is `plugins/`.** opencode 2 reads both `plugin/` and
+  `plugins/` (`packages/core/src/plugin/source-directory.ts:7`); RiotBox
+  writes the plural.
 - **The shim re-exports the default alone.** The adapter's default export is
-  `{ id, server, setup }` — opencode 1.x's loader reads `server`, opencode 2's
-  reads `setup` — and it also exports `server`, `setup` and `setupLegacy` by
-  name. opencode 1.x falls back to calling every function export as a plugin,
-  so a named re-export would register the plugin three times.
+  `{ id, server, setup }`. opencode 2's loader requires a default export with an
+  `id` and a `setup` or `effect` function
+  (`packages/core/src/plugin/module.ts`, "Plugin must export a default
+  definition with an id and an effect or setup function"). It does not read
+  named exports, so re-exporting the adapter's `server`, `setup` and
+  `setupLegacy` is unnecessary.
 - **The adapter finds its own files from `import.meta.url`,** which an ES
   module re-export does not change, so the shim's location does not matter.
 - **The `ctx_*` tools arrive in-process, not over MCP,** and the adapter opens
@@ -552,7 +555,6 @@ copy — do not restate it elsewhere. Regenerate
 | bun's `SHASUMS256.txt.asc` is not verified | The digests are transcribed from the unsigned checksum file; neither the signature nor its key is checked, here or in the refresh recipe | Open |
 | No opencode session run end to end | The adapter opens `node:sqlite` inside opencode's embedded bun. A current bun (1.4.4) loads it with FTS5; the bun opencode ships was not checked | Open |
 | opencode has no `SessionStart` hook upstream | Weaker resume attribution than Claude | Documented degradation, not fixed |
-| `opencode --pure` disables external plugins | Context Mode cannot engage at all | RiotBox warns on stderr and changes nothing else — `--pure` is the user's explicit instruction |
 | No Pi session run end to end through `riotbox` with Context Mode on | The staged package loads into a real Pi session on Node 24 with no errors, but its tools register only at the first `before_agent_start`, and the `riotbox run` integration suite pins the feature off | Open |
 | Pi's routing is not asserted at build time | A version bump can change what the `tool_call` handler blocks without failing the build, as on opencode | Open |
 | The `ctx_doctor` version check cannot be suppressed | When the agent calls `ctx_doctor`, one unauthenticated read of the npm dist-tags, then `git ls-remote` of the release tags if that fails. Offline it reports the version as unknown after a 10 s timeout per source | Accepted; see `THREAT_MODEL.md` |
@@ -634,7 +636,7 @@ model and credentials CI does not have.
 |---|---|
 | `tests/context-mode.venom.yml` | The Claude session path — no 1.x variable exported, the installed-plugin probe, and the legacy-stanza strip driven from fixtures shaped like the previous release's output — plus the build-time pins it depends on: the `Containerfile` layers read as text, and the claude build assert executed against fixtures in both directions |
 | `tests/plugin-setup.venom.yml` | The registration side, end to end: `context_mode_staged_path` and the usability test, the registration and its reconcile, the refusals for a registry *or* a marketplace file it cannot read, build and write, the host-copy exclusion and its three stand-down states, and what removal will and will not claim as RiotBox's own |
-| `tests/context-mode-opencode.venom.yml` | The opencode path, the default-only shim, the foreign-file refusal, the `--pure` warning, no 1.x variable exported |
+| `tests/context-mode-opencode.venom.yml` | The opencode path, the default-only shim, the foreign-file refusal, `--pure` passed through untouched (V2 rejects it), no 1.x variable exported |
 | `tests/context-mode-pi.venom.yml` | The Pi path: the Node floor, idempotent wire and strip, the refusals for a package without `pi.extensions` and for an unusable `settings.json`, the strip that leaves look-alike user entries, the build guard against fixtures in both directions, and the setup orchestration |
 | `tests/context-mode-summary.venom.yml` | Every printed number in the exit report, and the stats SQL against real 2.x stores: the row classes, the watermark and agent scoping, several project stores, a purge, a recreated store, a replaced `Read` that adds nothing, and locked, corrupt and absent stores with the stderr note. The store cases need Node 24: the test image installs the pinned one and sets `RIOTBOX_REQUIRE_CM_NODE=1`, which turns a missing Node into a failure; on a bare host they print `<case>=SKIPPED`. A case asserts the test image's Node pin matches `CONTEXT_MODE_NODE` |
 | `tests/context-mode-ledger.venom.yml` | Schema-2 record shape, the `agent` field, skip-and-return-0 paths, and the report and record agreeing on one real store |
