@@ -1,0 +1,23 @@
+internal/egress/inject/vouch_e2e_test.go
+  s_41155667145060::t_d91cf829e5fb18 18-19,21-22
+internal/egress/pod/inject_e2e_test.go
+  s_41155667145060::t_3c2b6ed3b9bab3 25-26
+tests/lib/egress-e2e-helpers.sh
+  s_41155667145060::t_52b9b302e2388f 12,14-17,19,21,23,25,27,135-137,139-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4f70433f31f272032cbd2c745701c73d104910fe",
+  "prompts": {},
+  "sessions": {
+    "s_41155667145060": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "376723b7-ee9d-49f9-b04d-f181eb783280",
+        "model": "unknown"
+      },
+      "human_author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
