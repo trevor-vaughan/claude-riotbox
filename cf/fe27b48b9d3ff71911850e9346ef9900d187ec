@@ -1,0 +1,19 @@
+libexec/checkpoints.sh
+  s_fa73f14b5507dc::t_15fbec50b42fe4 368-522,591-593,665,668-669,735-742,751-752
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cffe27b48b9d3ff71911850e9346ef9900d187ec",
+  "prompts": {},
+  "sessions": {
+    "s_fa73f14b5507dc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1152dff9-ece2-40e2-9324-8c296718baeb",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
