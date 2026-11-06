@@ -1,0 +1,37 @@
+docs/dev/decisions/README.md
+  s_12396f456952ef::t_e92b4fcca2cf65 25,28-29
+docs/dev/decisions/context-mode-2x-migration.md
+  s_12396f456952ef::t_1cc9147afe6dc6 118-123,125-128
+  s_12396f456952ef::t_ea507271bc03ce 1-117,124,129-295
+docs/dev/decisions/context-mode-adoption.md
+  s_12396f456952ef::t_1cc9147afe6dc6 20-21
+docs/dev/context-mode.md
+  s_12396f456952ef::t_e92b4fcca2cf65 9
+docs/dev/decisions/context-mode-opencode.md
+  s_12396f456952ef::t_1cc9147afe6dc6 12-13
+THREAT_MODEL.md
+  s_12396f456952ef::t_e92b4fcca2cf65 473-474,782-783,896
+  s_12396f456952ef::t_cd002e93426801 901-911
+docs/dev/decisions/context-mode-ledger.md
+  s_12396f456952ef::t_1cc9147afe6dc6 12-13
+docs/dev/decisions/context-mode-native-plugin.md
+  s_12396f456952ef::t_1cc9147afe6dc6 12-13
+README.md
+  s_12396f456952ef::t_e92b4fcca2cf65 591,688
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0b0ec85d75490135dd9833dfca1fe387d99ab076",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
