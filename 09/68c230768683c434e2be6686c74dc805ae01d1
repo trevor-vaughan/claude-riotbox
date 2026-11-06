@@ -1,0 +1,102 @@
+Containerfile
+  s_12396f456952ef::t_2d1cd0be4a99aa 1160,1163-1165
+  s_12396f456952ef::t_3d70cd8a2a2b29 1199-1201
+  s_12396f456952ef::t_f3cd0a5c71f0f8 151
+  s_12396f456952ef::t_04557f63fc29ac 1009,1353
+  s_12396f456952ef::t_ef851639532fad 1106
+  s_12396f456952ef::t_215a67b17e89cc 122-124
+  s_12396f456952ef::t_7423eb2561098d 815,817,857
+  s_12396f456952ef::t_aa74c2d656066e 819-820
+  s_12396f456952ef::t_f6bffaada5f10b 1664
+  s_12396f456952ef::t_5f360fc3cae3b3 1782
+  s_12396f456952ef::t_5b5a011187db6f 771
+scripts/build.sh
+  s_12396f456952ef::t_f3cd0a5c71f0f8 148,225
+docs/dev/decisions/pi-support.md
+  s_12396f456952ef::t_04557f63fc29ac 37
+container/codegraph-setup.sh
+  s_12396f456952ef::t_ccf05961934b4a 42-43,139-145
+agents/pi/git-ai.sh
+  s_12396f456952ef::t_215a67b17e89cc 17,24
+README.md
+  s_12396f456952ef::t_215a67b17e89cc 330
+  s_12396f456952ef::t_50baf04b857c45 984-985
+  s_12396f456952ef::t_5b6463843036a5 961
+  s_12396f456952ef::t_65ac933a33990c 244-246
+THREAT_MODEL.md
+  s_12396f456952ef::t_215a67b17e89cc 1024
+  s_12396f456952ef::t_cd002e93426801 925
+  s_12396f456952ef::t_459c7e759adb82 200
+docs/dev/agent-contract.md
+  s_12396f456952ef::t_215a67b17e89cc 784
+  s_12396f456952ef::t_5b6463843036a5 348-352
+tests/Containerfile.test
+  s_12396f456952ef::t_215a67b17e89cc 91-92
+tests/git-ai.venom.yml
+  s_12396f456952ef::t_feb1d187cd7da5 956
+tests/headroom-claude.venom.yml
+  s_12396f456952ef::t_3f5e9d0af0dac6 8-10,309,333
+  s_12396f456952ef::t_3d15d93df18501 14-16
+  s_12396f456952ef::t_70c9d32e6b7ab6 13
+  s_12396f456952ef::t_5a87c26799d4c9 11-12
+tests/headroom-opencode.venom.yml
+  s_12396f456952ef::t_3f5e9d0af0dac6 253,255-256
+agents/opencode/headroom-exec.sh
+  s_12396f456952ef::t_7e69815eded869 40
+tests/agents.venom.yml
+  s_12396f456952ef::t_50baf04b857c45 575
+tests/headroom.venom.yml
+  s_12396f456952ef::t_50baf04b857c45 124
+  s_12396f456952ef::t_3f5e9d0af0dac6 229,231-234
+container/agent-wrapper.sh
+  s_12396f456952ef::t_7e69815eded869 52
+agents/lib/headroom-proxy.sh
+  s_12396f456952ef::t_97c313ce9133d8 44-45,59
+  s_12396f456952ef::t_19261dc46bff8d 106-108,110-111
+  s_12396f456952ef::t_30d5c19eaaa493 12-16,22,24,28-30
+agents/claude/manifest.sh
+  s_12396f456952ef::t_5b6463843036a5 85-88
+agents/claude/headroom-exec.sh
+  s_12396f456952ef::t_6dd9ca2564dd72 20-22,26,30,34,36
+  s_12396f456952ef::t_6da5586d41d493 43,45-49
+  s_12396f456952ef::t_14c5739cd7a4ac 59
+  s_12396f456952ef::t_782e9b3f94f799 69-71
+  s_12396f456952ef::t_b544af695a12c4 112,141,181
+tests/lib/fake-headroom-listener.py
+  s_12396f456952ef::t_086e18363e6cd1 9
+tests/lib/headroom-fakes.sh
+  s_12396f456952ef::t_7e69815eded869 178-179
+container/pi/package.json
+  s_12396f456952ef::t_65ac933a33990c 7-9,12
+container/pi/package-lock.json
+  s_12396f456952ef::t_4cb0d092135d2e 11-13,29-31,34,49-51,58-60,63,106-108,114,122,146-148
+docs/dev/context-mode.md
+  s_12396f456952ef::t_d0f9bd7ab995ba 273
+  s_12396f456952ef::t_c0249783ac4bdd 355,361,365
+  s_12396f456952ef::t_8ce6901cd1e711 343
+tests/context-mode.venom.yml
+  s_12396f456952ef::t_f15fc7235276f9 1380-1381
+container/context-mode-setup.sh
+  s_12396f456952ef::t_c6b4db872d171d 52
+container/context-mode-summary.sh
+  s_12396f456952ef::t_aaa34b66160d05 421,423
+  s_12396f456952ef::t_37e246581ffed7 366
+tests/doctor-context-mode.venom.yml
+  s_12396f456952ef::t_cef05fb6b5d070 496-497,617,637
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0968c230768683c434e2be6686c74dc805ae01d1",
+  "prompts": {},
+  "sessions": {
+    "s_12396f456952ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2a329ec2-5c21-4de3-be41-df3d2d55d5a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
