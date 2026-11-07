@@ -1,0 +1,19 @@
+internal/egress/policy/resolve_test.go
+  s_85858abadac5c9::t_0dbe0c1daf69a5 260-269
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "40157113c881548ece9202269d528dca330fe708",
+  "prompts": {},
+  "sessions": {
+    "s_85858abadac5c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "49ed78b9-c0dd-4644-9c37-6044a8beb280",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
