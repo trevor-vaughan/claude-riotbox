@@ -1,0 +1,21 @@
+Containerfile
+  s_e6ce506ec35cbe::t_aa6b2cccf6a41b 1559
+tests/failure-visibility.venom.yml
+  s_e6ce506ec35cbe::t_b9b65bdb6efd41 28-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "c057a39b5c9af8d6ce683a6273c3fd6292da1cae",
+  "prompts": {},
+  "sessions": {
+    "s_e6ce506ec35cbe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "99088057-bbb6-4a4e-beea-527fbfcef9c8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
