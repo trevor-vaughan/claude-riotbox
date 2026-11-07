@@ -1,26 +1,37 @@
-docs/dev/egress.md
-  s_85858abadac5c9::t_f50ce6199e2b76 259-268,276,308-317,443-453
-README.md
-  s_85858abadac5c9::t_f50ce6199e2b76 1438,1451-1486
-  s_85858abadac5c9::t_5ba21c0526d34f 1487
-scripts/configs/egress.conf
-  s_85858abadac5c9::t_ef619127fe6740 95-97
 THREAT_MODEL.md
   s_85858abadac5c9::t_f50ce6199e2b76 1247-1252
+scripts/configs/egress.conf
+  s_85858abadac5c9::t_ef619127fe6740 95-97
+docs/dev/egress.md
+  s_85858abadac5c9::t_2fb750ed7a93d4 453-454
+  s_85858abadac5c9::t_f50ce6199e2b76 259-268,276,308-317,443-452
+README.md
+  s_85858abadac5c9::t_5ba21c0526d34f 1487
+  s_85858abadac5c9::t_2fb750ed7a93d4 1438-1439
+  s_85858abadac5c9::t_f50ce6199e2b76 1451-1486
+  s_6add4080ebfdca::t_319040aa21aef8 1440
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.6",
-  "base_commit_sha": "3c55b948536e357590e3d0e6da5cf2fa73a85ded",
+  "base_commit_sha": "deb1a4d1475dcab1849491ab7b68c2325b23d5d4",
   "prompts": {},
   "sessions": {
+    "s_6add4080ebfdca": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "949da27f-88f5-4ebf-bc29-316137fbf1ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    },
     "s_85858abadac5c9": {
       "agent_id": {
         "tool": "claude",
         "id": "49ed78b9-c0dd-4644-9c37-6044a8beb280",
         "model": "claude-opus-5-5"
       },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
+      "human_author": null
     }
   }
 }
