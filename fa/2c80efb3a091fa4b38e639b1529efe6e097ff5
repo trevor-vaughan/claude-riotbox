@@ -1,0 +1,19 @@
+THREAT_MODEL.md
+  s_e6ce506ec35cbe::t_2bbd489fcbe3c5 1597
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "fa2c80efb3a091fa4b38e639b1529efe6e097ff5",
+  "prompts": {},
+  "sessions": {
+    "s_e6ce506ec35cbe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "99088057-bbb6-4a4e-beea-527fbfcef9c8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
