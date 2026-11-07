@@ -1,0 +1,23 @@
+README.md
+  s_85858abadac5c9::t_118657d68ca24b 1477-1480,1483-1485
+docs/dev/egress.md
+  s_85858abadac5c9::t_85ac9d9bbb62d0 313-316
+scripts/configs/egress.conf
+  s_85858abadac5c9::t_3644419a6f04f2 107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "34073cca72018c5d010ea74f017adb5724476435",
+  "prompts": {},
+  "sessions": {
+    "s_85858abadac5c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "49ed78b9-c0dd-4644-9c37-6044a8beb280",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
