@@ -2,7 +2,7 @@ scripts/build.sh
   s_417c2318c40a48::t_13cf1934f3ff25 326-331,333,336-338
   s_417c2318c40a48::t_627e7b36c3a63e 365-366
 README.md
-  s_417c2318c40a48::t_1b141c75f61f7c 2545
+  s_417c2318c40a48::t_1b141c75f61f7c 2545,2587
 tests/build-config-scrub.venom.yml
   s_417c2318c40a48::t_1122c5692fb010 1-103
 ---
