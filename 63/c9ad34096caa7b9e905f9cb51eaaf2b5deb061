@@ -1,0 +1,21 @@
+libexec/hub.sh
+  s_39e619da963185::t_e5d10b53239fd8 61
+tests/anywhere.venom.yml
+  s_39e619da963185::t_5534a68e3e49df 218-236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "63c9ad34096caa7b9e905f9cb51eaaf2b5deb061",
+  "prompts": {},
+  "sessions": {
+    "s_39e619da963185": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "445fdd53-32ab-4f92-905c-1763b8c2e3db",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
