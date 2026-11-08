@@ -1,0 +1,103 @@
+name: build.sh tool-config credential scrubbing
+vars:
+  root: "."
+
+# build.sh copies host tool configs into configs/, which the Containerfile
+# COPYs into an image layer. A credential that survives the copy is baked into
+# the image for good. Line filters catch password/token keys; a credential can
+# also sit inside an index URL (https://user:token@host/...), which a line
+# filter keeps because the line also carries the index the config needs.
+#
+# Same harness as build-gitignore-global: the real build.sh against a copy of
+# the tree, a sandboxed HOME, and a fake podman, so nothing is built.
+testcases:
+  - name: URL credentials are scrubbed from pip.conf, uv.toml and cargo config
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          root="$(cd "{{.root}}" && pwd)"
+          sb="$(mktemp -d)"
+          trap 'rm -rf "${sb}"' EXIT
+          mkdir -p "${sb}/bin" "${sb}/home/.pip" "${sb}/home/.config/pip" \
+            "${sb}/home/.config/uv" "${sb}/home/.cargo" "${sb}/repo"
+          printf '#!/bin/sh\nif [ "$1" = unshare ]; then printf "0 0 4294967295\\n"; fi\nexit 0\n' >"${sb}/bin/podman"
+          chmod +x "${sb}/bin/podman"
+          cp -a "${root}/." "${sb}/repo/"
+          rm -rf "${sb}/repo/configs"
+
+          cat >"${sb}/home/.pip/pip.conf" <<'EOF'
+          [global]
+          index-url = https://alice:SECRET1@pypi.example.com/simple
+          extra-index-url = https://SECRET2@extra.example.com/simple
+          password = SECRET3
+          timeout = 60
+          EOF
+          cp "${sb}/home/.pip/pip.conf" "${sb}/home/.config/pip/pip.conf"
+          cat >"${sb}/home/.config/uv/uv.toml" <<'EOF'
+          [[index]]
+          name = "private"
+          url = "https://bob:SECRET4@uv.example.com/simple"
+          EOF
+          cat >"${sb}/home/.cargo/config.toml" <<'EOF'
+          [registries.private]
+          index = "sparse+https://carol:SECRET5@crates.example.com/index/"
+          token = "SECRET6"
+          EOF
+
+          ( cd "${sb}/repo" && HOME="${sb}/home" PATH="${sb}/bin:${PATH}" \
+              RIOTBOX_NONINTERACTIVE_BUILD=1 bash scripts/build.sh </dev/null >"${sb}/build.log" 2>&1 ) \
+            || { cat "${sb}/build.log" >&2; exit 1; }
+
+          cfg="${sb}/repo/configs"
+          if grep -rn 'SECRET' "${cfg}"; then
+            echo "FAIL: a credential reached configs/" >&2; exit 1
+          fi
+          # The non-secret parts must survive, or the configs stop working.
+          for want in \
+            ".pip/pip.conf:index-url = https://pypi.example.com/simple" \
+            ".pip/pip.conf:extra-index-url = https://extra.example.com/simple" \
+            ".pip/pip.conf:timeout = 60" \
+            ".config/pip/pip.conf:index-url = https://pypi.example.com/simple" \
+            '.config/uv/uv.toml:url = "https://uv.example.com/simple"' \
+            '.config/uv/uv.toml:name = "private"' \
+            '.cargo/config.toml:index = "sparse+https://crates.example.com/index/"'; do
+            grep -qxF "${want#*:}" "${cfg}/${want%%:*}" \
+              || { echo "FAIL: ${want%%:*} lost: ${want#*:}" >&2; cat "${cfg}/${want%%:*}" >&2; exit 1; }
+          done
+          echo "SCRUBBED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "SCRUBBED"
+
+  # Negative case: configs without credentials must come through byte for
+  # byte, so the scrub never rewrites a URL that carries no userinfo.
+  - name: configs without credentials are staged unchanged
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          root="$(cd "{{.root}}" && pwd)"
+          sb="$(mktemp -d)"
+          trap 'rm -rf "${sb}"' EXIT
+          mkdir -p "${sb}/bin" "${sb}/home/.config/uv" "${sb}/repo"
+          printf '#!/bin/sh\nif [ "$1" = unshare ]; then printf "0 0 4294967295\\n"; fi\nexit 0\n' >"${sb}/bin/podman"
+          chmod +x "${sb}/bin/podman"
+          cp -a "${root}/." "${sb}/repo/"
+          rm -rf "${sb}/repo/configs"
+          cat >"${sb}/home/.config/uv/uv.toml" <<'EOF'
+          # mirror: user@example.com maintains this
+          [[index]]
+          url = "https://uv.example.com/simple"
+          EOF
+
+          ( cd "${sb}/repo" && HOME="${sb}/home" PATH="${sb}/bin:${PATH}" \
+              RIOTBOX_NONINTERACTIVE_BUILD=1 bash scripts/build.sh </dev/null >"${sb}/build.log" 2>&1 ) \
+            || { cat "${sb}/build.log" >&2; exit 1; }
+
+          cmp -s "${sb}/repo/configs/.config/uv/uv.toml" "${sb}/home/.config/uv/uv.toml" \
+            || { echo "FAIL: clean uv.toml was altered" >&2; exit 1; }
+          echo "UNCHANGED"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "UNCHANGED"

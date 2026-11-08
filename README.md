@@ -2478,6 +2478,8 @@ If you say yes, the agent works on `riotbox/<id>` instead of your current branch
 
 **If the working tree still has uncommitted edits** that checking out the base branch would overwrite: the switch back is refused, so the merge is skipped and the session branch stays checked out. The container says so and prints the resolution (`git stash`, switch, `git merge --ff-only`, `git stash pop`). This one is sticky — until you resolve it, later sessions just continue on that branch, because setup sees it is already a session branch and neither creates nor merges a new one. Untracked scratch files and edits to files that are identical on both branches do not trigger this; git only refuses when the checkout would destroy work.
 
+**If the container is stopped** (`podman stop`): the SIGTERM is passed to the agent, and teardown runs once it exits, as on a normal exit. An agent still running when the stop timeout expires (10 seconds by default) is hard-killed.
+
 **If the container is hard-killed** (SIGKILL, OOM): teardown doesn't run, but the session branch persists on disk and can be merged manually:
 
 ```sh
@@ -2584,7 +2586,7 @@ Non-interactive callers (`riotbox run`, CI, scripts) never block on the prompt: 
 
 - **SELinux**: project and session bind mounts use `:z`. Package caches use named volumes to avoid relabeling overhead. `.claude.json` is copied rather than mounted to avoid `:z` relabeling issues on 600-permission files; `.credentials.json` is bind-mounted RW inside the session directory (a nested mount that avoids the relabeling problem).
 
-- **Tool configs** (`.npmrc`, `.editorconfig`, etc.) are copied at build time — not mounted — so edits inside the container don't affect the host. Auth tokens are stripped from `.npmrc`, `pip.conf`, and `cargo/config.toml` before baking into the image. Use `mounts.conf` to supply live credentials at runtime. Your `~/.gitignore_global` is copied the same way, and the image's git config sets `core.excludesFile` to it, so your global ignores apply inside the container. If you have none, the image gets [`container/gitignore_global`](container/gitignore_global) instead: OS and editor junk, `.env`, and per-user agent state. Your `~/.gitconfig` is never copied; the container's `~/.gitconfig` is baked by the Containerfile and commits as `LLM (riotbox)` so `reown` and the pre-push guard can recognise them.
+- **Tool configs** (`.npmrc`, `.editorconfig`, etc.) are copied at build time — not mounted — so edits inside the container don't affect the host. Auth tokens are stripped from `.npmrc`, `pip.conf`, and `cargo/config.toml` before baking into the image, and credentials embedded in URLs (`https://user:token@host/…`) are removed from those files and from `uv.toml`, leaving the bare URL. Use `mounts.conf` to supply live credentials at runtime. Your `~/.gitignore_global` is copied the same way, and the image's git config sets `core.excludesFile` to it, so your global ignores apply inside the container. If you have none, the image gets [`container/gitignore_global`](container/gitignore_global) instead: OS and editor junk, `.env`, and per-user agent state. Your `~/.gitconfig` is never copied; the container's `~/.gitconfig` is baked by the Containerfile and commits as `LLM (riotbox)` so `reown` and the pre-push guard can recognise them.
 
 - **Nested containers**: `RIOTBOX_NESTED=1` is a privileged mode for running podman-in-podman; default mode keeps a tighter profile. The flag set is:
 

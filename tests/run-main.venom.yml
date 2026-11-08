@@ -1,0 +1,115 @@
+name: run-main.sh tests
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# The entrypoint is PID 1. The kernel drops any signal sent to PID 1 that has
+# no handler installed, so a bash entrypoint waiting on a foreground child
+# never sees `podman stop`'s SIGTERM: the stop timeout expires, SIGKILL lands,
+# and the agent dies without teardown. run_main_command runs the child in the
+# background, forwards SIGTERM to it, and waits, while keeping what a
+# foreground child had: the caller's stdin and default SIGINT/SIGQUIT
+# handling. These cases run the function in an ordinary bash process. The
+# trap and wait behaviour is identical there; only the PID-1 drop rule is
+# not reproduced, and the function's handler is what removes that rule.
+
+testcases:
+  - name: run_main_command returns the child's exit code
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/container/run-main.sh"
+          run_main_command bash -c 'exit 7'
+          echo "rc=$?"
+        assertions:
+          - result.systemout ShouldContainSubstring "rc=7"
+
+  - name: run_main_command with no arguments runs bash
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/container/run-main.sh"
+          echo 'exit 3' | run_main_command
+          echo "rc=$?"
+        assertions:
+          - result.systemout ShouldContainSubstring "rc=3"
+
+  # A non-interactive `cmd &` defaults stdin to /dev/null, which would cut an
+  # interactive agent off from its terminal.
+  - name: the child reads the caller's stdin, not /dev/null
+    steps:
+      - type: exec
+        script: |
+          source "{{.riotbox_dir}}/container/run-main.sh"
+          echo "from-caller" | run_main_command cat
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "from-caller"
+
+  # A non-interactive `cmd &` also ignores SIGINT and SIGQUIT, which would make
+  # Ctrl-C at the terminal do nothing to the agent or its tools.
+  - name: the child does not ignore SIGINT or SIGQUIT
+    steps:
+      - type: exec
+        script: |
+          set -eu
+          source "{{.riotbox_dir}}/container/run-main.sh"
+          mask="$(run_main_command awk '/^SigIgn:/ { print $2 }' /proc/self/status)"
+          # Bit 1 is SIGINT (2), bit 2 is SIGQUIT (3).
+          if (( (16#${mask} & 0x6) != 0 )); then
+            echo "FAIL: child SigIgn=${mask} ignores SIGINT or SIGQUIT" >&2
+            exit 1
+          fi
+          echo "child_signals_default=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "child_signals_default=true"
+
+  - name: SIGTERM to the entrypoint reaches the child and teardown still runs
+    steps:
+      - type: exec
+        script: |
+          set -eu
+          T="$(mktemp -d)"
+          trap 'rm -rf "${T}"' EXIT
+          bash -c '
+            source "$1/container/run-main.sh"
+            run_main_command bash -c "trap \"touch $2/child-got-term; exit 143\" TERM; touch $2/ready; while :; do sleep 0.1; done"
+            echo "teardown rc=$?" > "$2/after"
+          ' _ "{{.riotbox_dir}}" "${T}" &
+          parent=$!
+          for _ in $(seq 50); do [ -e "${T}/ready" ] && break; sleep 0.1; done
+          kill -TERM "${parent}"
+          for _ in $(seq 50); do [ -e "${T}/after" ] && break; sleep 0.1; done
+          test -e "${T}/child-got-term" || { echo "FAIL: child never got SIGTERM" >&2; exit 1; }
+          cat "${T}/after"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "teardown rc=143"
+
+  # At a terminal, Ctrl-C already reaches the child directly (same process
+  # group). The entrypoint must survive its own copy and not re-send it: a
+  # second SIGINT would count as a double Ctrl-C to agents that exit on one.
+  - name: SIGINT to the entrypoint alone neither kills it nor reaches the child
+    steps:
+      - type: exec
+        script: |
+          set -eu
+          T="$(mktemp -d)"
+          trap 'rm -rf "${T}"' EXIT
+          bash -c '
+            source "$1/container/run-main.sh"
+            run_main_command bash -c "trap \"touch $2/child-got-int\" INT; touch $2/ready; while [ ! -e $2/go ]; do sleep 0.1; done; exit 5"
+            echo "teardown rc=$?" > "$2/after"
+          ' _ "{{.riotbox_dir}}" "${T}" &
+          parent=$!
+          for _ in $(seq 50); do [ -e "${T}/ready" ] && break; sleep 0.1; done
+          kill -INT "${parent}"
+          sleep 0.3
+          touch "${T}/go"
+          for _ in $(seq 50); do [ -e "${T}/after" ] && break; sleep 0.1; done
+          test ! -e "${T}/child-got-int" || { echo "FAIL: SIGINT was forwarded to the child" >&2; exit 1; }
+          cat "${T}/after"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "teardown rc=5"

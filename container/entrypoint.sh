@@ -7,7 +7,7 @@
 # Static config (git identity, gpgsign, dnf assumeyes, git guardrails, etc.)
 # is baked into the image. Only runtime-dependent setup belongs here.
 # shellcheck source=/dev/null
-source ~/.bashrc 2>/dev/null
+source ~/.bashrc
 
 # Easy environment reference for the underlying host
 if [[ -f /etc/hosts ]]; then
@@ -120,6 +120,8 @@ source "${RIOTBOX_SCRIPT_DIR}/overlay-setup.sh"
 source "${RIOTBOX_SCRIPT_DIR}/plugin-setup.sh"
 # shellcheck source=./startup-scripts.sh disable=SC1091
 source "${RIOTBOX_SCRIPT_DIR}/startup-scripts.sh"
+# shellcheck source=./run-main.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/run-main.sh"
 # shellcheck source=./headroom-summary.sh disable=SC1091
 [[ -f "${RIOTBOX_SCRIPT_DIR}/headroom-summary.sh" ]] && \
 	source "${RIOTBOX_SCRIPT_DIR}/headroom-summary.sh"
@@ -214,13 +216,8 @@ declare -F headroom_summary_init >/dev/null 2>&1 && headroom_summary_init
 declare -F context_mode_summary_init >/dev/null 2>&1 && context_mode_summary_init
 
 # Run the main command without exec so this shell survives to run teardown.
-# exec was originally used to avoid bash -lc semantics — sourcing .bashrc above
-# already handles that. Foreground child processes inherit the TTY regardless.
-if [[ $# -eq 0 ]]; then
-	bash
-else
-	"$@"
-fi
+# run_main_command forwards podman stop's SIGTERM to it; see run-main.sh.
+run_main_command "$@"
 _exit_code=$?
 
 # Print compact per-model token usage summary.  No-op unless RIOTBOX_HEADROOM=1
