@@ -1,0 +1,139 @@
+name: build and startup failures stay visible
+vars:
+  root: "."
+
+# Each case pins a spot where a failure used to be discarded (`|| true`,
+# `2>/dev/null`, or a silent default) so the build or session carried on with a
+# broken result. The Containerfile cases are structural, like locale.venom.yml:
+# building an image costs 15-60 minutes and the property is a build input.
+testcases:
+  # A plugin whose install failed left the build green and the image short one
+  # plugin, with nothing to show which.
+  - name: a failed plugin pre-stage install fails the build
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          block="$(awk '/^# ── Pre-stage plugins/ { on = 1 } on && /^$/ { exit } on' Containerfile)"
+          if ! grep -q 'claude plugin install' <<<"${block}"; then
+            echo "FAIL: no 'claude plugin install' in the pre-stage block; this case has nothing to check." >&2
+            exit 1
+          fi
+          if grep -q '|| true' <<<"${block}"; then
+            echo "FAIL: the plugin pre-stage block discards install failures:" >&2
+            grep -n '|| true' <<<"${block}" >&2
+            exit 1
+          fi
+          # RUN has no set -e, and a for loop's status is its last iteration's,
+          # so every install inside the loop must stop the loop itself.
+          if ! grep -qE 'claude plugin install "\$p" \|\| exit 1' <<<"${block}"; then
+            echo "FAIL: a failed install inside the plugin loop is masked by later iterations" >&2
+            exit 1
+          fi
+          echo "plugin_failures_fail_build=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "plugin_failures_fail_build=true"
+
+  # A broken ~/.bashrc leaves nvm, cargo and rvm off PATH for the whole
+  # session; its error message is the only clue.
+  - name: the entrypoint shows errors from sourcing ~/.bashrc
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          line="$(grep -E '^[[:space:]]*(source|\.)[[:space:]]+~/\.bashrc' container/entrypoint.sh)" || {
+            echo "FAIL: entrypoint.sh no longer sources ~/.bashrc; this case has nothing to check." >&2
+            exit 1
+          }
+          if grep -q '2>' <<<"${line}"; then
+            echo "FAIL: entrypoint.sh discards ~/.bashrc errors: ${line}" >&2
+            exit 1
+          fi
+          echo "bashrc_errors_visible=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "bashrc_errors_visible=true"
+
+  # The fallback (HOST_GID already taken in the base image) gives llm ids that
+  # differ from the host's. It has to say so, and neither branch may hide the
+  # error that sent it there.
+  - name: llm user creation reports a GID fallback and hides no errors
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          block="$(awk '/^RUN .*groupadd -g/ { on = 1 } on { print } on && /useradd -l -m -s \/bin\/bash llm/ { exit }' Containerfile)"
+          if [ -z "${block}" ]; then
+            echo "FAIL: no groupadd RUN for the llm user; this case has nothing to check." >&2
+            exit 1
+          fi
+          if grep -q '2>/dev/null' <<<"${block}"; then
+            echo "FAIL: llm user creation discards groupadd/useradd errors" >&2
+            exit 1
+          fi
+          if ! grep -q 'HOST_GID.*>&2' <<<"${block}"; then
+            echo "FAIL: the default-ids fallback does not report itself on stderr" >&2
+            exit 1
+          fi
+          echo "user_creation_visible=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "user_creation_visible=true"
+
+  - name: the locale strip does not discard find or rm failures
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          cd "{{.root}}"
+          block="$(awk '/^RUN find \/usr\/share\/locale/ { on = 1 } on { print } on && !/\\$/ { exit }' Containerfile)"
+          if [ -z "${block}" ]; then
+            echo "FAIL: no locale-strip RUN; this case has nothing to check." >&2
+            exit 1
+          fi
+          if grep -qE '\|\| true|2>/dev/null' <<<"${block}"; then
+            echo "FAIL: the locale strip discards failures: ${block}" >&2
+            exit 1
+          fi
+          echo "locale_strip_visible=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "locale_strip_visible=true"
+
+  # A tree without VERSION is not a riotbox checkout or install (install.sh
+  # refuses one too); labelling the image version=unknown hid that. Same
+  # harness as build-config-scrub: the real build.sh against a copy of the
+  # tree, a sandboxed HOME, and a fake podman.
+  - name: build.sh refuses to build without a VERSION file
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          root="$(cd "{{.root}}" && pwd)"
+          sb="$(mktemp -d)"
+          trap 'rm -rf "${sb}"' EXIT
+          mkdir -p "${sb}/bin" "${sb}/home" "${sb}/repo"
+          printf '#!/bin/sh\necho podman-called >>"%s/podman.log"\nexit 0\n' "${sb}" >"${sb}/bin/podman"
+          chmod +x "${sb}/bin/podman"
+          cp -a "${root}/." "${sb}/repo/"
+          rm -f "${sb}/repo/VERSION"
+          rc=0
+          ( cd "${sb}/repo" && HOME="${sb}/home" PATH="${sb}/bin:${PATH}" \
+              RIOTBOX_NONINTERACTIVE_BUILD=1 bash scripts/build.sh </dev/null >"${sb}/build.log" 2>&1 ) || rc=$?
+          if [ "${rc}" -eq 0 ]; then
+            echo "FAIL: build.sh succeeded without VERSION" >&2
+            cat "${sb}/build.log" >&2
+            exit 1
+          fi
+          if [ -e "${sb}/podman.log" ]; then
+            echo "FAIL: build.sh ran podman before rejecting the missing VERSION" >&2
+            exit 1
+          fi
+          grep -F "VERSION" "${sb}/build.log"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "ERROR"

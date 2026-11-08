@@ -18,7 +18,10 @@ else
 fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VERSION="$(cat "${PROJECT_DIR}/VERSION" 2>/dev/null || echo "unknown")"
+if ! VERSION="$(cat "${PROJECT_DIR}/VERSION")" || [[ -z "${VERSION}" ]]; then
+	echo "ERROR: ${PROJECT_DIR}/VERSION is missing or empty; not a riotbox checkout or install." >&2
+	exit 1
+fi
 
 # Container runtime: prefer podman, fall back to docker
 if command -v podman &>/dev/null; then
@@ -323,13 +326,19 @@ copy_if_exists() {
 	fi
 }
 
-# Copy a config file, stripping lines matching a credential pattern.
-# Usage: strip_and_copy <src> <dst_name> <grep-extended-pattern>
+# Copy a config file, stripping lines matching a credential pattern (if one
+# is given) and the userinfo from every URL. Index URLs carry credentials as
+# scheme://user:token@host, on a line that also holds the index the config
+# needs, so the URL is rewritten rather than the line dropped. A dropped
+# username (ssh://git@host) costs nothing: no SSH keys reach the container.
+# Usage: strip_and_copy <src> <dst_name> [grep-extended-pattern]
 strip_and_copy() {
-	local src="$1" dst_name="$2" pattern="$3"
+	local src="$1" dst_name="$2" pattern="${3:-}"
 	if [[ -f "${src}" ]]; then
 		mkdir -p "${CONFIGS_DIR}/$(dirname "${dst_name}")"
-		grep -vE "${pattern}" "${src}" >"${CONFIGS_DIR}/${dst_name}" 2>/dev/null || true
+		# grep exits 1 when every line matched; only >1 is an error.
+		{ if [[ -n "${pattern}" ]]; then grep -vE "${pattern}" "${src}" || (($? == 1)); else cat "${src}"; fi; } |
+			sed -E 's#://[^/@[:space:]"'\'']+@#://#g' >"${CONFIGS_DIR}/${dst_name}"
 		echo "  ✓ ${src} → configs/${dst_name} (credentials stripped)"
 	fi
 }
@@ -356,12 +365,8 @@ copy_if_exists "${HOME}/.ripgreprc" ".ripgreprc"
 # cargo config: strip registry tokens
 strip_and_copy "${HOME}/.cargo/config.toml" ".cargo/config.toml" '^\s*token\s*='
 
-# uv config
-if [[ -f "${HOME}/.config/uv/uv.toml" ]]; then
-	mkdir -p "${CONFIGS_DIR}/.config/uv"
-	cp "${HOME}/.config/uv/uv.toml" "${CONFIGS_DIR}/.config/uv/uv.toml"
-	echo "  ✓ ~/.config/uv/uv.toml → configs/.config/uv/uv.toml"
-fi
+# uv config: index credentials live only in URLs
+strip_and_copy "${HOME}/.config/uv/uv.toml" ".config/uv/uv.toml"
 
 # Ensure COPY in Containerfile never fails on an empty dir
 touch "${CONFIGS_DIR}/.keep"
@@ -424,7 +429,11 @@ echo "════════════════════════�
 # Dockerfile-only SHELL directive — that way nothing has to override the
 # format to silence "SHELL is not supported for OCI image format".
 
-# shellcheck disable=SC2086  # intentional word splitting for extra args
+# CONTAINER_EXTRA_ARGS is split on whitespace on purpose so it can carry
+# several flags. It is not a trust boundary: it comes from the environment of
+# the user running the build, who can run the engine directly anyway. The cost
+# is that a single argument containing spaces cannot be passed through it.
+# shellcheck disable=SC2086
 ${CONTAINER_CMD} build \
 	${CONTAINER_EXTRA_ARGS:-} \
 	--label "org.opencontainers.image.version=${VERSION}" \

@@ -310,8 +310,9 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
 
 # ── semgrep (Python package — must be installed in the runtime stage) ─────────
 # DL3013: semgrep has a large dependency graph; pinning every transitive dep
-# is impractical here. The image digest pins the base, and semgrep itself is
-# tested at build time (semgrep --version). Use a requirements file for prod.
+# is impractical here, so semgrep floats like the base image, and the
+# install is checked at build time (semgrep --version). Use a requirements
+# file for prod.
 # hadolint ignore=DL3013
 RUN pip3 install --no-cache-dir --break-system-packages semgrep pyyaml && \
     semgrep --version && \
@@ -338,9 +339,15 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
 # ── Non-root user + root-phase config ─────────────────────────────────────────
 # User creation, dnf config, and system prompt dir. The chown -R happens later
 # (after COPY/pip that create root-owned dirs under /home/llm).
-RUN (groupadd -g ${HOST_GID} llm && \
-     useradd -l -m -u ${HOST_UID} -g llm -s /bin/bash llm) 2>/dev/null || \
-    useradd -l -m -s /bin/bash llm && \
+# A HOST_GID the base image already uses (gid 20 is `games`) falls back to
+# useradd's default ids, which differ from the host's; say so in the build log.
+# A taken HOST_UID fails the build in useradd, with useradd's own message.
+RUN if groupadd -g ${HOST_GID} llm; then \
+        useradd -l -m -u ${HOST_UID} -g llm -s /bin/bash llm; \
+    else \
+        echo "WARNING: HOST_GID ${HOST_GID} is taken in the base image; llm gets default ids, not ${HOST_UID}:${HOST_GID}" >&2; \
+        useradd -l -m -s /bin/bash llm; \
+    fi && \
     mkdir -p /workspace && chown llm /workspace && \
     echo "llm ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/llm && \
     # env_reset would drop the egress proxy variables, so keep them for
@@ -380,7 +387,7 @@ RUN . /etc/os-release && \
 # This is a non-interactive automation container; we don't need locale data
 # for 200 other languages. Keep en* (covers en_US, en_GB, etc.).
 RUN find /usr/share/locale -mindepth 1 -maxdepth 1 -type d ! -name 'en*' \
-        -exec rm -rf {} + 2>/dev/null || true
+        -exec rm -rf {} +
 
 # ── Security tools + task/venom from builder stage ───────────────────────────
 COPY --from=tools --chown=llm:llm /tools/bin/ /home/llm/.local/bin/
@@ -545,7 +552,6 @@ RUN mkdir -p \
     git config --global core.pager "" && \
     git config --global advice.detachedHead false && \
     git config --global advice.addIgnoredFile false && \
-    git config --global init.defaultBranch main && \
     git config --global init.defaultBranch main && \
     git config --global worktree.useRelativePaths true && \
     # build.sh stages ~/.gitignore_global (the host's own, or the shipped
@@ -734,6 +740,7 @@ COPY --chown=llm:llm container/session-branch.sh /home/llm/.riotbox/session-bran
 COPY --chown=llm:llm container/overlay-setup.sh /home/llm/.riotbox/overlay-setup.sh
 COPY --chown=llm:llm container/plugin-setup.sh /home/llm/.riotbox/plugin-setup.sh
 COPY --chown=llm:llm container/startup-scripts.sh /home/llm/.riotbox/startup-scripts.sh
+COPY --chown=llm:llm container/run-main.sh /home/llm/.riotbox/run-main.sh
 COPY --chown=llm:llm container/nested-podman-setup.sh /home/llm/.riotbox/nested-podman-setup.sh
 COPY --chown=llm:llm container/headroom-summary.sh /home/llm/.riotbox/headroom-summary.sh
 COPY --chown=llm:llm container/codegraph-setup.sh /home/llm/.riotbox/codegraph-setup.sh
@@ -753,6 +760,7 @@ COPY --chown=llm:llm container/entrypoint.sh /home/llm/.riotbox/entrypoint.sh
 RUN chmod +x /home/llm/.riotbox/entrypoint.sh \
     /home/llm/.riotbox/session-branch.sh /home/llm/.riotbox/overlay-setup.sh \
     /home/llm/.riotbox/plugin-setup.sh /home/llm/.riotbox/startup-scripts.sh \
+    /home/llm/.riotbox/run-main.sh \
     /home/llm/.riotbox/nested-podman-setup.sh /home/llm/.riotbox/headroom-summary.sh \
     /home/llm/.riotbox/codegraph-setup.sh /home/llm/.riotbox/context-mode-setup.sh \
     /home/llm/.riotbox/context-mode-summary.sh /home/llm/.riotbox/git-ai-setup.sh
@@ -1130,12 +1138,13 @@ RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
 # hook path does NOT use bun — those stanzas run the pinned Node from the
 # Context Mode block below — so this layer buys the executor and nothing else.
 #
-# The release asset, not https://bun.sh/install: RIOTBOX-20260312-001 is open
-# and asks every download in this image for download-then-verify against a
-# pinned SHA256, which a piped installer cannot give. Same treatment venom gets,
-# and pinning costs nothing extra here — the version was already the only
-# control over what lands, since nothing in this layer probes for a feature the
-# way the opencode block probes for --auto.
+# The release asset, not https://bun.sh/install: RIOTBOX-20260312-001 asks
+# every download in this image for download-then-verify against a pinned
+# SHA256, which a piped installer cannot give (the finding is accepted for the
+# piped installers that remain). Same treatment venom gets, and pinning costs
+# nothing extra here — the version was already the only control over what
+# lands, since nothing in this layer probes for a feature the way the opencode
+# block probes for --auto.
 #
 # Unlike venom, upstream publishes SHASUMS256.txt per release, so the digests
 # below are transcribed from it rather than self-computed. They are still
@@ -1548,7 +1557,7 @@ RUN STAGING_DIR=/home/llm/.riotbox/plugins-staging/.claude && \
         superpowers ralph-loop \
         frontend-design feature-dev code-simplifier commit-commands \
         security-guidance claude-code-setup claude-md-management; do \
-        CLAUDE_CONFIG_DIR="${STAGING_DIR}" claude plugin install "$p" || true; \
+        CLAUDE_CONFIG_DIR="${STAGING_DIR}" claude plugin install "$p" || exit 1; \
     done
 
 # ═════════════════════════════════════════════════════════════════════════════
