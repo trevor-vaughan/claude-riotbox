@@ -1,0 +1,29 @@
+docs/dev/decisions/egress-proxy.md
+  s_1887f52fff4370::t_8d33059d857644 283-290
+docs/dev/egress.md
+  s_1887f52fff4370::t_3b2b70e7d3fddb 195-199
+internal/egress/envoyconfig/check_test.go
+  s_1887f52fff4370::t_b3940c33140564 1-48
+internal/egress/envoyconfig/envoyconfig.go
+  s_1887f52fff4370::t_352bd020f60a31 27,327-333,335-363,410-448
+internal/egress/state/state.go
+  s_1887f52fff4370::t_13a5e41aaa99b4 533-535,565-567
+internal/egress/state/state_test.go
+  s_1887f52fff4370::t_d32a8b958f3a30 320-352
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "0c51397f7a82e3b543971b322f049db442ac288a",
+  "prompts": {},
+  "sessions": {
+    "s_1887f52fff4370": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a84bb8a714d291610",
+        "model": "unknown"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
