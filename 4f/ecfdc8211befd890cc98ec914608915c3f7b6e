@@ -1,0 +1,27 @@
+docs/dev/egress.md
+  s_42a8301cb1a6ce::t_77d6886f8ae860 168-172,255-257,260-261,264-265,277-280,282-283,288-289,307-309,322-326,403-404
+docs/dev/decisions/egress-proxy.md
+  s_42a8301cb1a6ce::t_bf2b434b4ab794 108-109,235-259
+scripts/configs/egress.conf
+  s_42a8301cb1a6ce::t_f331664394d108 7-8,37-40,46-48,55-56,63-64
+README.md
+  s_42a8301cb1a6ce::t_58ba0e00c2c5ba 1192,1199,1210-1215,1401
+libexec/egress.sh
+  s_42a8301cb1a6ce::t_f331664394d108 19-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "4fecfdc8211befd890cc98ec914608915c3f7b6e",
+  "prompts": {},
+  "sessions": {
+    "s_42a8301cb1a6ce": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "18b240c5-8cd5-4231-8909-fcfbc7f2f6a9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
