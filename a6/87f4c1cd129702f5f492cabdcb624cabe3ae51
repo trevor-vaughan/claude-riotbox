@@ -1,0 +1,23 @@
+internal/egress/hostlink/listener.go
+  s_8dcd9742b18434::t_7a11b68c8ea880 1-172
+internal/egress/hostlink/helpers_test.go
+  s_8dcd9742b18434::t_e3bd19b03f7599 46
+internal/egress/hostlink/listener_test.go
+  s_8dcd9742b18434::t_826e983aecee2f 1-189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "a687f4c1cd129702f5f492cabdcb624cabe3ae51",
+  "prompts": {},
+  "sessions": {
+    "s_8dcd9742b18434": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a4c1f0b7f82feb46a",
+        "model": "unknown"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
