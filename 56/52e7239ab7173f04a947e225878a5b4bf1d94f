@@ -1,0 +1,24 @@
+internal/hub/hub_test.go
+  s_39e619da963185::t_eaf52311bc2068 20-22,26-27,37-45,51-58,66-67,123-167,180
+THREAT_MODEL.md
+  s_39e619da963185::t_7ed17367eb013d 1207-1208,1216-1221,1262-1270
+internal/hub/sessions.go
+  s_39e619da963185::t_d85044ec3fc6bd 14,18,32-39,80-85,93-95,105,108-119,140-170,177,179
+  s_39e619da963185::t_e6ebc28b221132 178
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "5652e7239ab7173f04a947e225878a5b4bf1d94f",
+  "prompts": {},
+  "sessions": {
+    "s_39e619da963185": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "445fdd53-32ab-4f92-905c-1763b8c2e3db",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
