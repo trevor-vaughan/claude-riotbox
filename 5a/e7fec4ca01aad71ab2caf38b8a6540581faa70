@@ -1,0 +1,29 @@
+cmd/riotbox-core/hostlink.go
+  s_8dcd9742b18434::t_ecf3b16e7a0f68 42-44
+internal/egress/hostlink/hostlink.go
+  s_8dcd9742b18434::t_5df80c3b50c9bf 78-83,88-90
+internal/egress/hostlink/listener_test.go
+  s_8dcd9742b18434::t_b6d54f462ec1c2 24-25,30,63,69,130-141,200
+internal/egress/hostlink/ports_test.go
+  s_8dcd9742b18434::t_db325644f9343d 55
+internal/egress/hostlink/relay.go
+  s_8dcd9742b18434::t_57e066e27978dc 23-26,28-30,34,71,105
+internal/egress/hostlink/relay_test.go
+  s_8dcd9742b18434::t_3b7ddd7f86200b 33,70-77,129-130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "5ae7fec4ca01aad71ab2caf38b8a6540581faa70",
+  "prompts": {},
+  "sessions": {
+    "s_8dcd9742b18434": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a4c1f0b7f82feb46a",
+        "model": "unknown"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
