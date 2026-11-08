@@ -1,12 +1,13 @@
 scripts/configs/egress.conf
-  s_42a8301cb1a6ce::t_89cf2239b4f4a2 44-46
-  s_42a8301cb1a6ce::t_94fa8816d43c3a 58-59
-  s_42a8301cb1a6ce::t_0cfd5f0c93899b 73-74
+  s_42a8301cb1a6ce::t_0cfd5f0c93899b 74-75
+  s_42a8301cb1a6ce::t_b24e6cdd7f8df3 7-10
+  s_42a8301cb1a6ce::t_89cf2239b4f4a2 45-47
+  s_42a8301cb1a6ce::t_94fa8816d43c3a 59-60
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.6",
-  "base_commit_sha": "8d0e41a980577e89e0c264a38cd647f1344a41d1",
+  "base_commit_sha": "7dfff6095da3e15e6f010e26f07109c84ce50aa1",
   "prompts": {},
   "sessions": {
     "s_42a8301cb1a6ce": {
@@ -15,7 +16,7 @@ scripts/configs/egress.conf
         "id": "18b240c5-8cd5-4231-8909-fcfbc7f2f6a9",
         "model": "claude-opus-5-5"
       },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
+      "human_author": null
     }
   }
 }
