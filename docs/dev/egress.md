@@ -256,6 +256,16 @@ skipped, a trailing CR is ignored. A preamble, then sections:
   concatenate.
 - **`[group NAME]`**: `NAME` matches `^[a-z0-9][a-z0-9-]{0,62}$`; members are
   `host[:port]` or `*.domain[:port]`, at least one, no `-` or `@`.
+- **`[inject]`** (`policy.InjectRow`): `VARIABLE host header` then
+  `prefix=WORD` / `base-url=VARIABLE`, each at most once, any order. Inside
+  `[inject]` every line is a row: `line` dispatches to `injectRow` before
+  `cutSetting`, which would read `prefix=Bearer` as a setting. Rules:
+  variable and `base-url=` are shell variable names, a variable once per
+  file; host passes `checkHost` (ASCII checked before folding case), no
+  wildcard, no port; header is a lowercase RFC 9110 token and not
+  `host`, `connection`, `keep-alive`, `proxy-connection`, `te`, `trailer`,
+  `transfer-encoding`, `upgrade` or `content-length`; `prefix=` is
+  non-empty visible ASCII and gets one trailing space.
 
 Every error is `file:line: reason`: an unknown section; an unknown setting
 or a `strict` value other than `on`/`off`; a setting after the first
@@ -263,7 +273,7 @@ section; an empty group; a group defined twice in one file; `-` or `@` in a
 group; `[group agent]`; an invalid entry or group name. An `@name` that no
 group defines is caught by resolution, which knows every file's groups.
 `agent.conf` and `applied.conf` are plain host lists (`policy.ParseList`:
-the same grammar, entries only).
+the same grammar, entries only: `ParseList` also refuses `[inject]`).
 
 ## Resolution
 
@@ -294,6 +304,19 @@ the same grammar, entries only).
    File order matters because one overlay can both add and remove a host
    (`allow @pypi`, then `deny pypi.org`); see
    [decisions/egress-proxy.md](decisions/egress-proxy.md#amendments-while-the-branch-was-open).
+
+`[inject]` rows (`fileRows`): the user file's row replaces the system
+file's with the same variable. Each surviving row adds `host:443` to the
+additions, strict or not (strict is "only what the files list", and the
+row is in a file). A removal in either file of exactly that entry fails at
+the row's line (wildcards and other ports do not count: `merge` matches
+exact entries), so a key is never silently left uninjected. `Resolve`
+reports the surviving rows as `Resolved.Inject`; `egressEdit` uses it to
+refuse `deny --save-to` of a row's host (alone or through a group), since
+the saved removal would fail every later `Resolve`. The overlay is
+applied after and may deny it live (`403`, not an error), but may not hold
+`[inject]`: `session.conf` is writable by the host user, so by an agent
+with `riotbox ~`, and a row decides where a real key goes.
 
 With strict off and no conf files the result is exactly the allowlist
 every session had before strict mode existed (a spec pins this). Strict and
@@ -420,8 +443,18 @@ record by number (a repeated one by its name), never by its value, before
 anything is created.
 `inject.Decide` picks the keys to inject (`inject.Providers`; the base-URL
 rule is in its comment) and `Plan.Notice` names the rest in one line on
-stderr. `egress-up` unsets the injected names in its own environment, so
-the engine commands `Up` runs never inherit a key. `pod.Up` →
+stderr. `inject.Providers` is the built-in table only. `egress-up` passes
+`inject.Decide` the table `policy.Providers` builds: built-in rows, then
+the system file's `[inject]` rows, then the user file's, each replacing the
+row with the same variable in its place. A replacing row never keeps
+`HeadroomLoopback`: only `agents/claude/headroom-exec.sh` rewrites a base URL
+to loopback, for `ANTHROPIC_BASE_URL` and `api.anthropic.com`. Two rows for
+one host are refused (also by `Resolve`, so every `riotbox egress` command
+reports it): the proxy carries one credential per host. Credentials are
+fixed at `egress-up`; a reload changes only the allowlist. The test that
+keeps `inject.Providers` in line with the agents' `env_vars` covers the
+built-in table only. `egress-up` unsets the injected names in its own
+environment, so the engine commands `Up` runs never inherit a key. `pod.Up` →
 `state.Dir.WriteInjection` makes the CA and leaves (`inject.NewCerts`),
 writes the secrets dir (on the runtime tmpfs; `egress-up` has already
 failed when there is none), `ca.crt` and `injected` before any engine

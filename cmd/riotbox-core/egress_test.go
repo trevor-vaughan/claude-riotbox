@@ -249,6 +249,30 @@ var _ = Describe("egress verbs", func() {
 			Expect(strings.Contains(string(got), "s3cret")).To(BeFalse(), "an engine command inherited the injected key")
 			Expect(strings.Contains("\n"+string(got), "\nGITHUB_TOKEN=ghp-passthrough-value\n")).To(BeTrue(), "an engine command lost the pass-through key")
 		})
+
+		It("injects a key an [inject] row in the user conf names, dropping it from the engine's environment", func() {
+			Expect(os.MkdirAll(filepath.Dir(user), 0o700)).To(Succeed())
+			Expect(os.WriteFile(user, []byte("[inject]\nGITHUB_TOKEN api.github.com authorization prefix=Bearer\n"), 0o600)).To(Succeed())
+			environ := filepath.Join(tmp, "environ")
+			env = append(env, "XDG_RUNTIME_DIR="+privateRuntime(), "FAKE_ENVIRON="+environ, "GITHUB_TOKEN=ghp-s3cret-injected")
+			s := runEgressIn("api.example.com\n\x00GITHUB_TOKEN=ghp-s3cret-injected\x00", upArgs("1", "s1")...)
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("these keys still enter the container"))
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("s3cret"))
+			// Booleans, not ContainSubstring: a failure must not print the
+			// engine's environment.
+			got, err := os.ReadFile(environ)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(strings.Contains(string(got), "s3cret")).To(BeFalse(), "an engine command inherited the injected key")
+		})
+
+		It("refuses a broken [inject] row before touching the engine", func() {
+			Expect(os.MkdirAll(filepath.Dir(user), 0o700)).To(Succeed())
+			Expect(os.WriteFile(user, []byte("[inject]\nGITHUB_TOKEN api.github.com host\n"), 0o600)).To(Succeed())
+			s := runEgressIn("\x00", upArgs("1", "s1")...)
+			Expect(s.ExitCode()).To(Equal(1))
+			Expect(string(s.Err.Contents())).To(ContainSubstring(user + ":2: the host header cannot carry a key"))
+			Expect(log).NotTo(BeAnExistingFile())
+		})
 	})
 
 	Describe("egress-allow and egress-deny", func() {
@@ -264,6 +288,39 @@ var _ = Describe("egress verbs", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(rds)).To(ContainSubstring(`"example.org:443"`))
 			Expect(os.ReadFile(save)).To(Equal([]byte("example.org\n")))
+		})
+
+		Context("when the entry is an [inject] row's host", func() {
+			const row = "[inject]\nNVIDIA_API_KEY integrate.api.nvidia.com authorization prefix=Bearer\n"
+			const refusal = "NVIDIA_API_KEY injects its key for integrate.api.nvidia.com"
+
+			setup := func(conf string) (d state.Dir) {
+				Expect(os.MkdirAll(filepath.Dir(user), 0o700)).To(Succeed())
+				Expect(os.WriteFile(user, []byte(conf), 0o600)).To(Succeed())
+				d = seed("s1")
+				env = append(env, gatewaysJSON("s1"))
+				return d
+			}
+
+			DescribeTable("refuses --save-to, changing nothing",
+				func(conf, item string) {
+					d := setup(conf)
+					s := runEgress(append(confArgs("egress-deny"), "--save-to", user, "--", item)...)
+					Expect(s.ExitCode()).To(Equal(1))
+					Expect(string(s.Err.Contents())).To(ContainSubstring(refusal))
+					Expect(d.SessionConf()).NotTo(BeAnExistingFile())
+					Expect(os.ReadFile(user)).To(Equal([]byte(conf)))
+				},
+				Entry("the host itself", row, "integrate.api.nvidia.com"),
+				Entry("a group holding it", "[group nv]\nintegrate.api.nvidia.com\n"+row, "@nv"),
+			)
+
+			It("still denies it live without --save-to", func() {
+				d := setup(row)
+				s := runEgress(append(confArgs("egress-deny"), "--", "integrate.api.nvidia.com")...)
+				Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+				Expect(os.ReadFile(d.SessionConf())).To(Equal([]byte("-integrate.api.nvidia.com\n")))
+			})
 		})
 
 		It("denies an entry, saving it as a removal, and notes a wildcard that still covers it", func() {

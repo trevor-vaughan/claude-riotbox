@@ -34,9 +34,9 @@ var _ = Describe("the shipped egress.conf template", func() {
 		Expect(c.Strict).To(Equal(policy.StrictUnset))
 	})
 
-	It("is version 4", func() {
+	It("is version 5", func() {
 		first, _, _ := strings.Cut(string(data), "\n")
-		Expect(first).To(Equal("# riotbox-config-version: 4"))
+		Expect(first).To(Equal("# riotbox-config-version: 5"))
 	})
 
 	It("parses and resolves every example once uncommented", func() {
@@ -111,5 +111,23 @@ var _ = Describe("the shipped egress.conf template", func() {
 			union = append(union, table[name].Members...)
 		}
 		Expect(union).To(ConsistOf(table["registries"].Members))
+	})
+
+	It("parses its [inject] example once uncommented, and says the key must also be forwarded", func() {
+		_, rest, found := strings.Cut(string(data), "\n# [inject]\n")
+		Expect(found).To(BeTrue())
+		var rows []string
+		for _, l := range strings.Split(rest, "\n") {
+			body, ok := strings.CutPrefix(l, "# ")
+			if !ok || !regexp.MustCompile(`^[A-Z_][A-Z0-9_]* `).MatchString(body) {
+				continue
+			}
+			rows = append(rows, body)
+		}
+		Expect(rows).NotTo(BeEmpty())
+		c, err := policy.ParseFile("egress.conf", []byte("[inject]\n"+strings.Join(rows, "\n")))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(c.Inject).To(HaveLen(len(rows)))
+		Expect(string(data)).To(ContainSubstring("RIOTBOX_PASSTHROUGH_EXTRA_VARS"))
 	})
 })

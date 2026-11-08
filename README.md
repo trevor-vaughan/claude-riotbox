@@ -1435,9 +1435,9 @@ not pointed at it; it does not need it. Every other host stays a tunnel the
 proxy cannot read.
 
 A key still enters the container, and the launch names it, when no row
-above knows it (any other forwarded variable whose name ends in `KEY`,
-`TOKEN`, `SECRET` or `PASSWORD`), when its base URL (`ANTHROPIC_BASE_URL`,
-`OPENAI_BASE_URL`) is set to anything but `https://<the provider's host>`,
+above, and no `[inject]` row, knows it (any other forwarded variable
+whose name ends in `KEY`, `TOKEN`, `SECRET` or `PASSWORD`), when its
+base URL (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`) is set to anything but `https://<the provider's host>`,
 or when it is not visible ASCII:
 
 ```text
@@ -1447,6 +1447,48 @@ egress: these keys still enter the container: ANTHROPIC_AUTH_TOKEN (not injectab
 That line covers the variables RiotBox forwards. One you add yourself
 with a bare `-e NAME` in `RIOTBOX_EXTRA_ARGS` also enters the container, but
 is not named.
+
+#### Adding a provider
+
+For a provider the table above does not know, add a row to an `[inject]`
+section of `~/.config/riotbox/egress.conf` (or `/etc/riotbox/egress.conf`),
+and forward the variable as usual:
+
+```ini
+[inject]
+# VARIABLE        host                      header         [prefix=WORD] [base-url=VARIABLE]
+NVIDIA_API_KEY    integrate.api.nvidia.com  authorization  prefix=Bearer  base-url=NVIDIA_BASE_URL
+```
+
+```bash
+# ~/.config/riotbox/config
+RIOTBOX_PASSTHROUGH_EXTRA_VARS="NVIDIA_API_KEY"
+```
+
+Both edits are needed: the row says where the proxy sends the key, and the
+passthrough list decides what the launch reads from your environment.
+
+- `prefix=Bearer` sends `Bearer <key>` (one space is added). With no
+  prefix, the header holds the key alone.
+- `base-url=VARIABLE` names the variable that points the agent elsewhere.
+  When it is set to anything but `https://<host>`, the key passes through
+  instead, as for `OPENAI_BASE_URL`.
+- The row's host is allowed, even in strict mode. A `-host` removal of it
+  in either `egress.conf` stops the launch and every `riotbox egress`
+  command until you remove it. `riotbox egress deny --save-to` refuses to
+  save one; a live `riotbox egress deny` (no `--save-to`) blocks the host
+  for that session only.
+- A row with the same variable as a built-in row, or as a row in
+  `/etc/riotbox/egress.conf`, replaces it. Two rows for one host are an
+  error. A row replacing `ANTHROPIC_API_KEY` turns off the
+  `RIOTBOX_HEADROOM=1` loopback exception below, so with headroom that key
+  then passes through.
+- Rows are read when a session starts. `riotbox egress reload` updates the
+  allowlist only.
+
+A row cannot express a key in the query string, a signed request (AWS
+SigV4, Bedrock) or an OAuth token (Vertex), and cannot remove a built-in
+row without replacing it.
 
 With `RIOTBOX_HEADROOM=1`, an `ANTHROPIC_BASE_URL` on `localhost` or a
 loopback address does not count as elsewhere: headroom replaces it in the

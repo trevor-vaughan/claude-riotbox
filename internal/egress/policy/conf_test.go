@@ -179,6 +179,7 @@ var _ = Describe("ParseList", func() {
 		Entry("a group reference", "@npm\n", "agent.conf:1: only host entries are allowed here, not @npm"),
 		Entry("a setting", "strict\n", "agent.conf:1: a setting is not allowed here"),
 		Entry("a group", "[group a]\na.example\n", "agent.conf:1: a section is not allowed here"),
+		Entry("an [inject] row", "[inject]\nK a.k.example x-api-key\n", "agent.conf:2: a section is not allowed here"),
 		Entry("an invalid entry", "10.0.0.1\n", `agent.conf:1: invalid egress entry "10.0.0.1"`),
 	)
 })

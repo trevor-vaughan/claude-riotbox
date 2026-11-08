@@ -202,6 +202,80 @@ var _ = Describe("Resolve", func() {
 		Expect(hosts(r.Entries)).NotTo(ContainElement("registry.npmjs.org"))
 		Expect(hosts(r.Entries)).To(ContainElement("pypi.org"))
 	})
+
+	const nvidia = "[inject]\nNVIDIA_API_KEY integrate.api.nvidia.com authorization prefix=Bearer\n"
+
+	It("allows each [inject] row's host on port 443", func() {
+		r, err := policy.Resolve(policy.Sources{Agent: agent, User: conf("user", nvidia)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Entries).To(ContainElement(entry("integrate.api.nvidia.com", 443)))
+	})
+
+	It("allows a row's host under strict too, as a line in the file", func() {
+		r, err := policy.Resolve(policy.Sources{Agent: agent, System: conf("sys", "strict\n"), User: conf("user", nvidia)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Entries).To(Equal([]policy.Entry{entry("integrate.api.nvidia.com", 443)}))
+	})
+
+	It("allows only the host of the row that survives the user file's replacement", func() {
+		r, err := policy.Resolve(policy.Sources{
+			System: conf("sys", "strict\n[inject]\nK old.example x-api-key\n"),
+			User:   conf("user", "[inject]\nK new.example x-api-key\n"),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Entries).To(Equal([]policy.Entry{entry("new.example", 443)}))
+	})
+
+	It("reports the surviving [inject] rows, the user's replacing the system's", func() {
+		r, err := policy.Resolve(policy.Sources{
+			System: conf("sys", "[inject]\nK old.example x-api-key\n"),
+			User:   conf("user", "[inject]\nK new.example x-api-key\n"),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Inject).To(Equal([]policy.InjectRow{{Env: "K", Host: "new.example", Header: "x-api-key", File: "user", Line: 2}}))
+	})
+
+	DescribeTable("refuses a row whose host a file removal takes away, at the row's line",
+		func(sys, user string) {
+			_, err := policy.Resolve(policy.Sources{System: conf("sys", sys), User: conf("user", user)})
+			Expect(err).To(MatchError("user:3: integrate.api.nvidia.com is removed from the allowlist, so NVIDIA_API_KEY could not be injected; drop the removal or this row"))
+		},
+		Entry("in the same file", "", "-integrate.api.nvidia.com\n"+nvidia),
+		Entry("in the other file", "-integrate.api.nvidia.com\n", "\n"+nvidia),
+		Entry("through a group", "[group nv]\nintegrate.api.nvidia.com\n[allow]\n-@nv\n", "\n"+nvidia),
+	)
+
+	It("does not count a wildcard or other-port removal as taking the row's host", func() {
+		r, err := policy.Resolve(policy.Sources{User: conf("user", "-*.nvidia.com\n-integrate.api.nvidia.com:8443\n"+nvidia)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Entries).To(ContainElement(entry("integrate.api.nvidia.com", 443)))
+	})
+
+	It("lets a live deny in the overlay block a row's host, without an error", func() {
+		r, err := policy.Resolve(policy.Sources{User: conf("user", nvidia), Overlay: conf("session", "-integrate.api.nvidia.com\n")})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Entries).NotTo(ContainElement(entry("integrate.api.nvidia.com", 443)))
+	})
+
+	It("refuses an [inject] row in the overlay", func() {
+		_, err := policy.Resolve(policy.Sources{Overlay: conf("session", "[inject]\nK a.k.example x-api-key\n")})
+		Expect(err).To(MatchError("session:2: a session overlay cannot inject keys"))
+	})
+
+	It("refuses two rows for one host, as Providers does", func() {
+		_, err := policy.Resolve(policy.Sources{User: conf("user", "[inject]\nMY_KEY api.openai.com authorization\n")})
+		Expect(err).To(MatchError(ContainSubstring("user:2: MY_KEY injects a key for api.openai.com")))
+	})
+
+	It("does not guard the host of a system row the user file replaced", func() {
+		r, err := policy.Resolve(policy.Sources{
+			System: conf("sys", "[inject]\nK old.example x-api-key\n"),
+			User:   conf("user", "-old.example\n[inject]\nK new.example x-api-key\n"),
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Entries).NotTo(ContainElement(entry("old.example", 443)))
+		Expect(r.Entries).To(ContainElement(entry("new.example", 443)))
+	})
 })
 
 var _ = Describe("Allows", func() {

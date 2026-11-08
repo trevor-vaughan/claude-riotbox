@@ -31,6 +31,7 @@ type Resolved struct {
 	Strict     bool
 	StrictFrom string           // SourceSession, SourceUser, SourceSystem or SourceDefault
 	Groups     map[string]Group // the table @ references resolved against
+	Inject     []InjectRow      // the surviving [inject] rows (fileRows)
 }
 
 // Resolve computes a session's allowlist (docs/dev/egress.md#resolution):
@@ -38,17 +39,27 @@ type Resolved struct {
 //  1. the group table (Groups);
 //  2. strict: the overlay's setting, else the user file's, else the
 //     system file's, else off;
-//  3. every addition of the system and user files, plus @registries and
-//     @agent unless strict is on, minus every removal in either file (a
-//     removal wins whichever file it is in); -@g removes each member of g;
+//  3. every addition of the system and user files, each surviving
+//     [inject] row's host (strict or not: the row is a line in a file),
+//     plus @registries and @agent unless strict is on, minus every removal
+//     in either file (a removal wins whichever file it is in); -@g removes
+//     each member of g;
 //  4. the overlay's lines on top, in file order, so a live allow re-allows
 //     what a file removed and the latest allow or deny of a host wins.
 //
-// It fails, naming the file and line, on an @ reference to no group and
-// on a group defined in the overlay.
+// It fails, naming the file and line, on an @ reference to no group, on a
+// group or an [inject] row in the overlay, on two [inject] rows for one
+// host (Providers), and on a file removal of an [inject] row's host, which
+// would leave its key uninjected.
 func Resolve(s Sources) (Resolved, error) {
 	if len(s.Overlay.Groups) > 0 {
 		return Resolved{}, fmt.Errorf("%s:%d: a session overlay cannot define groups", s.Overlay.Name, s.Overlay.Groups[0].Line)
+	}
+	if len(s.Overlay.Inject) > 0 {
+		return Resolved{}, fmt.Errorf("%s:%d: a session overlay cannot inject keys", s.Overlay.Name, s.Overlay.Inject[0].Line)
+	}
+	if _, err := Providers(s.System, s.User); err != nil {
+		return Resolved{}, err
 	}
 	r := Resolved{Groups: Groups(s.Agent, s.OS, s.System, s.User), StrictFrom: SourceDefault}
 	for _, f := range []struct {
@@ -63,6 +74,11 @@ func Resolve(s Sources) (Resolved, error) {
 	if !r.Strict {
 		add = slices.Concat(r.Groups["registries"].Members, r.Groups[AgentGroup].Members)
 	}
+	rows := fileRows(s.System, s.User)
+	r.Inject = rows
+	for _, row := range rows {
+		add = append(add, Entry{Host: row.Host, Port: DefaultPort})
+	}
 	for _, c := range []Conf{s.System, s.User} {
 		for _, it := range c.Items {
 			entries, err := r.expand(c.Name, it)
@@ -74,6 +90,12 @@ func Resolve(s Sources) (Resolved, error) {
 			} else {
 				add = append(add, entries...)
 			}
+		}
+	}
+	for _, row := range rows {
+		if slices.Contains(remove, Entry{Host: row.Host, Port: DefaultPort}) {
+			return Resolved{}, fmt.Errorf("%s:%d: %s is removed from the allowlist, so %s could not be injected; drop the removal or this row",
+				row.File, row.Line, row.Host, row.Env)
 		}
 	}
 	r.Entries = merge(add, remove)
