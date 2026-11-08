@@ -41,8 +41,9 @@ func egressFailed(stderr io.Writer, err error) int {
 // egressUp starts a session's proxy and prints the agent's engine flags,
 // one per line. Stdin holds the agent's hosts and, after a NUL, the
 // variables the agent would get from the host (inject.ParseInput); the
-// provider keys among them the proxy injects (inject.Decide), and the
-// keys that still enter the container are named on stderr.
+// provider keys among them the proxy injects (inject.Decide, over the table
+// policy.Providers makes of inject.Providers and the conf files' [inject]
+// rows), and the keys that still enter the container are named on stderr.
 func egressUp(a parsedArgs, stdout, stderr io.Writer) int {
 	pid, err := strconv.Atoi(a.opts["--owner-pid"])
 	if err != nil || pid <= 0 {
@@ -64,7 +65,19 @@ func egressUp(a parsedArgs, stdout, stderr io.Writer) int {
 	if err != nil {
 		return egressFailed(stderr, err)
 	}
-	plan := inject.Decide(vars, inject.Providers)
+	system, err := state.ReadConf(a.opts["--system-conf"])
+	if err != nil {
+		return egressFailed(stderr, err)
+	}
+	user, err := state.ReadConf(a.opts["--user-conf"])
+	if err != nil {
+		return egressFailed(stderr, err)
+	}
+	providers, err := policy.Providers(system, user)
+	if err != nil {
+		return egressFailed(stderr, err)
+	}
+	plan := inject.Decide(vars, providers)
 	if notice := plan.Notice(); notice != "" {
 		_, _ = fmt.Fprintln(stderr, notice)
 	}
@@ -294,6 +307,18 @@ func egressEdit(verbName string, remove bool) func(a parsedArgs, stdout, stderr 
 		r, err := applyChange(m, dir, named.String(), func(before policy.Resolved) error {
 			if _, known := before.Groups[it.Group]; it.Group != "" && !known {
 				return fmt.Errorf("no group named @%s (riotbox egress groups lists them)", it.Group)
+			}
+			if save && remove {
+				removed := []policy.Entry{it.Entry}
+				if it.Group != "" {
+					removed = before.Groups[it.Group].Members
+				}
+				for _, row := range before.Inject {
+					if slices.Contains(removed, policy.Entry{Host: row.Host, Port: policy.DefaultPort}) {
+						return fmt.Errorf("%s:%d: %s injects its key for %s; saving the removal to %s would stop every launch: deny it without --save-to, or delete the row",
+							row.File, row.Line, row.Env, row.Host, display.Quote(saveTo))
+					}
+				}
 			}
 			return dir.SetOverlay(it)
 		}, a.opts["--system-conf"], a.opts["--user-conf"], stderr)

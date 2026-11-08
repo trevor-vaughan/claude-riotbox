@@ -623,6 +623,23 @@ var _ = Describe("SaveItem", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(c.Items).To(Equal([]policy.Item{{Entry: a.Entry, Line: 1}}))
 	})
+
+	It("leaves an [inject] section byte-identical, adding to the [allow] before it", func() {
+		rows := "[inject]\nNVIDIA_API_KEY  integrate.api.nvidia.com  authorization  prefix=Bearer  # nv\n"
+		write("[allow]\nb.example\n" + rows)
+		Expect(state.SaveItem(path, a, GinkgoWriter)).To(Succeed())
+		Expect(os.ReadFile(path)).To(Equal([]byte("[allow]\nb.example\na.example\n" + rows)))
+	})
+
+	It("gives a file whose only section is [inject] a new [allow] after it, leaving the rows byte-identical", func() {
+		rows := "[inject]\nK a.k.example x-api-key base-url=K_URL\n"
+		write(rows)
+		Expect(state.SaveItem(path, a, GinkgoWriter)).To(Succeed())
+		Expect(os.ReadFile(path)).To(Equal([]byte(rows + "\n[allow]\na.example\n")))
+		c, err := state.ReadConf(path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(c.Inject).To(HaveLen(1))
+	})
 })
 
 var _ = Describe("SaveStrict", func() {
@@ -680,6 +697,13 @@ var _ = Describe("SaveStrict", func() {
 		write("[allow]\nstrict.example.com\n")
 		Expect(state.SaveStrict(path, policy.StrictOn, GinkgoWriter)).To(BeTrue())
 		Expect(os.ReadFile(path)).To(Equal([]byte("strict = on\n[allow]\nstrict.example.com\n")))
+	})
+
+	It("leaves an [inject] section byte-identical", func() {
+		rows := "[inject]\nK a.k.example authorization prefix=Bearer\n"
+		write("a.example\n" + rows)
+		Expect(state.SaveStrict(path, policy.StrictOn, GinkgoWriter)).To(BeTrue())
+		Expect(os.ReadFile(path)).To(Equal([]byte("strict = on\na.example\n" + rows)))
 	})
 })
 

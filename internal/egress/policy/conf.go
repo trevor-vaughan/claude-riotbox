@@ -96,13 +96,15 @@ type GroupDef struct {
 }
 
 // Conf is one egress.conf file as read: its strict setting, the lines of
-// its preamble and [allow] sections, in order, and its groups.
+// its preamble and [allow] sections, in order, its groups, and its [inject]
+// rows.
 type Conf struct {
 	Name       string // the file's path, for errors
 	Strict     StrictSetting
 	StrictLine int
 	Items      []Item
 	Groups     []GroupDef
+	Inject     []InjectRow // its [inject] rows, in order
 }
 
 // The sections a line can be in.
@@ -110,25 +112,27 @@ const (
 	sectionPreamble = iota
 	sectionAllow
 	sectionGroup
+	sectionInject
 )
 
 // confParser holds ParseFile's state between lines.
 type confParser struct {
-	c       Conf
-	section int
-	defined map[string]int // group name -> its header's line
+	c        Conf
+	section  int
+	defined  map[string]int // group name -> its header's line
+	injected map[string]int // [inject] variable -> its row's line
 }
 
 // ParseFile reads an egress.conf file: "#" starts a comment that runs to
 // the end of the line, blank lines are skipped, and the rest is a preamble
-// of settings and [allow] lines, then [allow] and [group NAME] sections
-// (docs/dev/egress.md#egressconf-grammar). A file without sections, as
+// of settings and [allow] lines, then [allow], [group NAME] and [inject]
+// sections (docs/dev/egress.md#egressconf-grammar). A file without sections, as
 // every egress.conf was before sections existed, is all preamble. name is
 // the file's path; every error reads "<name>:<line>: <reason>". An @
 // reference is checked here only for its spelling: whether the group
 // exists is up to Resolve, which knows every file's groups.
 func ParseFile(name string, data []byte) (Conf, error) {
-	p := confParser{c: Conf{Name: name}, defined: map[string]int{}}
+	p := confParser{c: Conf{Name: name}, defined: map[string]int{}, injected: map[string]int{}}
 	for i, line := range strings.Split(string(data), "\n") {
 		if j := strings.IndexByte(line, '#'); j >= 0 {
 			line = line[:j]
@@ -156,6 +160,10 @@ func (p *confParser) line(n int, line string) error {
 	if strings.HasPrefix(line, "[") {
 		return p.header(n, line)
 	}
+	// Before cutSetting: a row's prefix=WORD holds "=".
+	if p.section == sectionInject {
+		return p.injectRow(n, line)
+	}
 	if key, value, ok := cutSetting(line); ok {
 		return p.setting(n, key, value)
 	}
@@ -179,9 +187,13 @@ func (p *confParser) header(n int, line string) error {
 		p.section = sectionAllow
 		return nil
 	}
+	if line == "[inject]" {
+		p.section = sectionInject
+		return nil
+	}
 	m := groupHeader.FindStringSubmatch(line)
 	if m == nil {
-		return p.errorf(n, "unknown section %q (use [allow] or [group NAME])", line)
+		return p.errorf(n, "unknown section %q (use [allow], [group NAME] or [inject])", line)
 	}
 	name := m[1]
 	if name == AgentGroup {
@@ -266,8 +278,8 @@ func IsStrictLine(line string) bool {
 
 // ParseList reads a plain list of entries, one per line, as agent.conf
 // and applied.conf hold: ParseFile's grammar restricted to host entries:
-// no settings, no [group] sections, no group references or removals. An
-// [allow] header, which changes nothing, is tolerated.
+// no settings, no [group] or [inject] sections, no group references or
+// removals. An [allow] header, which changes nothing, is tolerated.
 func ParseList(name string, data []byte) ([]Entry, error) {
 	c, err := ParseFile(name, data)
 	if err != nil {
@@ -278,6 +290,9 @@ func ParseList(name string, data []byte) ([]Entry, error) {
 	}
 	if len(c.Groups) > 0 {
 		return nil, fmt.Errorf("%s:%d: a section is not allowed here", name, c.Groups[0].Line)
+	}
+	if len(c.Inject) > 0 {
+		return nil, fmt.Errorf("%s:%d: a section is not allowed here", name, c.Inject[0].Line)
 	}
 	entries := make([]Entry, 0, len(c.Items))
 	for _, it := range c.Items {

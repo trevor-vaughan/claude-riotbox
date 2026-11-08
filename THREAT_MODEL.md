@@ -1244,6 +1244,12 @@ egress proxy; without the flag the agent's HTTPS goes out directly.
   `tests/egress-e2e.venom.yml` on real podman. Entries are validated (RFC 1123 names, ASCII
   checked before case folding, no IP literals in any resolver-readable form)
   before being serialised to Envoy JSON with `encoding/json`.
+  `[inject]` rows decide where a real API key is sent, so they are read
+  only from the two `egress.conf` files, which the agent cannot write;
+  `policy.Resolve` refuses them in `session.conf`, which it could reach
+  through a `riotbox ~` mount. A row's host is allowed with it, and
+  deleting the row mid-session only takes the host away (`403`), so a
+  session's key is never sent to a host it was not started with.
 - **Strict mode and groups.** `strict` in either `egress.conf`, or
   `riotbox egress strict --enable` for one session, drops the implicit
   registries and agent hosts, so a session reaches only what is listed; the
