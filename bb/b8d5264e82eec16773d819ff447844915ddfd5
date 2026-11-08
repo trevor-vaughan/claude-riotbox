@@ -1,0 +1,25 @@
+tests/run-main.venom.yml
+  s_e6ce506ec35cbe::t_7507f678bcc764 1-115
+container/run-main.sh
+  s_e6ce506ec35cbe::t_ef7707b8605aa2 1-51
+container/entrypoint.sh
+  s_e6ce506ec35cbe::t_507a00e996a8a0 123-124,219-220
+Containerfile
+  s_e6ce506ec35cbe::t_507a00e996a8a0 737,757
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "362dcd405cf2955b7dd9ceda50b3219b8f2b579f",
+  "prompts": {},
+  "sessions": {
+    "s_e6ce506ec35cbe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "99088057-bbb6-4a4e-beea-527fbfcef9c8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
