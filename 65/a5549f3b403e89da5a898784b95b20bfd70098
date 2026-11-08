@@ -1,0 +1,21 @@
+docs/dev/egress.md
+  s_1887f52fff4370::t_09c400a4a77d97 295-296
+libexec/egress.sh
+  s_1887f52fff4370::t_a939df04f01c36 18-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "65a5549f3b403e89da5a898784b95b20bfd70098",
+  "prompts": {},
+  "sessions": {
+    "s_1887f52fff4370": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a84bb8a714d291610",
+        "model": "unknown"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
