@@ -1,0 +1,22 @@
+internal/egress/policy/resolve_test.go
+  s_42a8301cb1a6ce::t_8af083a0381348 345-362
+internal/egress/policy/resolve.go
+  s_42a8301cb1a6ce::t_8af083a0381348 53-55
+  s_42a8301cb1a6ce::t_ed016ec44b95eb 133-137
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "88540af24b961a01e1e6477590013540baab6ba1",
+  "prompts": {},
+  "sessions": {
+    "s_42a8301cb1a6ce": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "18b240c5-8cd5-4231-8909-fcfbc7f2f6a9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
