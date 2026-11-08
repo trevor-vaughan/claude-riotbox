@@ -1,0 +1,23 @@
+internal/egress/hostlink/helpers_test.go
+  s_8dcd9742b18434::t_00c2b2060e316a 1-79
+internal/egress/hostlink/relay.go
+  s_8dcd9742b18434::t_cd2d02bf443f16 1-130
+internal/egress/hostlink/relay_test.go
+  s_8dcd9742b18434::t_710889e00c5c31 1-124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "93cf23aab5e0fdbaa46b0ec55df3a2bcc6d5ed4d",
+  "prompts": {},
+  "sessions": {
+    "s_8dcd9742b18434": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a4c1f0b7f82feb46a",
+        "model": "unknown"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
