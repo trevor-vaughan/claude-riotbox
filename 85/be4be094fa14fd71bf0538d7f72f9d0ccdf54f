@@ -1,0 +1,20 @@
+tests/egress-e2e.venom.yml
+  s_42a8301cb1a6ce::t_59b16eab5cecbe 323-340,342-362
+  s_42a8301cb1a6ce::t_87e09c07f3977b 341
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "85be4be094fa14fd71bf0538d7f72f9d0ccdf54f",
+  "prompts": {},
+  "sessions": {
+    "s_42a8301cb1a6ce": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "18b240c5-8cd5-4231-8909-fcfbc7f2f6a9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
