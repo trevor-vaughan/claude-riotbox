@@ -1,0 +1,45 @@
+README.md
+  s_e64ca29bdf4d63::t_cfcec22c3f64f1 1438-1440,1451-1492
+THREAT_MODEL.md
+  s_e64ca29bdf4d63::t_39553dda72b97a 1247-1252
+cmd/riotbox-core/egress.go
+  s_e64ca29bdf4d63::t_34dd9efedfa33f 44-46,68-80,311-322
+cmd/riotbox-core/egress_test.go
+  s_e64ca29bdf4d63::t_00cce2c00c1f99 252-275,293-325
+docs/dev/egress.md
+  s_e64ca29bdf4d63::t_ac84a7a37c2a27 259-268,276,308-320,446-457
+internal/egress/policy/inject.go
+  s_e64ca29bdf4d63::t_79939490340266 1-163
+internal/egress/policy/inject_test.go
+  s_e64ca29bdf4d63::t_25c5499822fb95 1-188
+internal/egress/policy/resolve.go
+  s_e64ca29bdf4d63::t_863d44433598b1 34,42-46,50-53,58-63,77-81,95-100
+internal/egress/policy/resolve_test.go
+  s_e64ca29bdf4d63::t_93740dcc101e5d 205-278
+internal/egress/policy/template_test.go
+  s_e64ca29bdf4d63::t_fa966476688031 37,39,115-132
+internal/egress/state/state_test.go
+  s_e64ca29bdf4d63::t_c2b54111ddd384 626-642,701-707
+scripts/configs/egress.conf
+  s_e64ca29bdf4d63::t_4d3beebafd0425 1,52-55,93-110
+internal/egress/policy/conf.go
+  s_e64ca29bdf4d63::t_28adb199eceda0 99-100,107,115,120-123,128-129,135,163-166,190-193,196,281-282,294-296
+internal/egress/policy/conf_test.go
+  s_e64ca29bdf4d63::t_0b8cbe7a7a8fc5 182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "54cc80f7f806cef8004ba8302ef94708e35cc840",
+  "prompts": {},
+  "sessions": {
+    "s_e64ca29bdf4d63": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "39dff8c0-3804-4b7e-bed5-f835dc5502c7",
+        "model": "unknown"
+      },
+      "human_author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
