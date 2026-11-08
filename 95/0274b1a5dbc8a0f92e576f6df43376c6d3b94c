@@ -1,18 +1,18 @@
-internal/egress/envoyconfig/authority_test.go
-  s_42a8301cb1a6ce::t_53a1612355f909 1-73
-docs/dev/egress.md
-  s_42a8301cb1a6ce::t_a0184fc3404ed5 189-193
-internal/egress/envoyconfig/envoyconfig.go
-  s_42a8301cb1a6ce::t_45241dd8364cfc 326-332,448,505,507
-internal/egress/envoyconfig/envoyconfig_test.go
-  s_42a8301cb1a6ce::t_45241dd8364cfc 270,285,300,309
 tests/egress-e2e.venom.yml
   s_42a8301cb1a6ce::t_a0184fc3404ed5 345-347,352
+docs/dev/egress.md
+  s_42a8301cb1a6ce::t_a0184fc3404ed5 189-193
+internal/egress/envoyconfig/envoyconfig_test.go
+  s_42a8301cb1a6ce::t_45241dd8364cfc 270,285,300,309
+internal/egress/envoyconfig/authority_test.go
+  s_42a8301cb1a6ce::t_53a1612355f909 1-73
+internal/egress/envoyconfig/envoyconfig.go
+  s_42a8301cb1a6ce::t_45241dd8364cfc 326-332,448,505,507
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.6",
-  "base_commit_sha": "d16e6f70572f1593b8ce620f94a7eadab548620c",
+  "base_commit_sha": "950274b1a5dbc8a0f92e576f6df43376c6d3b94c",
   "prompts": {},
   "sessions": {
     "s_42a8301cb1a6ce": {
