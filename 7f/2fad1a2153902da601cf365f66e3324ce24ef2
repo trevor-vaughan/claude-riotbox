@@ -1,207 +1,35 @@
-scripts/build.sh
-  s_417c2318c40a48::t_13cf1934f3ff25 326-331,333,336-338
-  s_417c2318c40a48::t_627e7b36c3a63e 365-366
-README.md
-  s_417c2318c40a48::t_1b141c75f61f7c 2545,2587
-tests/build-config-scrub.venom.yml
-  s_417c2318c40a48::t_1122c5692fb010 1-103
----
-{
-  "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "02d267f8a9dd00f430a791ee91a9a13d1f9c0a4b",
-  "prompts": {},
-  "sessions": {
-    "s_417c2318c40a48": {
-      "agent_id": {
-        "tool": "claude",
-        "id": "d0462dff-0998-49fe-98ac-0154f16dd8a5",
-        "model": "claude-opus-5-5"
-      },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
-    }
-  }
-}
-
 Containerfile
-  s_417c2318c40a48::t_10d24fc01e88ba 313-315
----
-{
-  "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "d61de44451e0e4fabfb81471c224e43ba23100d9",
-  "prompts": {},
-  "sessions": {
-    "s_417c2318c40a48": {
-      "agent_id": {
-        "tool": "claude",
-        "id": "d0462dff-0998-49fe-98ac-0154f16dd8a5",
-        "model": "claude-opus-5-5"
-      },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
-    }
-  }
-}
-
-tests/run-main.venom.yml
-  s_e6ce506ec35cbe::t_7507f678bcc764 1-115
+  s_0c2be49368c76d::t_b6ac9e815e3f8a 313-315,342-350,390,743,763,1141-1147,1560
+README.md
+  s_0c2be49368c76d::t_fca82895900732 2481-2482,2589
+THREAT_MODEL.md
+  s_0c2be49368c76d::t_c70f041909c680 88-94,150,1384,1387,1392,1401,1404,1407,1410,1412-1428,1431-1436,1438-1441,1443,1490,1492,1511,1532-1533,1598-1620,1626-1628,1634-1636,1642,1672,1674,1676-1678,1840,1849-1852,1896,1915,1987,2006,2009,2014,2023-2030,2089,2138,2147-2171,2175-2177,2179,2184-2186,2198,2201,2206,2215-2218,2220-2221,2278,2331-2352,2356-2358,2360,2364,2379,2384,2393,2395-2397,2419,2454,2510-2530,2537-2538,2543,2565,2574-2581,2742-2745,2747,2825,3048,3056,3065,3068,3074,3102,3119,3135,3174,3176,3181,3387,3393,3400
+container/entrypoint.sh
+  s_0c2be49368c76d::t_7954ca4493fbed 10,123-124,219-220
 container/run-main.sh
-  s_e6ce506ec35cbe::t_ef7707b8605aa2 1-51
-container/entrypoint.sh
-  s_e6ce506ec35cbe::t_507a00e996a8a0 123-124,219-220
-Containerfile
-  s_e6ce506ec35cbe::t_507a00e996a8a0 737,757
----
-{
-  "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "362dcd405cf2955b7dd9ceda50b3219b8f2b579f",
-  "prompts": {},
-  "sessions": {
-    "s_e6ce506ec35cbe": {
-      "agent_id": {
-        "tool": "claude",
-        "id": "99088057-bbb6-4a4e-beea-527fbfcef9c8",
-        "model": "claude-opus-5-5"
-      },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
-    }
-  }
-}
-
-Containerfile
-  s_e6ce506ec35cbe::t_b83c69b27aaec1 342-350,390,1559
-tests/failure-visibility.venom.yml
-  s_e6ce506ec35cbe::t_7fec8ff647217f 1-133
-container/entrypoint.sh
-  s_e6ce506ec35cbe::t_b83c69b27aaec1 10
+  s_0c2be49368c76d::t_f32d44d1697fa5 1-51
 scripts/build.sh
-  s_e6ce506ec35cbe::t_b83c69b27aaec1 21-24
----
-{
-  "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "8b24ae2a41f176778c2f3dc6a5de5572933beb95",
-  "prompts": {},
-  "sessions": {
-    "s_e6ce506ec35cbe": {
-      "agent_id": {
-        "tool": "claude",
-        "id": "99088057-bbb6-4a4e-beea-527fbfcef9c8",
-        "model": "claude-opus-5-5"
-      },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
-    }
-  }
-}
-
-README.md
-  s_e6ce506ec35cbe::t_308442dd49944e 2439-2440,2481-2482
----
-{
-  "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "5193431d47fc71b009631c7591a5b89f76c2be2b",
-  "prompts": {},
-  "sessions": {
-    "s_e6ce506ec35cbe": {
-      "agent_id": {
-        "tool": "claude",
-        "id": "99088057-bbb6-4a4e-beea-527fbfcef9c8",
-        "model": "claude-opus-5-5"
-      },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
-    }
-  }
-}
-
-scripts/build.sh
-  s_e6ce506ec35cbe::t_acaf4dc8eab4eb 432-436
----
-{
-  "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "778b00595a02c25f1f0d596109d7b147326ca55b",
-  "prompts": {},
-  "sessions": {
-    "s_e6ce506ec35cbe": {
-      "agent_id": {
-        "tool": "claude",
-        "id": "99088057-bbb6-4a4e-beea-527fbfcef9c8",
-        "model": "claude-opus-5-5"
-      },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
-    }
-  }
-}
-
-Containerfile
-  s_e6ce506ec35cbe::t_aa6b2cccf6a41b 1559
+  s_0c2be49368c76d::t_222b139ad9fcb2 21-24,329-334,336,339-341,368-369,432-436
+tests/build-config-scrub.venom.yml
+  s_0c2be49368c76d::t_4a1c13e43edb19 1-103
 tests/failure-visibility.venom.yml
-  s_e6ce506ec35cbe::t_b9b65bdb6efd41 28-33
+  s_0c2be49368c76d::t_a96bdad38e8e4e 1-139
+tests/run-main.venom.yml
+  s_0c2be49368c76d::t_82cbf6b751b47c 1-115
 ---
 {
   "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "c057a39b5c9af8d6ce683a6273c3fd6292da1cae",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7f2fad1a2153902da601cf365f66e3324ce24ef2",
   "prompts": {},
   "sessions": {
-    "s_e6ce506ec35cbe": {
+    "s_0c2be49368c76d": {
       "agent_id": {
         "tool": "claude",
-        "id": "99088057-bbb6-4a4e-beea-527fbfcef9c8",
-        "model": "claude-opus-5-5"
+        "id": "d200bf47-8cf1-49f0-a9ee-9c04fba775a3",
+        "model": "unknown"
       },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
-    }
-  }
-}
-
-Containerfile
-  s_e6ce506ec35cbe::t_f33cc6f1514416 1145-1147
-  s_e6ce506ec35cbe::t_e99c42245bafef 1141-1142
-  s_e6ce506ec35cbe::t_cd19ba6a65f310 1143-1144
-THREAT_MODEL.md
-  s_e6ce506ec35cbe::t_839a508e0e1628 2331,2336-2337,2337,2342-2343
-  s_e6ce506ec35cbe::t_8537a010f2d863 88-94,1381,1387,1592-1614,1598-1620,2142-2166,2148-2172,2170-2171,2176-2177,2326-2330,2332-2335,2332-2336,2338-2347,2338-2341,2344-2353,2351-2352,2357-2358,2505-2512,2511-2518,2517-2524,2523-2530
-  s_e6ce506ec35cbe::t_e99c42245bafef 1432-1434,1438-1440,2513-2516,2519-2522
-  s_e6ce506ec35cbe::t_f9ab97ec3fa6e3 1484,1486,1490,1492,1505,1511,1526-1527,1532-1533,1622,1628,1671-1673,1677-1679,1835,1841,1844-1847,1850-1853,1891,1897,1910,1916,1982,1988,2001,2004,2007,2009,2010,2015,2018-2024,2024-2030,2179-2181,2185-2187,2193,2196,2199,2201,2202,2207,2210-2213,2215,2216-2219,2221,2390-2391,2396-2397,2569-2576,2575-2582,2737-2739,2743-2745
-  s_e6ce506ec35cbe::t_ac437630c59bc9 150,1378,1384,1386,1392,1395,1398,1401,1404,1406-1422,1407,1410,1412-1428,1425-1430,1431-1436,1435,1437,1441,1443,1629-1630,1635-1636
-  s_e6ce506ec35cbe::t_66fa91205be962 1615,1621,1623,1627,1629,1631,1637,1643,1667,1669,1673,1675,2025,2031,2084,2090,2133,2139,2172,2174,2178,2180,2216,2222,2273,2279,2353,2355,2359,2361,2365,2374,2379,2380,2385,2388,2392,2394,2398,2414,2420,2449,2455,2525,2531,2532-2533,2538,2538-2539,2544,2560,2566,2740,2742,2746,2748,2820,2826,3043,3049,3051,3057,3060,3063,3066,3069,3075,3097,3103,3114,3120,3130,3136,3169,3171,3175,3176,3177,3182,3382,3388,3394,3395,3401
----
-{
-  "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "0756532975967c53f5853ef1625cdb914d5c874a",
-  "prompts": {},
-  "sessions": {
-    "s_e6ce506ec35cbe": {
-      "agent_id": {
-        "tool": "claude",
-        "id": "99088057-bbb6-4a4e-beea-527fbfcef9c8",
-        "model": "claude-opus-5-5"
-      },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
-    }
-  }
-}
-
-THREAT_MODEL.md
-  s_e6ce506ec35cbe::t_2bbd489fcbe3c5 1597,1603
----
-{
-  "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "fa2c80efb3a091fa4b38e639b1529efe6e097ff5",
-  "prompts": {},
-  "sessions": {
-    "s_e6ce506ec35cbe": {
-      "agent_id": {
-        "tool": "claude",
-        "id": "99088057-bbb6-4a4e-beea-527fbfcef9c8",
-        "model": "claude-opus-5-5"
-      },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
+      "human_author": "Trevor Vaughan <peiriannydd@gmail.com>"
     }
   }
 }
