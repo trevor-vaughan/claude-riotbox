@@ -1,0 +1,25 @@
+internal/egress/policy/inject_test.go
+  s_85858abadac5c9::t_2a729159afc3f7 1-89
+internal/egress/policy/conf_test.go
+  s_85858abadac5c9::t_2a729159afc3f7 182
+internal/egress/policy/inject.go
+  s_85858abadac5c9::t_2a729159afc3f7 1-106
+internal/egress/policy/conf.go
+  s_85858abadac5c9::t_2a729159afc3f7 99,106,114,119-122,127,134,162-165,189-192,195,280,293-295
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "fcc5550d155a81622230fd13f1f87f00add1cf46",
+  "prompts": {},
+  "sessions": {
+    "s_85858abadac5c9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "49ed78b9-c0dd-4644-9c37-6044a8beb280",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
