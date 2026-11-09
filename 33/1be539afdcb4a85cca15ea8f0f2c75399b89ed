@@ -1,0 +1,20 @@
+cmd/riotbox-core/egress_test.go
+  s_960e57a310f0ac::t_cbcbd084bc6d04 248-251,253-257
+  s_960e57a310f0ac::t_b86b31894ba388 252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "331be539afdcb4a85cca15ea8f0f2c75399b89ed",
+  "prompts": {},
+  "sessions": {
+    "s_960e57a310f0ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7edc1c10-4aaf-41e4-b66b-4fc55fe6f1bf",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
