@@ -1,14 +1,14 @@
-tests/lib/egress-e2e-helpers.sh
-  s_41f84cf4d1fc86::t_275d422ab12d2a 66-67,70-72
 .github/workflows/test.yml
   s_41f84cf4d1fc86::t_13f2c44dc05709 53
 internal/egress/policy/resolve_test.go
   s_41f84cf4d1fc86::t_5a217d40708433 122
+tests/lib/egress-e2e-helpers.sh
+  s_41f84cf4d1fc86::t_275d422ab12d2a 66-67,70-72
 ---
 {
   "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "c1eb04b4b4a334941d53d2d96362f5d5d1fd19d5",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4788ccea587e0013280662ec94c0751c38c72f22",
   "prompts": {},
   "sessions": {
     "s_41f84cf4d1fc86": {
