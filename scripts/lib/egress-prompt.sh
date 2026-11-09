@@ -103,10 +103,11 @@ ${opening}
 A \`403\` from the proxy, or "CONNECT tunnel failed", means the host is not
 allowed. It is not a transient error. Do not retry it, and do not try other
 hosts, IP addresses, DNS, or proxies to get around it — nothing will work.
+Use HTTPS: plain HTTP is refused unless the user allows \`http://<host>\`.
 Stop and tell the user: "\`<host:port>\` is blocked; to allow it run
 \`riotbox egress allow --session ${session} <host>\`" (or an \`@group\`
-from \`riotbox egress groups\`), then carry on with work that doesn't need
-it.
+from \`riotbox egress groups\`, or \`http://<host>\` for plain HTTP), then
+carry on with work that doesn't need it.
 EOF
 	[[ -z "${closing}" ]] || printf '\n%s\n' "${closing}"
 	printf '\n%s\n' "${EGRESS_PROMPT_END}"

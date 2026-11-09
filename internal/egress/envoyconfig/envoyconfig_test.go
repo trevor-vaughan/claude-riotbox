@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -85,6 +86,163 @@ var _ = Describe("RenderRDS", func() {
 		out := envoyconfig.RenderRDS([]policy.Entry{{Host: hostile, Port: 443}}, nil)
 		Expect(json.Valid(out)).To(BeTrue())
 		Expect(dig(decode(out), "resources", 0, "virtual_hosts", 0, "domains")).To(Equal([]any{hostile + ":443"}))
+	})
+
+	Describe("plain HTTP", func() {
+		vhost := func(rds []byte, name string) any {
+			for _, v := range dig(decode(rds), "resources", 0, "virtual_hosts").([]any) {
+				if dig(v, "name") == name {
+					return v
+				}
+			}
+			Fail("no virtual host named " + name)
+			return nil
+		}
+		plainRouteOK := func(r any) {
+			ExpectWithOffset(1, dig(r, "match", "prefix")).To(Equal("/"))
+			ExpectWithOffset(1, dig(r, "route", "cluster")).To(Equal("egress"))
+			ExpectWithOffset(1, dig(r, "route", "timeout")).To(Equal("0s"))
+			ExpectWithOffset(1, dig(r, "route")).NotTo(HaveKey("upgrade_configs"))
+		}
+
+		// noSharedDomain fails if Envoy would see one domain in two virtual hosts.
+		noSharedDomain := func(rds []byte) {
+			seen := map[any]bool{}
+			for _, v := range dig(decode(rds), "resources", 0, "virtual_hosts").([]any) {
+				for _, d := range dig(v, "domains").([]any) {
+					ExpectWithOffset(1, seen[d]).To(BeFalse(), "domain %v in two virtual hosts", d)
+					seen[d] = true
+				}
+			}
+		}
+		routeKinds := func(v any) (connect, plain bool) {
+			for _, r := range dig(v, "routes").([]any) {
+				if _, ok := dig(r, "match").(map[string]any)["connect_matcher"]; ok {
+					connect = connect || dig(r, "route") != nil
+				} else {
+					plain = plain || dig(r, "route") != nil
+				}
+			}
+			return connect, plain
+		}
+		// allowsVia reports whether the virtual host that
+		// holds domain forwards CONNECT, or plain HTTP, rather than refusing it.
+		allowsVia := func(rds []byte, domain string) (connect, plain bool) {
+			for _, v := range dig(decode(rds), "resources", 0, "virtual_hosts").([]any) {
+				if slices.Contains(dig(v, "domains").([]any), any(domain)) {
+					return routeKinds(v)
+				}
+			}
+			Fail("no virtual host holds " + domain)
+			return false, false
+		}
+
+		It("emits no plain virtual host without plain entries", func() {
+			names := []any{}
+			for _, v := range dig(decode(envoyconfig.RenderRDS(sample, nil)), "resources", 0, "virtual_hosts").([]any) {
+				names = append(names, dig(v, "name"))
+			}
+			Expect(names).To(Equal([]any{"allowed", "deny"}))
+		})
+
+		It("forwards a plain entry's requests, refusing CONNECT to it, matching port 80 with or without the port", func() {
+			rds := envoyconfig.RenderRDS([]policy.Entry{
+				{Host: "mirror.example.org", Port: 80, Plain: true},
+				{Host: "*.example.net", Port: 80, Plain: true},
+				{Host: "alt.example.org", Port: 8080, Plain: true},
+			}, nil)
+			noSharedDomain(rds)
+			v := vhost(rds, "plain")
+			Expect(dig(v, "domains")).To(Equal([]any{"mirror.example.org:80", "mirror.example.org", "*.example.net:80", "*.example.net", "alt.example.org:8080"}))
+			Expect(dig(v, "routes", 0, "match", "connect_matcher")).To(Equal(map[string]any{}))
+			Expect(dig(v, "routes", 0, "direct_response", "status")).To(BeEquivalentTo(403))
+			plainRouteOK(dig(v, "routes", 1))
+		})
+
+		It("puts an authority allowed both ways in one virtual host, as Envoy refuses a domain in two", func() {
+			rds := envoyconfig.RenderRDS([]policy.Entry{
+				{Host: "a.example", Port: 80},
+				{Host: "a.example", Port: 80, Plain: true},
+				{Host: "b.example", Port: 443},
+			}, nil)
+			Expect(dig(vhost(rds, "allowed"), "domains")).To(Equal([]any{"b.example:443"}))
+			noSharedDomain(rds)
+			both := vhost(rds, "allowed-plain")
+			Expect(dig(both, "domains")).To(Equal([]any{"a.example:80", "a.example"}))
+			Expect(dig(both, "routes", 0, "route", "upgrade_configs", 0, "upgrade_type")).To(Equal("CONNECT"))
+			plainRouteOK(dig(both, "routes", 1))
+		})
+
+		It("never routes plain HTTP to an intercepted host through its interception", func() {
+			rds := envoyconfig.RenderRDS([]policy.Entry{
+				{Host: "api.example.com", Port: 443},
+				{Host: "api.example.com", Port: 80, Plain: true},
+			}, []envoyconfig.Intercept{{Host: "api.example.com", Header: "x-api-key"}})
+			noSharedDomain(rds)
+			Expect(dig(vhost(rds, "plain"), "domains")).To(Equal([]any{"api.example.com:80", "api.example.com"}))
+			plainRouteOK(dig(vhost(rds, "plain"), "routes", 1))
+			Expect(dig(vhost(rds, "intercept-api.example.com"), "domains")).To(Equal([]any{"api.example.com:443"}))
+		})
+
+		It("leaves an intercepted authority to its interception even when a plain entry names it", func() {
+			rds := envoyconfig.RenderRDS([]policy.Entry{
+				{Host: "api.example.com", Port: 443},
+				{Host: "api.example.com", Port: 443, Plain: true},
+			}, []envoyconfig.Intercept{{Host: "api.example.com", Header: "x-api-key"}})
+			noSharedDomain(rds)
+			Expect(dig(vhost(rds, "intercept-api.example.com"), "domains")).To(Equal([]any{"api.example.com:443"}))
+		})
+
+		It("keeps CONNECT to an exact plain entry that a tunnel wildcard allowed", func() {
+			rds := envoyconfig.RenderRDS([]policy.Entry{
+				{Host: "*.example.com", Port: 80},
+				{Host: "a.example.com", Port: 80, Plain: true},
+			}, nil)
+			noSharedDomain(rds)
+			connect, plain := allowsVia(rds, "a.example.com:80")
+			Expect(connect).To(BeTrue())
+			Expect(plain).To(BeTrue())
+			_, plain = allowsVia(rds, "a.example.com")
+			Expect(plain).To(BeTrue())
+		})
+
+		It("keeps plain HTTP, and the tunnel, on an exact tunnel entry that a plain wildcard covers, with or without the port", func() {
+			rds := envoyconfig.RenderRDS([]policy.Entry{
+				{Host: "*.example.com", Port: 80, Plain: true},
+				{Host: "a.example.com", Port: 80},
+			}, nil)
+			noSharedDomain(rds)
+			for _, d := range []string{"a.example.com:80", "a.example.com"} {
+				connect, plain := allowsVia(rds, d)
+				Expect(plain).To(BeTrue(), d)
+				Expect(connect).To(BeTrue(), d)
+			}
+		})
+
+		It("folds a broader wildcard into a narrower one", func() {
+			rds := envoyconfig.RenderRDS([]policy.Entry{
+				{Host: "*.example.com", Port: 80},
+				{Host: "*.a.example.com", Port: 80, Plain: true},
+			}, nil)
+			noSharedDomain(rds)
+			connect, plain := allowsVia(rds, "*.a.example.com:80")
+			Expect(connect).To(BeTrue())
+			Expect(plain).To(BeTrue())
+			connect, plain = allowsVia(rds, "*.example.com:80")
+			Expect(connect).To(BeTrue())
+			Expect(plain).To(BeFalse())
+		})
+
+		It("does not fold a wildcard on another port or another suffix", func() {
+			rds := envoyconfig.RenderRDS([]policy.Entry{
+				{Host: "*.example.com", Port: 8080},
+				{Host: "*.other.org", Port: 80},
+				{Host: "a.example.com", Port: 80, Plain: true},
+			}, nil)
+			noSharedDomain(rds)
+			connect, _ := allowsVia(rds, "a.example.com:80")
+			Expect(connect).To(BeFalse())
+		})
 	})
 })
 
@@ -238,6 +396,34 @@ var _ = Describe("the pinned Envoy image", Label("e2e"), func() {
 		}
 		validate(envoyconfig.RenderStatic("s1", sample, []envoyconfig.Intercept{{Host: host, Header: "x-api-key"}}), secrets)
 	})
+
+	It("accepts a rendering with plain-HTTP entries, one sharing an authority with a tunnel", func() {
+		validate(envoyconfig.RenderStatic("s1", append(slices.Clone(sample),
+			policy.Entry{Host: "mirror.example.org", Port: 80, Plain: true},
+			policy.Entry{Host: "*.example.org", Port: 80, Plain: true},
+			policy.Entry{Host: "git.example.net", Port: 80},
+			policy.Entry{Host: "git.example.net", Port: 80, Plain: true},
+			policy.Entry{Host: "*.example.net", Port: 80},
+			policy.Entry{Host: "a.example.net", Port: 80, Plain: true},
+		), nil), "")
+	})
+
+	It("accepts a plain entry naming an intercepted authority", func() {
+		const host = "api.example.com"
+		secrets := GinkgoT().TempDir()
+		certs, err := inject.NewCerts("s1", []string{host}, time.Now())
+		Expect(err).NotTo(HaveOccurred())
+		for name, data := range map[string][]byte{
+			envoyconfig.CertFile(host):       certs.Leaves[host].Cert,
+			envoyconfig.KeyFile(host):        certs.Leaves[host].Key,
+			envoyconfig.CredentialFile(host): envoyconfig.RenderCredential(host, "test-key"),
+		} {
+			Expect(os.WriteFile(filepath.Join(secrets, name), data, 0o600)).To(Succeed())
+		}
+		validate(envoyconfig.RenderStatic("s1", append(slices.Clone(sample),
+			policy.Entry{Host: host, Port: 443, Plain: true},
+		), []envoyconfig.Intercept{{Host: host, Header: "x-api-key"}}), secrets)
+	})
 })
 
 var _ = Describe("denials", func() {
@@ -263,16 +449,17 @@ var _ = Describe("denials", func() {
 		Expect(body).To(HaveSuffix("  riotbox egress allow --session s1 %REQ(:AUTHORITY)%\n"))
 	})
 
-	It("tells a refused plain-HTTP request that allowing a host cannot help", func() {
+	It("tells a refused plain-HTTP request to use HTTPS, or to ask the user to allow http://", func() {
 		m := dig(hcm("s1"), "local_reply_config", "mappers", 1)
 		Expect(dig(m, "filter", "status_code_filter", "comparison", "op")).To(Equal("EQ"))
 		Expect(dig(m, "filter", "status_code_filter", "comparison", "value", "default_value")).To(BeEquivalentTo(403))
 		Expect(dig(m, "headers_to_add", 0, "header", "key")).To(Equal(envoyconfig.DeniedHeader))
 		Expect(dig(m, "headers_to_add", 0, "header", "value")).To(Equal("denied %REQ(:AUTHORITY)%"))
 		body := dig(m, "body_format_override", "text_format_source", "inline_string")
-		Expect(body).To(ContainSubstring("plain HTTP is never proxied"))
-		Expect(body).To(ContainSubstring("Use HTTPS"))
-		Expect(body).NotTo(ContainSubstring("riotbox egress allow"))
+		Expect(body).To(HavePrefix("riotbox egress: plain HTTP to %REQ(:AUTHORITY)% is not on this session's allowlist.\n"))
+		Expect(body).To(ContainSubstring("Use HTTPS."))
+		Expect(body).To(ContainSubstring("If the user agrees after checking the host, they run on the host:\n"))
+		Expect(body).To(HaveSuffix("  riotbox egress allow --session s1 http://%REQ(:AUTHORITY)%\n"))
 	})
 
 	It("keeps the status, and gives no runtime key a runtime layer could override", func() {

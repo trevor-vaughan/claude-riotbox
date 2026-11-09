@@ -10,6 +10,9 @@ import (
 )
 
 func entry(host string, port int) policy.Entry { return policy.Entry{Host: host, Port: port} }
+func plain(host string, port int) policy.Entry {
+	return policy.Entry{Host: host, Port: port, Plain: true}
+}
 
 // longName is 253 characters: three 63-character labels and one of 61.
 var longName = strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
@@ -36,6 +39,12 @@ var _ = Describe("Parse", func() {
 		Entry("a numeric-looking first label", "0x.example", entry("0x.example", 443), false),
 		Entry("a zero-padded port, normalised", "a.example:0443", entry("a.example", 443), false),
 		Entry("a 253-character name", longName, entry(longName, 443), false),
+		Entry("plain HTTP, on port 80", "http://mirror.example.org", plain("mirror.example.org", 80), false),
+		Entry("plain HTTP with a port", "http://mirror.example.org:8080", plain("mirror.example.org", 8080), false),
+		Entry("plain HTTP in any case", "HTTP://Mirror.Example.ORG", plain("mirror.example.org", 80), false),
+		Entry("a plain-HTTP wildcard", "http://*.example.org", plain("*.example.org", 80), false),
+		Entry("a plain-HTTP removal", "-http://mirror.example.org", plain("mirror.example.org", 80), true),
+		Entry("plain HTTP on port 443, still plain", "http://a.example:443", plain("a.example", 443), false),
 	)
 
 	DescribeTable("rejects",
@@ -76,6 +85,16 @@ var _ = Describe("Parse", func() {
 		Entry("a non-ASCII letter that lowercases to ASCII (KELVIN SIGN)", "\u212Aa.com", "printable ASCII"),
 		Entry("a lone dash", "-", "host is empty"),
 		Entry("an empty entry", "", "host is empty"),
+		Entry("an https URL", "https://a.example", "a URL is not an entry"),
+		Entry("another scheme", "ftp://a.example", "a URL is not an entry"),
+		Entry("plain HTTP with a path", "http://a.example/x", "give http://host or http://host:port"),
+		Entry("plain HTTP with a trailing slash", "http://a.example/", "give http://host or http://host:port"),
+		Entry("plain HTTP with a query", "http://a.example?x", "give http://host or http://host:port"),
+		Entry("plain HTTP with userinfo", "http://u@a.example", "give http://host or http://host:port"),
+		Entry("plain HTTP with no host", "http://", "host is empty"),
+		Entry("plain HTTP to an IP literal", "http://10.0.0.1", "IP address"),
+		Entry("a doubled scheme", "http://http://a.example", "a URL is not an entry"),
+		Entry("a removal sign after the scheme", "http://-a.example", "not a valid DNS label"),
 	)
 })
 
@@ -104,5 +123,28 @@ var _ = Describe("Covering", func() {
 	It("does not report a wildcard as covering itself, nor the bare domain", func() {
 		Expect(policy.Covering(entries, entry("*.example.com", 443))).To(BeEmpty())
 		Expect(policy.Covering(entries, entry("example.com", 443))).To(BeEmpty())
+	})
+})
+
+var _ = Describe("Entry, plain HTTP", func() {
+	It("spells a plain entry with its scheme, and its port only when it is not 80", func() {
+		Expect(plain("a.example", 80).String()).To(Equal("http://a.example"))
+		Expect(plain("a.example", 8080).String()).To(Equal("http://a.example:8080"))
+		Expect(plain("a.example", 443).String()).To(Equal("http://a.example:443"))
+		Expect(plain("a.example", 80).Authority()).To(Equal("a.example:80"))
+	})
+
+	It("round-trips every plain spelling through Parse", func() {
+		for _, e := range []policy.Entry{plain("a.example", 80), plain("a.example", 8080), plain("*.a.example", 80)} {
+			got, _, err := policy.Parse(e.String())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got).To(Equal(e))
+		}
+	})
+
+	It("never covers a plain entry by a tunnel wildcard, or the reverse", func() {
+		Expect(policy.Covering([]policy.Entry{entry("*.example.org", 80)}, plain("a.example.org", 80))).To(BeEmpty())
+		Expect(policy.Covering([]policy.Entry{plain("*.example.org", 80)}, entry("a.example.org", 80))).To(BeEmpty())
+		Expect(policy.Covering([]policy.Entry{plain("*.example.org", 80)}, plain("a.example.org", 80))).To(Equal([]policy.Entry{plain("*.example.org", 80)}))
 	})
 })

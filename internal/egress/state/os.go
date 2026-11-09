@@ -89,7 +89,7 @@ func (d Dir) OSGroups() ([]policy.GroupDef, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.Strict != policy.StrictUnset || len(c.Items) > 0 {
+	if c.Strict != policy.StrictUnset || c.AllowPlain != policy.PlainUnset || len(c.Items) > 0 {
 		return nil, fmt.Errorf("%s: only [group] sections are allowed here", d.OSConf())
 	}
 	return c.Groups, nil

@@ -165,6 +165,16 @@ minutes would cut a quiet model stream).
    (`codec_type: HTTP1`): cleartext HTTP/2 lets an authority holding
    `; $ ( ' &` into the denial text's `riotbox egress allow` line, which
    HTTP/1's codec refuses (a spec pins this too).
+   Plain HTTP is forwarded only for authorities in the `plain` or
+   `allowed-plain` virtual hosts. Each authority is in one virtual host:
+   Envoy refuses a domain in two, so an entry naming an intercepted
+   authority (plain or not) is skipped: the interception's 403 already
+   refuses plain HTTP there. Envoy also prefers an exact domain to a
+   wildcard, so an exact authority is given the CONNECT and plain ways of
+   every wildcard of either kind that covers it on its port; otherwise the
+   exact entry would shadow the wildcard's other way. A plain entry on port
+   80 also lists its bare host, because clients omit `:80`. Plain requests
+   never reach an interception, so no key is injected over cleartext.
 6. **Logs are untrusted.** The proxy can write anything into `log/`. The host
    opens those files refusing links and non-regular files, and reads at most
    1 MiB per line or tail (`state.CountDenied`, `Dir.EnvoyLogTail`); the
@@ -247,15 +257,17 @@ bind mount.
 `policy.ParseFile`. Line-oriented; `#` starts a comment, blank lines are
 skipped, a trailing CR is ignored. A preamble, then sections:
 
-- **Preamble**: the setting `strict`, `strict = on` or `strict = off`
-  (blanks around `=` optional, values lowercase), and `[allow]` lines. A
+- **Preamble**: the setting `strict`, `strict = on` or `strict = off`, the
+  setting `allow_plain = on` or `allow_plain = off` (no bare form), each
+  with blanks around `=` optional and values lowercase, and `[allow]` lines. A
   file with no sections, as every `egress.conf` was before sections
   existed, is all preamble, so it parses unchanged.
-- **`[allow]`**: `host[:port]`, `*.domain[:port]`, `-entry`, `@group`,
-  `-@group`, one per line (`policy.ParseItem`). Several `[allow]` sections
+- **`[allow]`**: `host[:port]`, `*.domain[:port]`, `http://host[:port]`,
+  `http://*.domain[:port]`, `-entry`, `@group`, `-@group`, one per line (`policy.ParseItem`). Several `[allow]` sections
   concatenate.
 - **`[group NAME]`**: `NAME` matches `^[a-z0-9][a-z0-9-]{0,62}$`; members are
-  `host[:port]` or `*.domain[:port]`, at least one, no `-` or `@`.
+  `host[:port]`, `*.domain[:port]`, `http://host[:port]` or
+  `http://*.domain[:port]`, at least one, no `-` or `@`.
 - **`[inject]`** (`policy.InjectRow`): `VARIABLE host header` then
   `prefix=WORD` / `base-url=VARIABLE`, each at most once, any order. Inside
   `[inject]` every line is a row: `line` dispatches to `injectRow` before
@@ -267,13 +279,19 @@ skipped, a trailing CR is ignored. A preamble, then sections:
   `transfer-encoding`, `upgrade` or `content-length`; `prefix=` is
   non-empty visible ASCII and gets one trailing space.
 
+`http://` is stripped after the ASCII check and lowercasing, and before the
+port and host checks. A path, query or userinfo after it is an error, as is
+any other scheme.
+
 Every error is `file:line: reason`: an unknown section; an unknown setting
-or a `strict` value other than `on`/`off`; a setting after the first
+or a `strict` value other than `on`/`off`; an `allow_plain` value other
+than `on`/`off`; a setting after the first
 section; an empty group; a group defined twice in one file; `-` or `@` in a
 group; `[group agent]`; an invalid entry or group name. An `@name` that no
 group defines is caught by resolution, which knows every file's groups.
 `agent.conf` and `applied.conf` are plain host lists (`policy.ParseList`:
-the same grammar, entries only: `ParseList` also refuses `[inject]`).
+the same grammar, entries only: `ParseList` also refuses `[inject]` and both
+settings).
 
 ## Resolution
 
@@ -291,7 +309,9 @@ the same grammar, entries only: `ParseList` also refuses `[inject]`).
    `@registries`. Only built-ins nest, one level, and none nests `@os`; user
    groups list hosts.
 2. **Strict**: `session.conf`'s setting, else the user file's, else the
-   system file's, else off (`StrictFrom` records which).
+   system file's, else off (`StrictFrom` records which). `allow_plain` layers
+   the same way, but only the user and system files may set it; the overlay
+   is refused.
 3. **Conf merge**: every addition of the two files, plus `@registries` and
    `@agent` unless strict is on, minus every removal in either file (a
    removal wins whichever file it is in; `-@g` removes each member). A
@@ -304,6 +324,12 @@ the same grammar, entries only: `ParseList` also refuses `[inject]`).
    File order matters because one overlay can both add and remove a host
    (`allow @pypi`, then `deny pypi.org`); see
    [decisions/egress-proxy.md](decisions/egress-proxy.md#amendments-while-the-branch-was-open).
+5. **Plain HTTP**: with `allow_plain` on (the user file's setting, else the
+   system file's, else off; never the overlay's), `http://host` on port 80
+   for every tunnel entry left, unless a file or the overlay removes that
+   plain entry (a later overlay allow of the host, or of that plain entry,
+   lifts an earlier removal). It runs last, so a live allow or deny of a host
+   also covers its plain HTTP.
 
 `[inject]` rows (`fileRows`): the user file's row replaces the system
 file's with the same variable. Each surviving row adds `host:443` to the
@@ -380,8 +406,8 @@ with 403. Two mappers, first match wins, each adding
   session's allowlist, it is not a network fault, and the agent should stop
   and ask the user; "If the user agrees after checking the host, they run on
   the host: `riotbox egress allow --session <name> <authority>`";
-- any other 403 (plain HTTP, never proxied): use HTTPS; allowing the host
-  will not help.
+- any other 403 (plain HTTP not allowed): use HTTPS, or ask the user to
+  allow `http://<authority>`.
 
 The status is unchanged and the mappers have no `runtime_key`, so nothing
 outside the config can change them. `%REQ(:AUTHORITY)%` is chosen by the

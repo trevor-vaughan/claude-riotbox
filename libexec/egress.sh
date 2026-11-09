@@ -16,7 +16,8 @@ usage: riotbox egress list
 
 Change what a running RIOTBOX_EGRESS=1 session may reach, without
 restarting it. <entry> is host, host:port or *.domain (port 443 when
-omitted); @group is every host of a group (see `riotbox egress groups`).
+omitted), or http://host[:port] for plain HTTP (port 80 when omitted);
+@group is every host of a group (see `riotbox egress groups`).
 
   list     each running session: when it started, its launch's PID,
            its project dirs, its access log, whether strict mode is on

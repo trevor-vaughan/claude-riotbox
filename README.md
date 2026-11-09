@@ -1189,12 +1189,14 @@ Unless strict mode is on, the allowlist is the union of:
 
   ```ini
   strict                    # optional, before any section: only what the files list
+  allow_plain = on          # optional: plain HTTP, port 80, to every allowed host
   [group mirrors]           # your own group: host, host:port or *.domain lines
   mirror.corp.example:8443
   [allow]                   # lines before any section are [allow] lines too
   example.com               # port 443
   example.com:8443          # that port only
   *.example.com             # any subdomain at any depth, not example.com itself
+  http://mirror.example.org # plain HTTP to one host, port 80 (http://host:port for another)
   @agent                    # the agent's own API hosts (needed under strict)
   @containers               # every host of a group
   @mirrors
@@ -1205,7 +1207,12 @@ Unless strict mode is on, the allowlist is the union of:
 A removal (`-entry`, `-@group`) in either file wins over every addition,
 including the hosts a group adds, and it must match the entry exactly:
 `-*.example.com` does not remove `a.example.com`. Everything not on the list
-is refused with `403`, and so is all plain HTTP. Only names are accepted,
+is refused with `403`. Plain HTTP is refused too, unless an `http://` entry or
+`allow_plain = on` allows it. Plain HTTP has no encryption: anyone on the
+path can read or change it, so prefer one `http://` entry over
+`allow_plain`. `allow_plain` is read from the files only; under it, a
+live `riotbox egress allow`/`deny` of a host covers its plain HTTP
+too. Only names are accepted,
 never IP addresses. A bad line stops the launch, and every
 `riotbox egress` command that reads the file, with
 `<file>:<line>: <reason>`, for example: an invalid entry or group name, an
@@ -1391,8 +1398,7 @@ interrupt the removal.
 A refused request's `403` carries an `x-riotbox-egress: denied <host[:port]>`
 header and a short text body. For HTTPS it names the session and the
 `riotbox egress allow` command to run, and asks the agent to stop and ask
-you; for plain HTTP it says to use HTTPS, since allowing the host will not
-help. The host in that text is whatever the agent asked for: check it
+you; for plain HTTP it says to use HTTPS, or how to allow `http://<host>`. The host in that text is whatever the agent asked for: check it
 before you allow it. Most clients drop the body for HTTPS (curl prints only
 `CONNECT tunnel failed, response 403`), so the agent's system prompt
 (Claude, opencode and Pi) also says that such a failure is the allowlist,

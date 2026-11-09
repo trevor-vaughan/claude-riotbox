@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/policy"
 )
@@ -273,8 +274,9 @@ func listener(session string, routes obj) obj {
 // refusal, as the routes answer 403 to everything they do not allow — to
 // say what was refused: a text/plain body and DeniedHeader. Two mappers,
 // first match wins: a refused CONNECT is told how the user allows the
-// host; any other method (plain HTTP, never proxied) is told to use
-// HTTPS, since allowing the host cannot help it. %REQ(:AUTHORITY)% is the
+// host; any other method (plain HTTP, refused unless an http:// entry
+// allows it) is told to use HTTPS, or how the user allows plain HTTP to
+// the host. %REQ(:AUTHORITY)% is the
 // authority the client asked for (host:port for a CONNECT); the client
 // chooses it, so the text asks the user to check it before running the
 // command. Clients drop the body of a refused CONNECT (curl prints only
@@ -313,19 +315,31 @@ func localReply(session string) obj {
 			"This is not a network fault: retrying, or trying other hosts, IP addresses, DNS or proxies, will not get through.\n"+
 			"Stop and ask the user to allow it. If the user agrees after checking the host, they run on the host:\n"+
 			"  riotbox egress allow --session "+session+" "+authority+"\n"),
-		denied(refused, "riotbox egress: "+authority+" was refused: plain HTTP is never proxied by this session's egress proxy.\n"+
-			"Use HTTPS; allowing the host will not help.\n"),
+		denied(refused, "riotbox egress: plain HTTP to "+authority+" is not on this session's allowlist.\n"+
+			"Use HTTPS. If the host serves only plain HTTP, this is not a network fault: stop and ask the user to allow it.\n"+
+			"If the user agrees after checking the host, they run on the host:\n"+
+			"  riotbox egress allow --session "+session+" http://"+authority+"\n"),
 	}}
 }
 
-// routeConfig allows CONNECT to each entry's host:port and answers every
-// other request 403. A CONNECT to an intercepted host that entries allow
-// on port 443 goes instead to that host's internal listener, from a
-// virtual host of its own (Envoy prefers an exact domain to a wildcard,
-// and refuses one domain in two virtual hosts); an intercepted host
-// entries do not allow is denied before any interception. With no
-// entries only the deny host is emitted (an empty domains list is
-// invalid).
+// routeConfig allows CONNECT to each tunnel entry's host:port and plain
+// HTTP to each plain entry's, and answers every other request 403. Each
+// authority goes in exactly one virtual host (Envoy refuses one domain in
+// two): "allowed" for CONNECT only, "plain" for plain HTTP only,
+// "allowed-plain" when entries allow it both ways. A plain entry on port
+// 80 also matches its bare host, since an HTTP client usually leaves the
+// default port out of Host; ports are never stripped otherwise. A CONNECT
+// to an intercepted host that entries allow on port 443 goes instead to
+// that host's internal listener, from a virtual host of its own (Envoy
+// prefers an exact domain to a wildcard); an intercepted host entries do
+// not allow is denied before any interception. Plain HTTP never reaches
+// an interception, and no entry, plain or not, shares a domain with an
+// interception's virtual host: its 403 already refuses plain HTTP. Because
+// Envoy also prefers an exact domain to a wildcard, an exact authority
+// takes on the ways any wildcard entry on its port that covers it allows,
+// of either kind, so it never loses what the wildcard would have allowed.
+// With no entries only the deny host is emitted (an
+// empty domains list is invalid).
 func routeConfig(entries []policy.Entry, intercepts []Intercept) obj {
 	forbidden := obj{"status": 403}
 	intercepted := map[policy.Entry]bool{}
@@ -334,18 +348,75 @@ func routeConfig(entries []policy.Entry, intercepts []Intercept) obj {
 			intercepted[e] = true
 		}
 	}
-	var vhosts, domains []any
+	// ways is how entries allow one authority, in the order first seen.
+	type ways struct {
+		host           string
+		port           int
+		connect, plain bool
+	}
+	var order []*ways
+	byAuthority := map[string]*ways{}
 	for _, e := range entries {
-		if !intercepted[e] {
-			domains = append(domains, e.Authority())
+		if intercepted[policy.Entry{Host: e.Host, Port: e.Port}] {
+			continue
+		}
+		w := byAuthority[e.Authority()]
+		if w == nil {
+			w = &ways{host: e.Host, port: e.Port}
+			byAuthority[e.Authority()] = w
+			order = append(order, w)
+		}
+		if e.Plain {
+			w.plain = true
+		} else {
+			w.connect = true
 		}
 	}
-	if len(domains) > 0 {
-		vhosts = append(vhosts, obj{
-			"name":    "allowed",
-			"domains": domains,
-			"routes":  []any{connectRoute("egress"), obj{"match": obj{"prefix": "/"}, "direct_response": forbidden}},
-		})
+	// Envoy prefers an exact domain to a wildcard, so an exact authority
+	// must also allow whatever a wildcard covering it allows, of either kind.
+	merged := make(map[*ways]ways, len(order))
+	for _, w := range order {
+		m := *w
+		for _, wild := range order {
+			if strings.HasPrefix(wild.host, "*.") && wild.port == w.port && wild.host != w.host &&
+				strings.HasSuffix(w.host, wild.host[1:]) {
+				m.connect = m.connect || wild.connect
+				m.plain = m.plain || wild.plain
+			}
+		}
+		merged[w] = m
+	}
+	var connectOnly, plainOnly, both []any
+	for _, o := range order {
+		w := merged[o]
+		domains := []any{policy.Entry{Host: w.host, Port: w.port}.Authority()}
+		if w.plain && w.port == policy.PlainPort {
+			domains = append(domains, w.host)
+		}
+		switch {
+		case w.connect && w.plain:
+			both = append(both, domains...)
+		case w.plain:
+			plainOnly = append(plainOnly, domains...)
+		default:
+			connectOnly = append(connectOnly, domains...)
+		}
+	}
+	refuseConnect := obj{"match": obj{"connect_matcher": obj{}}, "direct_response": forbidden}
+	refuseRest := obj{"match": obj{"prefix": "/"}, "direct_response": forbidden}
+	var vhosts []any
+	for _, v := range []struct {
+		name    string
+		domains []any
+		routes  []any
+	}{
+		{"allowed", connectOnly, []any{connectRoute("egress"), refuseRest}},
+		{"plain", plainOnly, []any{refuseConnect, plainRoute()}},
+		{"allowed-plain", both, []any{connectRoute("egress"), plainRoute()}},
+	} {
+		if len(v.domains) > 0 {
+			vhosts = append(vhosts, obj{"name": v.name, "domains": v.domains, "routes": v.routes})
+		}
 	}
 	for _, i := range intercepts {
 		e := policy.Entry{Host: i.Host, Port: policy.DefaultPort}
@@ -355,16 +426,13 @@ func routeConfig(entries []policy.Entry, intercepts []Intercept) obj {
 		vhosts = append(vhosts, obj{
 			"name":    interceptName(i.Host),
 			"domains": []any{e.Authority()},
-			"routes":  []any{connectRoute(interceptName(i.Host)), obj{"match": obj{"prefix": "/"}, "direct_response": forbidden}},
+			"routes":  []any{connectRoute(interceptName(i.Host)), refuseRest},
 		})
 	}
 	vhosts = append(vhosts, obj{
 		"name":    "deny",
 		"domains": []any{"*"},
-		"routes": []any{
-			obj{"match": obj{"connect_matcher": obj{}}, "direct_response": forbidden},
-			obj{"match": obj{"prefix": "/"}, "direct_response": forbidden},
-		},
+		"routes":  []any{refuseConnect, refuseRest},
 	})
 	return obj{"name": "egress", "virtual_hosts": vhosts}
 }
@@ -381,6 +449,18 @@ func connectRoute(cluster string) obj {
 			"timeout":         "0s",
 			"upgrade_configs": []any{obj{"upgrade_type": "CONNECT", "connect_config": obj{}}},
 		},
+	}
+}
+
+// plainRoute forwards a plain-HTTP request to the forward-proxy cluster,
+// which resolves the authority the virtual host matched. Its timeout is
+// off as connectRoute's is: the default 15s would cut a slow download,
+// and the connection manager's stream_idle_timeout still reaps a stalled
+// one.
+func plainRoute() obj {
+	return obj{
+		"match": obj{"prefix": "/"},
+		"route": obj{"cluster": "egress", "timeout": "0s"},
 	}
 }
 
