@@ -342,7 +342,7 @@ egress_mask_data() {
 					case "${field}" in
 					type=*) type="${field#type=}" ;;
 					src=* | source=*) src="${field#*=}" ;;
-					dst=* | destination=* | target=*) dst="${field#*=}" ;;
+					dst=* | dest=* | destination=* | target=*) dst="${field#*=}" ;;
 					*) ;;
 					esac
 				done

@@ -480,13 +480,14 @@ testcases:
           PROJECT_VOLUME_FLAGS="--mount type=bind,src=${TMP},dst=/h -v ${TMP}/proj:/workspace:z"
           MOUNTS="-v ${TMP}:/h:ro,z --volume=${TMP}/:/h2/ -v${TMP} -v /:/root-fs:ro"
           CREDFILE_FLAGS=""
-          RIOTBOX_EXTRA_ARGS="--mount=type=bind,source=${TMP}/my,target=/in -v named:/n --mount type=volume,src=${TMP},dst=/vol"
+          RIOTBOX_EXTRA_ARGS="--mount=type=bind,source=${TMP}/my,target=/in -v named:/n --mount type=volume,src=${TMP},dst=/vol --mount type=bind,src=${TMP},dest=/d"
           egress_mask_data || { echo "BAD: egress_mask_data failed" >&2; exit 1; }
           rel='my data,""x'$'\n''y/riotbox-egress'
           want=(
             --mount "type=tmpfs,\"destination=/h/${rel}\",notmpcopyup"
             --mount "type=tmpfs,\"destination=/h2/${rel}\",notmpcopyup"
             --mount "type=tmpfs,\"destination=/root-fs${TMP}/${rel}\",notmpcopyup"
+            --mount "type=tmpfs,\"destination=/d/${rel}\",notmpcopyup"
           )
           [ "$(printf '%s\0' "${EGRESS_MASK_FLAGS[@]}" | od -c)" = "$(printf '%s\0' "${want[@]}" | od -c)" ] ||
             { echo "BAD: masks: $(printf '[%s] ' "${EGRESS_MASK_FLAGS[@]}")" >&2; exit 1; }
