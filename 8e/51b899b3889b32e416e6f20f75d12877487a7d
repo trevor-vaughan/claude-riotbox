@@ -1,0 +1,22 @@
+container/anywhere.sh
+  s_39e619da963185::t_05584af782f361 71-72
+  s_39e619da963185::t_6b570ed7fb81dd 73-78
+tests/anywhere.venom.yml
+  s_39e619da963185::t_efce3760c9523b 299-331
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "08d7f10467d38af8953f3d438a1cab4f6093070e",
+  "prompts": {},
+  "sessions": {
+    "s_39e619da963185": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "445fdd53-32ab-4f92-905c-1763b8c2e3db",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
