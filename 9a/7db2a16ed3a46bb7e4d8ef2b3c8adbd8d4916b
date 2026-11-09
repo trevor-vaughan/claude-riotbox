@@ -1,0 +1,98 @@
+README.md
+  h_4db53f42b9be42 1312-1350
+THREAT_MODEL.md
+  h_4db53f42b9be42 1379-1393
+cmd/riotbox-core/egress.go
+  h_4db53f42b9be42 100-103,109,333,455-471,525,586
+cmd/riotbox-core/egress_test.go
+  h_4db53f42b9be42 4,763-815,1211
+cmd/riotbox-core/hostlink.go
+  h_4db53f42b9be42 1-69
+cmd/riotbox-core/hostlink_test.go
+  h_4db53f42b9be42 1-61
+cmd/riotbox-core/main.go
+  h_4db53f42b9be42 115-121,206-215
+container/entrypoint.sh
+  h_4db53f42b9be42 108-113
+docs/dev/decisions/egress-proxy.md
+  h_4db53f42b9be42 291-339
+docs/dev/egress.md
+  h_4db53f42b9be42 23,26,41,51,244-245,425-486
+internal/egress/envoyconfig/envoyconfig.go
+  h_4db53f42b9be42 57-65,135-136,148,173,239-256,380-381,391-392,396-398,412-414,481-487,564,608-699
+internal/egress/envoyconfig/envoyconfig_test.go
+  h_4db53f42b9be42 504-512
+internal/egress/envoyconfig/hostlink_test.go
+  h_4db53f42b9be42 1-177
+internal/egress/envoyconfig/intercept_test.go
+  h_4db53f42b9be42 127-128,132,161,208
+internal/egress/hostlink/conn.go
+  h_4db53f42b9be42 1-68
+internal/egress/hostlink/helpers_test.go
+  h_4db53f42b9be42 1-79
+internal/egress/hostlink/hostlink.go
+  h_4db53f42b9be42 1-126
+internal/egress/hostlink/hostlink_suite_test.go
+  h_4db53f42b9be42 1-13
+internal/egress/hostlink/listener.go
+  h_4db53f42b9be42 1-172
+internal/egress/hostlink/listener_test.go
+  h_4db53f42b9be42 1-202
+internal/egress/hostlink/ports_test.go
+  h_4db53f42b9be42 1-81
+internal/egress/hostlink/relay.go
+  h_4db53f42b9be42 1-133
+internal/egress/hostlink/relay_test.go
+  h_4db53f42b9be42 1-134
+internal/egress/pod/inject_e2e_test.go
+  h_4db53f42b9be42 71
+internal/egress/pod/pod.go
+  h_4db53f42b9be42 3-5,32,34,46,58-68,151,158,170,212-221,232,272-275,290-307,319-328,332-342,344-348,355-384,408-410,456-458,461,465,468,473,476,482-493,530-531,533-539,548,551-555
+internal/egress/pod/pod_test.go
+  h_4db53f42b9be42 7,10,67-68,70,114,397-533,705-719,736
+internal/egress/pod/sessions.go
+  h_4db53f42b9be42 150-152,171-175,178,183,254-283
+internal/egress/pod/sessions_test.go
+  h_4db53f42b9be42 485-561
+internal/egress/policy/inject.go
+  h_4db53f42b9be42 72-74
+internal/egress/policy/inject_test.go
+  h_4db53f42b9be42 59-60
+internal/egress/policy/policy.go
+  h_4db53f42b9be42 29-34,167-169
+internal/egress/policy/policy_test.go
+  h_4db53f42b9be42 122-138
+internal/egress/policy/resolve.go
+  h_4db53f42b9be42 143-147
+internal/egress/policy/resolve_test.go
+  h_4db53f42b9be42 317-325
+internal/egress/state/state.go
+  h_4db53f42b9be42 7-8,35,46,93-130,392,394,401,427-438,590-592,610-612,626-640
+internal/egress/state/state_test.go
+  h_4db53f42b9be42 6,129-198,391-435
+scripts/configs/egress.conf
+  h_4db53f42b9be42 102-107
+scripts/lib/egress-hostlink.sh
+  h_4db53f42b9be42 1-48
+tests/egress-e2e.venom.yml
+  h_4db53f42b9be42 174,179,203,485-573
+tests/egress-hostlink.venom.yml
+  h_4db53f42b9be42 1-97
+tests/egress-launch.venom.yml
+  h_4db53f42b9be42 38
+tests/lib/egress-e2e-helpers.sh
+  h_4db53f42b9be42 50,55-56,59,64-92,162-176
+tests/lib/egress-fake-engine/podman
+  h_4db53f42b9be42 26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "57edcac34905b2d600a23d5e3a052f6f6c6123fa",
+  "prompts": {},
+  "humans": {
+    "h_4db53f42b9be42": {
+      "author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}

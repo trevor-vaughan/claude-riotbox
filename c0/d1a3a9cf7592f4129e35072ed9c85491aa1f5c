@@ -1,0 +1,21 @@
+internal/realpath/realpath_test.go
+  s_1437b4f5da9bcb::t_ca53c6acd0e320 17-22,25-34,38,90-91,128,132
+  s_1437b4f5da9bcb::t_face8844ecd249 23
+  s_1437b4f5da9bcb::t_4c6071fcf4cae8 24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "338b6eecda4c7c569c33959f2a85cb2c4fcbcece",
+  "prompts": {},
+  "sessions": {
+    "s_1437b4f5da9bcb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e1dfea8b-7142-436a-96b8-a6f8f805ef88",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
