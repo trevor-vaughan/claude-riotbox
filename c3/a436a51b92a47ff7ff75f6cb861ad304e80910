@@ -1,18 +1,24 @@
-THREAT_MODEL.md
-  s_960e57a310f0ac::t_ac015de3ea81ae 1394-1411
+README.md
+  s_960e57a310f0ac::t_9b4f7e57f29c43 1106-1127,1130-1133
+  s_960e57a310f0ac::t_e43a776d244acc 1128-1129,1415-1419
 libexec/egress.sh
   s_960e57a310f0ac::t_ac015de3ea81ae 46-47
-README.md
-  s_960e57a310f0ac::t_9b4f7e57f29c43 1106-1132
-  s_960e57a310f0ac::t_ac015de3ea81ae 1414
+THREAT_MODEL.md
+  s_960e57a310f0ac::t_ac015de3ea81ae 1394-1411
 docs/dev/egress.md
-  s_960e57a310f0ac::t_797513c9b944c3 421
-  s_960e57a310f0ac::t_ac015de3ea81ae 15,224-231,247
+  s_960e57a310f0ac::t_ac015de3ea81ae 15,224-228,232-233,249
+  s_960e57a310f0ac::t_e43a776d244acc 229-231,423-425
+docs/dev/riotbox-core.md
+  s_960e57a310f0ac::t_07d8fb26e2fd2b 89,195,198-201
+bin/riotbox
+  s_960e57a310f0ac::t_07d8fb26e2fd2b 87-88
+libexec/launch.sh
+  s_960e57a310f0ac::t_07d8fb26e2fd2b 6-7
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.6",
-  "base_commit_sha": "d8205ded52017bfaab19682e50dbd6739fd0b1e8",
+  "base_commit_sha": "c3a436a51b92a47ff7ff75f6cb861ad304e80910",
   "prompts": {},
   "sessions": {
     "s_960e57a310f0ac": {
@@ -21,7 +27,7 @@ docs/dev/egress.md
         "id": "7edc1c10-4aaf-41e4-b66b-4fc55fe6f1bf",
         "model": "claude-opus-5-5"
       },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
+      "human_author": null
     }
   }
 }
