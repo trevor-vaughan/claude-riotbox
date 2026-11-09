@@ -10,7 +10,7 @@ vars:
 # plugin cases reach each distro's mirrors (os/<ID>/egress-hosts).
 
 testcases:
-  - name: allows a listed host, refuses others, never proxies plain HTTP, and leaves no direct route
+  - name: allows a listed host, refuses others and unlisted plain HTTP, and leaves no direct route
     steps:
       - type: exec
         script: |
@@ -171,11 +171,12 @@ testcases:
           err="$(e2e_core egress-down -- "${name}" 2>&1)"
           echo "${err}"
           [[ "${err}" == *"1 denied request(s)"* ]] || { echo "BAD: no denial report" >&2; exit 1; }
-          for obj in "container exists ${name}-egress" \
+          for obj in "container exists ${name}-egress" "container exists ${name}-hostlink" \
               "network exists ${name}-int" "network exists ${name}-ext"; do
             # shellcheck disable=SC2086 # split on purpose
             if podman ${obj}; then echo "BAD: left behind: ${obj}" >&2; exit 1; fi
           done
+          [ ! -e "${E2E_ROOT}/${name}/hostlink/relay.sock" ] || { echo "BAD: the relay's socket was left behind" >&2; exit 1; }
           e2e_core egress-down -- "${name}" || { echo "BAD: second teardown failed" >&2; exit 1; }
           echo OK
         assertions:
@@ -199,7 +200,7 @@ testcases:
           e2e_up "${killed}" "${dead}"
           podman run -d --name "${killed}" "${E2E_FLAGS[@]}" "${E2E_BUSYBOX_IMAGE}" sleep 300 >/dev/null
           e2e_core egress-sweep
-          for obj in "container exists rbx-e2e-orphan-$$-egress" "network exists rbx-e2e-orphan-$$-int"; do
+          for obj in "container exists rbx-e2e-orphan-$$-egress" "container exists rbx-e2e-orphan-$$-hostlink" "network exists rbx-e2e-orphan-$$-int"; do
             # shellcheck disable=SC2086 # split on purpose
             if podman ${obj}; then echo "BAD: orphan kept: ${obj}" >&2; exit 1; fi
           done
@@ -234,7 +235,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring OK
 
-  - name: strict mode refuses a registry until allow @pypi opens it live, and each denial says why
+  - name: strict mode refuses a registry until allow @pypi opens it live, plain HTTP until allow http:// opens it, and each denial says why
     steps:
       - type: exec
         script: |
@@ -270,16 +271,92 @@ testcases:
           e2e_eventually 403 https://pypi.org/
           e2e_core egress-allow --session "${name}" -- @pypi
           e2e_eventually 200 https://pypi.org/
-          # Plain HTTP is never proxied, so its 403 says to use HTTPS and
-          # does not offer an allow command that could not help.
+          # Plain HTTP is refused unless an http:// entry allows it; its
+          # 403 says to use HTTPS and how the user allows it.
           reply="$(e2e_agent "${E2E_AGENT_IMAGE}" curl -sS -i --max-time 20 http://www.wikipedia.org/ | tr -d '\r')"
           echo "${reply}"
           [[ "${reply}" == "HTTP/1.1 403 "* ]] || { echo "BAD: plain HTTP was not refused with 403" >&2; exit 1; }
           grep -qxF 'x-riotbox-egress: denied www.wikipedia.org' <<<"${reply}" || { echo "BAD: no denial header on plain HTTP" >&2; exit 1; }
-          [[ "${reply}" == *"plain HTTP is never proxied"* && "${reply}" == *"Use HTTPS"* ]] || { echo "BAD: the plain-HTTP body does not say to use HTTPS" >&2; exit 1; }
-          if [[ "${reply}" == *"riotbox egress allow"* ]]; then echo "BAD: the plain-HTTP body offers an allow command" >&2; exit 1; fi
+          [[ "${reply}" == *"Use HTTPS."* ]] || { echo "BAD: the plain-HTTP body does not say to use HTTPS" >&2; exit 1; }
+          [[ "${reply}" == *"riotbox egress allow --session ${name} http://www.wikipedia.org"* ]] || { echo "BAD: no http:// allow command in the plain-HTTP body" >&2; exit 1; }
+          # A live http:// allow opens plain HTTP to that host alone; its
+          # tunnel stays refused under strict. A plain request has no CONNECT,
+          # so its status is the second field of e2e_codes.
+          e2e_core egress-allow --session "${name}" -- http://www.wikipedia.org
+          for _ in $(seq 15); do
+            got="$(e2e_codes http://www.wikipedia.org/)"
+            [[ "${got#* }" == 301 ]] && break
+            sleep 1
+          done
+          [ "${got}" = "000 301" ] || { echo "BAD: plain http://www.wikipedia.org gave '${got}', want '000 301'" >&2; exit 1; }
+          want="403 000" check https://www.wikipedia.org
           got="$(e2e_agent "${E2E_AGENT_IMAGE}" printenv RIOTBOX_EGRESS_SESSION)"
           [ "${got}" = "${name}" ] || { echo "BAD: RIOTBOX_EGRESS_SESSION is '${got}', want ${name}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: allow_plain = on lets each allowed host take plain HTTP on port 80, and nothing else
+    steps:
+      - type: exec
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          printf 'strict\nallow_plain = on\n@agent\n' >"${E2E_TMP}/user.conf"
+          e2e_up "rbx-e2e-plain-$$" $$ example.com
+          check() { local got; got="$(e2e_codes "$@")"; echo "$* -> ${got}"; [ "${got}" = "${want}" ] || { echo "BAD: want ${want}" >&2; exit 1; }; }
+          want="200 200" check https://example.com
+          want="000 200" check http://example.com
+          want="000 403" check http://www.wikipedia.org
+          want="000 403" check http://example.com:8080
+          want="000 403" check http://www.wikipedia.org -H 'Host: example.com'
+          want="000 403" check http://example.com./
+          e2e_core egress-list | grep -qxF '  allow:   http://example.com' || { echo "BAD: list lacks the derived http:// entry" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: port ranges, host:* and *.domain:* reach their ports, and nothing else
+    steps:
+      - type: exec
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          name="rbx-e2e-ports-$$"
+          printf 'strict\n@agent\nexample.com:80-81\nwww.wikipedia.org:*\n*.wikimedia.org:*\n' >"${E2E_TMP}/user.conf"
+          e2e_up "${name}" $$
+          check() { local got; got="$(e2e_codes "$@")"; echo "$* -> ${got}"; [ "${got}" = "${want}" ] || { echo "BAD: want ${want}" >&2; exit 1; }; }
+          # -p sends CONNECT host:80 for a plain URL, so the tunnel's port is
+          # the one under test; the second field is the origin's answer.
+          want="200 200" check http://example.com/ -p
+          want="200 301" check http://www.wikipedia.org/ -p
+          want="200 200" check https://www.wikipedia.org
+          want="200 301" check https://upload.wikimedia.org
+          want="403 000" check https://example.com
+          want="403 000" check https://wikimedia.org
+          # curl drops a refused CONNECT's body; send the CONNECT by hand. A
+          # userinfo trick, a non-numeric port, a zero-padded port (which
+          # Envoy's exact-domain match does not read as port 443) and a
+          # lookalike suffix must not slip past the :authority guards.
+          raw_connect='p="${https_proxy#http://}"; p="${p%/}"
+            exec 3<>"/dev/tcp/${p%:*}/${p##*:}"
+            printf "CONNECT %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n" "$1" "$1" >&3
+            timeout 20 cat <&3'
+          for target in 'www.wikipedia.org:443@example.net:443' 'www.wikipedia.org:x' 'www.wikipedia.org:0443' 'x.wikimedia.org:0443' 'x.wikimedia.org.example.net:443'; do
+            reply="$(e2e_agent "${E2E_AGENT_IMAGE}" bash -c "${raw_connect}" bash "${target}" | tr -d '\r')"
+            echo "${target} -> ${reply%%$'\n'*}"
+            [[ "${reply}" == "HTTP/1.1 403 "* || "${reply}" == "HTTP/1.1 400 "* ]] || { echo "BAD: CONNECT ${target} was not refused with 403 or 400" >&2; exit 1; }
+          done
+          e2e_core egress-allow --session "${name}" -- example.com:443-444
+          e2e_eventually 200 https://example.com
           echo OK
         assertions:
           - result.code ShouldEqual 0
@@ -328,6 +405,90 @@ testcases:
           done
           [ "$(sha256sum <"${rds}")" = "${before}" ] || { echo "BAD: rds.json changed" >&2; exit 1; }
           [ ! -e "${E2E_ROOT}/rbx" ] || { echo "BAD: a write reached the host" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  # RIOTBOX_EGRESS_CONF: egress_guard_conf lets only read-only and overlay
+  # mounts reach the file. Each must keep the agent from changing the host
+  # file, including by renaming the directory above it and recreating it.
+  - name: every mount spelling egress_guard_conf allows keeps the agent from changing RIOTBOX_EGRESS_CONF
+    steps:
+      - type: exec
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          mkdir -p "${E2E_TMP}/proj/sub"
+          conf="${E2E_TMP}/proj/sub/egress.conf"
+          echo own.example >"${conf}"
+          before="$(sha256sum <"${conf}")"
+          source "{{.root}}/libexec/egress-lib.sh"
+          RIOTBOX_EGRESS_CONF="$(realpath "${conf}")"
+          MOUNTS="" CREDFILE_FLAGS="" RIOTBOX_EXTRA_ARGS=""
+          unset RIOTBOX_NESTED
+          spellings=(
+            "-v ${E2E_TMP}/proj:/workspace:ro,z"
+            "--mount type=bind,src=${E2E_TMP}/proj,dst=/workspace,ro"
+            "--mount type=bind,src=${E2E_TMP}/proj,dst=/workspace,readonly"
+            "--mount type=bind,src=${E2E_TMP}/proj,dst=/workspace,ro=true"
+            "--mount type=bind,src=${E2E_TMP}/proj,dst=/workspace,readonly=true"
+            "-v ${E2E_TMP}/proj:/workspace:O"
+          )
+          # The test is tied to what the guard really accepts.
+          for spelling in "${spellings[@]}"; do
+            PROJECT_VOLUME_FLAGS="${spelling}"
+            egress_guard_conf || { echo "BAD: the guard refused: ${spelling}" >&2; exit 1; }
+          done
+          PROJECT_VOLUME_FLAGS="-v ${E2E_TMP}/proj:/workspace:z"
+          if egress_guard_conf 2>/dev/null; then
+            echo "BAD: the guard allowed a read-write mount" >&2; exit 1
+          fi
+          probe='cat /workspace/sub/egress.conf
+            2>/dev/null echo evil.example >>/workspace/sub/egress.conf && echo APPENDED
+            2>/dev/null true >/workspace/sub/egress.conf && echo TRUNCATED
+            mv /workspace/sub/egress.conf /workspace/sub/egress.conf.moved 2>/dev/null && echo MOVED
+            rm /workspace/sub/egress.conf 2>/dev/null && echo REMOVED
+            mv /workspace/sub /workspace/sub-old 2>/dev/null && 2>/dev/null mkdir /workspace/sub &&
+              2>/dev/null echo evil.example >/workspace/sub/egress.conf && echo REPLACED
+            :'
+          # Positive control: the same probe against a plain read-write mount
+          # must change the copy, or a passing read-only run proves nothing.
+          # MOVED runs before REMOVED, so REMOVED finds no file to remove.
+          mkdir -p "${E2E_TMP}/ctl/sub"
+          echo own.example >"${E2E_TMP}/ctl/sub/egress.conf"
+          out="$(podman run --rm "--userns=keep-id:uid=$(id -u),gid=$(id -g)" -v "${E2E_TMP}/ctl:/workspace:z" "${E2E_BUSYBOX_IMAGE}" sh -c "${probe}" 2>&1)" ||
+            { echo "${out}" >&2; echo "BAD: the control podman run failed" >&2; exit 1; }
+          echo "control (read-write): ${out//$'\n'/ }"
+          for marker in APPENDED TRUNCATED MOVED REPLACED; do
+            [[ "${out}" == *"${marker}"* ]] || { echo "BAD: the control did not report ${marker}: the probe cannot detect a change" >&2; exit 1; }
+          done
+          [ -d "${E2E_TMP}/ctl/sub-old" ] || { echo "BAD: the control did not rename the directory" >&2; exit 1; }
+          [ "$(cat "${E2E_TMP}/ctl/sub/egress.conf")" = evil.example ] || { echo "BAD: the control did not replace the file" >&2; exit 1; }
+          for spelling in "${spellings[@]}"; do
+            read -ra flags <<<"${spelling}"
+            overlay=0
+            [[ "${spelling}" == *:O ]] && overlay=1
+            for user in "--userns=keep-id:uid=$(id -u),gid=$(id -g)" "--user=0"; do
+              rc=0
+              out="$(podman run --rm "${user}" "${flags[@]}" "${E2E_BUSYBOX_IMAGE}" sh -c "${probe}" 2>&1)" || rc=$?
+              if [[ "${rc}" != 0 && "${overlay}" = 1 && "${out}" != own.example* && "${out}" =~ (crun|mount|overlay) ]]; then
+                echo "SKIP :O: ${user}: ${out%%$'\n'*}"
+                continue
+              fi
+              echo "${spelling} ${user}: ${out//$'\n'/ }"
+              [[ "${rc}" = 0 ]] || { echo "BAD: podman failed (${rc}): ${spelling} ${user}" >&2; exit 1; }
+              [[ "${out}" == own.example* ]] || { echo "BAD: the agent could not read the file: ${spelling} ${user}" >&2; exit 1; }
+              if [[ "${overlay}" = 0 && "${out}" =~ (APPENDED|TRUNCATED|MOVED|REMOVED|REPLACED) ]]; then
+                echo "BAD: a read-only mount let the agent change the file: ${spelling} ${user}" >&2; exit 1
+              fi
+              [ "$(sha256sum <"${conf}")" = "${before}" ] || { echo "BAD: the host file changed: ${spelling} ${user}" >&2; exit 1; }
+              [ ! -e "${E2E_TMP}/proj/sub-old" ] || { echo "BAD: the host directory was renamed: ${spelling} ${user}" >&2; exit 1; }
+            done
+          done
           echo OK
         assertions:
           - result.code ShouldEqual 0
@@ -401,6 +562,95 @@ testcases:
           check debian "${debian}" "${apt}"
           check ubuntu "${ubuntu}" "${apt}"
           check arch "${E2E_ARCH_IMAGE}" "pacman -Sy --noconfirm"
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: an allowed host-loopback port reaches the host's 127.0.0.1, through the proxy and as localhost, and others are refused
+    steps:
+      - type: exec
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          e2e_require_pasta
+          mkdir "${E2E_TMP}/www"; echo hostlink-ok >"${E2E_TMP}/www/index.html"
+          e2e_host_server "${E2E_TMP}/www"
+          port="${E2E_HOST_PORT}"
+          e2e_up "rbx-e2e-hostlink-$$" $$ "host.containers.internal:${port}"
+          got="$(e2e_agent "${E2E_AGENT_IMAGE}" curl -s -p --max-time 20 "http://host.containers.internal:${port}/" || :)"
+          [ "${got}" = hostlink-ok ] || { echo "BAD: through the proxy: ${got}" >&2; exit 1; }
+          got="$(e2e_codes "http://host.containers.internal:$((port + 1))/" -p)"
+          [ "${got}" = "403 000" ] || { echo "BAD: an unlisted port: ${got}" >&2; exit 1; }
+          got="$(e2e_codes "http://host.containers.internal:${port}/")"
+          [ "${got}" = "000 403" ] || { echo "BAD: plain HTTP to the host: ${got}" >&2; exit 1; }
+          got="$(e2e_listen_probe "${port}")"
+          [ "${got}" = hostlink-ok ] || { echo "BAD: as localhost: ${got}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a live allow adds the localhost listener and a live deny drops it
+    steps:
+      - type: exec
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          e2e_require_pasta
+          mkdir "${E2E_TMP}/www"; echo hostlink-ok >"${E2E_TMP}/www/index.html"
+          e2e_host_server "${E2E_TMP}/www"
+          port="${E2E_HOST_PORT}"
+          name="rbx-e2e-hostlive-$$"
+          # Another host port at launch, so the session starts its relay.
+          e2e_up "${name}" $$ "host.containers.internal:$((port + 1))"
+          # Named as the session's agent, so teardown removes it.
+          podman run -d --name "${name}" "${E2E_FLAGS[@]}" "${E2E_AGENT_IMAGE}" sh -c '
+            /run/riotbox-egress-share/riotbox-core hostlink-listen \
+              --ports /run/riotbox-egress-share/hostlink.ports --proxy "$HTTPS_PROXY" & sleep 300' >/dev/null
+          probe() { podman exec "${name}" curl -s --max-time 5 "http://127.0.0.1:${port}/" || :; }
+          eventually() {
+            local want="$1" got=""
+            for _ in $(seq 20); do got="$(probe)"; [ "${got}" = "${want}" ] && return 0; sleep 1; done
+            echo "BAD: want '${want}', got '${got}'" >&2; return 1
+          }
+          eventually ""
+          e2e_core egress-allow --session "${name}" -- "host.containers.internal:${port}"
+          eventually hostlink-ok
+          e2e_core egress-deny --session "${name}" -- "host.containers.internal:${port}"
+          eventually ""
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: two sessions that allow the same host port both reach it
+    steps:
+      - type: exec
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          e2e_require_pasta
+          mkdir "${E2E_TMP}/www"; echo hostlink-ok >"${E2E_TMP}/www/index.html"
+          e2e_host_server "${E2E_TMP}/www"
+          port="${E2E_HOST_PORT}"
+          e2e_up "rbx-e2e-hosta-$$" $$ "host.containers.internal:${port}"
+          first=("${E2E_FLAGS[@]}")
+          e2e_up "rbx-e2e-hostb-$$" $$ "host.containers.internal:${port}"
+          got="$(e2e_listen_probe "${port}")"
+          [ "${got}" = hostlink-ok ] || { echo "BAD: second session: ${got}" >&2; exit 1; }
+          E2E_FLAGS=("${first[@]}")
+          got="$(e2e_listen_probe "${port}")"
+          [ "${got}" = hostlink-ok ] || { echo "BAD: first session: ${got}" >&2; exit 1; }
           echo OK
         assertions:
           - result.code ShouldEqual 0

@@ -105,8 +105,8 @@ Denials are explained in the agent's system prompt, not only in the 403
 body, because clients drop the body of a refused CONNECT: curl reports
 `CONNECT tunnel failed, response 403` and nothing more. The body and the
 `x-riotbox-egress` header stay for clients that do show them, and a
-non-CONNECT 403 says plain HTTP is never proxied, since telling the agent
-to ask for the host there would not help. The body echoes the authority
+non-CONNECT 403 says to use HTTPS, or how to allow `http://<host>` (see
+[Plain HTTP, opt-in, 2026-11-08](#plain-http-opt-in-2026-11-08)). The body echoes the authority
 the agent asked for, so it asks the user to check the host before allowing
 it.
 
@@ -232,3 +232,108 @@ sessions by their networks and the agent by its exact name.
 packaged podman); setting `--userns` on the pod instead (with no infra
 container nothing passes it on, and the two containers need different
 mappings: nested mode widens the agent's).
+
+## Plain HTTP, opt-in, 2026-11-08
+
+Some hosts serve only plain HTTP. The earlier rule (plain HTTP never
+forwarded; see the OS package mirrors section) left no way to reach them.
+
+**Chosen:** refused by default. Allowed per host by `http://host[:port]`
+entries (files, groups, or a live allow), or for every allowed host on port
+80 by `allow_plain = on`, which only the system and user files may set.
+Derivation runs after the overlay, so a live allow or deny of a host follows
+it; `-http://host` wins. Plain HTTP uses the same DFP cluster and never an
+interception.
+
+**Turned down:**
+
+- An environment variable: one source of truth, the files.
+- A protocols list. A CONNECT tunnel already carries any TCP to an allowed
+  host:port, so the list's honest default is "connect", not "https", and its
+  only other value would be "http". The per-entry scheme is the extension
+  point.
+- TLS/SNI enforcement on tunnels: a separate change, and it would break SSH
+  over CONNECT.
+
+**Cost:** cleartext gives no confidentiality or integrity for what the agent
+sends or receives. The OS-mirror rewrite stays HTTPS. `allow_plain` derives
+port-80 plain HTTP for every tunnel host, including `[inject]` provider hosts
+and hosts allowed only on other ports; no key is injected over it, but
+per-host `http://` entries avoid opening those.
+
+## Port ranges and every port, 2026-11-08
+
+Entries could name one port only, so a service on a run of ports, or on
+any port, needed one line per port.
+
+**Chosen:** `host:low-high` expands to one domain per port, capped at 1024
+ports. `host:*` is a prefix domain guarded by an `:authority` regex, and
+`*.s:*` is a regex route in the `*` host. Intersection domains are added so
+that Envoy's domain precedence never hides an allow.
+
+**Turned down:**
+
+- A regex for every range: it has the same precedence problem, plus the
+  regexes for numeric ranges.
+- Refusing `*.domain:*`.
+- Any width without a cap: a 1-65535 range would be about 1.6 MB of routes
+  per host.
+
+**Cost:** the route file grows with range width, and routing is harder to
+read. Where a wildcard range meets each `host:*` under it, their
+intersection adds a domain per port per host, so the domains grow as the
+product of the two, not their sum (a 1024-port `*.example.com` range with 64
+`hN.example.com:*` entries is 66560 domains). `envoyconfig.Check` caps the
+total of single-port domains at `envoyconfig.MaxDomains` (65536); `WriteConfig`
+and `Reload` refuse an allowlist over it, naming the count, and a reload
+that is refused leaves the running proxy's rules as they were. The fix is
+fewer or narrower ranges, or `host:*`.
+
+## Host loopback through a relay sidecar, 2026-11-08
+
+A host's `ssh -L` forward binds the host's `127.0.0.1`, which neither Envoy
+(on a bridge) nor the agent (on an internal network) can reach. The name
+`host.containers.internal` had to mean the host's loopback, not its network
+address.
+
+**Chosen:** a sidecar `<name>-hostlink` on pasta alone with
+`--map-host-loopback,169.254.1.2`, running `riotbox-core hostlink-relay` on
+a Unix socket. Envoy forwards each allowed CONNECT to that socket
+unterminated (a route without `connect_config`) over one static `pipe`
+cluster, and the relay dials `169.254.1.2:PORT`. The agent gets `localhost`
+listeners (`hostlink-listen`) that tunnel through the proxy.
+
+- **Gated on the launch's allowlist naming the host itself.** The sidecar's
+  conmon and pasta cost about 2 of the user's shared
+  `fs.inotify.max_user_instances` (default 128) per session, and Envoy
+  aborts when they run out. A wildcard does not count. The trade-off: a
+  live allow of the host in a session started without a relay cannot work
+  until a restart, so live changes (allow, deny, reload, strict) warn, and
+  the CONNECTs get 503 meanwhile.
+- **One socket with CONNECT passthrough, not a cluster per port.** CDS stays
+  static; a live allow needs only `rds.json` and the ports file.
+- **The relay re-checks the port** against the ports file, read on each
+  connection: defence in depth if a route bug passes a port. `Reload`
+  writes the ports file before `rds.json`, so an allow opens the relay
+  first and a deny closes it first. A malformed file refuses every port.
+- **A copy of `riotbox-core` in `share/`,** not a mount of the install:
+  `:z` would relabel the user's install on SELinux. `Down` deletes the copy.
+- **`share/` is not under `/run/riotbox-egress`,** where `ca.crt` is a file
+  mount; it is mounted read-only at `/run/riotbox-egress-share`.
+- **`169.254.1.2`** is link-local, so it never shadows a real destination.
+
+**Turned down:**
+
+- `pasta_options` in `containers.conf`: user-wide, it changes every bridge
+  container.
+- A host process: cruft, and a host port binding that concurrent sessions
+  would fight over.
+- A sidecar in every session: the inotify cost above.
+- Closing `host.docker.internal` (podman's alias for the host's network
+  address, reachable through the forward proxy like any allowed name): left
+  unchanged by decision. See THREAT_MODEL.md.
+
+**Cost:** one more container and a pasta process per relayed session;
+rootless podman on pasta only (otherwise `Up` warns and starts without it);
+plain `http://host.containers.internal` and `[inject]` rows for it are
+refused; no listeners for `host.containers.internal:*`.

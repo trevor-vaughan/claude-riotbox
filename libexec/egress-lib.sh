@@ -39,6 +39,11 @@
 #                 reaching it, or, with RIOTBOX_NESTED=1, any mount that
 #                 needs a mask. Requires: RIOTBOX_EGRESS_ROOT,
 #                 PROJECT_VOLUME_FLAGS, MOUNTS, CREDFILE_FLAGS.
+#   egress_guard_conf
+#                 return 1, saying why, when a read-write agent mount reaches
+#                 RIOTBOX_EGRESS_CONF (any mount of it with RIOTBOX_NESTED=1).
+#                 Requires: RIOTBOX_EGRESS_CONF, PROJECT_VOLUME_FLAGS, MOUNTS,
+#                 CREDFILE_FLAGS.
 #   egress_gate_env
 #                 after egress_start, the same for RIOTBOX_EXTRA_ARGS that
 #                 would put an injected key in the agent, or let it read
@@ -51,7 +56,9 @@
 #                 (and INT/TERM, through it) to remove it. Requires:
 #                 CONTAINER_CMD, CONTAINER_NAME, SESSION_KEY, PROJECT_DIRS,
 #                 PASSTHROUGH_FLAGS, RIOTBOX_EGRESS_ROOT, ROOT_DIR (its os/ is
-#                 passed as --os-dir), RIOTBOX_CORE and
+#                 passed as --os-dir), RIOTBOX_EGRESS_CONF (optional; sent as
+#                 --own-conf, so the session uses that file in place of
+#                 EGRESS_USER_CONF), RIOTBOX_CORE and
 #                 riotbox_core_require (scripts/lib/riotbox-core.sh), and
 #                 agent_call (agents/registry.sh).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -297,6 +304,60 @@ egress_gate_mounts() {
 	return 1
 }
 
+# _egress_bind_mounts — print each bind mount of the agent's mounts
+# (PROJECT_VOLUME_FLAGS, MOUNTS, CREDFILE_FLAGS, RIOTBOX_EXTRA_ARGS, read as
+# _egress_split_args reads them) as five NUL-terminated fields: where it
+# came from, its source, its container destination without trailing
+# slashes, its options (the -v options; for --mount, the fields other than
+# type, source and destination, comma-joined in order), and 1 when the
+# source is a host path (a -v source starting with / or ., or any --mount
+# type=bind source) or 0 (a -v volume name). A -v without a destination
+# (an anonymous volume) and a --mount of any other type are skipped. The source and the
+# destination may be empty (`-v /a:`, `-v :/x`, a --mount without source=):
+# callers must check.
+_egress_bind_mounts() {
+	local spec origin rec value src dst opts host type field i
+	local -a recs fields
+	for spec in "PROJECT_VOLUME_FLAGS:project" "MOUNTS:mounts.conf" "CREDFILE_FLAGS:credential files" "RIOTBOX_EXTRA_ARGS:RIOTBOX_EXTRA_ARGS"; do
+		origin="${spec#*:}"
+		spec="${spec%%:*}"
+		# shellcheck disable=SC2312 # _egress_split_args only prints
+		mapfile -d '' -t recs < <(_egress_split_args "${!spec:-}")
+		for ((i = 0; i < ${#recs[@]}; i++)); do
+			rec="${recs[i]}"
+			[[ "${rec}" == m* ]] || continue
+			i=$((i + 1))
+			value="${recs[i]}"
+			src=""
+			dst=""
+			opts=""
+			host=1
+			if [[ "${rec}" == m--mount ]]; then
+				type=volume
+				IFS=, read -ra fields <<<"${value}"
+				for field in "${fields[@]}"; do
+					case "${field}" in
+					type=*) type="${field#type=}" ;;
+					src=* | source=*) src="${field#*=}" ;;
+					dst=* | dest=* | destination=* | target=*) dst="${field#*=}" ;;
+					*) opts="${opts:+${opts},}${field}" ;;
+					esac
+				done
+				[[ "${type}" == bind ]] || continue
+			else
+				[[ "${value}" == *:* ]] || continue
+				src="${value%%:*}"
+				dst="${value#*:}"
+				[[ "${dst}" != *:* ]] || opts="${dst#*:}"
+				dst="${dst%%:*}"
+				[[ "${src}" == /* || "${src}" == .* ]] || host=0
+			fi
+			while [[ "${dst}" == */ && "${dst}" != / ]]; do dst="${dst%/}"; done
+			printf '%s\0%s\0%s\0%s\0%s\0' "${origin}" "${src}" "${dst}" "${opts}" "${host}"
+		done
+	done
+}
+
 # egress_mask_data — set EGRESS_MASK_FLAGS to an empty tmpfs over every
 # container path through which an agent mount reaches RIOTBOX_EGRESS_ROOT;
 # return 1, saying why, when a mount is a file in it or, with
@@ -318,87 +379,123 @@ egress_gate_mounts() {
 # quoted, as podman reads --mount, and listed once.
 # shellcheck disable=SC2154 # set by launch.sh, which sources this file
 egress_mask_data() {
-	local root spec origin rec value src dst type field real dest i
+	local root origin src dst opts host field real dest i
 	local -a recs fields
 	local -A seen=()
 	EGRESS_MASK_FLAGS=()
 	root="$(realpath -m -- "${RIOTBOX_EGRESS_ROOT}")"
-	for spec in "PROJECT_VOLUME_FLAGS:project" "MOUNTS:mounts.conf" "CREDFILE_FLAGS:credential files" "RIOTBOX_EXTRA_ARGS:RIOTBOX_EXTRA_ARGS"; do
-		origin="${spec#*:}"
-		spec="${spec%%:*}"
-		# shellcheck disable=SC2312 # _egress_split_args only prints
-		mapfile -d '' -t recs < <(_egress_split_args "${!spec:-}")
-		for ((i = 0; i < ${#recs[@]}; i++)); do
-			rec="${recs[i]}"
-			[[ "${rec}" == m* ]] || continue
-			i=$((i + 1))
-			value="${recs[i]}"
-			src=""
-			dst=""
-			if [[ "${rec}" == m--mount ]]; then
-				type=volume
-				IFS=, read -ra fields <<<"${value}"
-				for field in "${fields[@]}"; do
-					case "${field}" in
-					type=*) type="${field#type=}" ;;
-					src=* | source=*) src="${field#*=}" ;;
-					dst=* | destination=* | target=*) dst="${field#*=}" ;;
-					*) ;;
-					esac
-				done
-				[[ "${type}" == bind ]] || continue
-			else
-				# A -v source is a host path when it starts with / or .;
-				# without a destination it is an anonymous volume.
-				[[ "${value}" == *:* ]] || continue
-				src="${value%%:*}"
-				dst="${value#*:}"
-				# An overlay's upperdir and workdir are host dirs podman
-				# writes to and, for upperdir, shows at the destination:
-				# one in or above the root would hand the agent the root,
-				# so it is refused rather than masked.
-				if [[ "${dst}" == *:* ]]; then
-					IFS=, read -ra fields <<<"${dst#*:}"
-					for field in "${fields[@]}"; do
-						[[ "${field}" == upperdir=* || "${field}" == workdir=* ]] || continue
-						real="$(realpath -m -- "${field#*=}")"
-						if [[ "${real%/}/" == "${root}/"* || "${root}/" == "${real%/}/"* ]]; then
-							echo "ERROR: RIOTBOX_EGRESS=1 refuses ${origin} with ${field}: it reaches the egress proxy's state (${RIOTBOX_EGRESS_ROOT}), which the agent could use to change what it may reach." >&2
-							echo "       See README \"Egress proxy\"." >&2
-							return 1
-						fi
-					done
-				fi
-				dst="${dst%%:*}"
-				[[ "${src}" == /* || "${src}" == .* ]] || continue
-			fi
-			[[ -n "${src}" && -n "${dst}" ]] || continue
-			real="$(realpath -m -- "${src}")"
-			while [[ "${dst}" == */ && "${dst}" != / ]]; do dst="${dst%/}"; done
-			if [[ "${real%/}/" == "${root}/"* ]]; then
-				if [[ -e "${real}" && ! -d "${real}" ]]; then
-					echo "ERROR: RIOTBOX_EGRESS=1 refuses ${origin} mounting ${src}: it is a file in the egress proxy's state (${RIOTBOX_EGRESS_ROOT}), which the agent could use to change what it may reach." >&2
+	# shellcheck disable=SC2312 # _egress_bind_mounts only prints
+	mapfile -d '' -t recs < <(_egress_bind_mounts)
+	for ((i = 0; i + 4 < ${#recs[@]}; i += 5)); do
+		origin="${recs[i]}" src="${recs[i + 1]}" dst="${recs[i + 2]}" opts="${recs[i + 3]}" host="${recs[i + 4]}"
+		# An overlay's upperdir and workdir are host dirs podman writes to
+		# and, for upperdir, shows at the destination: one in or above the
+		# root would hand the agent the root, so it is refused rather than
+		# masked.
+		if [[ -n "${opts}" ]]; then
+			IFS=, read -ra fields <<<"${opts}"
+			for field in "${fields[@]}"; do
+				[[ "${field}" == upperdir=* || "${field}" == workdir=* ]] || continue
+				real="$(realpath -m -- "${field#*=}")"
+				if [[ "${real%/}/" == "${root}/"* || "${root}/" == "${real%/}/"* ]]; then
+					echo "ERROR: RIOTBOX_EGRESS=1 refuses ${origin} with ${field}: it reaches the egress proxy's state (${RIOTBOX_EGRESS_ROOT}), which the agent could use to change what it may reach." >&2
 					echo "       See README \"Egress proxy\"." >&2
 					return 1
 				fi
-				dest="${dst}"
-			elif [[ "${root}/" == "${real%/}/"* ]]; then
-				dest="${dst%/}${root#"${real%/}"}"
-			else
-				continue
-			fi
-			# Nested mode grants CAP_SYS_ADMIN in the agent's user
-			# namespace, where the mask is not locked: the agent could
-			# unmount it, or bind-mount the root elsewhere.
-			if [[ "${RIOTBOX_NESTED:-}" = "1" ]]; then
-				echo "ERROR: RIOTBOX_EGRESS=1 with RIOTBOX_NESTED=1 refuses ${origin} mounting ${src}: it holds the egress proxy's state (${RIOTBOX_EGRESS_ROOT}), and nested mode's CAP_SYS_ADMIN lets the agent remove the mask that hides it." >&2
-				echo "       Mount a narrower directory, or run without RIOTBOX_NESTED=1 or RIOTBOX_EGRESS=1. See README \"Egress proxy\"." >&2
+			done
+		fi
+		[[ "${host}" = 1 && -n "${src}" && -n "${dst}" ]] || continue
+		real="$(realpath -m -- "${src}")"
+		if [[ "${real%/}/" == "${root}/"* ]]; then
+			if [[ -e "${real}" && ! -d "${real}" ]]; then
+				echo "ERROR: RIOTBOX_EGRESS=1 refuses ${origin} mounting ${src}: it is a file in the egress proxy's state (${RIOTBOX_EGRESS_ROOT}), which the agent could use to change what it may reach." >&2
+				echo "       See README \"Egress proxy\"." >&2
 				return 1
 			fi
-			[[ -z "${seen["${dest}"]:-}" ]] || continue
-			seen["${dest}"]=1
-			EGRESS_MASK_FLAGS+=(--mount "type=tmpfs,\"destination=${dest//\"/\"\"}\",notmpcopyup")
+			dest="${dst}"
+		elif [[ "${root}/" == "${real%/}/"* ]]; then
+			dest="${dst%/}${root#"${real%/}"}"
+		else
+			continue
+		fi
+		# Nested mode grants CAP_SYS_ADMIN in the agent's user namespace,
+		# where the mask is not locked: the agent could unmount it, or
+		# bind-mount the root elsewhere.
+		if [[ "${RIOTBOX_NESTED:-}" = "1" ]]; then
+			echo "ERROR: RIOTBOX_EGRESS=1 with RIOTBOX_NESTED=1 refuses ${origin} mounting ${src}: it holds the egress proxy's state (${RIOTBOX_EGRESS_ROOT}), and nested mode's CAP_SYS_ADMIN lets the agent remove the mask that hides it." >&2
+			echo "       Mount a narrower directory, or run without RIOTBOX_NESTED=1 or RIOTBOX_EGRESS=1. See README \"Egress proxy\"." >&2
+			return 1
+		fi
+		[[ -z "${seen["${dest}"]:-}" ]] || continue
+		seen["${dest}"]=1
+		EGRESS_MASK_FLAGS+=(--mount "type=tmpfs,\"destination=${dest//\"/\"\"}\",notmpcopyup")
+	done
+}
+
+# egress_guard_conf — return 1, saying why, when an agent mount that is
+# read-write reaches RIOTBOX_EGRESS_CONF, the session's own egress.conf
+# (already an absolute path, set by launch.sh). The agent runs as the host
+# user: through such a mount it could replace the file with one that lets it
+# reach more, and riotbox would read that at the next reload or --save. A
+# read-only bind of the file would not do instead: inside a read-write
+# project the agent can rename a directory above the file (only the mount
+# point itself is busy) and recreate the file at its host path. So the launch
+# is refused. Read-only and overlay (`:O`, writes go to a copy) mounts may
+# reach it, so the agent can still read its allowlist; with RIOTBOX_NESTED=1
+# the agent keeps CAP_SYS_ADMIN and could remount read-only as read-write,
+# so any reaching mount is refused. A mount reaches the file when the real
+# path of its source is the file or a directory above it. Mounts are read as
+# _egress_bind_mounts reads them; options are classified failing closed
+# (anything not recognised as read-only or overlay is read-write).
+# An overlay upperdir or workdir holding the file is refused as well, in
+# every mode: podman writes there.
+egress_guard_conf() {
+	local origin src dst opts host field real conf i ro overlay
+	local -a recs fields
+	[[ -n "${RIOTBOX_EGRESS_CONF:-}" ]] || return 0
+	conf="$(realpath -m -- "${RIOTBOX_EGRESS_CONF}")"
+	# shellcheck disable=SC2312 # _egress_bind_mounts only prints
+	mapfile -d '' -t recs < <(_egress_bind_mounts)
+	for ((i = 0; i + 4 < ${#recs[@]}; i += 5)); do
+		origin="${recs[i]}" src="${recs[i + 1]}" dst="${recs[i + 2]}" opts="${recs[i + 3]}" host="${recs[i + 4]}"
+		# An overlay's upperdir and workdir are host dirs podman writes to,
+		# whatever the mount's source: one holding the file is refused.
+		IFS=, read -ra fields <<<"${opts}"
+		for field in "${fields[@]}"; do
+			[[ "${field}" == upperdir=* || "${field}" == workdir=* ]] || continue
+			real="$(realpath -m -- "${field#*=}")"
+			[[ "${conf}" == "${real%/}/"* ]] || continue
+			echo "ERROR: RIOTBOX_EGRESS_CONF refuses ${origin} with ${field}: podman writes the agent's changes there, and it holds ${RIOTBOX_EGRESS_CONF}, so the agent could replace that file with one that lets it reach more." >&2
+			echo "       Keep the overlay's upperdir and workdir outside the directories that hold the file. See README \"Egress proxy\"." >&2
+			return 1
 		done
+		[[ "${host}" = 1 && -n "${src}" && -n "${dst}" ]] || continue
+		real="$(realpath -m -- "${src}")"
+		[[ "${conf}" == "${real}" || "${conf}" == "${real%/}/"* ]] || continue
+		if [[ "${RIOTBOX_NESTED:-}" == 1 ]]; then
+			echo "ERROR: RIOTBOX_EGRESS_CONF with RIOTBOX_NESTED=1 refuses ${origin} mounting ${src}: it holds ${RIOTBOX_EGRESS_CONF}, and nested mode's CAP_SYS_ADMIN could let the agent remount it read-write and change what it may reach." >&2
+			echo "       Keep the file outside the agent's mounts, or run without RIOTBOX_NESTED=1. See README \"Egress proxy\"." >&2
+			return 1
+		fi
+		ro=0 overlay=0
+		IFS=, read -ra fields <<<"${opts}"
+		for field in "${fields[@]}"; do
+			case "${field}" in
+			ro | readonly | ro=true | readonly=true) ro=1 ;;
+			O) overlay=1 ;;
+			*) ;;
+			esac
+		done
+		for field in "${fields[@]}"; do
+			case "${field}" in
+			rw | ro=false | readonly=false) ro=0 ;;
+			*) ;;
+			esac
+		done
+		[[ "${ro}" = 1 || "${overlay}" = 1 ]] && continue
+		echo "ERROR: RIOTBOX_EGRESS_CONF refuses ${origin} mounting ${src} read-write: it holds ${RIOTBOX_EGRESS_CONF}, and the agent could replace that file with one that lets it reach more." >&2
+		echo "       Keep the file outside the agent's read-write mounts, or mount it read-only (:ro). See README \"Egress proxy\"." >&2
+		return 1
 	done
 }
 
@@ -455,7 +552,7 @@ _egress_on_exit() {
 
 # shellcheck disable=SC2154 # set by launch.sh, which sources this file
 egress_start() {
-	local agent="${RIOTBOX_AGENT:-claude}" hosts out dir projects=() words=() sent=() unsent=() name value i
+	local agent="${RIOTBOX_AGENT:-claude}" hosts out dir projects=() words=() sent=() unsent=() own=() name value i
 	# shellcheck disable=SC2310 # it has already said why it failed
 	riotbox_core_require || return 1
 	# The agent's hosts are what the proxy exists to allow: an unknown agent,
@@ -494,6 +591,7 @@ egress_start() {
 	# RIOTBOX_HEADROOM as NUL-terminated NAME=VALUE records, and decides
 	# which provider keys its proxy injects. printf is a builtin: no key is
 	# ever on a command line.
+	[[ -z "${RIOTBOX_EGRESS_CONF:-}" ]] || own=(--own-conf "${RIOTBOX_EGRESS_CONF}")
 	out="$({
 		printf '%s\n' "${hosts}"
 		printf '\0'
@@ -503,7 +601,7 @@ egress_start() {
 		printf 'RIOTBOX_HEADROOM=%s\0' "${RIOTBOX_HEADROOM:-}"
 	} | "${RIOTBOX_CORE}" egress-up \
 		--engine "${CONTAINER_CMD}" --state-root "${RIOTBOX_EGRESS_ROOT}" \
-		--system-conf "${EGRESS_SYSTEM_CONF}" --user-conf "${EGRESS_USER_CONF}" --os-dir "${ROOT_DIR}/os" \
+		--system-conf "${EGRESS_SYSTEM_CONF}" --user-conf "${EGRESS_USER_CONF}" --os-dir "${ROOT_DIR}/os" "${own[@]}" \
 		--image "${RIOTBOX_EGRESS_IMAGE:-${RIOTBOX_EGRESS_DEFAULT_IMAGE}}" \
 		--session-key "${SESSION_KEY}" --owner-pid "$$" "${projects[@]}" -- "${CONTAINER_NAME}")" || return 1
 	if [[ -z "${out}" ]]; then

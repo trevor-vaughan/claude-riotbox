@@ -50,6 +50,11 @@ func egressUp(a parsedArgs, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "riotbox-core: egress-up: --owner-pid %s is not a process ID\n", display.Quote(a.opts["--owner-pid"]))
 		return badUsage(stderr)
 	}
+	own := a.opts["--own-conf"]
+	if own != "" && !filepath.IsAbs(own) {
+		_, _ = fmt.Fprintf(stderr, "riotbox-core: egress-up: --own-conf must be an absolute path, not %s\n", display.Quote(own))
+		return badUsage(stderr)
+	}
 	dir, err := state.Open(a.opts["--state-root"], a.args[0])
 	if err != nil {
 		return egressFailed(stderr, err)
@@ -69,7 +74,11 @@ func egressUp(a parsedArgs, stdout, stderr io.Writer) int {
 	if err != nil {
 		return egressFailed(stderr, err)
 	}
-	user, err := state.ReadConf(a.opts["--user-conf"])
+	readUser, userConf := state.ReadConf, a.opts["--user-conf"]
+	if own != "" {
+		readUser, userConf = state.ReadOwnConf, own
+	}
+	user, err := readUser(userConf)
 	if err != nil {
 		return egressFailed(stderr, err)
 	}
@@ -97,15 +106,21 @@ func egressUp(a parsedArgs, stdout, stderr io.Writer) int {
 			return egressFailed(stderr, err)
 		}
 	}
+	core, err := os.Executable()
+	if err != nil {
+		return egressFailed(stderr, fmt.Errorf("finding riotbox-core for the hostlink relay: %w", err))
+	}
 	flags, err := pod.NewManager(a.opts["--engine"], stderr).Up(pod.UpRequest{
 		Dir:         dir,
 		SessionKey:  a.opts["--session-key"],
 		OwnerPID:    pid,
 		Image:       a.opts["--image"],
+		Core:        core,
 		AgentHosts:  hosts,
 		Projects:    a.multi["--project"],
 		SystemConf:  a.opts["--system-conf"],
 		UserConf:    a.opts["--user-conf"],
+		OwnConf:     own,
 		OSDir:       a.opts["--os-dir"],
 		Credentials: plan.Inject,
 	})
@@ -143,9 +158,10 @@ func egressSweep(a parsedArgs, _, stderr io.Writer) int {
 }
 
 // egressList prints each running session with when it started, the
-// launch that owns it, its project dirs, its log, its strict setting, the
-// keys its proxy injects and the allowlist its proxy enforces. What the
-// engine or an older session did not record is "unknown".
+// launch that owns it, its project dirs, its log, its own egress.conf if it
+// has one, its strict setting, the keys its proxy injects and the allowlist
+// its proxy enforces. What the engine or an older session did not record is
+// "unknown".
 func egressList(a parsedArgs, stdout, stderr io.Writer) int {
 	running, err := pod.NewManager(a.opts["--engine"], stderr).RunningSessions()
 	if err != nil {
@@ -182,6 +198,11 @@ func egressList(a parsedArgs, stdout, stderr io.Writer) int {
 			// One session's corrupt record must not hide the others.
 			_, _ = fmt.Fprintf(stderr, "riotbox-core: egress: %s: %v\n", s.Name, injectedErr)
 		}
+		own, ownErr := dir.OwnConf()
+		if ownErr != nil {
+			// One session's corrupt record must not hide the others.
+			_, _ = fmt.Fprintf(stderr, "riotbox-core: egress: %s: %v\n", s.Name, ownErr)
+		}
 		started, owner := "unknown", "unknown"
 		if !s.Started.IsZero() {
 			started = s.Started.Format("2006-01-02 15:04:05 MST")
@@ -200,6 +221,12 @@ func egressList(a parsedArgs, stdout, stderr io.Writer) int {
 			fmt.Fprintf(&b, "  project: %s\n", display.Quote(p))
 		}
 		fmt.Fprintf(&b, "  log:     %s\n", display.Quote(dir.AccessLog()))
+		switch {
+		case ownErr != nil:
+			b.WriteString("  conf:    unreadable\n")
+		case own != "":
+			fmt.Fprintf(&b, "  conf:    %s\n", display.Quote(own))
+		}
 		fmt.Fprintf(&b, "  strict:  %s\n", strict)
 		if injectedErr != nil {
 			b.WriteString("  inject:  unreadable\n")
@@ -260,6 +287,20 @@ func saveToOption(a parsedArgs, verbName string, stderr io.Writer) (path string,
 	return path, true, true
 }
 
+// saveTarget is where --save-to saves for dir's session: the session's own
+// egress.conf when --save-to names the --user-conf file and the session has
+// one, as that file replaces the user conf there; else saveTo.
+func saveTarget(dir state.Dir, saveTo, userConf string) (string, error) {
+	if filepath.Clean(saveTo) != filepath.Clean(userConf) {
+		return saveTo, nil
+	}
+	own, err := dir.OwnConf()
+	if err != nil || own == "" {
+		return saveTo, err
+	}
+	return own, nil
+}
+
 // egressEdit returns egress-allow's run (remove false) or egress-deny's
 // (remove true): record the entry or @group in the session overlay (a
 // group as its reference, re-resolved at every reload), apply it live,
@@ -288,6 +329,11 @@ func egressEdit(verbName string, remove bool) func(a parsedArgs, stdout, stderr 
 		dir, err := m.Target(a.opts["--state-root"], sessionName)
 		if err != nil {
 			return egressFailed(stderr, err)
+		}
+		if save {
+			if saveTo, err = saveTarget(dir, saveTo, a.opts["--user-conf"]); err != nil {
+				return egressFailed(stderr, err)
+			}
 		}
 		if it.Group != "" {
 			dropped, err := forgetGroup(m, dir, it.Group, save, a.opts["--system-conf"], a.opts["--user-conf"], stderr)
@@ -325,6 +371,7 @@ func egressEdit(verbName string, remove bool) func(a parsedArgs, stdout, stderr 
 		if err != nil {
 			return egressFailed(stderr, err)
 		}
+		warnNoRelay(dir, r, stderr)
 		if save {
 			if err := state.SaveItem(saveTo, it, stderr); err != nil {
 				return egressFailed(stderr, fmt.Errorf("the session was changed, but saving to %s failed: %w", display.Quote(saveTo), err))
@@ -375,9 +422,11 @@ func forgetGroup(m pod.Manager, dir state.Dir, group string, save bool, systemCo
 	return true, checkRunning(m, dir)
 }
 
-// noteStillAllowed says on stderr which wildcard still allows each host a
-// deny named: the entry, or each member of the group. The overlay applies
-// last and in order, so nothing else can keep a denied host allowed.
+// noteStillAllowed says on stderr which entries still allow what a deny
+// named, for the entry or each member of the group: those covering all of
+// it (a wildcard, a range, every port), then those allowing only part of it
+// (a narrower or overlapping range, a name under a denied wildcard). The
+// overlay applies last and in order, so nothing else can keep it allowed.
 func noteStillAllowed(r policy.Resolved, it policy.Item, stderr io.Writer) {
 	denied := []policy.Entry{it.Entry}
 	if it.Group != "" {
@@ -386,6 +435,9 @@ func noteStillAllowed(r policy.Resolved, it policy.Item, stderr io.Writer) {
 	for _, e := range denied {
 		for _, w := range policy.Covering(r.Entries, e) {
 			_, _ = fmt.Fprintf(stderr, "egress: note: %s is still allowed by %s\n", e, w)
+		}
+		for _, w := range policy.Overlapping(r.Entries, e) {
+			_, _ = fmt.Fprintf(stderr, "egress: note: %s is still partly allowed by %s\n", e, w)
 		}
 	}
 }
@@ -441,6 +493,23 @@ func applyChange(m pod.Manager, dir state.Dir, what string, change func(before p
 	return policy.Resolved{}, fmt.Errorf("%s was not applied: %w", what, err)
 }
 
+// warnNoRelay warns on stderr when r, just applied to dir's session,
+// allows policy.HostLink but the session has no hostlink relay
+// (state.Dir.HasRelay): pod.Up starts one only for a launch whose
+// allowlist names the host, so a live allow cannot reach it.
+func warnNoRelay(dir state.Dir, r policy.Resolved, stderr io.Writer) {
+	if !slices.ContainsFunc(r.Entries, func(e policy.Entry) bool { return e.Host == policy.HostLink }) {
+		return
+	}
+	relay, err := dir.HasRelay()
+	switch {
+	case err != nil:
+		_, _ = fmt.Fprintf(stderr, "WARNING: egress: %s is allowed, but whether session %s has a host-loopback relay cannot be told: %v\n", policy.HostLink, dir.Name(), err)
+	case !relay:
+		_, _ = fmt.Fprintf(stderr, "WARNING: egress: %s is allowed, but session %s has no host-loopback relay (it starts only when the allowlist names %s at launch, on rootless podman with pasta); restart the session to reach it. Until then its CONNECTs fail with 503.\n", policy.HostLink, dir.Name(), policy.HostLink)
+	}
+}
+
 // checkRunning fails unless dir's session is still running: it may have
 // stopped while the command waited for the lock, and a reload of a dead
 // session would be reported as applied. The caller holds the lock.
@@ -494,6 +563,7 @@ func egressReload(a parsedArgs, stdout, stderr io.Writer) int {
 			status = egressFailed(stderr, fmt.Errorf("%s: %w", dir.Name(), err))
 			continue
 		}
+		warnNoRelay(dir, r, stderr)
 		if _, err := fmt.Fprintf(stdout, "egress: %s: reloaded, %d allowed\n", dir.Name(), len(r.Entries)); err != nil {
 			return written(err, stderr)
 		}
@@ -546,6 +616,11 @@ func egressStrict(a parsedArgs, stdout, stderr io.Writer) int {
 	if err != nil {
 		return egressFailed(stderr, err)
 	}
+	if save {
+		if saveTo, err = saveTarget(dir, saveTo, a.opts["--user-conf"]); err != nil {
+			return egressFailed(stderr, err)
+		}
+	}
 	r, err := applyChange(m, dir, "strict "+a.args[0], func(policy.Resolved) error { return dir.SetOverlayStrict(setting) },
 		a.opts["--system-conf"], a.opts["--user-conf"], stderr)
 	if err != nil {
@@ -554,6 +629,7 @@ func egressStrict(a parsedArgs, stdout, stderr io.Writer) int {
 	if w := r.LockoutWarning(); w != "" {
 		_, _ = fmt.Fprintln(stderr, w)
 	}
+	warnNoRelay(dir, r, stderr)
 	changed := false
 	if save {
 		if changed, err = state.SaveStrict(saveTo, setting, stderr); err != nil {

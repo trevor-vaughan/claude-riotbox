@@ -1,6 +1,7 @@
 package main_test
 
 import (
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -96,6 +97,34 @@ var _ = Describe("egress verbs", func() {
 		upArgs := func(pid, name string) []string {
 			return append(confArgs("egress-up"), "--image", "img", "--session-key", "k", "--owner-pid", pid, "--", name)
 		}
+
+		ownArgs := func(own string) []string {
+			return append(confArgs("egress-up"), "--own-conf", own,
+				"--image", "img", "--session-key", "k", "--owner-pid", "1", "--", "s1")
+		}
+
+		It("refuses a missing --own-conf before touching the engine", func() {
+			own := filepath.Join(tmp, "gone.conf")
+			s := runEgressIn("\x00", ownArgs(own)...)
+			Expect(s.ExitCode()).To(Equal(1))
+			Expect(string(s.Err.Contents())).To(ContainSubstring("the session's egress conf: open " + own))
+			Expect(log).NotTo(BeAnExistingFile())
+		})
+
+		It("is a usage error when --own-conf is not absolute", func() {
+			s := runEgressIn("\x00", ownArgs("own.conf")...)
+			Expect(s.ExitCode()).To(Equal(2))
+			Expect(string(s.Err.Contents())).To(ContainSubstring("--own-conf must be an absolute path"))
+		})
+
+		It("reads the [inject] rows from --own-conf, not --user-conf", func() {
+			own := filepath.Join(tmp, "own.conf")
+			Expect(os.WriteFile(own, []byte("[inject]\nGITHUB_TOKEN api.github.com host\n"), 0o600)).To(Succeed())
+			s := runEgressIn("\x00", ownArgs(own)...)
+			Expect(s.ExitCode()).To(Equal(1))
+			Expect(string(s.Err.Contents())).To(ContainSubstring(own + ":2: the host header cannot carry a key"))
+			Expect(log).NotTo(BeAnExistingFile())
+		})
 
 		It("refuses a broken OS plugin in --os-dir before touching the engine", func() {
 			osDir := GinkgoT().TempDir()
@@ -216,6 +245,16 @@ var _ = Describe("egress verbs", func() {
 			Expect(string(engineLog)).NotTo(ContainSubstring("riotbox-egress-secrets"))
 		})
 
+		It("records --own-conf in the session's state", func() {
+			noRuntime()
+			own := filepath.Join(tmp, "own.conf")
+			Expect(os.WriteFile(own, []byte("own.example\n"), 0o600)).To(Succeed())
+			runEgressIn("\x00", ownArgs(own)...)
+			dir, err := state.Open(root, "s1")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dir.OwnConf()).To(Equal(own))
+		})
+
 		It("removes the runtime secrets at egress-down, and an idle orphan's at egress-sweep", func() {
 			run := privateRuntime()
 			env = append(env, "XDG_RUNTIME_DIR="+run)
@@ -276,6 +315,42 @@ var _ = Describe("egress verbs", func() {
 	})
 
 	Describe("egress-allow and egress-deny", func() {
+		It("saves to the session's own egress.conf when --save-to names the user conf", func() {
+			d := seed("s1")
+			own := filepath.Join(tmp, "own.conf")
+			Expect(os.WriteFile(own, nil, 0o600)).To(Succeed())
+			Expect(d.WriteOwnConf(own)).To(Succeed())
+			env = append(env, gatewaysJSON("s1"))
+			s := runEgress(append(confArgs("egress-allow"), "--save-to", user, "--", "example.org")...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Out.Contents())).To(Equal("egress: s1: allowed example.org\negress: saved example.org to " + own + "\n"))
+			Expect(os.ReadFile(own)).To(Equal([]byte("example.org\n")))
+			Expect(user).NotTo(BeAnExistingFile())
+		})
+
+		It("changes nothing when --save-to names the user conf and the session's own-conf record is corrupt", func() {
+			d := seed("s1")
+			Expect(os.WriteFile(filepath.Join(d.Path(), "own-conf"), []byte("relative.conf\n"), 0o600)).To(Succeed())
+			env = append(env, gatewaysJSON("s1"))
+			s := runEgress(append(confArgs("egress-allow"), "--save-to", user, "--", "example.org")...)
+			Expect(s.ExitCode()).To(Equal(1))
+			Expect(string(s.Err.Contents())).To(ContainSubstring("does not hold an absolute path"))
+			Expect(d.SessionConf()).NotTo(BeAnExistingFile())
+			Expect(user).NotTo(BeAnExistingFile())
+		})
+
+		It("still saves to the system conf of a session with its own egress.conf", func() {
+			d := seed("s1")
+			own := filepath.Join(tmp, "own.conf")
+			Expect(os.WriteFile(own, nil, 0o600)).To(Succeed())
+			Expect(d.WriteOwnConf(own)).To(Succeed())
+			env = append(env, gatewaysJSON("s1"))
+			s := runEgress(append(confArgs("egress-allow"), "--save-to", sys, "--", "example.org")...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(os.ReadFile(sys)).To(Equal([]byte("example.org\n")))
+			Expect(os.ReadFile(own)).To(BeEmpty())
+		})
+
 		It("allows an entry in the only running session, live, and saves it on request", func() {
 			d := seed("s1")
 			env = append(env, gatewaysJSON("s1"))
@@ -335,6 +410,34 @@ var _ = Describe("egress verbs", func() {
 			Expect(string(s.Err.Contents())).To(ContainSubstring("egress: note: a.example.org is still allowed by *.example.org\n"))
 			Expect(os.ReadFile(d.SessionConf())).To(Equal([]byte("-a.example.org\n")))
 			Expect(os.ReadFile(user)).To(Equal([]byte("*.example.org\n-a.example.org\n")))
+		})
+
+		DescribeTable("denies a port entry and notes the entries that still allow some or all of it",
+			func(conf, denied, note string) {
+				Expect(os.MkdirAll(filepath.Dir(user), 0o700)).To(Succeed())
+				Expect(os.WriteFile(user, []byte(conf), 0o600)).To(Succeed())
+				seed("s1")
+				env = append(env, gatewaysJSON("s1"))
+				s := runEgress(append(confArgs("egress-deny"), "--", denied)...)
+				Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+				Expect(string(s.Err.Contents())).To(ContainSubstring("egress: note: " + note + "\n"))
+			},
+			Entry("a range covering the denied port", "h.example:8000-8100\n", "h.example:8080", "h.example:8080 is still allowed by h.example:8000-8100"),
+			Entry("every port covering the denied port", "h.example:*\n", "h.example:443", "h.example is still allowed by h.example:*"),
+			Entry("a single port inside the denied every-port entry", "h.example:*\nh.example:443\n", "h.example:*", "h.example:* is still partly allowed by h.example"),
+			Entry("a single port inside the denied range", "h.example:8000-8100\nh.example:8080\n", "h.example:8000-8100", "h.example:8000-8100 is still partly allowed by h.example:8080"),
+			Entry("a range overlapping the denied range", "h.example:8000-8100\nh.example:8050-8200\n", "h.example:8000-8100", "h.example:8000-8100 is still partly allowed by h.example:8050-8200"),
+			Entry("a name under the denied wildcard", "*.example.com:*\na.example.com:443\n", "*.example.com:*", "*.example.com:* is still partly allowed by a.example.com"),
+		)
+
+		It("notes no overlap for a disjoint port or the other kind", func() {
+			Expect(os.MkdirAll(filepath.Dir(user), 0o700)).To(Succeed())
+			Expect(os.WriteFile(user, []byte("h.example:8000-8100\nh.example:9000\nhttp://h.example:*\n"), 0o600)).To(Succeed())
+			seed("s1")
+			env = append(env, gatewaysJSON("s1"))
+			s := runEgress(append(confArgs("egress-deny"), "--", "h.example:8000-8100")...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("egress: note:"))
 		})
 
 		It("refuses an entry written with a leading dash", func() {
@@ -731,7 +834,70 @@ var _ = Describe("egress verbs", func() {
 		})
 	})
 
+	Describe("a live change that allows the host's loopback", func() {
+		const noRelay = "WARNING: egress: host.containers.internal is allowed, but session s1 has no host-loopback relay (it starts only when the allowlist names host.containers.internal at launch, on rootless podman with pasta); restart the session to reach it. Until then its CONNECTs fail with 503.\n"
+		var d state.Dir
+		BeforeEach(func() {
+			d = seed("s1")
+			env = append(env, gatewaysJSON("s1"))
+		})
+		userConf := func(conf string) {
+			Expect(os.MkdirAll(filepath.Dir(user), 0o700)).To(Succeed())
+			Expect(os.WriteFile(user, []byte(conf), 0o600)).To(Succeed())
+		}
+
+		DescribeTable("warns when the session has no relay",
+			func(prepare func(), args ...string) {
+				prepare()
+				s := runEgress(append(confArgs(args[0]), args[1:]...)...)
+				Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+				Expect(string(s.Err.Contents())).To(ContainSubstring(noRelay))
+			},
+			Entry("egress-allow", func() {}, "egress-allow", "--", policy.HostLink+":2222"),
+			Entry("egress-deny of one port, leaving another", func() { userConf(policy.HostLink + ":2222\n" + policy.HostLink + ":3333\n") },
+				"egress-deny", "--", policy.HostLink+":2222"),
+			Entry("egress-reload", func() { userConf(policy.HostLink + ":2222\n") }, "egress-reload"),
+			Entry("egress-strict", func() { userConf(policy.HostLink + ":2222\n") }, "egress-strict", "--", "off"),
+		)
+
+		It("warns when the session's relay left its socket behind and no longer answers", func() {
+			userConf(policy.HostLink + ":2222\n")
+			l, err := net.ListenUnix("unix", &net.UnixAddr{Name: d.HostlinkSocket(), Net: "unix"})
+			Expect(err).NotTo(HaveOccurred())
+			l.SetUnlinkOnClose(false)
+			Expect(l.Close()).To(Succeed())
+			s := runEgress(confArgs("egress-reload")...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Err.Contents())).To(ContainSubstring(noRelay))
+		})
+
+		It("does not warn when the session's relay serves its socket", func() {
+			l, err := net.Listen("unix", d.HostlinkSocket())
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(l.Close)
+			s := runEgress(append(confArgs("egress-allow"), "--", policy.HostLink+":2222")...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("WARNING"))
+		})
+
+		It("does not warn for a change that leaves the host off the allowlist", func() {
+			s := runEgress(append(confArgs("egress-allow"), "--", "*.containers.internal:2222")...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("WARNING"))
+		})
+	})
+
 	Describe("egress-list", func() {
+		It("shows a session's own egress.conf", func() {
+			d := seed("s1")
+			own := filepath.Join(tmp, "own.conf")
+			Expect(d.WriteOwnConf(own)).To(Succeed())
+			env = append(env, gatewaysJSON("s1"))
+			s := runEgress("egress-list", "--engine", engine, "--state-root", root)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Out.Contents())).To(ContainSubstring("  log:     " + d.AccessLog() + "\n  conf:    " + own + "\n  strict:  "))
+		})
+
 		It("says when no session runs", func() {
 			s := runEgress("egress-list", "--engine", engine, "--state-root", root)
 			Expect(s.ExitCode()).To(Equal(0))
@@ -782,6 +948,17 @@ var _ = Describe("egress verbs", func() {
 				"  inject:  OPENAI_API_KEY → api.openai.com\n" +
 				"  allow:   api.anthropic.com\n"))
 			Expect(string(s.Out.Contents())).NotTo(ContainSubstring("s3cret"))
+		})
+
+		It("shows conf unreadable, says why, and lists the session, when the own-conf record is corrupt", func() {
+			d := seed("s1")
+			Expect(os.WriteFile(filepath.Join(d.Path(), "own-conf"), []byte("relative.conf\n"), 0o600)).To(Succeed())
+			env = append(env, gatewaysJSON("s1"))
+			s := runEgress("egress-list", "--engine", engine, "--state-root", root)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Out.Contents())).To(ContainSubstring("  log:     " + d.AccessLog() + "\n  conf:    unreadable\n  strict:  "))
+			Expect(string(s.Err.Contents())).To(ContainSubstring("riotbox-core: egress: s1: "))
+			Expect(string(s.Err.Contents())).To(ContainSubstring("does not hold an absolute path"))
 		})
 
 		It("shows inject unreadable, says why, and lists the session, when the injection record is corrupt", func() {
@@ -856,6 +1033,33 @@ var _ = Describe("egress verbs", func() {
 	})
 
 	Describe("egress-reload", func() {
+		It("re-reads each session's own egress.conf in place of --user-conf", func() {
+			d1 := seed("s1")
+			own := filepath.Join(tmp, "own.conf")
+			Expect(os.WriteFile(own, []byte("own.example\n"), 0o600)).To(Succeed())
+			Expect(d1.WriteOwnConf(own)).To(Succeed())
+			d2 := seed("s2")
+			Expect(os.MkdirAll(filepath.Dir(user), 0o700)).To(Succeed())
+			Expect(os.WriteFile(user, []byte("user.example\n"), 0o600)).To(Succeed())
+			env = append(env, gatewaysJSON("s1", "s2"))
+			s := runEgress(confArgs("egress-reload")...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(d1.Applied()).To(ContainElement(policy.Entry{Host: "own.example", Port: 443}))
+			Expect(d1.Applied()).NotTo(ContainElement(policy.Entry{Host: "user.example", Port: 443}))
+			Expect(d2.Applied()).To(ContainElement(policy.Entry{Host: "user.example", Port: 443}))
+		})
+
+		It("fails only the session whose own egress.conf is gone", func() {
+			d1 := seed("s1")
+			Expect(d1.WriteOwnConf(filepath.Join(tmp, "gone.conf"))).To(Succeed())
+			seed("s2")
+			env = append(env, gatewaysJSON("s1", "s2"))
+			s := runEgress(confArgs("egress-reload")...)
+			Expect(s.ExitCode()).To(Equal(1))
+			Expect(string(s.Err.Contents())).To(ContainSubstring("s1: the session's egress conf: open " + filepath.Join(tmp, "gone.conf")))
+			Expect(string(s.Out.Contents())).To(ContainSubstring("egress: s2: reloaded"))
+		})
+
 		It("re-reads the conf files into every running session when none is named", func() {
 			d1, d2 := seed("s1"), seed("s2")
 			Expect(os.MkdirAll(filepath.Dir(user), 0o700)).To(Succeed())
@@ -904,6 +1108,19 @@ var _ = Describe("egress verbs", func() {
 		BeforeEach(func() {
 			Expect(os.WriteFile(filepath.Join(seed("s1").Path(), "agent.conf"), []byte("api.agent.example\n"), 0o600)).To(Succeed())
 			env = append(env, gatewaysJSON("s1"))
+		})
+
+		It("saves the setting to the session's own egress.conf when --save-to names the user conf", func() {
+			d, err := state.Open(root, "s1")
+			Expect(err).NotTo(HaveOccurred())
+			own := filepath.Join(tmp, "own.conf")
+			Expect(os.WriteFile(own, nil, 0o600)).To(Succeed())
+			Expect(d.WriteOwnConf(own)).To(Succeed())
+			s := runEgress(append(confArgs("egress-strict"), "--save-to", user, "--", "on")...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Out.Contents())).To(HaveSuffix("egress: saved strict = on to " + own + "\n"))
+			Expect(os.ReadFile(own)).To(ContainSubstring("strict = on"))
+			Expect(user).NotTo(BeAnExistingFile())
 		})
 
 		It("turns strict mode on in the session, live, and warns that the agent's hosts are left out", func() {
@@ -1126,7 +1343,7 @@ var _ = Describe("egress verbs", func() {
 			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
 			calls, err := os.ReadFile(log)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(string(calls)).To(HavePrefix("stop --ignore --time 10 s1-egress\nrm --force --ignore s1 s1-egress\n"))
+			Expect(string(calls)).To(HavePrefix("stop --ignore --time 10 s1-egress\nrm --force --ignore s1 s1-egress s1-hostlink\n"))
 		})
 
 		It("sweeps with nothing to do", func() {

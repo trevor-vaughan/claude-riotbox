@@ -1,7 +1,8 @@
 // Package pod runs the container-engine side of a RIOTBOX_EGRESS=1
 // session: an internal network without DNS for the agent, a DNS-enabled
-// external one, and the Envoy proxy container on both networks (Up); their
-// removal, with the agent's container (Down); and the lookups the egress
+// external one, and the Envoy proxy container on both networks, and, on
+// pasta, the hostlink relay sidecar (Up); their removal, with the agent's
+// container (Down); and the lookups the egress
 // CLI and the orphan sweep need (sessions.go). There is no pod: podman
 // before 6.0 refuses --userns on a pod's member, and both containers need
 // their own keep-id mapping. See docs/dev/egress.md for the topology
@@ -28,7 +29,9 @@ import (
 	"unicode"
 
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/envoyconfig"
+	"github.com/trevor-vaughan/claude-riotbox/internal/egress/hostlink"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/inject"
+	"github.com/trevor-vaughan/claude-riotbox/internal/egress/policy"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/state"
 )
 
@@ -40,6 +43,7 @@ const (
 	LabelOwnerPIDNS = "riotbox.owner-pidns"
 	LabelRole       = "riotbox.egress-role"
 	roleGateway     = "gateway"
+	roleHostlink    = "hostlink"
 )
 
 // readyMarker is the line Envoy 1.40 logs once CDS, LDS and the listener's
@@ -50,6 +54,17 @@ const readyMarker = "all dependencies initialized. starting workers"
 // AgentCACert is where the agent finds the session CA's certificate when
 // the proxy injects keys.
 const AgentCACert = "/run/riotbox-egress/ca.crt"
+
+// ShareMount is where the hostlink sidecar and the agent find the
+// session's share dir (state.Dir.ShareDir), read-only: the riotbox-core
+// copy and the host-loopback ports file. It is not under
+// /run/riotbox-egress, where AgentCACert is a file mount.
+const ShareMount = "/run/riotbox-egress-share"
+
+// hostlinkTarget is the address pasta maps to the host's loopback in the
+// hostlink sidecar (--map-host-loopback): a link-local address, so it
+// never shadows a real destination.
+const hostlinkTarget = "169.254.1.2"
 
 // networkGone matches the engine's message for a network that is already
 // removed, which Down treats as success (a concurrent Down got there first).
@@ -133,13 +148,14 @@ func NewManager(engine string, stderr io.Writer) Manager {
 // names are the engine objects of one session, named after it. The agent's
 // container is the session's own name (launch.sh).
 type names struct {
-	agent, gateway, internal, external string
+	agent, gateway, hostlink, internal, external string
 }
 
 func namesFor(session string) names {
 	return names{
 		agent:    session,
 		gateway:  session + "-egress",
+		hostlink: session + "-hostlink",
 		internal: session + "-int",
 		external: session + "-ext",
 	}
@@ -151,11 +167,16 @@ type UpRequest struct {
 	SessionKey string
 	OwnerPID   int      // the launch.sh process that owns the session
 	Image      string   // the Envoy image, by digest
+	Core       string   // the host's riotbox-core (static); when the relay starts, Up copies it into the share dir for the hostlink sidecar and the agent
 	AgentHosts []byte   // the agent's egress_hosts output, saved as agent.conf
 	Projects   []string // the launch's project dirs, saved for riotbox egress list
 	OSDir      string   // the OS plugins (state.LoadOS), saved as os.conf; "" for none
 	SystemConf string
 	UserConf   string
+	// OwnConf is the session's own egress.conf (RIOTBOX_EGRESS_CONF),
+	// recorded so it replaces UserConf now and at every later reload
+	// (state.Dir.WriteOwnConf); "" for none.
+	OwnConf string
 	// Credentials are the keys the proxy injects (inject.Decide); none
 	// for a session that injects nothing. With any, Dir must have a
 	// runtime base (state.Dir.WithRuntime).
@@ -192,6 +213,16 @@ type UpRequest struct {
 // Up loads the OS plugins (UpRequest.OSDir) before it creates anything, so a
 // broken plugin stops the launch with no engine call and no state dir, and
 // saves them as os.conf after agent.conf.
+//
+// When the resolved allowlist has an entry for policy.HostLink itself and
+// rootless podman runs on pasta, Up first starts the session's hostlink
+// sidecar, <name>-hostlink: the relay (internal/egress/hostlink) on a
+// copy of riotbox-core (UpRequest.Core, which must then be set), on pasta
+// alone with the host's loopback mapped to hostlinkTarget, serving a
+// socket the proxy reaches, and waits for that socket; and it mounts the
+// share dir into the agent at ShareMount, whose entrypoint starts the
+// localhost listeners. Otherwise it starts the session without them,
+// warning when the allowlist names policy.HostLink but there is no pasta.
 func (m Manager) Up(r UpRequest) (_ []string, err error) {
 	// The image is a positional engine argument and the state paths are
 	// part of a -v src:dst:opts argument, so neither may be able to change
@@ -202,7 +233,7 @@ func (m Manager) Up(r UpRequest) (_ []string, err error) {
 	if len(r.Credentials) > 0 && r.Dir.SecretsDir() == "" {
 		return nil, state.ErrNoRuntimeDir
 	}
-	for _, p := range []string{r.Dir.ConfigDir(), r.Dir.LogDir(), r.Dir.SecretsDir(), r.Dir.CACert()} {
+	for _, p := range []string{r.Dir.ConfigDir(), r.Dir.LogDir(), r.Dir.SecretsDir(), r.Dir.CACert(), r.Dir.ShareDir(), r.Dir.HostlinkDir()} {
 		if strings.ContainsAny(p, ":,") {
 			return nil, fmt.Errorf("the egress state path %q contains ':' or ','", p)
 		}
@@ -221,6 +252,9 @@ func (m Manager) Up(r UpRequest) (_ []string, err error) {
 		return nil, err
 	}
 	if err := r.Dir.WriteProjects(r.Projects); err != nil {
+		return nil, err
+	}
+	if err := r.Dir.WriteOwnConf(r.OwnConf); err != nil {
 		return nil, err
 	}
 	if err := r.Dir.WriteInjection(r.Credentials, time.Now()); err != nil {
@@ -242,9 +276,10 @@ func (m Manager) Up(r UpRequest) (_ []string, err error) {
 		return nil, err
 	}
 	// Envoy appends to its logs and Create keeps them, so a reused session
-	// dir would show the last run's ready line and denials. Unlink is safe
-	// on a symlink planted in the proxy-writable log dir.
-	for _, stale := range []string{r.Dir.EnvoyLog(), r.Dir.AccessLog()} {
+	// dir would show the last run's ready line and denials, and a stale
+	// socket would pass the relay's readiness check. Unlink is safe on a
+	// symlink planted in the proxy-writable log dir.
+	for _, stale := range []string{r.Dir.EnvoyLog(), r.Dir.AccessLog(), r.Dir.HostlinkSocket()} {
 		if err := os.Remove(stale); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return nil, err
 		}
@@ -259,6 +294,24 @@ func (m Manager) Up(r UpRequest) (_ []string, err error) {
 			return nil, fmt.Errorf("pulling the egress proxy image: %w", err)
 		}
 	}
+	// Only an entry for the host itself routes to the relay: a wildcard
+	// never covers it (envoyconfig).
+	relay := false
+	if slices.ContainsFunc(resolved.Entries, func(e policy.Entry) bool { return e.Host == policy.HostLink }) {
+		var netCmd string
+		relay, netCmd = m.pasta()
+		if !relay {
+			_, _ = fmt.Fprintf(m.Stderr, "WARNING: egress: %s is on the allowlist, but reaching the host's loopback needs rootless podman with pasta (this podman's rootless network command: %q); its CONNECTs will fail with 503\n", policy.HostLink, netCmd)
+		}
+	}
+	if relay {
+		if r.Core == "" {
+			return nil, errors.New("no riotbox-core to run the hostlink relay on")
+		}
+		if err := r.Dir.InstallCore(r.Core); err != nil {
+			return nil, err
+		}
+	}
 	n := namesFor(r.Dir.Name())
 	labels := []string{
 		"--label", LabelEgress + "=" + r.Dir.Name(),
@@ -270,34 +323,72 @@ func (m Manager) Up(r UpRequest) (_ []string, err error) {
 	if len(r.Credentials) > 0 {
 		secretsMount = []string{"-v", r.Dir.SecretsDir() + ":" + envoyconfig.SecretsDir + ":ro,z"}
 	}
+	user := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
+	// The flags both of the session's own containers run with.
+	hardening := []string{
+		"--userns=keep-id", "--user", user,
+		"--read-only", "--cap-drop=ALL", "--security-opt", "no-new-privileges",
+		// Envoy holds the injected keys in memory: a crash must not
+		// write them to disk in a core file.
+		"--ulimit", "core=0",
+		"--log-driver=none",
+	}
 	steps := [][]string{
 		slices.Concat([]string{"network", "create", "--internal", "--disable-dns"}, labels, []string{n.internal}),
 		slices.Concat([]string{"network", "create"}, labels, []string{n.external}),
-		slices.Concat([]string{"run", "-d", "--name", n.gateway}, labels, []string{
-			"--label", LabelRole + "=" + roleGateway,
-			"--network", n.internal + "," + n.external,
-			"--userns=keep-id", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-			"--read-only", "--cap-drop=ALL", "--security-opt", "no-new-privileges",
-			// Envoy holds the injected keys in memory: a crash must not
-			// write them to disk in a core file.
-			"--ulimit", "core=0",
-			"--log-driver=none",
-			"-v", r.Dir.ConfigDir() + ":" + envoyconfig.ConfigDir + ":ro,z",
-			"-v", r.Dir.LogDir() + ":" + envoyconfig.LogDir + ":rw,z",
-		}, secretsMount, []string{
-			"--entrypoint", "/usr/local/bin/envoy",
+	}
+	if relay {
+		// Its only network is pasta, so the agent cannot reach it but
+		// through the proxy's socket.
+		steps = append(steps, slices.Concat([]string{"run", "-d", "--name", n.hostlink}, labels, []string{
+			"--label", LabelRole + "=" + roleHostlink,
+			"--network", "pasta:--map-host-loopback," + hostlinkTarget,
+		}, hardening, []string{
+			"-v", r.Dir.ShareDir() + ":" + ShareMount + ":ro,z",
+			"-v", r.Dir.HostlinkDir() + ":" + envoyconfig.HostlinkDir + ":rw,z",
+			"--entrypoint", ShareMount + "/riotbox-core",
 			r.Image,
-			"-c", envoyconfig.ConfigDir + "/" + envoyconfig.BootstrapFile,
-			"--log-path", envoyconfig.LogDir + "/" + envoyconfig.EnvoyLogName,
-			"--file-flush-interval-msec", "1000",
-		}),
+			"hostlink-relay",
+			"--socket", envoyconfig.HostlinkDir + "/" + envoyconfig.HostlinkSocketName,
+			"--ports", ShareMount + "/" + hostlink.PortsFile,
+			"--target", hostlinkTarget,
+		}))
 	}
 	for _, step := range steps {
 		if _, err := m.Engine.Output(step...); err != nil {
 			return nil, errors.Join(err, m.Down(r.Dir, false))
 		}
 	}
-	if err := m.waitReady(r.Dir, n.gateway); err != nil {
+	if relay {
+		if err := m.waitFor(n.hostlink, "the egress hostlink relay", r.Dir.HasRelay); err != nil {
+			return nil, errors.Join(err, m.Down(r.Dir, false))
+		}
+	}
+	gateway := slices.Concat([]string{"run", "-d", "--name", n.gateway}, labels, []string{
+		"--label", LabelRole + "=" + roleGateway,
+		"--network", n.internal + "," + n.external,
+	}, hardening, []string{
+		"-v", r.Dir.ConfigDir() + ":" + envoyconfig.ConfigDir + ":ro,z",
+		"-v", r.Dir.LogDir() + ":" + envoyconfig.LogDir + ":rw,z",
+		"-v", r.Dir.HostlinkDir() + ":" + envoyconfig.HostlinkDir + ":ro,z",
+	}, secretsMount, []string{
+		"--entrypoint", "/usr/local/bin/envoy",
+		r.Image,
+		"-c", envoyconfig.ConfigDir + "/" + envoyconfig.BootstrapFile,
+		"--log-path", envoyconfig.LogDir + "/" + envoyconfig.EnvoyLogName,
+		"--file-flush-interval-msec", "1000",
+	})
+	if _, err := m.Engine.Output(gateway...); err != nil {
+		return nil, errors.Join(err, m.Down(r.Dir, false))
+	}
+	// Envoy writes its log, so it is read as untrusted: no symlinks, no
+	// FIFOs, at most its last MiB (state.EnvoyLogTail). At the default log
+	// level the marker is logged within the first few KB.
+	envoyReady := func() (bool, error) {
+		log, err := r.Dir.EnvoyLogTail()
+		return err == nil && bytes.Contains(log, []byte(readyMarker)), err
+	}
+	if err := m.waitFor(n.gateway, "the egress proxy", envoyReady); err != nil {
 		m.printLogTail(r.Dir)
 		return nil, errors.Join(err, m.Down(r.Dir, false))
 	}
@@ -320,6 +411,9 @@ func (m Manager) Up(r UpRequest) (_ []string, err error) {
 		// The agent's prompt section names the session in the allow
 		// command it tells the agent to pass on (scripts/lib/egress-prompt.sh).
 		"-e", "RIOTBOX_EGRESS_SESSION=" + r.Dir.Name(),
+	}
+	if relay {
+		flags = append(flags, "-v", r.Dir.ShareDir()+":"+ShareMount+":ro,z")
 	}
 	if len(r.Credentials) == 0 {
 		return flags, nil
@@ -366,34 +460,42 @@ func (m Manager) gatewayIP(n names) (string, error) {
 	return ip.String(), nil
 }
 
-// waitReady polls Envoy's log for readyMarker, checking each time that the
-// proxy container still runs, until ReadyTimeout. Only the last MiB of the
-// log is searched, which suffices: at the default log level the marker is
-// logged within the first few KB.
-func (m Manager) waitReady(dir state.Dir, gateway string) error {
+// waitFor polls ready, checking each time that container still runs,
+// until ReadyTimeout. what names the container in its errors.
+func (m Manager) waitFor(container, what string, ready func() (bool, error)) error {
 	deadline := time.Now().Add(m.ReadyTimeout)
 	for {
-		// Envoy writes this file, so it is read as untrusted: no symlinks,
-		// no FIFOs, at most its last MiB (state.EnvoyLogTail).
-		log, err := dir.EnvoyLogTail()
+		ok, err := ready()
 		if err != nil {
 			return err
 		}
-		if bytes.Contains(log, []byte(readyMarker)) {
+		if ok {
 			return nil
 		}
-		out, err := m.Engine.Output("container", "inspect", "--format", "{{.State.Running}}", gateway)
+		out, err := m.Engine.Output("container", "inspect", "--format", "{{.State.Running}}", container)
 		if err != nil {
 			return err
 		}
 		if strings.TrimSpace(string(out)) != "true" {
-			return errors.New("the egress proxy exited during startup")
+			return fmt.Errorf("%s exited during startup", what)
 		}
 		if !time.Now().Before(deadline) {
-			return fmt.Errorf("the egress proxy was not ready after %s", m.ReadyTimeout)
+			return fmt.Errorf("%s was not ready after %s", what, m.ReadyTimeout)
 		}
 		time.Sleep(m.PollInterval)
 	}
+}
+
+// pasta reports whether the engine's rootless network command is pasta,
+// which the hostlink sidecar needs, and what the engine said. A failed
+// query counts as no.
+func (m Manager) pasta() (bool, string) {
+	out, err := m.Engine.Output("info", "--format", "{{.Host.RootlessNetworkCmd}}")
+	if err != nil {
+		return false, err.Error()
+	}
+	cmd := strings.TrimSpace(string(out))
+	return cmd == "pasta", cmd
 }
 
 // printLogTail shows the last 20 lines of Envoy's log on Stderr. The log
@@ -432,15 +534,16 @@ func printable(s string) string {
 	return string(b)
 }
 
-// Down removes the session's agent and proxy containers and its networks,
+// Down removes the session's agent, proxy and hostlink containers, the
+// relay's socket, the riotbox-core copy (state.Dir.Core) and its networks,
 // each only if present, and then its secrets: under each of runtimes
-// (runtime bases, state.RuntimeBases) or, with none given, under dir's own;
-// and any an earlier release kept in the state dir. So it is safe to repeat. The proxy
-// is stopped first, with SIGTERM, so Envoy flushes its access log; with
-// report, Down then says how many requests were denied. It carries on
-// past a failed step and returns every failure. Networks are checked
-// with `network exists` before removal because `network rm --ignore` is
-// missing from older podman.
+// (runtime bases, state.RuntimeBases) or, with none given, under dir's
+// own; and any an earlier release kept in the state dir. So it is safe to
+// repeat. The proxy is stopped first, with SIGTERM, so Envoy flushes its
+// access log; with report, Down then says how many requests were denied.
+// It carries on past a failed step and returns every failure. Networks are
+// checked with `network exists` before removal because `network rm
+// --ignore` is missing from older podman.
 func (m Manager) Down(dir state.Dir, report bool, runtimes ...string) error {
 	n := namesFor(dir.Name())
 	var errs []error
@@ -449,8 +552,13 @@ func (m Manager) Down(dir state.Dir, report bool, runtimes ...string) error {
 	}
 	// The agent normally exited (launch.sh runs it with --rm) before
 	// Down; one still running would hold the internal network.
-	if _, err := m.Engine.Output("rm", "--force", "--ignore", n.agent, n.gateway); err != nil {
+	if _, err := m.Engine.Output("rm", "--force", "--ignore", n.agent, n.gateway, n.hostlink); err != nil {
 		errs = append(errs, err)
+	}
+	for _, file := range []string{dir.HostlinkSocket(), dir.Core()} {
+		if err := os.Remove(file); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
 	}
 	for _, network := range []string{n.internal, n.external} {
 		present, err := m.Engine.Exists("network", "exists", network)

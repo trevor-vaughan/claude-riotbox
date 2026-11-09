@@ -105,6 +105,12 @@ egress_trust_apply
 # shellcheck source=../scripts/lib/egress-os.sh disable=SC1091
 source "${RIOTBOX_SCRIPT_DIR}/lib/egress-os.sh"
 egress_os_apply "${RIOTBOX_SCRIPT_DIR}/os/registry.sh"
+# In an egress session with a hostlink relay, give the agent localhost
+# listeners for the host-loopback ports the allowlist names. It warns and
+# returns 1 when it cannot; the session starts either way.
+# shellcheck source=../scripts/lib/egress-hostlink.sh disable=SC1091
+source "${RIOTBOX_SCRIPT_DIR}/lib/egress-hostlink.sh"
+egress_hostlink_apply
 # Elapsed-time reporting for slow startup steps. Sourced ahead of
 # plugin-setup.sh, which is the only caller today; it lives here rather than in
 # that file for the same reason json-write.sh does — the entrypoint composes all

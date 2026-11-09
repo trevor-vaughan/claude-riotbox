@@ -4,6 +4,8 @@
 //
 //	config/        Envoy's config files, mounted read-only into the proxy
 //	log/           access.log and envoy.log, mounted read-write
+//	share/         riotbox-core and hostlink.ports, mounted read-only into the agent and the hostlink sidecar
+//	hostlink/      the hostlink relay's socket, read-write in the sidecar, read-only in the proxy
 //	agent.conf     the active agent's egress_hosts, saved at start
 //	os.conf        the OS plugins' groups, saved at start
 //	session.conf   the session's allow/deny overlay (riotbox egress)
@@ -30,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -40,6 +43,7 @@ import (
 
 	"github.com/trevor-vaughan/claude-riotbox/internal/display"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/envoyconfig"
+	"github.com/trevor-vaughan/claude-riotbox/internal/egress/hostlink"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/inject"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/policy"
 	"github.com/trevor-vaughan/claude-riotbox/internal/lock"
@@ -86,6 +90,44 @@ func (d Dir) ConfigDir() string { return filepath.Join(d.Path(), "config") }
 // LogDir holds Envoy's logs.
 func (d Dir) LogDir() string { return filepath.Join(d.Path(), "log") }
 
+// ShareDir is the one session dir the agent sees, read-only: it holds the
+// session's riotbox-core copy (Core) and the host-loopback ports file
+// (HostlinkPorts). The hostlink sidecar mounts it read-only as well.
+func (d Dir) ShareDir() string { return filepath.Join(d.Path(), "share") }
+
+// HostlinkPorts is the ports file the hostlink relay and the agent's
+// listeners read (hostlink.RenderPorts).
+func (d Dir) HostlinkPorts() string { return filepath.Join(d.ShareDir(), hostlink.PortsFile) }
+
+// Core is the session's copy of riotbox-core (InstallCore).
+func (d Dir) Core() string { return filepath.Join(d.ShareDir(), "riotbox-core") }
+
+// HostlinkDir holds the hostlink relay's socket (HostlinkSocket):
+// read-write in the hostlink sidecar, read-only in the proxy.
+func (d Dir) HostlinkDir() string { return filepath.Join(d.Path(), "hostlink") }
+
+// HostlinkSocket is the hostlink relay's socket.
+func (d Dir) HostlinkSocket() string {
+	return filepath.Join(d.HostlinkDir(), envoyconfig.HostlinkSocketName)
+}
+
+// relayDialTimeout bounds HasRelay's dial of the relay's socket.
+const relayDialTimeout = time.Second
+
+// HasRelay reports whether the session's hostlink relay serves its socket:
+// a dial of HostlinkSocket is answered. A missing socket, or one nobody
+// listens on (a crashed relay's, or a plain file), is no relay.
+func (d Dir) HasRelay() (bool, error) {
+	c, err := net.DialTimeout("unix", d.HostlinkSocket(), relayDialTimeout)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, c.Close()
+}
+
 // AccessLog is Envoy's per-request JSON log.
 func (d Dir) AccessLog() string { return filepath.Join(d.LogDir(), envoyconfig.AccessLogName) }
 
@@ -97,6 +139,41 @@ func (d Dir) AgentConf() string { return filepath.Join(d.Path(), "agent.conf") }
 
 // SessionConf holds the session's allow/deny overlay.
 func (d Dir) SessionConf() string { return filepath.Join(d.Path(), "session.conf") }
+
+// ownConfFile records the egress.conf the session was started with
+// (RIOTBOX_EGRESS_CONF), which replaces the user conf in every Policy.
+func (d Dir) ownConfFile() string { return filepath.Join(d.Path(), "own-conf") }
+
+// WriteOwnConf records path as the session's own egress.conf; "" removes
+// the record, as a reused state dir may hold an earlier launch's. path must
+// be absolute and on one line.
+func (d Dir) WriteOwnConf(path string) error {
+	if path == "" {
+		if err := os.Remove(d.ownConfFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	if !filepath.IsAbs(path) || strings.ContainsAny(path, "\n\x00") {
+		return fmt.Errorf("the session's egress conf %s must be an absolute path on one line", display.Quote(path))
+	}
+	return WriteAtomic(d.ownConfFile(), []byte(path+"\n"))
+}
+
+// OwnConf is the egress.conf the session was started with, or "" when it
+// uses the user's. The record sits in a dir another process can write, so
+// anything but an absolute path is refused.
+func (d Dir) OwnConf() (string, error) {
+	data, err := readOptional(d.ownConfFile())
+	if err != nil || data == nil {
+		return "", err
+	}
+	path := strings.TrimSuffix(string(data), "\n")
+	if !filepath.IsAbs(path) || strings.ContainsAny(path, "\n\x00") {
+		return "", fmt.Errorf("%s does not hold an absolute path", display.Quote(d.ownConfFile()))
+	}
+	return path, nil
+}
 
 func (d Dir) appliedConf() string { return filepath.Join(d.Path(), "applied.conf") }
 
@@ -347,16 +424,16 @@ func (d Dir) intercepts() ([]envoyconfig.Intercept, error) {
 }
 
 // Create makes root (and any missing parents), the session dir and its
-// config and log dirs, each mode 0700, tightening any that already exist:
+// config, log, share and hostlink dirs, each mode 0700, tightening any that already exist:
 // they hold the session's allowlist and a log of its traffic. It refuses a
-// session, config or log dir that is not a real directory (a link planted
+// session, config, log, share or hostlink dir that is not a real directory (a link planted
 // there would redirect writes and the proxy's bind mounts); root itself may
 // be a link, as users link their data dirs.
 func (d Dir) Create() error {
 	if err := os.MkdirAll(filepath.Dir(d.root), 0o700); err != nil {
 		return err
 	}
-	for _, dir := range []string{d.root, d.Path(), d.ConfigDir(), d.LogDir()} {
+	for _, dir := range []string{d.root, d.Path(), d.ConfigDir(), d.LogDir(), d.ShareDir(), d.HostlinkDir()} {
 		if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 			return err
 		}
@@ -382,6 +459,18 @@ func (d Dir) Create() error {
 // link is removed as the link alone.
 func (d Dir) Remove() error { return os.RemoveAll(d.Path()) }
 
+// InstallCore copies the riotbox-core binary at src to Core, mode 0700,
+// replacing a reused session dir's copy. The hostlink sidecar and the
+// agent run the copy: mounting the installed binary would need the :z
+// option, which relabels the user's install on an SELinux host.
+func (d Dir) InstallCore(src string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("copying riotbox-core for the hostlink relay: %w", err)
+	}
+	return writeAtomicMode(d.Core(), data, 0o700)
+}
+
 // Lock takes the session's lock (interoperable with flock(1)), saying on w
 // that it waits when another command holds it. Hold it around a change to
 // session.conf and the Reload that applies it.
@@ -390,8 +479,9 @@ func (d Dir) Lock(w io.Writer) (release func() error, err error) {
 }
 
 // Policy resolves the session's allowlist as the files now say
-// (policy.Resolve): agent.conf as @agent, os.conf as the OS groups, the system and user conf files
-// (each optional) and, on top, session.conf. A session.conf line naming a
+// (policy.Resolve): agent.conf as @agent, os.conf as the OS groups, the system conf and the user conf
+// (each optional) or, when one is recorded (OwnConf), the session's own conf,
+// which must exist, and, on top, session.conf. A session.conf line naming a
 // group no file defines any more fails it, as it fails every reload, with
 // the command that drops the line (Dangles).
 func (d Dir) Policy(systemConf, userConf string) (policy.Resolved, error) {
@@ -418,14 +508,23 @@ func (d Dir) sources(systemConf, userConf string) (policy.Sources, error) {
 	if err != nil {
 		return policy.Sources{}, err
 	}
+	own, err := d.OwnConf()
+	if err != nil {
+		return policy.Sources{}, err
+	}
+	readUser := ReadConf
+	if own != "" {
+		userConf, readUser = own, ReadOwnConf
+	}
 	s := policy.Sources{Agent: agent, OS: osGroups}
-	for _, f := range []struct {
-		path string
-		conf *policy.Conf
-	}{{systemConf, &s.System}, {userConf, &s.User}, {d.SessionConf(), &s.Overlay}} {
-		if *f.conf, err = ReadConf(f.path); err != nil {
-			return policy.Sources{}, err
-		}
+	if s.System, err = ReadConf(systemConf); err != nil {
+		return policy.Sources{}, err
+	}
+	if s.User, err = readUser(userConf); err != nil {
+		return policy.Sources{}, err
+	}
+	if s.Overlay, err = ReadConf(d.SessionConf()); err != nil {
+		return policy.Sources{}, err
 	}
 	return s, nil
 }
@@ -473,6 +572,17 @@ func ReadConf(path string) (policy.Conf, error) {
 	data, err := readOptional(path)
 	if err != nil {
 		return policy.Conf{}, err
+	}
+	return policy.ParseFile(path, data)
+}
+
+// ReadOwnConf parses a session's own egress.conf (RIOTBOX_EGRESS_CONF).
+// Unlike the user conf it must exist: reading a missing one as empty would
+// quietly drop its strict setting and its denials.
+func ReadOwnConf(path string) (policy.Conf, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return policy.Conf{}, fmt.Errorf("the session's egress conf: %w", err)
 	}
 	return policy.ParseFile(path, data)
 }
@@ -530,6 +640,12 @@ func (d Dir) WriteConfig(r policy.Resolved) error {
 	if err != nil {
 		return err
 	}
+	if err := envoyconfig.Check(r.Entries, intercepts); err != nil {
+		return err
+	}
+	if err := WriteAtomic(d.HostlinkPorts(), hostlink.RenderPorts(r.Entries)); err != nil {
+		return err
+	}
 	files := envoyconfig.Render(d.name, r.Entries, intercepts)
 	for _, f := range []struct {
 		name string
@@ -547,8 +663,9 @@ func (d Dir) WriteConfig(r policy.Resolved) error {
 	return d.recordApplied(r)
 }
 
-// Reload resolves the policy again (Policy) and replaces rds.json alone,
-// which a running proxy applies without touching open tunnels. It returns
+// Reload resolves the policy again (Policy) and replaces the host-loopback
+// ports file and rds.json, which a running proxy applies without touching
+// open tunnels. It returns
 // the new policy.
 func (d Dir) Reload(systemConf, userConf string) (policy.Resolved, error) {
 	r, err := d.Policy(systemConf, userConf)
@@ -557,6 +674,24 @@ func (d Dir) Reload(systemConf, userConf string) (policy.Resolved, error) {
 	}
 	intercepts, err := d.intercepts()
 	if err != nil {
+		return policy.Resolved{}, err
+	}
+	if err := envoyconfig.Check(r.Entries, intercepts); err != nil {
+		return policy.Resolved{}, err
+	}
+	// The ports file goes first: an allow then opens the relay before
+	// Envoy, a deny closes it first, so neither is ever looser than the
+	// policy. A session an earlier release started has no share dir and
+	// no relay to tell; a share path that is not a real directory is
+	// refused, as Create refuses it.
+	if err := realDirOrAbsent(d.ShareDir()); err != nil {
+		return policy.Resolved{}, err
+	}
+	if _, err := os.Lstat(d.ShareDir()); err == nil {
+		if err := WriteAtomic(d.HostlinkPorts(), hostlink.RenderPorts(r.Entries)); err != nil {
+			return policy.Resolved{}, err
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		return policy.Resolved{}, err
 	}
 	if err := WriteAtomic(filepath.Join(d.ConfigDir(), envoyconfig.RDSFile), envoyconfig.RenderRDS(r.Entries, intercepts)); err != nil {

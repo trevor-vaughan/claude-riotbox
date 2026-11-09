@@ -67,7 +67,8 @@ verbs:
                          says why on stderr
   egress-up --engine <engine> --state-root <dir> --system-conf <file>
             --user-conf <file> --image <ref> --session-key <key>
-            --owner-pid <pid> [--project <dir>]... <name>
+            --owner-pid <pid> [--os-dir <dir>] [--own-conf <file>]
+            [--project <dir>]... <name>
                          start the session's egress proxy, reading the
                          agent's hosts on stdin, then optionally a NUL and
                          the agent's variables as NUL-terminated NAME=VALUE
@@ -77,7 +78,10 @@ verbs:
                          /run/user/<uid>/riotbox-egress), which must be a
                          private tmpfs when there are any; record the
                          project dirs for egress-list; print the agent's
-                         engine flags, one per line; exit 1 on failure
+                         engine flags, one per line; exit 1 on
+                         failure; --own-conf (absolute, must exist)
+                         replaces --user-conf for this session, now and
+                         in every later verb
   egress-down --engine <engine> --state-root <dir> <name>
                          remove the session's egress proxy, networks and
                          secrets and report denied requests; exit 1 if a
@@ -88,7 +92,7 @@ verbs:
                          unused for 7 days
   egress-list --engine <engine> --state-root <dir>
                          print each running egress session's start, owner
-                         PID, projects, log, strict setting, injected keys
+                         PID, projects, log, own conf, strict setting, injected keys
                          and allowlist
   egress-allow --engine <engine> --state-root <dir> --system-conf <file>
                --user-conf <file> [--session <name>] [--save-to <file>]
@@ -97,13 +101,15 @@ verbs:
                          allow or deny an entry or a group in a running
                          session, live; --save-to (the --system-conf or
                          --user-conf file) also records it there,
-                         replacing any line for it
+                         replacing any line for it; --user-conf means the
+                         session's own conf when it has one (--own-conf)
   egress-strict --engine <engine> --state-root <dir> --system-conf <file>
                 --user-conf <file> [--session <name>] [--save-to <file>]
                 <on | off | clear>
                          set or clear a running session's strict setting,
                          live; --save-to (the --system-conf or --user-conf
-                         file) also sets or removes it there
+                         file) also sets or removes it there; --user-conf
+                         means the session's own conf when it has one
   egress-groups --engine <engine> --state-root <dir> --system-conf <file>
                 --user-conf <file>
                          print every group, where it is defined and its
@@ -112,6 +118,13 @@ verbs:
                 --user-conf <file> [--session <name>]
                          re-read the conf files into the named session, or
                          every running one
+  hostlink-relay --socket <path> --ports <file> --target <ip>
+                         serve the egress hostlink relay on a Unix socket:
+                         tunnel CONNECTs to host.containers.internal:<port>
+                         to <ip>:<port> for each port the file lists
+  hostlink-listen --ports <file> --proxy http://<host>:<port>
+                         listen on 127.0.0.1 for each port the file lists
+                         and tunnel each connection through the proxy
 `
 
 // unbounded is a verb's maxArgs when it takes any number of positionals.
@@ -191,19 +204,21 @@ var verbs = map[string]verb{
 	"session-busy": {options: []string{"--engine", "--lib-dir"}, minArgs: 2, maxArgs: 2, run: sessionBusy},
 	"egress-up": {
 		options:  []string{"--engine", "--state-root", "--system-conf", "--user-conf", "--image", "--session-key", "--owner-pid"},
-		optional: []string{"--os-dir"},
+		optional: []string{"--os-dir", "--own-conf"},
 		repeated: []string{"--project"},
 		minArgs:  1, maxArgs: 1,
 		run: egressUp,
 	},
-	"egress-down":   {options: []string{"--engine", "--state-root"}, minArgs: 1, maxArgs: 1, run: egressDown},
-	"egress-sweep":  {options: []string{"--engine", "--state-root"}, run: egressSweep},
-	"egress-list":   {options: []string{"--engine", "--state-root"}, run: egressList},
-	"egress-allow":  {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressEdit("egress-allow", false)},
-	"egress-deny":   {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressEdit("egress-deny", true)},
-	"egress-strict": {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressStrict},
-	"egress-groups": {options: egressConfOptions, optional: []string{"--os-dir"}, run: egressGroups},
-	"egress-reload": {options: egressConfOptions, optional: []string{"--session"}, run: egressReload},
+	"egress-down":     {options: []string{"--engine", "--state-root"}, minArgs: 1, maxArgs: 1, run: egressDown},
+	"egress-sweep":    {options: []string{"--engine", "--state-root"}, run: egressSweep},
+	"egress-list":     {options: []string{"--engine", "--state-root"}, run: egressList},
+	"egress-allow":    {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressEdit("egress-allow", false)},
+	"egress-deny":     {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressEdit("egress-deny", true)},
+	"egress-strict":   {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressStrict},
+	"egress-groups":   {options: egressConfOptions, optional: []string{"--os-dir"}, run: egressGroups},
+	"egress-reload":   {options: egressConfOptions, optional: []string{"--session"}, run: egressReload},
+	"hostlink-relay":  {options: []string{"--socket", "--ports", "--target"}, run: hostlinkRelay},
+	"hostlink-listen": {options: []string{"--ports", "--proxy"}, run: hostlinkListen},
 }
 
 func main() {

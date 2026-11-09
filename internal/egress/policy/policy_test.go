@@ -10,9 +10,16 @@ import (
 )
 
 func entry(host string, port int) policy.Entry { return policy.Entry{Host: host, Port: port} }
+func plain(host string, port int) policy.Entry {
+	return policy.Entry{Host: host, Port: port, Plain: true}
+}
 
 // longName is 253 characters: three 63-character labels and one of 61.
 var longName = strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
+
+func ports(host string, lo, hi int) policy.Entry {
+	return policy.Entry{Host: host, Port: lo, PortEnd: hi}
+}
 
 var _ = Describe("Parse", func() {
 	DescribeTable("accepts",
@@ -36,6 +43,21 @@ var _ = Describe("Parse", func() {
 		Entry("a numeric-looking first label", "0x.example", entry("0x.example", 443), false),
 		Entry("a zero-padded port, normalised", "a.example:0443", entry("a.example", 443), false),
 		Entry("a 253-character name", longName, entry(longName, 443), false),
+		Entry("plain HTTP, on port 80", "http://mirror.example.org", plain("mirror.example.org", 80), false),
+		Entry("plain HTTP with a port", "http://mirror.example.org:8080", plain("mirror.example.org", 8080), false),
+		Entry("plain HTTP in any case", "HTTP://Mirror.Example.ORG", plain("mirror.example.org", 80), false),
+		Entry("a plain-HTTP wildcard", "http://*.example.org", plain("*.example.org", 80), false),
+		Entry("a plain-HTTP removal", "-http://mirror.example.org", plain("mirror.example.org", 80), true),
+		Entry("plain HTTP on port 443, still plain", "http://a.example:443", plain("a.example", 443), false),
+		Entry("a port range", "a.example:8000-8100", ports("a.example", 8000, 8100), false),
+		Entry("a range of one port, as that port", "a.example:8080-8080", entry("a.example", 8080), false),
+		Entry("a range of exactly 1024 ports", "a.example:1000-2023", ports("a.example", 1000, 2023), false),
+		Entry("every port", "a.example:*", ports("a.example", 1, 65535), false),
+		Entry("every port of every subdomain", "*.a.example:*", ports("*.a.example", 1, 65535), false),
+		Entry("a wildcard range", "*.a.example:80-81", ports("*.a.example", 80, 81), false),
+		Entry("a plain-HTTP range", "http://a.example:8000-8001", policy.Entry{Host: "a.example", Port: 8000, PortEnd: 8001, Plain: true}, false),
+		Entry("plain HTTP on every port", "http://a.example:*", policy.Entry{Host: "a.example", Port: 1, PortEnd: 65535, Plain: true}, false),
+		Entry("a range removal", "-a.example:8000-8100", ports("a.example", 8000, 8100), true),
 	)
 
 	DescribeTable("rejects",
@@ -76,7 +98,52 @@ var _ = Describe("Parse", func() {
 		Entry("a non-ASCII letter that lowercases to ASCII (KELVIN SIGN)", "\u212Aa.com", "printable ASCII"),
 		Entry("a lone dash", "-", "host is empty"),
 		Entry("an empty entry", "", "host is empty"),
+		Entry("an https URL", "https://a.example", "a URL is not an entry"),
+		Entry("another scheme", "ftp://a.example", "a URL is not an entry"),
+		Entry("plain HTTP with a path", "http://a.example/x", "give http://host or http://host:port"),
+		Entry("plain HTTP with a trailing slash", "http://a.example/", "give http://host or http://host:port"),
+		Entry("plain HTTP with a query", "http://a.example?x", "give http://host or http://host:port"),
+		Entry("plain HTTP with userinfo", "http://u@a.example", "give http://host or http://host:port"),
+		Entry("plain HTTP with no host", "http://", "host is empty"),
+		Entry("plain HTTP to an IP literal", "http://10.0.0.1", "IP address"),
+		Entry("a doubled scheme", "http://http://a.example", "a URL is not an entry"),
+		Entry("a removal sign after the scheme", "http://-a.example", "not a valid DNS label"),
+		Entry("a range of 1025 ports", "a.example:1000-2024", "at most 1024 ports; use host:* for every port"),
+		Entry("every port spelled as a range", "a.example:1-65535", "at most 1024 ports; use host:* for every port"),
+		Entry("a reversed range", "a.example:9000-8000", "a port range runs low-high"),
+		Entry("a range with no end", "a.example:8000-", "port must be a number from 1 to 65535"),
+		Entry("a range with no start", "a.example:-8000", "port must be a number from 1 to 65535"),
+		Entry("a range of three numbers", "a.example:1-2-3", "port must be a number from 1 to 65535"),
+		Entry("a range from port 0", "a.example:0-10", "port must be a number from 1 to 65535"),
+		Entry("a range past 65535", "a.example:65535-65536", "port must be a number from 1 to 65535"),
+		Entry("a star with digits", "a.example:8*", "port must be a number from 1 to 65535"),
+		Entry("a star as the host", "*:*", "at least two labels"),
 	)
+
+	DescribeTable("refuses plain HTTP to the host's loopback name, which only tunnels, and says what to write instead",
+		func(raw, want string) {
+			_, _, err := policy.Parse(raw)
+			Expect(err).To(MatchError("plain HTTP to host.containers.internal is not supported, as the host relay only tunnels; " + want))
+		},
+		Entry("a port", "http://host.containers.internal:18080",
+			"allow host.containers.internal:18080 (no http://), then use http://localhost:18080 in the session"),
+		Entry("a range", "http://host.containers.internal:18000-18099",
+			"allow host.containers.internal:18000-18099 (no http://), then use http://localhost:PORT in the session"),
+		Entry("every port", "http://host.containers.internal:*",
+			"allow host.containers.internal:PORT (no http://) for each port, then use http://localhost:PORT in the session"),
+		Entry("the default port, below 1024", "http://host.containers.internal",
+			"allow host.containers.internal:80 (no http://) and tunnel to it through the proxy, as ports below 1024 get no localhost listener"),
+		Entry("a removal", "-http://Host.Containers.Internal:8080",
+			"write -host.containers.internal:8080 (no http://)"),
+		Entry("a removal of every port", "-http://host.containers.internal:*",
+			"write -host.containers.internal:* (no http://)"),
+	)
+
+	It("accepts tunnels to the host's loopback name", func() {
+		e, _, err := policy.Parse("host.containers.internal:18000-18099")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(e).To(Equal(policy.Entry{Host: policy.HostLink, Port: 18000, PortEnd: 18099}))
+	})
 })
 
 var _ = Describe("Entry", func() {
@@ -104,5 +171,91 @@ var _ = Describe("Covering", func() {
 	It("does not report a wildcard as covering itself, nor the bare domain", func() {
 		Expect(policy.Covering(entries, entry("*.example.com", 443))).To(BeEmpty())
 		Expect(policy.Covering(entries, entry("example.com", 443))).To(BeEmpty())
+	})
+})
+
+var _ = Describe("Overlapping", func() {
+	It("finds a narrower entry inside a denied range or every port, on the same host", func() {
+		list := []policy.Entry{entry("a.example", 443), ports("a.example", 8000, 8100), entry("b.example", 443)}
+		Expect(policy.Overlapping(list, ports("a.example", 1, 65535))).To(Equal([]policy.Entry{entry("a.example", 443), ports("a.example", 8000, 8100)}))
+		Expect(policy.Overlapping(list, ports("a.example", 8050, 8200))).To(Equal([]policy.Entry{ports("a.example", 8000, 8100)}))
+	})
+
+	It("finds a wildcard's entries on a host it matches, and the reverse", func() {
+		list := []policy.Entry{entry("a.example.com", 443), ports("*.example.com", 8000, 8100)}
+		Expect(policy.Overlapping(list, ports("*.example.com", 1, 65535))).To(Equal(list))
+		Expect(policy.Overlapping(list, entry("a.example.com", 8080))).To(BeEmpty())
+		Expect(policy.Overlapping(list, ports("a.example.com", 8090, 9000))).To(Equal([]policy.Entry{ports("*.example.com", 8000, 8100)}))
+		Expect(policy.Overlapping(list, ports("a.example.com", 9000, 9100))).To(BeEmpty())
+	})
+
+	It("leaves out what Covering reports, itself, disjoint ports, other hosts and the other kind", func() {
+		list := []policy.Entry{ports("a.example", 1, 65535), entry("a.example", 80), entry("b.example", 443), plain("a.example", 443)}
+		Expect(policy.Overlapping(list, entry("a.example", 443))).To(BeEmpty())
+		Expect(policy.Overlapping(list, ports("a.example", 1, 65535))).To(Equal([]policy.Entry{entry("a.example", 80)}))
+	})
+})
+
+var _ = Describe("Entry, plain HTTP", func() {
+	It("spells a plain entry with its scheme, and its port only when it is not 80", func() {
+		Expect(plain("a.example", 80).String()).To(Equal("http://a.example"))
+		Expect(plain("a.example", 8080).String()).To(Equal("http://a.example:8080"))
+		Expect(plain("a.example", 443).String()).To(Equal("http://a.example:443"))
+		Expect(plain("a.example", 80).Authority()).To(Equal("a.example:80"))
+	})
+
+	It("round-trips every plain spelling through Parse", func() {
+		for _, e := range []policy.Entry{plain("a.example", 80), plain("a.example", 8080), plain("*.a.example", 80)} {
+			got, _, err := policy.Parse(e.String())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got).To(Equal(e))
+		}
+	})
+
+	It("never covers a plain entry by a tunnel wildcard, or the reverse", func() {
+		Expect(policy.Covering([]policy.Entry{entry("*.example.org", 80)}, plain("a.example.org", 80))).To(BeEmpty())
+		Expect(policy.Covering([]policy.Entry{plain("*.example.org", 80)}, entry("a.example.org", 80))).To(BeEmpty())
+		Expect(policy.Covering([]policy.Entry{plain("*.example.org", 80)}, plain("a.example.org", 80))).To(Equal([]policy.Entry{plain("*.example.org", 80)}))
+	})
+})
+
+var _ = Describe("Entry, port ranges", func() {
+	It("spells a range low-high and every port as *, round-tripping through Parse", func() {
+		for raw, e := range map[string]policy.Entry{
+			"a.example:8000-8100":    ports("a.example", 8000, 8100),
+			"a.example:*":            ports("a.example", 1, 65535),
+			"*.a.example:*":          ports("*.a.example", 1, 65535),
+			"http://a.example:*":     {Host: "a.example", Port: 1, PortEnd: 65535, Plain: true},
+			"http://a.example:80-81": {Host: "a.example", Port: 80, PortEnd: 81, Plain: true},
+		} {
+			Expect(e.String()).To(Equal(raw))
+			got, _, err := policy.Parse(raw)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got).To(Equal(e))
+		}
+	})
+
+	DescribeTable("Covers: hosts and ports, either kind",
+		func(w, e policy.Entry, want bool) { Expect(policy.Covers(w, e)).To(Equal(want)) },
+		Entry("a range holds a port in it", ports("a.example", 8000, 8100), entry("a.example", 8080), true),
+		Entry("a range holds its own ends", ports("a.example", 8000, 8100), entry("a.example", 8100), true),
+		Entry("a range does not hold a port past it", ports("a.example", 8000, 8100), entry("a.example", 8101), false),
+		Entry("a range holds a narrower range", ports("a.example", 8000, 8100), ports("a.example", 8010, 8020), true),
+		Entry("a range does not hold an overlapping one", ports("a.example", 8000, 8100), ports("a.example", 8050, 8150), false),
+		Entry("every port holds any port", ports("a.example", 1, 65535), entry("a.example", 22), true),
+		Entry("a range does not hold every port", ports("a.example", 1, 1024), ports("a.example", 1, 65535), false),
+		Entry("a wildcard on every port holds a subdomain's port", ports("*.example.org", 1, 65535), entry("a.b.example.org", 9), true),
+		Entry("a wildcard holds a narrower wildcard", ports("*.example.org", 1, 65535), ports("*.a.example.org", 1, 65535), true),
+		Entry("a wildcard does not hold its bare domain", ports("*.example.org", 1, 65535), entry("example.org", 443), false),
+		Entry("a narrower wildcard does not hold a broader one", ports("*.a.example.org", 1, 65535), ports("*.example.org", 1, 65535), false),
+		Entry("another host is not held", ports("a.example", 1, 65535), entry("b.example", 443), false),
+		Entry("kind is ignored", policy.Entry{Host: "a.example", Port: 1, PortEnd: 65535, Plain: true}, entry("a.example", 443), true),
+	)
+
+	It("lists a range or every port as covering a port it holds, of the same kind only", func() {
+		list := []policy.Entry{ports("a.example", 8000, 8100), {Host: "a.example", Port: 1, PortEnd: 65535, Plain: true}}
+		Expect(policy.Covering(list, entry("a.example", 8080))).To(Equal([]policy.Entry{ports("a.example", 8000, 8100)}))
+		Expect(policy.Allows(list, entry("a.example", 8080))).To(BeTrue())
+		Expect(policy.Allows(list, entry("a.example", 9000))).To(BeFalse())
 	})
 })

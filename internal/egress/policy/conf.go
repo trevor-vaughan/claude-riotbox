@@ -88,6 +88,16 @@ func (s StrictSetting) String() string {
 	}
 }
 
+// PlainSetting is a file's allow_plain setting.
+type PlainSetting int
+
+// The allow_plain settings a file can hold.
+const (
+	PlainUnset PlainSetting = iota // the file does not set allow_plain
+	PlainOn
+	PlainOff
+)
+
 // GroupDef is one [group NAME] section.
 type GroupDef struct {
 	Name    string
@@ -95,16 +105,18 @@ type GroupDef struct {
 	Line    int // the header's line
 }
 
-// Conf is one egress.conf file as read: its strict setting, the lines of
+// Conf is one egress.conf file as read: its strict and allow_plain settings, the lines of
 // its preamble and [allow] sections, in order, its groups, and its [inject]
 // rows.
 type Conf struct {
-	Name       string // the file's path, for errors
-	Strict     StrictSetting
-	StrictLine int
-	Items      []Item
-	Groups     []GroupDef
-	Inject     []InjectRow // its [inject] rows, in order
+	Name           string // the file's path, for errors
+	Strict         StrictSetting
+	StrictLine     int
+	AllowPlain     PlainSetting
+	AllowPlainLine int
+	Items          []Item
+	Groups         []GroupDef
+	Inject         []InjectRow // its [inject] rows, in order
 }
 
 // The sections a line can be in.
@@ -212,21 +224,26 @@ func (p *confParser) header(n int, line string) error {
 }
 
 func (p *confParser) setting(n int, key, value string) error {
-	if key != "strict" {
-		return p.errorf(n, "unknown setting %q (the only setting is strict)", key)
+	if key != "strict" && key != "allow_plain" {
+		return p.errorf(n, "unknown setting %q (the settings are strict and allow_plain)", key)
 	}
 	if p.section != sectionPreamble {
-		return p.errorf(n, "the strict setting must come before the first [section]")
+		return p.errorf(n, "the %s setting must come before the first [section]", key)
 	}
-	switch value {
-	case "on":
+	if value != "on" && value != "off" {
+		return p.errorf(n, "%s must be on or off, not %q", key, value)
+	}
+	if key == "allow_plain" {
+		p.c.AllowPlain, p.c.AllowPlainLine = PlainOff, n
+		if value == "on" {
+			p.c.AllowPlain = PlainOn
+		}
+		return nil
+	}
+	p.c.Strict, p.c.StrictLine = StrictOff, n
+	if value == "on" {
 		p.c.Strict = StrictOn
-	case "off":
-		p.c.Strict = StrictOff
-	default:
-		return p.errorf(n, "strict must be on or off, not %q", value)
 	}
-	p.c.StrictLine = n
 	return nil
 }
 
@@ -257,7 +274,7 @@ func (p *confParser) endGroup() error {
 }
 
 // cutSetting splits a setting line: "key = value", or the bare word
-// strict, which means strict = on. No entry holds "=" and no bare word is
+// strict, which means strict = on. allow_plain has no bare form. No entry holds "=" and no bare word is
 // an entry, so this cannot mistake an entry for a setting.
 func cutSetting(line string) (key, value string, ok bool) {
 	if k, v, found := strings.Cut(line, "="); found {
@@ -287,6 +304,9 @@ func ParseList(name string, data []byte) ([]Entry, error) {
 	}
 	if c.Strict != StrictUnset {
 		return nil, fmt.Errorf("%s:%d: a setting is not allowed here", name, c.StrictLine)
+	}
+	if c.AllowPlain != PlainUnset {
+		return nil, fmt.Errorf("%s:%d: a setting is not allowed here", name, c.AllowPlainLine)
 	}
 	if len(c.Groups) > 0 {
 		return nil, fmt.Errorf("%s:%d: a section is not allowed here", name, c.Groups[0].Line)

@@ -50,7 +50,7 @@ jobs:
         run: task test:lint
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -67,6 +67,15 @@ jobs:
 
       - name: Ensure podman is available
         run: command -v podman || sudo apt-get update && sudo apt-get install -y podman
+
+      # Ubuntu 26.04's pasta AppArmor profile refuses podman's SIGTERM, so
+      # stopping the last bridge-network container fails with "rootless netns:
+      # kill network process: permission denied" (LP #2154379). Drop this step
+      # once actions/runner-images#15182 ships in the runner image.
+      - name: Allow podman to stop pasta (actions/runner-images#15182)
+        run: |
+          sudo sed -i '$ i\  signal (receive) set=(term) peer=podman,' /etc/apparmor.d/usr.bin.pasta
+          sudo apparmor_parser -r /etc/apparmor.d/usr.bin.pasta
 
       - name: Run tests
         id: tests

@@ -116,6 +116,12 @@ var _ = Describe("Groups", func() {
 var _ = Describe("Resolve", func() {
 	agent := []policy.Entry{entry("api.agent.example", 443)}
 
+	It("keeps a range and its single ports apart, and removes a range only exactly", func() {
+		r, err := policy.Resolve(policy.Sources{User: conf("user", "strict\na.example:8000-8100\na.example:8080\n-a.example:8000-8001\n")})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Entries).To(Equal([]policy.Entry{{Host: "a.example", Port: 8000, PortEnd: 8100}, {Host: "a.example", Port: 8080}}))
+	})
+
 	It("allows exactly @registries and @agent, strict off by default, when no file says anything", func() {
 		r, err := policy.Resolve(policy.Sources{Agent: agent})
 		Expect(err).NotTo(HaveOccurred())
@@ -275,6 +281,106 @@ var _ = Describe("Resolve", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(r.Entries).NotTo(ContainElement(entry("old.example", 443)))
 		Expect(r.Entries).To(ContainElement(entry("new.example", 443)))
+	})
+
+	Describe("plain HTTP", func() {
+		files := func(sys, user string) policy.Sources {
+			return policy.Sources{Agent: agent, System: conf("sys", sys), User: conf("user", user), Overlay: conf("session.conf", "")}
+		}
+
+		It("allows no plain HTTP when nothing asks for it", func() {
+			r, err := policy.Resolve(files("a.example\n", ""))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.AllowPlain).To(BeFalse())
+			for _, e := range r.Entries {
+				Expect(e.Plain).To(BeFalse(), e.String())
+			}
+		})
+
+		It("allows an http:// entry exactly, without its tunnel", func() {
+			r, err := policy.Resolve(files("strict\nhttp://a.example:8080\n", ""))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.Entries).To(Equal([]policy.Entry{plain("a.example", 8080)}))
+		})
+
+		It("adds http://host on port 80 for every tunnel entry when allow_plain is on, wildcards too", func() {
+			r, err := policy.Resolve(files("strict\nallow_plain = on\na.example\n*.b.example\nc.example:8443\n", ""))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.AllowPlain).To(BeTrue())
+			Expect(r.Entries).To(Equal([]policy.Entry{
+				plain("*.b.example", 80), entry("*.b.example", 443),
+				plain("a.example", 80), entry("a.example", 443),
+				plain("c.example", 80), entry("c.example", 8443),
+			}))
+		})
+
+		It("adds no http:// entry for host.containers.internal under allow_plain", func() {
+			r, err := policy.Resolve(files("strict\nallow_plain = on\na.example\nhost.containers.internal:2222\n", ""))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.Entries).To(Equal([]policy.Entry{
+				plain("a.example", 80), entry("a.example", 443),
+				entry(policy.HostLink, 2222),
+			}))
+		})
+
+		DescribeTable("takes allow_plain from the user file, else the system file, else off",
+			func(sys, user string, want bool) {
+				r, err := policy.Resolve(files(sys, user))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(r.AllowPlain).To(Equal(want))
+			},
+			Entry("neither", "", "", false),
+			Entry("system on", "allow_plain = on\n", "", true),
+			Entry("user off over system on", "allow_plain = on\n", "allow_plain = off\n", false),
+			Entry("user on over system off", "allow_plain = off\n", "allow_plain = on\n", true),
+		)
+
+		It("lets a file's -http://host keep one host off plain HTTP under allow_plain", func() {
+			r, err := policy.Resolve(files("strict\nallow_plain = on\na.example\nb.example\n", "-http://b.example\n"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.Entries).To(Equal([]policy.Entry{plain("a.example", 80), entry("a.example", 443), entry("b.example", 443)}))
+		})
+
+		It("derives after the overlay, so a live allow or deny of a host covers its plain HTTP too", func() {
+			s := files("strict\nallow_plain = on\na.example\n", "")
+			s.Overlay = conf("session.conf", "-a.example\nb.example\n")
+			r, err := policy.Resolve(s)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.Entries).To(Equal([]policy.Entry{plain("b.example", 80), entry("b.example", 443)}))
+		})
+
+		It("lets a live -http://host win over allow_plain", func() {
+			s := files("strict\nallow_plain = on\na.example\n", "")
+			s.Overlay = conf("session.conf", "-http://a.example\n")
+			r, err := policy.Resolve(s)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.Entries).To(Equal([]policy.Entry{entry("a.example", 443)}))
+		})
+
+		It("lets a later live allow of the host undo an earlier live -http://host, and not the reverse", func() {
+			for _, tc := range []struct {
+				overlay string
+				want    []policy.Entry
+			}{
+				{"-http://a.example\na.example\n", []policy.Entry{plain("a.example", 80), entry("a.example", 443)}},
+				{"a.example\n-http://a.example\n", []policy.Entry{entry("a.example", 443)}},
+				{"-http://a.example\nhttp://a.example\n", []policy.Entry{plain("a.example", 80), entry("a.example", 443)}},
+				{"-http://a.example\nb.example\n", []policy.Entry{entry("a.example", 443), plain("b.example", 80), entry("b.example", 443)}},
+			} {
+				s := files("strict\nallow_plain = on\na.example\n", "")
+				s.Overlay = conf("session.conf", tc.overlay)
+				r, err := policy.Resolve(s)
+				Expect(err).NotTo(HaveOccurred(), tc.overlay)
+				Expect(r.Entries).To(Equal(tc.want), tc.overlay)
+			}
+		})
+
+		It("refuses allow_plain in the session overlay, naming the line", func() {
+			s := files("", "")
+			s.Overlay = conf("session.conf", "allow_plain = on\n")
+			_, err := policy.Resolve(s)
+			Expect(err).To(MatchError("session.conf:1: allow_plain is set only in egress.conf, not in a session"))
+		})
 	})
 })
 

@@ -111,6 +111,30 @@ var _ = Describe("ParseFile", func() {
 		Entry("absent", "a.example\n", policy.StrictUnset, 0),
 	)
 
+	DescribeTable("reads the allow_plain setting",
+		func(text string, want policy.PlainSetting, line int) {
+			c, err := policy.ParseFile("x", []byte(text))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(c.AllowPlain).To(Equal(want))
+			Expect(c.AllowPlainLine).To(Equal(line))
+		},
+		Entry("on", "allow_plain = on\n", policy.PlainOn, 1),
+		Entry("off, without spaces", "allow_plain=off\n", policy.PlainOff, 1),
+		Entry("beside strict", "strict\nallow_plain = on\n", policy.PlainOn, 2),
+		Entry("twice: the last one counts", "allow_plain = on\nallow_plain = off\n", policy.PlainOff, 2),
+		Entry("absent", "a.example\n", policy.PlainUnset, 0),
+	)
+
+	It("reads http:// entries in [allow] and in a group", func() {
+		c, err := policy.ParseFile("x", []byte("http://a.example\n[group m]\nhttp://m.example:8080\n[allow]\n-http://b.example\n"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(c.Items).To(Equal([]policy.Item{
+			{Entry: plain("a.example", 80), Line: 1},
+			{Entry: plain("b.example", 80), Remove: true, Line: 5},
+		}))
+		Expect(c.Groups[0].Members).To(Equal([]policy.Entry{plain("m.example", 8080)}))
+	})
+
 	It("reads a section header with a trailing comment", func() {
 		c, err := policy.ParseFile("x", []byte("[group m] # c\nm.example\n"))
 		Expect(err).NotTo(HaveOccurred())
@@ -147,6 +171,9 @@ var _ = Describe("ParseFile", func() {
 		Entry("an empty strict value", "strict =\n", `x:1: strict must be on or off, not ""`),
 		Entry("strict in an allow section", "[allow]\nstrict\n", "x:2: the strict setting must come before the first [section]"),
 		Entry("strict in a group", "[group a]\na.example\nstrict = off\n", "x:3: the strict setting must come before the first [section]"),
+		Entry("an allow_plain value that is not on or off", "allow_plain = yes\n", `x:1: allow_plain must be on or off, not "yes"`),
+		Entry("allow_plain as a bare word", "allow_plain\n", `x:1: invalid egress entry "allow_plain"`),
+		Entry("allow_plain in an allow section", "[allow]\nallow_plain = on\n", "x:2: the allow_plain setting must come before the first [section]"),
 		Entry("an invalid entry", "a.example\n10.0.0.1\n", `x:2: invalid egress entry "10.0.0.1": `),
 		Entry("an invalid group reference", "@Bad\n", `x:1: invalid group name "Bad"`),
 		Entry("an invalid group member", "[group a]\n10.0.0.1\n", `x:2: invalid egress entry "10.0.0.1": `),
@@ -160,6 +187,10 @@ var _ = Describe("ParseFile", func() {
 var _ = Describe("ParseList", func() {
 	It("reads bare entries", func() {
 		Expect(policy.ParseList("agent.conf", []byte("a.example\n*.b.example:8443\n"))).To(Equal([]policy.Entry{entry("a.example", 443), entry("*.b.example", 8443)}))
+	})
+
+	It("reads http:// entries, as applied.conf holds them", func() {
+		Expect(policy.ParseList("applied.conf", []byte("a.example\nhttp://a.example\n"))).To(Equal([]policy.Entry{entry("a.example", 443), plain("a.example", 80)}))
 	})
 
 	It("tolerates an [allow] header", func() {
@@ -178,6 +209,7 @@ var _ = Describe("ParseList", func() {
 		Entry("a removal", "a.example\n-b.example\n", "agent.conf:2: only host entries are allowed here, not -b.example"),
 		Entry("a group reference", "@npm\n", "agent.conf:1: only host entries are allowed here, not @npm"),
 		Entry("a setting", "strict\n", "agent.conf:1: a setting is not allowed here"),
+		Entry("allow_plain", "allow_plain = on\n", "agent.conf:1: a setting is not allowed here"),
 		Entry("a group", "[group a]\na.example\n", "agent.conf:1: a section is not allowed here"),
 		Entry("an [inject] row", "[inject]\nK a.k.example x-api-key\n", "agent.conf:2: a section is not allowed here"),
 		Entry("an invalid entry", "10.0.0.1\n", `agent.conf:1: invalid egress entry "10.0.0.1"`),

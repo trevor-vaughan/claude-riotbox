@@ -36,7 +36,7 @@ var _ = Describe("the shipped egress.conf template", func() {
 
 	It("is version 5", func() {
 		first, _, _ := strings.Cut(string(data), "\n")
-		Expect(first).To(Equal("# riotbox-config-version: 5"))
+		Expect(first).To(Equal("# riotbox-config-version: 6"))
 	})
 
 	It("parses and resolves every example once uncommented", func() {

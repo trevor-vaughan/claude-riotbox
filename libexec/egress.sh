@@ -15,8 +15,11 @@ usage: riotbox egress list
        riotbox egress reload [--session NAME]
 
 Change what a running RIOTBOX_EGRESS=1 session may reach, without
-restarting it. <entry> is host, host:port or *.domain (port 443 when
-omitted); @group is every host of a group (see `riotbox egress groups`).
+restarting it. <entry> is host[:PORT] or *.domain[:PORT] (port 443 when
+omitted), or http://host[:PORT] or http://*.domain[:PORT] for plain HTTP
+(port 80 when omitted). PORT is a number, low-high (at most 1024 ports) or
+* (every port). @group is every host of a group (see
+`riotbox egress groups`).
 
   list     each running session: when it started, its launch's PID,
            its project dirs, its access log, whether strict mode is on
@@ -40,7 +43,8 @@ omitted); @group is every host of a group (see `riotbox egress groups`).
                   also `riotbox egress list`); may be left out when only
                   one is running
   --save          also record the change in your egress.conf
-                  (${XDG_CONFIG_HOME:-~/.config}/riotbox/egress.conf)
+                  (${XDG_CONFIG_HOME:-~/.config}/riotbox/egress.conf), or
+                  in the session's own (RIOTBOX_EGRESS_CONF) if it has one
                   so later sessions get it: the entry or @group as a
                   line, or strict as `strict = on|off` (--clear removes it)
 

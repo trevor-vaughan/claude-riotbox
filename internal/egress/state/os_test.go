@@ -128,6 +128,15 @@ var _ = Describe("OS plugins", func() {
 			Expect(err).To(MatchError(ContainSubstring(dir.OSConf() + ": only [group] sections")))
 		})
 
+		It("refuses an os.conf with an allow_plain setting before a group", func() {
+			dir, err := state.Open(filepath.Join(GinkgoT().TempDir(), "riotbox-egress"), "s1")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dir.Create()).To(Succeed())
+			Expect(os.WriteFile(dir.OSConf(), []byte("allow_plain = on\n[group a]\na.example\n"), 0o600)).To(Succeed())
+			_, err = dir.OSGroups()
+			Expect(err).To(MatchError(ContainSubstring(dir.OSConf() + ": only [group] sections")))
+		})
+
 		It("feeds the session's policy", func() {
 			dir, err := state.Open(filepath.Join(GinkgoT().TempDir(), "riotbox-egress"), "s1")
 			Expect(err).NotTo(HaveOccurred())

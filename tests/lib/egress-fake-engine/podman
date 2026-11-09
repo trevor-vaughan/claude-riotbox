@@ -23,7 +23,7 @@
 #                                  its own environment to ${CAPTURE}.environ,
 #                                  sleeps ${FAKE_AGENT_SLEEP:-0}s, exits
 #                                  ${FAKE_AGENT_EXIT:-0}
-#   anything else (image exists, network create, stop, rm, the
+#   anything else (image exists, info, network create, stop, rm, the
 #   container-name probe `ps`, the sweep's `ps --filter name=…`)
 #                                  exit 0, no output: no agent runs
 # With FAKE_FAIL_ON set, a call whose argv starts with it fails (exit 125).

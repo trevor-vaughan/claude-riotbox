@@ -68,6 +68,7 @@ var _ = Describe("credential injection, against real podman and Envoy", Label("e
 		})
 		flags, err = m.Up(pod.UpRequest{
 			Dir: dir, SessionKey: "e2e", OwnerPID: os.Getpid(), Image: image,
+			Core:       filepath.Join("..", "..", "..", "libexec", "riotbox-core"),
 			AgentHosts: []byte(echoHost + "\nexample.com\n"),
 			SystemConf: systemConf, UserConf: userConf,
 			// Test-only: no provider row names this host; the spec hands

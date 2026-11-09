@@ -3,7 +3,8 @@ set -euo pipefail
 # Set up mounts and launch a container with the given command.
 # Required env: CONTAINER_CMD, IMAGE_NAME, ROOT_DIR
 # Optional env: RIOTBOX_PROJECTS, RIOTBOX_NETWORK, RIOTBOX_NESTED, RIOTBOX_SOCKET,
-#               RIOTBOX_HEADROOM, RIOTBOX_CONTEXT_MODE, RIOTBOX_EGRESS
+#               RIOTBOX_HEADROOM, RIOTBOX_CONTEXT_MODE, RIOTBOX_EGRESS,
+#               RIOTBOX_EGRESS_CONF
 # Arguments: command and args to run inside the container
 
 # Source config for persistent defaults (e.g. RIOTBOX_NETWORK=none). These
@@ -72,6 +73,28 @@ case "${RIOTBOX_EGRESS:-}" in
 	exit 1
 	;;
 esac
+# RIOTBOX_EGRESS_CONF=<file> gives the session its own egress.conf in place
+# of the user's (libexec/egress-lib.sh egress_start, egress_guard_conf)
+# and turns egress mode on. With RIOTBOX_EGRESS=0 it is a contradiction,
+# refused rather than run without the proxy; a file that cannot be read is
+# refused rather than read as empty, which would widen the allowlist.
+if [[ -n "${RIOTBOX_EGRESS_CONF:-}" ]]; then
+	if [[ "${RIOTBOX_EGRESS:-}" = "0" ]]; then
+		echo "ERROR: RIOTBOX_EGRESS_CONF needs egress mode, but RIOTBOX_EGRESS=0" >&2
+		exit 1
+	fi
+	if ! _egress_conf="$(realpath -e -- "${RIOTBOX_EGRESS_CONF}" 2>/dev/null)"; then
+		printf 'ERROR: RIOTBOX_EGRESS_CONF: %q does not exist\n' "${RIOTBOX_EGRESS_CONF}" >&2
+		exit 1
+	fi
+	if [[ ! -f "${_egress_conf}" || ! -r "${_egress_conf}" ]]; then
+		printf 'ERROR: RIOTBOX_EGRESS_CONF: %q is not a readable regular file\n' "${RIOTBOX_EGRESS_CONF}" >&2
+		exit 1
+	fi
+	RIOTBOX_EGRESS_CONF="${_egress_conf}"
+	RIOTBOX_EGRESS=1
+	unset _egress_conf
+fi
 if [[ "${RIOTBOX_EGRESS:-}" = "1" ]]; then
 	# shellcheck source=./egress-lib.sh disable=SC1091
 	source "$(dirname "${BASH_SOURCE[0]}")/egress-lib.sh"
@@ -333,6 +356,7 @@ CREDFILE_FLAGS="$(credfile_flags)"
 # PASSTHROUGH_FLAGS (set above) then passes instead of the key.
 # egress_mask_data hides the egress root (every session's proxy config) from
 # the agent wherever its mounts reach it, e.g. `riotbox ~`.
+# egress_guard_conf refuses a read-write mount that reaches RIOTBOX_EGRESS_CONF.
 EGRESS_FLAGS=()
 EGRESS_MASK_FLAGS=()
 if [[ "${RIOTBOX_EGRESS:-}" = "1" ]]; then
@@ -340,6 +364,8 @@ if [[ "${RIOTBOX_EGRESS:-}" = "1" ]]; then
 	egress_gate_mounts || exit 1
 	# shellcheck disable=SC2310 # it has already said why it failed
 	egress_mask_data || exit 1
+	# shellcheck disable=SC2310 # it has already said why it failed
+	egress_guard_conf || exit 1
 	# shellcheck disable=SC2310 # it has already said why it failed
 	egress_start || exit 1
 	# shellcheck disable=SC2310 # it has already said why it failed

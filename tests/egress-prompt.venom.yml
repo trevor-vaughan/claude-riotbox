@@ -27,6 +27,7 @@ testcases:
           [ "$(grep -cxF '<!-- riotbox:egress end -->' "${f}")" -eq 1 ] || { echo "BAD: end marker not there exactly once" >&2; exit 1; }
           grep -qF 'riotbox egress allow --session riotbox-proj-1a2b3c4d <host>' "${f}" || { echo "BAD: no allow command" >&2; exit 1; }
           grep -qF 'It is not a transient error. Do not retry it' "${f}" || { echo "BAD: no instruction" >&2; exit 1; }
+          grep -qF 'plain HTTP is refused unless the user allows `http://<host>`' "${f}" || { echo "BAD: no plain-HTTP instruction" >&2; exit 1; }
           echo OK
         assertions:
           - result.code ShouldEqual 0

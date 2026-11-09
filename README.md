@@ -1103,6 +1103,34 @@ RIOTBOX_EGRESS=1 riotbox run "<task>"
 `RIOTBOX_EGRESS` must be unset, empty, `0` or `1`; any other value (such as
 `true`) stops the launch with an error rather than running without the proxy.
 
+#### A session's own egress.conf
+
+A tool that launches riotbox for one job can give that session its own
+allowlist file:
+
+```bash
+RIOTBOX_EGRESS_CONF=/path/to/job/egress.conf riotbox run "<task>" /path/to/job
+```
+
+- The file takes the place of `~/.config/riotbox/egress.conf` for that
+  session, with the same syntax. `/etc/riotbox/egress.conf`, the agent's
+  own hosts and the package registries still apply; put `strict` in the
+  file to allow only what it lists.
+- It turns egress mode on. `RIOTBOX_EGRESS=0` with it stops the launch, as
+  does a file that is missing or unreadable.
+- The session keeps using it: `riotbox egress reload` re-reads it, and
+  `riotbox egress allow|deny|strict --save` writes to it, not to your
+  `egress.conf`. `riotbox egress list` shows it as `conf:`.
+- The agent must not be able to change it. The launch refuses when any
+  read-write mount (the project, `mounts.conf`, credential files,
+  `RIOTBOX_EXTRA_ARGS`) would show it; keep it outside the project, or
+  mount what holds it read-only (`:ro`) or as an overlay (`:O`) so the
+  agent can still read what it may reach. An overlay `upperdir` or `workdir`
+  that holds it is refused too. With `RIOTBOX_NESTED=1` any
+  mount that shows it is refused, as nested mode could remount it.
+  This protects the file from this session's agent only; do not put it
+  where another session's agent can write.
+
 The first egress launch pulls the Envoy image (pinned by digest;
 `RIOTBOX_EGRESS_IMAGE` overrides it). Inside the session, `HTTPS_PROXY` and
 `HTTP_PROXY` (and their lowercase forms) point at the proxy. If you forward
@@ -1189,12 +1217,16 @@ Unless strict mode is on, the allowlist is the union of:
 
   ```ini
   strict                    # optional, before any section: only what the files list
+  allow_plain = on          # optional: plain HTTP, port 80, to every allowed host
   [group mirrors]           # your own group: host, host:port or *.domain lines
   mirror.corp.example:8443
   [allow]                   # lines before any section are [allow] lines too
   example.com               # port 443
   example.com:8443          # that port only
+  example.com:8000-8100     # a range (at most 1024 ports)
+  example.com:*             # every port
   *.example.com             # any subdomain at any depth, not example.com itself
+  http://mirror.example.org # plain HTTP to one host, port 80 (http://host:port for another)
   @agent                    # the agent's own API hosts (needed under strict)
   @containers               # every host of a group
   @mirrors
@@ -1205,7 +1237,12 @@ Unless strict mode is on, the allowlist is the union of:
 A removal (`-entry`, `-@group`) in either file wins over every addition,
 including the hosts a group adds, and it must match the entry exactly:
 `-*.example.com` does not remove `a.example.com`. Everything not on the list
-is refused with `403`, and so is all plain HTTP. Only names are accepted,
+is refused with `403`. Plain HTTP is refused too, unless an `http://` entry or
+`allow_plain = on` allows it. Plain HTTP has no encryption: anyone on the
+path can read or change it, so prefer one `http://` entry over
+`allow_plain`. `allow_plain` is read from the files only; under it, a
+live `riotbox egress allow`/`deny` of a host covers its plain HTTP
+too. Only names are accepted,
 never IP addresses. A bad line stops the launch, and every
 `riotbox egress` command that reads the file, with
 `<file>:<line>: <reason>`, for example: an invalid entry or group name, an
@@ -1300,6 +1337,47 @@ starts, so restart any egress session started before this release, or
 `riotbox egress reload` fails for it while its own allowlist or your
 `egress.conf` names `@centos`.
 
+#### Reaching services on your host (ssh -L)
+
+An `ssh -L 18000:db.internal:5432 bastion` forward binds the host's
+`127.0.0.1:18000`. Allow that port, in `egress.conf` or live, and the agent
+reaches it:
+
+```ini
+host.containers.internal:18000          # one port
+host.containers.internal:18000-18099    # a range (at most 1024 ports)
+```
+
+```bash
+riotbox egress allow host.containers.internal:18000
+```
+
+The agent then uses `localhost:18000` or `host.containers.internal:18000`.
+Allowing a port exposes whatever listens on it: an `ssh -L` forward reaches
+its far end, so allow only the ports you mean. This needs rootless podman on
+pasta (the default since podman 5); otherwise the launch warns and those
+connections fail with `503`. Notes:
+
+- The relay starts only when the allowlist names `host.containers.internal`
+  itself at launch (a wildcard does not count). It costs a session about two
+  of the user's `fs.inotify.max_user_instances` (default 128), so sessions
+  without one do not start it. If you allow the host live in a session that
+  started without it, `riotbox egress allow` warns: restart the session.
+  Ports you then add or remove apply live.
+- `localhost` listeners come one per port, within about 2 s of a change. A range wider
+  than 1024 ports, such as `host.containers.internal:*`, gets none: use
+  `host.containers.internal:PORT` through the proxy.
+- Ports below 1024 get no `localhost` listener either: the agent runs
+  unprivileged and cannot bind them (the listener logs a warning to
+  `~/.riotbox/hostlink.log`). Use `host.containers.internal:PORT` for them.
+- Tunnels only: a plain `http://host.containers.internal` entry and an
+  `[inject]` row for it are refused. Plain HTTP still works over a tunnel:
+  allow `host.containers.internal:18080` and use `http://localhost:18080`
+  in the session.
+- `host.docker.internal` is not covered. It is podman's alias for the
+  host's network address, and is allowed or refused by name like any other
+  host. See [THREAT_MODEL.md](THREAT_MODEL.md).
+
 ### Changing a running session
 
 `egress.conf` is read when a session starts. To change a session without
@@ -1334,7 +1412,11 @@ file without sections), replacing any earlier line for it, so a saved allow undo
 saved deny in your `egress.conf` (a removal in the system `egress.conf`
 still wins). `strict --save` writes `strict = on` or `strict = off` near the
 top of your `egress.conf`, replacing one already there, and
-`strict --clear --save` removes it. `strict --enable`, and `strict --clear`
+`strict --clear --save` removes it. A session started with
+`RIOTBOX_EGRESS_CONF` saves to that file instead, and in it the `(user conf)`
+label of `riotbox egress list`'s `strict:` line refers to that file;
+`riotbox egress groups` is not per session and lists the groups of your
+`egress.conf`. `strict --enable`, and `strict --clear`
 when a conf file is strict, print the warning above when the agent's hosts
 are left out. `deny` of a host that a wildcard still matches says which
 wildcard. Connections already open are never cut by `allow`, `deny`,
@@ -1391,8 +1473,7 @@ interrupt the removal.
 A refused request's `403` carries an `x-riotbox-egress: denied <host[:port]>`
 header and a short text body. For HTTPS it names the session and the
 `riotbox egress allow` command to run, and asks the agent to stop and ask
-you; for plain HTTP it says to use HTTPS, since allowing the host will not
-help. The host in that text is whatever the agent asked for: check it
+you; for plain HTTP it says to use HTTPS, or how to allow `http://<host>`. The host in that text is whatever the agent asked for: check it
 before you allow it. Most clients drop the body for HTTPS (curl prints only
 `CONNECT tunnel failed, response 403`), so the agent's system prompt
 (Claude, opencode and Pi) also says that such a failure is the allowlist,

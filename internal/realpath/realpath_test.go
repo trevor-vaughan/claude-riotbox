@@ -14,10 +14,28 @@ import (
 	"github.com/trevor-vaughan/claude-riotbox/internal/realpath"
 )
 
+// gnuRealpath is the GNU realpath binary the differential specs compare
+// against, set by BeforeEach.
+var gnuRealpath string
+
+// findGNURealpath returns the first of gnurealpath and realpath on PATH that
+// is GNU coreutils. Ubuntu 26.04's realpath is uutils, which fails on a link
+// loop that GNU realpath -m resolves; coreutils-from-uutils depends on
+// gnu-coreutils, which installs GNU's as gnurealpath.
+func findGNURealpath() (string, error) {
+	for _, name := range []string{"gnurealpath", "realpath"} {
+		out, err := exec.Command(name, "--version").Output()
+		if err == nil && strings.Contains(string(out), "(GNU coreutils)") {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("neither gnurealpath nor realpath on PATH is GNU coreutils")
+}
+
 // gnu runs GNU realpath with flag on path, as the bash did, and returns its
 // output without the newline, or an error when it fails.
 func gnu(flag, path string) (string, error) {
-	out, err := exec.Command("realpath", flag, "--", path).Output()
+	out, err := exec.Command(gnuRealpath, flag, "--", path).Output()
 	return strings.TrimSuffix(string(out), "\n"), err
 }
 
@@ -69,7 +87,8 @@ var _ = Describe("Canonical and Lexical, against GNU realpath", func() {
 	var dir string
 
 	BeforeEach(func() {
-		_, err := exec.LookPath("realpath")
+		var err error
+		gnuRealpath, err = findGNURealpath()
 		Expect(err).NotTo(HaveOccurred(), "the differential specs need GNU realpath")
 		dir = tree()
 	})
@@ -106,11 +125,11 @@ var _ = Describe("Canonical and Lexical, against GNU realpath", func() {
 		Expect(os.Chdir(filepath.Join(dir, "L"))).To(Succeed())
 		Expect(os.Setenv("PWD", filepath.Join(dir, "L"))).To(Succeed())
 		for _, path := range []string{".", "..", "deep/../x", "../../L", "missing"} {
-			cmd := exec.Command("realpath", "-m", "--", path)
+			cmd := exec.Command(gnuRealpath, "-m", "--", path)
 			out, err := cmd.Output()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(realpath.Canonical(path)).To(Equal(strings.TrimSuffix(string(out), "\n")), path)
-			out, err = exec.Command("realpath", "-ms", "--", path).Output()
+			out, err = exec.Command(gnuRealpath, "-ms", "--", path).Output()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(realpath.Lexical(path)).To(Equal(strings.TrimSuffix(string(out), "\n")), path)
 		}

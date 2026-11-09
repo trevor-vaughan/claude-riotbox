@@ -1,0 +1,97 @@
+name: egress — localhost listeners for host-loopback ports
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# scripts/lib/egress-hostlink.sh is sourced by container/entrypoint.sh,
+# which calls egress_hostlink_apply before any agent starts. riotbox-core
+# egress-up mounts the share dir (riotbox-core and hostlink.ports) only on
+# rootless podman with pasta. A fake riotbox-core records its argv.
+
+testcases:
+  - name: outside an egress session it does nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          printf '#!/bin/sh\necho "$@" >"%s/ran"\n' "${T}" >"${T}/riotbox-core"; chmod +x "${T}/riotbox-core"
+          unset RIOTBOX_EGRESS_SESSION
+          source "{{.riotbox_dir}}/scripts/lib/egress-hostlink.sh"
+          egress_hostlink_apply "${T}" "${T}/log"
+          sleep 0.3
+          [ ! -e "${T}/ran" ] || { echo "BAD: it ran" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: without the share dir's riotbox-core it does nothing
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          export RIOTBOX_EGRESS_SESSION=s1 HTTPS_PROXY=http://s1-egress:3128
+          source "{{.riotbox_dir}}/scripts/lib/egress-hostlink.sh"
+          egress_hostlink_apply "${T}" "${T}/log"
+          [ ! -e "${T}/log" ] || { echo "BAD: it started something" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: it starts the listeners in the background on the share dir's ports file and the proxy, logging to the log
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          printf '#!/bin/sh\necho "$@"\nsleep 2\n' >"${T}/riotbox-core"; chmod +x "${T}/riotbox-core"
+          export RIOTBOX_EGRESS_SESSION=s1 HTTPS_PROXY=http://s1-egress:3128
+          source "{{.riotbox_dir}}/scripts/lib/egress-hostlink.sh"
+          start=$(date +%s)
+          egress_hostlink_apply "${T}" "${T}/log"
+          [ $(( $(date +%s) - start )) -lt 2 ] || { echo "BAD: it waited for the listeners" >&2; exit 1; }
+          for _ in $(seq 20); do [ -s "${T}/log" ] && break; sleep 0.1; done
+          want="hostlink-listen --ports ${T}/hostlink.ports --proxy http://s1-egress:3128"
+          [ "$(cat "${T}/log")" = "${want}" ] || { echo "BAD: log: $(cat "${T}/log")" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: it warns and starts nothing without a proxy
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          printf '#!/bin/sh\necho ran\n' >"${T}/riotbox-core"; chmod +x "${T}/riotbox-core"
+          export RIOTBOX_EGRESS_SESSION=s1; unset HTTPS_PROXY
+          source "{{.riotbox_dir}}/scripts/lib/egress-hostlink.sh"
+          err="$(egress_hostlink_apply "${T}" "${T}/log" 2>&1)"; rc=$?
+          [ "${rc}" = 1 ] || { echo "BAD: rc ${rc}" >&2; exit 1; }
+          [[ "${err}" == "WARNING: egress: HTTPS_PROXY is not set"* ]] || { echo "BAD: ${err}" >&2; exit 1; }
+          [ ! -e "${T}/log" ] || { echo "BAD: it started something" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: it warns and starts nothing when it cannot write the log
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          T="$(mktemp -d)"; trap 'rm -rf "${T}"' EXIT
+          printf '#!/bin/sh\necho ran\n' >"${T}/riotbox-core"; chmod +x "${T}/riotbox-core"
+          export RIOTBOX_EGRESS_SESSION=s1 HTTPS_PROXY=http://s1-egress:3128
+          source "{{.riotbox_dir}}/scripts/lib/egress-hostlink.sh"
+          err="$(egress_hostlink_apply "${T}" "${T}/missing-dir/log" 2>&1)"; rc=$?
+          [ "${rc}" = 1 ] || { echo "BAD: rc ${rc}" >&2; exit 1; }
+          [[ "${err}" == "WARNING: egress: cannot write ${T}/missing-dir/log"* ]] || { echo "BAD: ${err}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK

@@ -47,16 +47,50 @@ e2e_setup() {
 	E2E_TMP="$(mktemp -d)"
 	E2E_ROOT="${E2E_TMP}/riotbox-egress"
 	E2E_SESSIONS=()
+	E2E_PIDS=()
 	trap e2e_cleanup EXIT
 }
 
 e2e_cleanup() {
-	local name
+	local name pid
+	for pid in "${E2E_PIDS[@]}"; do kill "${pid}" 2>/dev/null || :; done
 	for name in "${E2E_SESSIONS[@]}"; do
 		"${E2E_CORE}" egress-down --engine podman --state-root "${E2E_ROOT}" -- "${name}" >/dev/null 2>&1 ||
-			echo "WARNING: teardown of ${name} failed; remove it with: podman rm -f ${name}-egress; podman network rm ${name}-int ${name}-ext" >&2
+			echo "WARNING: teardown of ${name} failed; remove it with: podman rm -f ${name}-egress ${name}-hostlink; podman network rm ${name}-int ${name}-ext" >&2
 	done
 	rm -rf "${E2E_TMP}"
+}
+
+# e2e_require_pasta
+#   Skip the case unless rootless podman runs on pasta, which the hostlink
+#   sidecar needs. A failed query counts as no, as in pod.go: podman before
+#   5.0 has no RootlessNetworkCmd field.
+e2e_require_pasta() {
+	local cmd
+	if ! cmd="$(podman info --format '{{.Host.RootlessNetworkCmd}}' 2>&1)"; then
+		cmd="query failed: ${cmd}"
+	fi
+	if [[ "${cmd}" != pasta ]]; then
+		echo "SKIP: needs rootless podman on pasta (rootless network command: ${cmd:-none})"
+		echo OK
+		exit 0
+	fi
+}
+
+# e2e_host_server <dir>
+#   Serve <dir> over plain HTTP on a free port of this host's 127.0.0.1, as
+#   an ssh -L forward would bind, until the case exits. Sets E2E_HOST_PORT.
+e2e_host_server() {
+	local dir="$1"
+	E2E_HOST_PORT="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+	python3 -m http.server "${E2E_HOST_PORT}" --bind 127.0.0.1 --directory "${dir}" >/dev/null 2>&1 &
+	E2E_PIDS+=("$!")
+	for _ in $(seq 50); do
+		curl -s -o /dev/null "http://127.0.0.1:${E2E_HOST_PORT}/" && return 0
+		sleep 0.1
+	done
+	echo "FAIL: the host test server did not start" >&2
+	return 1
 }
 
 # e2e_core <verb> [args...] — run a riotbox-core egress verb on this case's root.
@@ -126,6 +160,21 @@ e2e_eventually() {
 	done
 	echo "BAD: ${url}: CONNECT status ${got%% *}, want ${want}" >&2
 	return 1
+}
+
+# e2e_listen_probe <port>
+#   As the agent (E2E_FLAGS), start the localhost listeners from the share
+#   dir as the entrypoint does, and print what http://127.0.0.1:<port>/
+#   serves, or nothing.
+e2e_listen_probe() {
+	# shellcheck disable=SC2016 # expanded in the container
+	e2e_agent "${E2E_AGENT_IMAGE}" sh -c '
+		/run/riotbox-egress-share/riotbox-core hostlink-listen \
+			--ports /run/riotbox-egress-share/hostlink.ports --proxy "$HTTPS_PROXY" 2>/dev/null &
+		for _ in $(seq 50); do
+			out="$(curl -s --max-time 5 "http://127.0.0.1:$1/")" && { printf "%s" "$out"; exit 0; }
+			sleep 0.2
+		done' sh "$1" || :
 }
 
 # e2e_with_ca <image>

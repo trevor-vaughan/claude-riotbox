@@ -147,6 +147,9 @@ const secretsGrace = time.Hour
 // container still runs, or when the running containers cannot be listed:
 // a launch killed with SIGKILL leaves its agent running.
 //
+// It also removes each hostlink sidecar whose session has no networks
+// left and whose owner is gone by the same test (sweepHostlinks).
+//
 // It also deletes the secrets of every state dir no live session uses
 // that saw no use for secretsGrace, so a session whose engine objects are
 // gone does not keep its keys for maxAge: those under each of runtimes
@@ -165,13 +168,19 @@ func (m Manager) Sweep(root string, runtimes []string, maxAge time.Duration, now
 		return err
 	}
 	own := pidNamespace()
+	// owned: an owner that is in another PID namespace, unlabelled or
+	// malformed, or alive, keeps what it owns.
+	owned := func(pid int, pidns string) bool {
+		return own == "" || pidns != own || pid == 0 || alive(pid)
+	}
 	live := map[string]bool{}
 	for _, s := range found {
-		if own == "" || s.ownerPIDNS != own || s.ownerPID == 0 || alive(s.ownerPID) {
+		if owned(s.ownerPID, s.ownerPIDNS) {
 			live[s.name] = true
 		}
 	}
 	var errs []error
+	errs = append(errs, m.sweepHostlinks(found, owned))
 	checked := map[string]bool{}
 	for _, s := range found {
 		if live[s.name] || checked[s.name] {
@@ -238,6 +247,36 @@ func (m Manager) Sweep(root string, runtimes []string, maxAge time.Duration, now
 	}
 	for _, runtime := range runtimes {
 		errs = append(errs, sweepRuntime(root, runtime, live, now))
+	}
+	return errors.Join(errs...)
+}
+
+// sweepHostlinks removes each hostlink sidecar whose session has no
+// network left among found and whose owner is not owned: one whose rm
+// failed in a Down that removed the networks, which sessions alone can no
+// longer find.
+func (m Manager) sweepHostlinks(found []session, owned func(pid int, pidns string) bool) error {
+	out, err := m.Engine.Output("ps", "-a", "--filter", "label="+LabelRole+"="+roleHostlink, "--format", "json")
+	if err != nil {
+		return fmt.Errorf("listing egress hostlink containers: %w", err)
+	}
+	var containers []struct {
+		Names  []string
+		Labels map[string]string
+	}
+	if err := decodeList(out, &containers); err != nil {
+		return fmt.Errorf("reading the engine's container list: %w", err)
+	}
+	var errs []error
+	for _, c := range containers {
+		name, ok := m.sessionName(c.Labels, c.Names, "-hostlink")
+		if !ok || owned(ownerPID(c.Labels), c.Labels[LabelOwnerPIDNS]) ||
+			slices.ContainsFunc(found, func(s session) bool { return s.name == name }) {
+			continue
+		}
+		if _, err := m.Engine.Output("rm", "--force", "--ignore", namesFor(name).hostlink); err != nil {
+			errs = append(errs, fmt.Errorf("removing the orphaned egress hostlink container of %s: %w", name, err))
+		}
 	}
 	return errors.Join(errs...)
 }

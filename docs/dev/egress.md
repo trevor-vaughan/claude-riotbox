@@ -12,7 +12,7 @@ runs, and the invariants a change must keep.
 
 | Path | What it does |
 |---|---|
-| `libexec/egress-lib.sh` | The launch side: the gates (`egress_gate`, `egress_gate_mounts`, `egress_gate_env`), start (`egress_start`), the teardown trap, and the pinned image (`RIOTBOX_EGRESS_DEFAULT_IMAGE`) |
+| `libexec/egress-lib.sh` | The launch side: the gates (`egress_gate`, `egress_gate_mounts`, `egress_gate_env`, `egress_guard_conf`), start (`egress_start`), the teardown trap, and the pinned image (`RIOTBOX_EGRESS_DEFAULT_IMAGE`) |
 | `libexec/egress.sh` | `riotbox egress list\|groups\|allow\|deny\|strict\|reload`: parses the command line and calls the core; `--save` always passes the user `egress.conf` as `--save-to` |
 | `cmd/riotbox-core/egress.go` | The nine `egress-*` verbs (see [riotbox-core.md](riotbox-core.md#egress-verbs)) |
 | `internal/egress/policy` | Entry grammar (`policy.go`), `egress.conf` grammar (`conf.go`), built-in groups and OS group validation (`groups.go`), resolution (`resolve.go`) |
@@ -20,8 +20,10 @@ runs, and the invariants a change must keep.
 | `internal/egress/state` | One session's host directory: config files, overlay, logs, lock, the stale-dir rule, the injection's secrets, CA certificate and record, and the OS plugins (`os.go`: `LoadOS`, `os.conf`) |
 | `internal/egress/pod` | The engine side: create, wait for readiness, remove, list running sessions, sweep orphans |
 | `internal/egress/inject` | Credential injection: the provider table (`providers.go`), `egress-up`'s stdin framing (`input.go`), the inject/pass-through decision and notice (`plan.go`), the per-session CA and leaves (`certs.go`) |
+| `internal/egress/hostlink` | Host loopback: the ports file (`RenderPorts`, `ParsePorts`), the relay (`relay.go`) and the agent's listeners (`listener.go`) |
 | `os/` | OS plugins: each distro's mirrors as `@<ID>` and the repo rewrite ([os-contract.md](os-contract.md)) |
 | `scripts/lib/egress-os.sh` | Runs the distro's repo rewrite at session start (`egress_os_apply`), called from `container/entrypoint.sh` |
+| `scripts/lib/egress-hostlink.sh` | Starts the agent's `localhost` listeners (`egress_hostlink_apply`), called from `container/entrypoint.sh` |
 | `scripts/lib/egress-trust.sh` | The combined CA bundle for curl and Python (`egress_trust_apply`), called from `container/entrypoint.sh` |
 | `agents/<name>/manifest.sh` | `agent_<name>_egress_hosts`, the agent's API hosts ([agent-contract.md](agent-contract.md#agent_name_egress_hosts)) |
 | `scripts/lib/egress-prompt.sh` | The egress section of each agent's system prompt (`egress_prompt_apply`, `egress_prompt_apply_shared`), called from each manifest's `container_setup` |
@@ -36,6 +38,7 @@ One set of objects per launch, named after the agent container `<name>`:
 | `<name>-int` | `podman network create --internal --disable-dns` | The agent's only network. No default route and no DNS server; on podman 6.1 it also has no gateway address on the host. |
 | `<name>-ext` | a normal bridge network, DNS enabled | Envoy's way out, and its only resolver (its `resolv.conf` lists this network's aardvark-dns alone). The default `podman` network has DNS disabled and the internal network has none, so without this Envoy cannot resolve upstreams (`503`, flag `DF`). |
 | `<name>-egress` | Envoy, digest-pinned distroless image, on both networks | Listens on `:3128`. No admin interface: nothing uses it, and an allowlisted name that resolves to loopback could reach it. Runs as the invoking user (`--userns=keep-id`), `--read-only`, `--cap-drop=ALL`, `no-new-privileges`, `--ulimit core=0` (it holds injected keys in memory; no core file may write them out), `--log-driver=none`. Config dir mounted read-only, log dir read-write; with injected keys, the secrets dir on the runtime tmpfs read-only. |
+| `<name>-hostlink` | the host-loopback relay, only when the launch's allowlist names `host.containers.internal` ([Host loopback](#host-loopback)). Envoy's image, with `riotbox-core hostlink-relay` (the session's copy in `share/`) as its entrypoint, and Envoy's hardening. Network: `pasta:--map-host-loopback,169.254.1.2` only, so the agent cannot reach it. Mounts: `share/` read-only, `hostlink/` read-write | Reaches the host's `127.0.0.1`, which neither bridge nor internal network can. |
 | `<name>` | the agent, on `<name>-int` only | Gets `HTTP(S)_PROXY` and `http(s)_proxy` = `http://<name>-egress:3128`, `NO_PROXY=localhost,127.0.0.1` (headroom's loopback proxy), `RIOTBOX_EGRESS_SESSION=<name>` (for the [prompt section](#telling-the-agent-about-denials)), `--cap-drop=NET_ADMIN,NET_RAW`, `--dns none` (no `/etc/resolv.conf`), and `--add-host <name>-egress:<ip>`, Envoy's address on `<name>-int` as `podman container inspect` reports it once Envoy is ready, refused unless it parses as an IP literal. |
 
 There is no pod: podman before 6.0 refuses `--userns` on a pod's member
@@ -45,7 +48,7 @@ by its name and the rest by theirs.
 
 Every object `egress-up` creates carries `riotbox.egress=<name>`, `riotbox.session=<key>`,
 `riotbox.owner-pid=<launch.sh PID>` and `riotbox.owner-pidns=<PID namespace>`;
-Envoy also carries `riotbox.egress-role=gateway`. A session counts as running
+Envoy also carries `riotbox.egress-role=gateway`, the relay `hostlink`. A session counts as running
 while a container with that role label, named `<name>-egress`, runs.
 `riotbox egress list` takes each session's start (`StartedAt`) and owner PID
 from that container in `podman ps --format json`; the project dirs, which
@@ -165,6 +168,38 @@ minutes would cut a quiet model stream).
    (`codec_type: HTTP1`): cleartext HTTP/2 lets an authority holding
    `; $ ( ' &` into the denial text's `riotbox egress allow` line, which
    HTTP/1's codec refuses (a spec pins this too).
+   Plain HTTP is forwarded only for authorities in the `plain` or
+   `allowed-plain` virtual hosts. Each authority is in one virtual host:
+   Envoy refuses a domain in two, so an entry naming an intercepted
+   authority (plain or not) is skipped: the interception's 403 already
+   refuses plain HTTP there. Envoy also prefers an exact domain to a
+   wildcard, so an exact authority is given the CONNECT and plain ways of
+   every wildcard of either kind that covers it on its port; otherwise the
+   exact entry would shadow the wildcard's other way. A plain entry on port
+   80 also lists its bare host, because clients omit `:80`. Plain requests
+   never reach an interception, so no key is injected over cleartext.
+   Port ranges and `host:*` lean on the same domain precedence, so they
+   need these rules (`envoyconfig.routeConfig`):
+   - Envoy picks the most specific matching domain: exact, then the longest
+     `*.suffix`, then `host:*`, then `*`. Whatever it picks must allow what
+     every less specific entry allows.
+   - The intersection rule: where a more specific domain would take a
+     request that only a less specific entry allows, the intersection of
+     the two is added as a domain of its own, so the overlap never hides
+     an allow.
+   - `host:*` is a prefix domain, which would also match `host:x` and
+     `host:443@evil:443`, so its routes carry an `:authority` regex guard,
+     `(?i)^host:PORT$`, where PORT matches exactly 1 to 65535 with no
+     leading zeros (`envoyconfig.portRE`): Envoy matches the exact domain
+     `api.s:443` by string, so `api.s:0443` would miss it, and its
+     interception, and take the raw tunnel. `*.s:*` has no domain form; it
+     is a regex route in the catch-all `*` host, guarded the same way.
+   - A range expands to one `host:port` domain per port, which is why it is
+     capped, and the intersection rule multiplies them (a wildcard range
+     times each `host:*` under it), so `envoyconfig.Check` also caps the
+     total of single-port domains at `envoyconfig.MaxDomains` (65536).
+     `Dir.WriteConfig` and `Dir.Reload` call it and refuse an allowlist over
+     the cap; the `Render*` functions do not check it.
 6. **Logs are untrusted.** The proxy can write anything into `log/`. The host
    opens those files refusing links and non-regular files, and reads at most
    1 MiB per line or tail (`state.CountDenied`, `Dir.EnvoyLogTail`); the
@@ -186,6 +221,16 @@ minutes would cut a quiet model stream).
    `<name>-ext`'s resolver, Envoy or the internal network's gateway (when it
    has one), with a positive control on `<name>-ext`.
    **Do not give the internal network DNS or the agent a `--dns` server.**
+9. **A session's own egress.conf is not writable by the agent.** A session's
+   own egress.conf (`RIOTBOX_EGRESS_CONF`) must not be writable by the agent:
+   `egress_guard_conf` refuses the launch when a read-write agent mount
+   reaches it (the same mount walk as `egress_mask_data`,
+   `_egress_bind_mounts`), and refuses any reaching mount in nested mode, so
+   the agent cannot add allows that the user's next reload would apply. An
+   overlay `upperdir` or `workdir` that holds the file is refused too, in
+   every mode, as podman writes there. A
+   read-only bind of the file alone was rejected: the agent could rename a
+   directory above it and recreate the file at the host path.
 
 ## Per-session state
 
@@ -201,11 +246,14 @@ mode 0700 (`state.Dir.Create` refuses a link in place of the session,
 | `os.conf` | The OS plugins' groups, loaded from `egress-up --os-dir` at start and saved as `[group]` sections; later commands read them from here. Absent for a session an older release started: it has no OS groups |
 | `projects.json` | The launch's project dirs (`egress-up --project`), a JSON list so any path reads back whole; `riotbox egress list` shows them. Absent for a session an older release started, which `list` shows as `unknown` |
 | `session.conf` | The overlay `riotbox egress allow\|deny\|strict` writes, in the `egress.conf` grammar: an optional `strict = on\|off` line, then one entry or `@group` line per change, the latest last. No sections |
+| `own-conf` | The absolute path of the session's own egress.conf (`egress-up --own-conf`, from `RIOTBOX_EGRESS_CONF`), one line. `Dir.sources` reads that file, which must exist, in place of `--user-conf`, so every verb uses it. Absent for a session without one; `Up` removes it from a reused state dir |
 | `applied.conf` | The allowlist last written to `rds.json`; `riotbox egress list` shows this |
 | `applied-strict` | The strict setting last applied, as `list` shows it (`on (user conf)`); absent for a session an older release started, which `list` shows as `unknown`, as it does any value it does not recognise |
 | `secrets/` | Only in sessions an earlier build started: the secrets dir now lives on the runtime tmpfs (below). `RemoveSecrets`, and so `egress-down` and the sweep, still delete it |
 | `ca.crt` | The session CA's certificate (0600; the agent runs as the owning uid), mounted read-only into the agent at `/run/riotbox-egress/ca.crt`. Its key is never written |
 | `injected` | One `VARIABLE host header` line per injected key, never a value. `WriteConfig` and `Reload` render the interception from it; `list` prints it |
+| `share/` | The one dir the agent sees besides `ca.crt`, mounted read-only at `/run/riotbox-egress-share` into the agent (and the sidecar) only when the relay starts: `riotbox-core` (a copy of the host's, mode 0700, only when the relay starts) and `hostlink.ports`. Not under `/run/riotbox-egress`, where `ca.crt` is a file mount |
+| `hostlink/` | The relay's `relay.sock`: read-write in the relay, read-only in Envoy |
 | `.lock` | Serialises the commands that change the session |
 
 **The secrets dir is not here.** The proxy's per credential host
@@ -247,15 +295,21 @@ bind mount.
 `policy.ParseFile`. Line-oriented; `#` starts a comment, blank lines are
 skipped, a trailing CR is ignored. A preamble, then sections:
 
-- **Preamble**: the setting `strict`, `strict = on` or `strict = off`
-  (blanks around `=` optional, values lowercase), and `[allow]` lines. A
+- **Preamble**: the setting `strict`, `strict = on` or `strict = off`, the
+  setting `allow_plain = on` or `allow_plain = off` (no bare form), each
+  with blanks around `=` optional and values lowercase, and `[allow]` lines. A
   file with no sections, as every `egress.conf` was before sections
   existed, is all preamble, so it parses unchanged.
-- **`[allow]`**: `host[:port]`, `*.domain[:port]`, `-entry`, `@group`,
-  `-@group`, one per line (`policy.ParseItem`). Several `[allow]` sections
+- **`[allow]`**: `host[:port]`, `*.domain[:port]`, `http://host[:port]`,
+  `http://*.domain[:port]`, `-entry`, `@group`, `-@group`, one per line (`policy.ParseItem`). Several `[allow]` sections
   concatenate.
+  A port is a number from 1 to 65535, a range `low-high`, or `*` (every
+  port). A range covers at most 1024 ports (`policy.MaxPortRange`), `low-low`
+  means `low`, and `1-65535` is refused in favour of `*`.
 - **`[group NAME]`**: `NAME` matches `^[a-z0-9][a-z0-9-]{0,62}$`; members are
-  `host[:port]` or `*.domain[:port]`, at least one, no `-` or `@`.
+  `host[:port]`, `*.domain[:port]`, `http://host[:port]` or
+  `http://*.domain[:port]`, where a port is a number, a range `low-high` or
+  `*` as in `[allow]`; at least one, no `-` or `@`.
 - **`[inject]`** (`policy.InjectRow`): `VARIABLE host header` then
   `prefix=WORD` / `base-url=VARIABLE`, each at most once, any order. Inside
   `[inject]` every line is a row: `line` dispatches to `injectRow` before
@@ -267,13 +321,19 @@ skipped, a trailing CR is ignored. A preamble, then sections:
   `transfer-encoding`, `upgrade` or `content-length`; `prefix=` is
   non-empty visible ASCII and gets one trailing space.
 
+`http://` is stripped after the ASCII check and lowercasing, and before the
+port and host checks. A path, query or userinfo after it is an error, as is
+any other scheme.
+
 Every error is `file:line: reason`: an unknown section; an unknown setting
-or a `strict` value other than `on`/`off`; a setting after the first
+or a `strict` value other than `on`/`off`; an `allow_plain` value other
+than `on`/`off`; a setting after the first
 section; an empty group; a group defined twice in one file; `-` or `@` in a
 group; `[group agent]`; an invalid entry or group name. An `@name` that no
 group defines is caught by resolution, which knows every file's groups.
 `agent.conf` and `applied.conf` are plain host lists (`policy.ParseList`:
-the same grammar, entries only: `ParseList` also refuses `[inject]`).
+the same grammar, entries only: `ParseList` also refuses `[inject]` and both
+settings).
 
 ## Resolution
 
@@ -291,7 +351,9 @@ the same grammar, entries only: `ParseList` also refuses `[inject]`).
    `@registries`. Only built-ins nest, one level, and none nests `@os`; user
    groups list hosts.
 2. **Strict**: `session.conf`'s setting, else the user file's, else the
-   system file's, else off (`StrictFrom` records which).
+   system file's, else off (`StrictFrom` records which). `allow_plain` layers
+   the same way, but only the user and system files may set it; the overlay
+   is refused.
 3. **Conf merge**: every addition of the two files, plus `@registries` and
    `@agent` unless strict is on, minus every removal in either file (a
    removal wins whichever file it is in; `-@g` removes each member). A
@@ -304,6 +366,12 @@ the same grammar, entries only: `ParseList` also refuses `[inject]`).
    File order matters because one overlay can both add and remove a host
    (`allow @pypi`, then `deny pypi.org`); see
    [decisions/egress-proxy.md](decisions/egress-proxy.md#amendments-while-the-branch-was-open).
+5. **Plain HTTP**: with `allow_plain` on (the user file's setting, else the
+   system file's, else off; never the overlay's), `http://host` on port 80
+   for every tunnel entry left, unless a file or the overlay removes that
+   plain entry (a later overlay allow of the host, or of that plain entry,
+   lifts an earlier removal). It runs last, so a live allow or deny of a host
+   also covers its plain HTTP.
 
 `[inject]` rows (`fileRows`): the user file's row replaces the system
 file's with the same variable. Each surviving row adds `host:443` to the
@@ -352,7 +420,9 @@ keeps what it last applied. With `--save` it refuses and changes nothing.
 (`state.editConf`), line by line, keeping every other line and comment.
 `--save-to` must equal, after `filepath.Clean`, `--system-conf` or
 `--user-conf`, the only files checked before anything changes, or the verb
-exits 2; the bash CLI always passes the user file.
+exits 2; the bash CLI always passes the user file. When it names
+`--user-conf` and the session has an `own-conf`, the save goes to that file
+(`saveTarget`).
 
 - `state.SaveItem` drops every line in the preamble or an `[allow]` section
   that names the same entry or group, with either sign, and writes one new
@@ -364,6 +434,68 @@ exits 2; the bash CLI always passes the user file.
   one `strict = on|off` line where the first was (keeping its comment), or
   after the file's leading comment and blank lines; `clear` only drops
   them. A missing file is created only to set a value.
+
+## Host loopback
+
+`host.containers.internal:PORT` entries reach the host's `127.0.0.1:PORT`,
+where an `ssh -L` forward binds. Policy treats the name like any other host
+(`policy.HostLink`); the rendering and the sidecar make it mean loopback.
+
+**The CONNECT path.** Agent → Envoy → the `hostlink` vhost → a route with no
+`connect_config`, so Envoy passes the CONNECT on unterminated → the static
+`hostlink` `pipe` cluster (`/run/riotbox-hostlink/relay.sock`, HTTP/1) →
+`riotbox-core hostlink-relay` → `169.254.1.2:PORT` (pasta's mapping of the
+host's loopback) → the host's `127.0.0.1:PORT`. The relay answers `200`,
+`403` (a port not in the ports file), `400` (malformed) or `502` (the dial
+failed); it reads at most 8 KiB of head and dials with a 10 s timeout.
+
+**The name never reaches the DFP cluster.** If it did, it would mean the
+host's network address. `hostlinkVHosts` (`envoyconfig.go`) puts one exact
+`host.containers.internal:PORT` domain per allowed port in the `hostlink`
+vhost, and the prefix domain `host.containers.internal:*` and the bare name
+in `hostlink-rest`, which routes to the relay only when `:*` is allowed
+and answers 403 otherwise. Wildcard entries never cover the name (the
+domain folding skips it). Envoy ranks a `*.suffix:p` domain above a prefix
+domain, so for each rendered wildcard domain that matches the name, the
+exact `host.containers.internal:p` is added too, to `hostlink` when `p` is
+allowed and to a 403-only vhost otherwise; a spec pins this. Plain HTTP and
+`[inject]` rows for the name are refused in `policy`.
+
+**The ports file.** `share/hostlink.ports`: one port or `low-high` per line,
+from the entries for the name (`*` is `1-65535`). `WriteConfig` and `Reload`
+write it atomically, and `Reload` writes it before `rds.json`, so an allow
+opens the relay first and a deny closes it first; neither check is ever
+looser than the policy. The relay re-reads it on each connection (a few
+lines; an mtime check can miss two writes in one tick). A missing file means
+no ports; a malformed one, including one without a final newline, refuses
+every port.
+
+**Agent listeners.** `container/entrypoint.sh` calls `egress_hostlink_apply`
+(`scripts/lib/egress-hostlink.sh`), which runs `riotbox-core hostlink-listen`
+in the background when the session has the share dir, logging to
+`~/.riotbox/hostlink.log`. It listens on `127.0.0.1:PORT` for each listed
+port and tunnels each connection through the proxy with a CONNECT. It polls
+the ports file every 2 s, opening and closing listeners; open connections
+stay open. A port already bound in the agent is logged and retried at the
+next change. A range wider than 1024 ports (`host.containers.internal:*`)
+gets no listeners, only a log line: `host.containers.internal:PORT` through
+the proxy still works.
+
+**Lifecycle.** `Up` starts the relay only when the resolved allowlist has an
+entry for the name itself (a wildcard does not count) and
+`podman info` reports the rootless network command as pasta. The reason is
+cost: the sidecar's conmon and pasta use about 2 of the user's shared
+`fs.inotify.max_user_instances` (default 128) per session, and Envoy aborts
+when they run out. The order is copy `riotbox-core` into `share/` → networks
+→ sidecar → wait for the relay to answer on `relay.sock` (a stale one is
+removed first) → Envoy, so the relay serves the socket when Envoy starts. Without pasta, `Up` warns that the
+CONNECTs will fail with 503 and starts the session without the sidecar or
+the agent's share mount. A live allow of the name in a session without a
+relay answering on its socket (`HasRelay` dials it, so a crashed relay's
+socket does not count) prints `warnNoRelay`'s warning: restart the session.
+`Down` removes the sidecar with the agent and Envoy, then the socket and
+the `riotbox-core` copy; the sweep tears sessions down through `Down` and
+also removes orphaned `<name>-hostlink` containers (`sweepHostlinks`).
 
 ## Telling the agent about denials
 
@@ -380,8 +512,8 @@ with 403. Two mappers, first match wins, each adding
   session's allowlist, it is not a network fault, and the agent should stop
   and ask the user; "If the user agrees after checking the host, they run on
   the host: `riotbox egress allow --session <name> <authority>`";
-- any other 403 (plain HTTP, never proxied): use HTTPS; allowing the host
-  will not help.
+- any other 403 (plain HTTP not allowed): use HTTPS, or ask the user to
+  allow `http://<authority>`.
 
 The status is unchanged and the mappers have no `runtime_key`, so nothing
 outside the config can change them. `%REQ(:AUTHORITY)%` is chosen by the
