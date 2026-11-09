@@ -1,0 +1,94 @@
+cmd/riotbox-core/egress.go
+  s_bc8713f657ae59::t_7f5e8e826dd06a 100-103,109
+  s_bc8713f657ae59::t_7313572f600922 333,455-471,525,586
+cmd/riotbox-core/egress_test.go
+  s_bc8713f657ae59::t_3680d3411dc195 1211
+  s_bc8713f657ae59::t_5b0420a13e53bf 4,763-788,800-815
+  s_bc8713f657ae59::t_e2a401dadcbf0d 789-799
+internal/egress/pod/pod.go
+  s_bc8713f657ae59::t_77bca76950079f 3-5,32,34,46,58-68,151,158,212,215,272-275,299-300,304-307,319-328,332-342,344-348,355,357-384,408-410,456-458,461,465,468,473,476,482-493,530,548-550
+  s_bc8713f657ae59::t_992334ef00c378 170,213-214,216-221,232,290-298,301-303,356
+  s_bc8713f657ae59::t_755b484fd1ba0b 551-554
+  s_bc8713f657ae59::t_629ad7b0233bd7 531-539
+internal/egress/pod/pod_test.go
+  s_bc8713f657ae59::t_3c2286a4160d61 7,10,67-68,70,397-415,469-514,515-517,518-533,705-711,736
+  s_bc8713f657ae59::t_70f8f55c96e343 107-108,110-115,416-468
+  s_bc8713f657ae59::t_451b8edca7f771 712-719
+tests/egress-launch.venom.yml
+  s_bc8713f657ae59::t_9ac3206445a508 38
+tests/lib/egress-fake-engine/podman
+  s_bc8713f657ae59::t_7d2d9050f58d95 26
+tests/egress-e2e.venom.yml
+  s_bc8713f657ae59::t_dfae0e0fe95fbb 174,179,203,485-526,529-573
+  s_bc8713f657ae59::t_17d8cff2e04b77 527-528
+tests/lib/egress-e2e-helpers.sh
+  s_bc8713f657ae59::t_24213978b72544 50,55-56,59,64-92,162-176
+internal/egress/state/state.go
+  s_bc8713f657ae59::t_8a79099985af8e 117,120,123-124,129-130
+  s_bc8713f657ae59::t_cb348af756af6a 629-634,638
+  s_bc8713f657ae59::t_e48352b0633482 35,114-116,118-119,121-122,125-128
+container/entrypoint.sh
+  s_bc8713f657ae59::t_5a852baaf4233d 108
+  s_bc8713f657ae59::t_158e0f4491e99b 109-110
+internal/egress/pod/inject_e2e_test.go
+  s_bc8713f657ae59::t_3caeee9ead44d7 71
+internal/egress/state/state_test.go
+  s_bc8713f657ae59::t_4adc6caeab4975 6,164-173,184-196
+  s_bc8713f657ae59::t_59427ac9e876e3 415-434
+  s_bc8713f657ae59::t_862c579bba5e83 435
+  s_bc8713f657ae59::t_4549fa5615adbd 174-183
+scripts/lib/egress-hostlink.sh
+  s_bc8713f657ae59::t_edbd5d18ed22e9 9-10
+internal/egress/pod/sessions.go
+  s_bc8713f657ae59::t_0cb4f04c6412a0 150-152,171-175,178,183,254-283
+internal/egress/pod/sessions_test.go
+  s_bc8713f657ae59::t_33345ba522c17b 485-561
+internal/egress/policy/inject.go
+  s_bc8713f657ae59::t_721b81223512ec 72-74
+internal/egress/policy/inject_test.go
+  s_bc8713f657ae59::t_28aed5d694c775 59-60
+internal/egress/envoyconfig/hostlink_test.go
+  s_bc8713f657ae59::t_a41dc9b38f6592 6,110-157
+  s_bc8713f657ae59::t_7ab953b21c6c2a 62-66
+README.md
+  s_bc8713f657ae59::t_d0053b627cd68e 1312-1338,1340-1341,1345-1350
+  s_bc8713f657ae59::t_a7ce1b2a4bc34f 1339
+  s_bc8713f657ae59::t_ecb64e9b4cdded 1342-1344
+THREAT_MODEL.md
+  s_bc8713f657ae59::t_19798867ed5356 1379-1393
+docs/dev/decisions/egress-proxy.md
+  s_bc8713f657ae59::t_2330aae58c3326 291-308,313-339
+  s_bc8713f657ae59::t_4ebf4a1e143363 309-312
+docs/dev/egress.md
+  s_bc8713f657ae59::t_3f515403ae6c3d 23,26,41,51,245,425-476,479-480,483-486
+  s_bc8713f657ae59::t_6575b9da8efc84 477-478,481-482
+  s_bc8713f657ae59::t_82793a5015d88e 244
+scripts/configs/egress.conf
+  s_bc8713f657ae59::t_ef2fd9523d695a 102-107
+internal/egress/envoyconfig/envoyconfig.go
+  s_bc8713f657ae59::t_040fc76c8275c0 633-634
+internal/egress/hostlink/hostlink.go
+  s_bc8713f657ae59::t_60b4fe99723916 60,64
+internal/egress/hostlink/ports_test.go
+  s_bc8713f657ae59::t_8101b312177704 29-33
+internal/egress/policy/resolve.go
+  s_bc8713f657ae59::t_507de390d67355 143-147
+internal/egress/policy/resolve_test.go
+  s_bc8713f657ae59::t_0bca07964f2759 317-325
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "605bfd16a65ea9b6e322ba6c99dfc100f712fd02",
+  "prompts": {},
+  "sessions": {
+    "s_bc8713f657ae59": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0c82df2f-9078-41e2-bcb7-3aedfae35503",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
