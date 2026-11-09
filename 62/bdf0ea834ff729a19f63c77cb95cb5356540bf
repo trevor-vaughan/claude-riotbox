@@ -1,0 +1,30 @@
+internal/egress/pod/pod.go
+  s_960e57a310f0ac::t_4096b2d9b5a3cd 176-179,257
+  s_960e57a310f0ac::t_da9fa49fcddcf1 258-259
+cmd/riotbox-core/egress.go
+  s_960e57a310f0ac::t_8c7a9ac3f49f47 77-81,123
+  s_960e57a310f0ac::t_4096b2d9b5a3cd 53-57
+cmd/riotbox-core/main.go
+  s_960e57a310f0ac::t_8c7a9ac3f49f47 70,203
+  s_960e57a310f0ac::t_61f7e25ea888bb 79-81
+cmd/riotbox-core/egress_test.go
+  s_960e57a310f0ac::t_142007d1e4d28e 101-128
+internal/egress/pod/pod_test.go
+  s_960e57a310f0ac::t_142007d1e4d28e 19,78-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "66ab80a5ac0ddd7fcba561fc46eb03f9015a74b2",
+  "prompts": {},
+  "sessions": {
+    "s_960e57a310f0ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7edc1c10-4aaf-41e4-b66b-4fc55fe6f1bf",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
