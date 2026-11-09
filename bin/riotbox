@@ -84,7 +84,8 @@ Session management:
                                Retry moving old session data that failed to move
   egress <list|groups|allow|deny|strict|reload>
                                Show or change a running session's egress
-                               allowlist (RIOTBOX_EGRESS=1; see egress --help)
+                               allowlist (RIOTBOX_EGRESS=1, or
+                               RIOTBOX_EGRESS_CONF=<file>; see egress --help)
 
 Overlay commands (podman-only):
   overlays                     List sessions with pending overlay data

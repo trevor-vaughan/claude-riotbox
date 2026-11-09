@@ -1103,6 +1103,34 @@ RIOTBOX_EGRESS=1 riotbox run "<task>"
 `RIOTBOX_EGRESS` must be unset, empty, `0` or `1`; any other value (such as
 `true`) stops the launch with an error rather than running without the proxy.
 
+#### A session's own egress.conf
+
+A tool that launches riotbox for one job can give that session its own
+allowlist file:
+
+```bash
+RIOTBOX_EGRESS_CONF=/path/to/job/egress.conf riotbox run "<task>" /path/to/job
+```
+
+- The file takes the place of `~/.config/riotbox/egress.conf` for that
+  session, with the same syntax. `/etc/riotbox/egress.conf`, the agent's
+  own hosts and the package registries still apply; put `strict` in the
+  file to allow only what it lists.
+- It turns egress mode on. `RIOTBOX_EGRESS=0` with it stops the launch, as
+  does a file that is missing or unreadable.
+- The session keeps using it: `riotbox egress reload` re-reads it, and
+  `riotbox egress allow|deny|strict --save` writes to it, not to your
+  `egress.conf`. `riotbox egress list` shows it as `conf:`.
+- The agent must not be able to change it. The launch refuses when any
+  read-write mount (the project, `mounts.conf`, credential files,
+  `RIOTBOX_EXTRA_ARGS`) would show it; keep it outside the project, or
+  mount what holds it read-only (`:ro`) or as an overlay (`:O`) so the
+  agent can still read what it may reach. An overlay `upperdir` or `workdir`
+  that holds it is refused too. With `RIOTBOX_NESTED=1` any
+  mount that shows it is refused, as nested mode could remount it.
+  This protects the file from this session's agent only; do not put it
+  where another session's agent can write.
+
 The first egress launch pulls the Envoy image (pinned by digest;
 `RIOTBOX_EGRESS_IMAGE` overrides it). Inside the session, `HTTPS_PROXY` and
 `HTTP_PROXY` (and their lowercase forms) point at the proxy. If you forward
@@ -1384,7 +1412,11 @@ file without sections), replacing any earlier line for it, so a saved allow undo
 saved deny in your `egress.conf` (a removal in the system `egress.conf`
 still wins). `strict --save` writes `strict = on` or `strict = off` near the
 top of your `egress.conf`, replacing one already there, and
-`strict --clear --save` removes it. `strict --enable`, and `strict --clear`
+`strict --clear --save` removes it. A session started with
+`RIOTBOX_EGRESS_CONF` saves to that file instead, and in it the `(user conf)`
+label of `riotbox egress list`'s `strict:` line refers to that file;
+`riotbox egress groups` is not per session and lists the groups of your
+`egress.conf`. `strict --enable`, and `strict --clear`
 when a conf file is strict, print the warning above when the agent's hosts
 are left out. `deny` of a host that a wildcard still matches says which
 wildcard. Connections already open are never cut by `allow`, `deny`,

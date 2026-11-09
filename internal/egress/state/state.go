@@ -140,6 +140,41 @@ func (d Dir) AgentConf() string { return filepath.Join(d.Path(), "agent.conf") }
 // SessionConf holds the session's allow/deny overlay.
 func (d Dir) SessionConf() string { return filepath.Join(d.Path(), "session.conf") }
 
+// ownConfFile records the egress.conf the session was started with
+// (RIOTBOX_EGRESS_CONF), which replaces the user conf in every Policy.
+func (d Dir) ownConfFile() string { return filepath.Join(d.Path(), "own-conf") }
+
+// WriteOwnConf records path as the session's own egress.conf; "" removes
+// the record, as a reused state dir may hold an earlier launch's. path must
+// be absolute and on one line.
+func (d Dir) WriteOwnConf(path string) error {
+	if path == "" {
+		if err := os.Remove(d.ownConfFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	if !filepath.IsAbs(path) || strings.ContainsAny(path, "\n\x00") {
+		return fmt.Errorf("the session's egress conf %s must be an absolute path on one line", display.Quote(path))
+	}
+	return WriteAtomic(d.ownConfFile(), []byte(path+"\n"))
+}
+
+// OwnConf is the egress.conf the session was started with, or "" when it
+// uses the user's. The record sits in a dir another process can write, so
+// anything but an absolute path is refused.
+func (d Dir) OwnConf() (string, error) {
+	data, err := readOptional(d.ownConfFile())
+	if err != nil || data == nil {
+		return "", err
+	}
+	path := strings.TrimSuffix(string(data), "\n")
+	if !filepath.IsAbs(path) || strings.ContainsAny(path, "\n\x00") {
+		return "", fmt.Errorf("%s does not hold an absolute path", display.Quote(d.ownConfFile()))
+	}
+	return path, nil
+}
+
 func (d Dir) appliedConf() string { return filepath.Join(d.Path(), "applied.conf") }
 
 func (d Dir) projectsFile() string { return filepath.Join(d.Path(), "projects.json") }
@@ -444,8 +479,9 @@ func (d Dir) Lock(w io.Writer) (release func() error, err error) {
 }
 
 // Policy resolves the session's allowlist as the files now say
-// (policy.Resolve): agent.conf as @agent, os.conf as the OS groups, the system and user conf files
-// (each optional) and, on top, session.conf. A session.conf line naming a
+// (policy.Resolve): agent.conf as @agent, os.conf as the OS groups, the system conf and the user conf
+// (each optional) or, when one is recorded (OwnConf), the session's own conf,
+// which must exist, and, on top, session.conf. A session.conf line naming a
 // group no file defines any more fails it, as it fails every reload, with
 // the command that drops the line (Dangles).
 func (d Dir) Policy(systemConf, userConf string) (policy.Resolved, error) {
@@ -472,14 +508,23 @@ func (d Dir) sources(systemConf, userConf string) (policy.Sources, error) {
 	if err != nil {
 		return policy.Sources{}, err
 	}
+	own, err := d.OwnConf()
+	if err != nil {
+		return policy.Sources{}, err
+	}
+	readUser := ReadConf
+	if own != "" {
+		userConf, readUser = own, ReadOwnConf
+	}
 	s := policy.Sources{Agent: agent, OS: osGroups}
-	for _, f := range []struct {
-		path string
-		conf *policy.Conf
-	}{{systemConf, &s.System}, {userConf, &s.User}, {d.SessionConf(), &s.Overlay}} {
-		if *f.conf, err = ReadConf(f.path); err != nil {
-			return policy.Sources{}, err
-		}
+	if s.System, err = ReadConf(systemConf); err != nil {
+		return policy.Sources{}, err
+	}
+	if s.User, err = readUser(userConf); err != nil {
+		return policy.Sources{}, err
+	}
+	if s.Overlay, err = ReadConf(d.SessionConf()); err != nil {
+		return policy.Sources{}, err
 	}
 	return s, nil
 }
@@ -527,6 +572,17 @@ func ReadConf(path string) (policy.Conf, error) {
 	data, err := readOptional(path)
 	if err != nil {
 		return policy.Conf{}, err
+	}
+	return policy.ParseFile(path, data)
+}
+
+// ReadOwnConf parses a session's own egress.conf (RIOTBOX_EGRESS_CONF).
+// Unlike the user conf it must exist: reading a missing one as empty would
+// quietly drop its strict setting and its denials.
+func ReadOwnConf(path string) (policy.Conf, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return policy.Conf{}, fmt.Errorf("the session's egress conf: %w", err)
 	}
 	return policy.ParseFile(path, data)
 }

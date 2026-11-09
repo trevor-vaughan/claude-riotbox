@@ -986,3 +986,80 @@ var _ = Describe("Stale", func() {
 		Expect(state.Stale(filepath.Join(root, "nope"), nil, week, now)).To(BeEmpty())
 	})
 })
+
+var _ = Describe("a session's own egress.conf", func() {
+	var d state.Dir
+	var sys, user, own string
+
+	BeforeEach(func() {
+		tmp := GinkgoT().TempDir()
+		d = mustOpen(filepath.Join(tmp, "riotbox-egress"), "s1")
+		Expect(d.Create()).To(Succeed())
+		sys = filepath.Join(tmp, "none-sys")
+		user = filepath.Join(tmp, "user.conf")
+		own = filepath.Join(tmp, "own.conf")
+		Expect(os.WriteFile(user, []byte("user.example\n"), 0o600)).To(Succeed())
+		Expect(os.WriteFile(own, []byte("own.example\n"), 0o600)).To(Succeed())
+	})
+
+	It("is none until one is recorded", func() {
+		Expect(d.OwnConf()).To(BeEmpty())
+	})
+
+	It("reads back the recorded path, and an empty path removes the record", func() {
+		Expect(d.WriteOwnConf(own)).To(Succeed())
+		Expect(d.OwnConf()).To(Equal(own))
+		Expect(d.WriteOwnConf("")).To(Succeed())
+		Expect(d.OwnConf()).To(BeEmpty())
+		Expect(d.WriteOwnConf("")).To(Succeed(), "removing no record is not an error")
+	})
+
+	DescribeTable("refuses to record a path that is not absolute and on one line",
+		func(path string) {
+			Expect(d.WriteOwnConf(path)).To(MatchError(ContainSubstring("must be an absolute path on one line")))
+			Expect(d.OwnConf()).To(BeEmpty())
+		},
+		Entry("relative", "own.conf"),
+		Entry("with a newline", "/tmp/a\nb"),
+		Entry("with a NUL", "/tmp/a\x00b"),
+	)
+
+	It("refuses a record another process left without an absolute path", func() {
+		Expect(os.WriteFile(filepath.Join(d.Path(), "own-conf"), []byte("rel.conf\n"), 0o600)).To(Succeed())
+		_, err := d.OwnConf()
+		Expect(err).To(MatchError(ContainSubstring("does not hold an absolute path")))
+	})
+
+	DescribeTable("refuses an empty record",
+		func(content string) {
+			Expect(os.WriteFile(filepath.Join(d.Path(), "own-conf"), []byte(content), 0o600)).To(Succeed())
+			_, err := d.OwnConf()
+			Expect(err).To(MatchError(ContainSubstring("does not hold an absolute path")))
+		},
+		Entry("zero bytes", ""),
+		Entry("a bare newline", "\n"),
+	)
+
+	It("replaces the user conf in the session's policy", func() {
+		Expect(os.WriteFile(sys, []byte("sys.example\n"), 0o600)).To(Succeed())
+		Expect(d.WriteOwnConf(own)).To(Succeed())
+		r, err := d.Policy(sys, user)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Entries).To(ContainElement(policy.Entry{Host: "own.example", Port: 443}))
+		Expect(r.Entries).To(ContainElement(policy.Entry{Host: "sys.example", Port: 443}))
+		Expect(r.Entries).NotTo(ContainElement(policy.Entry{Host: "user.example", Port: 443}))
+	})
+
+	It("uses the user conf when none is recorded", func() {
+		r, err := d.Policy(sys, user)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Entries).To(ContainElement(policy.Entry{Host: "user.example", Port: 443}))
+	})
+
+	It("fails the policy, naming the file, when the recorded file is gone", func() {
+		Expect(d.WriteOwnConf(own)).To(Succeed())
+		Expect(os.Remove(own)).To(Succeed())
+		_, err := d.Policy(sys, user)
+		Expect(err).To(MatchError(ContainSubstring("the session's egress conf: open " + own)))
+	})
+})

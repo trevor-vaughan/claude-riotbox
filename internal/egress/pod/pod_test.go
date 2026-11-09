@@ -16,6 +16,7 @@ import (
 
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/inject"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/pod"
+	"github.com/trevor-vaughan/claude-riotbox/internal/egress/policy"
 	"github.com/trevor-vaughan/claude-riotbox/internal/egress/state"
 )
 
@@ -74,6 +75,26 @@ var _ = Describe("Manager", func() {
 	})
 
 	Describe("Up", func() {
+		It("records the session's own egress.conf, which then decides the allowlist", func() {
+			own := filepath.Join(GinkgoT().TempDir(), "own.conf")
+			Expect(os.WriteFile(own, []byte("own.example\n"), 0o600)).To(Succeed())
+			req.OwnConf = own
+			engine.respond = healthy(dir)
+			_, err := m.Up(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dir.OwnConf()).To(Equal(own))
+			Expect(dir.Applied()).To(ContainElement(policy.Entry{Host: "own.example", Port: 443}))
+		})
+
+		It("clears an earlier launch's own egress.conf from a reused state dir", func() {
+			Expect(dir.Create()).To(Succeed())
+			Expect(dir.WriteOwnConf("/earlier/own.conf")).To(Succeed())
+			engine.respond = healthy(dir)
+			_, err := m.Up(req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dir.OwnConf()).To(BeEmpty())
+		})
+
 		It("saves the OS plugins' groups as os.conf before the proxy starts", func() {
 			osDir := GinkgoT().TempDir()
 			Expect(os.MkdirAll(filepath.Join(osDir, "fedora"), 0o755)).To(Succeed())

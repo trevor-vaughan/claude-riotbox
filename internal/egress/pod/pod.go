@@ -173,6 +173,10 @@ type UpRequest struct {
 	OSDir      string   // the OS plugins (state.LoadOS), saved as os.conf; "" for none
 	SystemConf string
 	UserConf   string
+	// OwnConf is the session's own egress.conf (RIOTBOX_EGRESS_CONF),
+	// recorded so it replaces UserConf now and at every later reload
+	// (state.Dir.WriteOwnConf); "" for none.
+	OwnConf string
 	// Credentials are the keys the proxy injects (inject.Decide); none
 	// for a session that injects nothing. With any, Dir must have a
 	// runtime base (state.Dir.WithRuntime).
@@ -248,6 +252,9 @@ func (m Manager) Up(r UpRequest) (_ []string, err error) {
 		return nil, err
 	}
 	if err := r.Dir.WriteProjects(r.Projects); err != nil {
+		return nil, err
+	}
+	if err := r.Dir.WriteOwnConf(r.OwnConf); err != nil {
 		return nil, err
 	}
 	if err := r.Dir.WriteInjection(r.Credentials, time.Now()); err != nil {

@@ -12,7 +12,7 @@ runs, and the invariants a change must keep.
 
 | Path | What it does |
 |---|---|
-| `libexec/egress-lib.sh` | The launch side: the gates (`egress_gate`, `egress_gate_mounts`, `egress_gate_env`), start (`egress_start`), the teardown trap, and the pinned image (`RIOTBOX_EGRESS_DEFAULT_IMAGE`) |
+| `libexec/egress-lib.sh` | The launch side: the gates (`egress_gate`, `egress_gate_mounts`, `egress_gate_env`, `egress_guard_conf`), start (`egress_start`), the teardown trap, and the pinned image (`RIOTBOX_EGRESS_DEFAULT_IMAGE`) |
 | `libexec/egress.sh` | `riotbox egress list\|groups\|allow\|deny\|strict\|reload`: parses the command line and calls the core; `--save` always passes the user `egress.conf` as `--save-to` |
 | `cmd/riotbox-core/egress.go` | The nine `egress-*` verbs (see [riotbox-core.md](riotbox-core.md#egress-verbs)) |
 | `internal/egress/policy` | Entry grammar (`policy.go`), `egress.conf` grammar (`conf.go`), built-in groups and OS group validation (`groups.go`), resolution (`resolve.go`) |
@@ -221,6 +221,16 @@ minutes would cut a quiet model stream).
    `<name>-ext`'s resolver, Envoy or the internal network's gateway (when it
    has one), with a positive control on `<name>-ext`.
    **Do not give the internal network DNS or the agent a `--dns` server.**
+9. **A session's own egress.conf is not writable by the agent.** A session's
+   own egress.conf (`RIOTBOX_EGRESS_CONF`) must not be writable by the agent:
+   `egress_guard_conf` refuses the launch when a read-write agent mount
+   reaches it (the same mount walk as `egress_mask_data`,
+   `_egress_bind_mounts`), and refuses any reaching mount in nested mode, so
+   the agent cannot add allows that the user's next reload would apply. An
+   overlay `upperdir` or `workdir` that holds the file is refused too, in
+   every mode, as podman writes there. A
+   read-only bind of the file alone was rejected: the agent could rename a
+   directory above it and recreate the file at the host path.
 
 ## Per-session state
 
@@ -236,6 +246,7 @@ mode 0700 (`state.Dir.Create` refuses a link in place of the session,
 | `os.conf` | The OS plugins' groups, loaded from `egress-up --os-dir` at start and saved as `[group]` sections; later commands read them from here. Absent for a session an older release started: it has no OS groups |
 | `projects.json` | The launch's project dirs (`egress-up --project`), a JSON list so any path reads back whole; `riotbox egress list` shows them. Absent for a session an older release started, which `list` shows as `unknown` |
 | `session.conf` | The overlay `riotbox egress allow\|deny\|strict` writes, in the `egress.conf` grammar: an optional `strict = on\|off` line, then one entry or `@group` line per change, the latest last. No sections |
+| `own-conf` | The absolute path of the session's own egress.conf (`egress-up --own-conf`, from `RIOTBOX_EGRESS_CONF`), one line. `Dir.sources` reads that file, which must exist, in place of `--user-conf`, so every verb uses it. Absent for a session without one; `Up` removes it from a reused state dir |
 | `applied.conf` | The allowlist last written to `rds.json`; `riotbox egress list` shows this |
 | `applied-strict` | The strict setting last applied, as `list` shows it (`on (user conf)`); absent for a session an older release started, which `list` shows as `unknown`, as it does any value it does not recognise |
 | `secrets/` | Only in sessions an earlier build started: the secrets dir now lives on the runtime tmpfs (below). `RemoveSecrets`, and so `egress-down` and the sweep, still delete it |
@@ -409,7 +420,9 @@ keeps what it last applied. With `--save` it refuses and changes nothing.
 (`state.editConf`), line by line, keeping every other line and comment.
 `--save-to` must equal, after `filepath.Clean`, `--system-conf` or
 `--user-conf`, the only files checked before anything changes, or the verb
-exits 2; the bash CLI always passes the user file.
+exits 2; the bash CLI always passes the user file. When it names
+`--user-conf` and the session has an `own-conf`, the save goes to that file
+(`saveTarget`).
 
 - `state.SaveItem` drops every line in the preamble or an `[allow]` section
   that names the same entry or group, with either sign, and writes one new

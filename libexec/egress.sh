@@ -43,7 +43,8 @@ omitted), or http://host[:PORT] or http://*.domain[:PORT] for plain HTTP
                   also `riotbox egress list`); may be left out when only
                   one is running
   --save          also record the change in your egress.conf
-                  (${XDG_CONFIG_HOME:-~/.config}/riotbox/egress.conf)
+                  (${XDG_CONFIG_HOME:-~/.config}/riotbox/egress.conf), or
+                  in the session's own (RIOTBOX_EGRESS_CONF) if it has one
                   so later sessions get it: the entry or @group as a
                   line, or strict as `strict = on|off` (--clear removes it)
 

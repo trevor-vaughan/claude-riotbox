@@ -410,6 +410,90 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring OK
 
+  # RIOTBOX_EGRESS_CONF: egress_guard_conf lets only read-only and overlay
+  # mounts reach the file. Each must keep the agent from changing the host
+  # file, including by renaming the directory above it and recreating it.
+  - name: every mount spelling egress_guard_conf allows keeps the agent from changing RIOTBOX_EGRESS_CONF
+    steps:
+      - type: exec
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          mkdir -p "${E2E_TMP}/proj/sub"
+          conf="${E2E_TMP}/proj/sub/egress.conf"
+          echo own.example >"${conf}"
+          before="$(sha256sum <"${conf}")"
+          source "{{.root}}/libexec/egress-lib.sh"
+          RIOTBOX_EGRESS_CONF="$(realpath "${conf}")"
+          MOUNTS="" CREDFILE_FLAGS="" RIOTBOX_EXTRA_ARGS=""
+          unset RIOTBOX_NESTED
+          spellings=(
+            "-v ${E2E_TMP}/proj:/workspace:ro,z"
+            "--mount type=bind,src=${E2E_TMP}/proj,dst=/workspace,ro"
+            "--mount type=bind,src=${E2E_TMP}/proj,dst=/workspace,readonly"
+            "--mount type=bind,src=${E2E_TMP}/proj,dst=/workspace,ro=true"
+            "--mount type=bind,src=${E2E_TMP}/proj,dst=/workspace,readonly=true"
+            "-v ${E2E_TMP}/proj:/workspace:O"
+          )
+          # The test is tied to what the guard really accepts.
+          for spelling in "${spellings[@]}"; do
+            PROJECT_VOLUME_FLAGS="${spelling}"
+            egress_guard_conf || { echo "BAD: the guard refused: ${spelling}" >&2; exit 1; }
+          done
+          PROJECT_VOLUME_FLAGS="-v ${E2E_TMP}/proj:/workspace:z"
+          if egress_guard_conf 2>/dev/null; then
+            echo "BAD: the guard allowed a read-write mount" >&2; exit 1
+          fi
+          probe='cat /workspace/sub/egress.conf
+            2>/dev/null echo evil.example >>/workspace/sub/egress.conf && echo APPENDED
+            2>/dev/null true >/workspace/sub/egress.conf && echo TRUNCATED
+            mv /workspace/sub/egress.conf /workspace/sub/egress.conf.moved 2>/dev/null && echo MOVED
+            rm /workspace/sub/egress.conf 2>/dev/null && echo REMOVED
+            mv /workspace/sub /workspace/sub-old 2>/dev/null && 2>/dev/null mkdir /workspace/sub &&
+              2>/dev/null echo evil.example >/workspace/sub/egress.conf && echo REPLACED
+            :'
+          # Positive control: the same probe against a plain read-write mount
+          # must change the copy, or a passing read-only run proves nothing.
+          # MOVED runs before REMOVED, so REMOVED finds no file to remove.
+          mkdir -p "${E2E_TMP}/ctl/sub"
+          echo own.example >"${E2E_TMP}/ctl/sub/egress.conf"
+          out="$(podman run --rm "--userns=keep-id:uid=$(id -u),gid=$(id -g)" -v "${E2E_TMP}/ctl:/workspace:z" "${E2E_BUSYBOX_IMAGE}" sh -c "${probe}" 2>&1)" ||
+            { echo "${out}" >&2; echo "BAD: the control podman run failed" >&2; exit 1; }
+          echo "control (read-write): ${out//$'\n'/ }"
+          for marker in APPENDED TRUNCATED MOVED REPLACED; do
+            [[ "${out}" == *"${marker}"* ]] || { echo "BAD: the control did not report ${marker}: the probe cannot detect a change" >&2; exit 1; }
+          done
+          [ -d "${E2E_TMP}/ctl/sub-old" ] || { echo "BAD: the control did not rename the directory" >&2; exit 1; }
+          [ "$(cat "${E2E_TMP}/ctl/sub/egress.conf")" = evil.example ] || { echo "BAD: the control did not replace the file" >&2; exit 1; }
+          for spelling in "${spellings[@]}"; do
+            read -ra flags <<<"${spelling}"
+            overlay=0
+            [[ "${spelling}" == *:O ]] && overlay=1
+            for user in "--userns=keep-id:uid=$(id -u),gid=$(id -g)" "--user=0"; do
+              rc=0
+              out="$(podman run --rm "${user}" "${flags[@]}" "${E2E_BUSYBOX_IMAGE}" sh -c "${probe}" 2>&1)" || rc=$?
+              if [[ "${rc}" != 0 && "${overlay}" = 1 && "${out}" != own.example* && "${out}" =~ (crun|mount|overlay) ]]; then
+                echo "SKIP :O: ${user}: ${out%%$'\n'*}"
+                continue
+              fi
+              echo "${spelling} ${user}: ${out//$'\n'/ }"
+              [[ "${rc}" = 0 ]] || { echo "BAD: podman failed (${rc}): ${spelling} ${user}" >&2; exit 1; }
+              [[ "${out}" == own.example* ]] || { echo "BAD: the agent could not read the file: ${spelling} ${user}" >&2; exit 1; }
+              if [[ "${overlay}" = 0 && "${out}" =~ (APPENDED|TRUNCATED|MOVED|REMOVED|REPLACED) ]]; then
+                echo "BAD: a read-only mount let the agent change the file: ${spelling} ${user}" >&2; exit 1
+              fi
+              [ "$(sha256sum <"${conf}")" = "${before}" ] || { echo "BAD: the host file changed: ${spelling} ${user}" >&2; exit 1; }
+              [ ! -e "${E2E_TMP}/proj/sub-old" ] || { echo "BAD: the host directory was renamed: ${spelling} ${user}" >&2; exit 1; }
+            done
+          done
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
   - name: dnf reaches CentOS Stream, CRB and EPEL through @centos alone, and only after the rewrite
     steps:
       - type: exec

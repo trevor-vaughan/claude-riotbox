@@ -50,6 +50,11 @@ func egressUp(a parsedArgs, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "riotbox-core: egress-up: --owner-pid %s is not a process ID\n", display.Quote(a.opts["--owner-pid"]))
 		return badUsage(stderr)
 	}
+	own := a.opts["--own-conf"]
+	if own != "" && !filepath.IsAbs(own) {
+		_, _ = fmt.Fprintf(stderr, "riotbox-core: egress-up: --own-conf must be an absolute path, not %s\n", display.Quote(own))
+		return badUsage(stderr)
+	}
 	dir, err := state.Open(a.opts["--state-root"], a.args[0])
 	if err != nil {
 		return egressFailed(stderr, err)
@@ -69,7 +74,11 @@ func egressUp(a parsedArgs, stdout, stderr io.Writer) int {
 	if err != nil {
 		return egressFailed(stderr, err)
 	}
-	user, err := state.ReadConf(a.opts["--user-conf"])
+	readUser, userConf := state.ReadConf, a.opts["--user-conf"]
+	if own != "" {
+		readUser, userConf = state.ReadOwnConf, own
+	}
+	user, err := readUser(userConf)
 	if err != nil {
 		return egressFailed(stderr, err)
 	}
@@ -111,6 +120,7 @@ func egressUp(a parsedArgs, stdout, stderr io.Writer) int {
 		Projects:    a.multi["--project"],
 		SystemConf:  a.opts["--system-conf"],
 		UserConf:    a.opts["--user-conf"],
+		OwnConf:     own,
 		OSDir:       a.opts["--os-dir"],
 		Credentials: plan.Inject,
 	})
@@ -148,9 +158,10 @@ func egressSweep(a parsedArgs, _, stderr io.Writer) int {
 }
 
 // egressList prints each running session with when it started, the
-// launch that owns it, its project dirs, its log, its strict setting, the
-// keys its proxy injects and the allowlist its proxy enforces. What the
-// engine or an older session did not record is "unknown".
+// launch that owns it, its project dirs, its log, its own egress.conf if it
+// has one, its strict setting, the keys its proxy injects and the allowlist
+// its proxy enforces. What the engine or an older session did not record is
+// "unknown".
 func egressList(a parsedArgs, stdout, stderr io.Writer) int {
 	running, err := pod.NewManager(a.opts["--engine"], stderr).RunningSessions()
 	if err != nil {
@@ -187,6 +198,11 @@ func egressList(a parsedArgs, stdout, stderr io.Writer) int {
 			// One session's corrupt record must not hide the others.
 			_, _ = fmt.Fprintf(stderr, "riotbox-core: egress: %s: %v\n", s.Name, injectedErr)
 		}
+		own, ownErr := dir.OwnConf()
+		if ownErr != nil {
+			// One session's corrupt record must not hide the others.
+			_, _ = fmt.Fprintf(stderr, "riotbox-core: egress: %s: %v\n", s.Name, ownErr)
+		}
 		started, owner := "unknown", "unknown"
 		if !s.Started.IsZero() {
 			started = s.Started.Format("2006-01-02 15:04:05 MST")
@@ -205,6 +221,12 @@ func egressList(a parsedArgs, stdout, stderr io.Writer) int {
 			fmt.Fprintf(&b, "  project: %s\n", display.Quote(p))
 		}
 		fmt.Fprintf(&b, "  log:     %s\n", display.Quote(dir.AccessLog()))
+		switch {
+		case ownErr != nil:
+			b.WriteString("  conf:    unreadable\n")
+		case own != "":
+			fmt.Fprintf(&b, "  conf:    %s\n", display.Quote(own))
+		}
 		fmt.Fprintf(&b, "  strict:  %s\n", strict)
 		if injectedErr != nil {
 			b.WriteString("  inject:  unreadable\n")
@@ -265,6 +287,20 @@ func saveToOption(a parsedArgs, verbName string, stderr io.Writer) (path string,
 	return path, true, true
 }
 
+// saveTarget is where --save-to saves for dir's session: the session's own
+// egress.conf when --save-to names the --user-conf file and the session has
+// one, as that file replaces the user conf there; else saveTo.
+func saveTarget(dir state.Dir, saveTo, userConf string) (string, error) {
+	if filepath.Clean(saveTo) != filepath.Clean(userConf) {
+		return saveTo, nil
+	}
+	own, err := dir.OwnConf()
+	if err != nil || own == "" {
+		return saveTo, err
+	}
+	return own, nil
+}
+
 // egressEdit returns egress-allow's run (remove false) or egress-deny's
 // (remove true): record the entry or @group in the session overlay (a
 // group as its reference, re-resolved at every reload), apply it live,
@@ -293,6 +329,11 @@ func egressEdit(verbName string, remove bool) func(a parsedArgs, stdout, stderr 
 		dir, err := m.Target(a.opts["--state-root"], sessionName)
 		if err != nil {
 			return egressFailed(stderr, err)
+		}
+		if save {
+			if saveTo, err = saveTarget(dir, saveTo, a.opts["--user-conf"]); err != nil {
+				return egressFailed(stderr, err)
+			}
 		}
 		if it.Group != "" {
 			dropped, err := forgetGroup(m, dir, it.Group, save, a.opts["--system-conf"], a.opts["--user-conf"], stderr)
@@ -574,6 +615,11 @@ func egressStrict(a parsedArgs, stdout, stderr io.Writer) int {
 	dir, err := m.Target(a.opts["--state-root"], sessionName)
 	if err != nil {
 		return egressFailed(stderr, err)
+	}
+	if save {
+		if saveTo, err = saveTarget(dir, saveTo, a.opts["--user-conf"]); err != nil {
+			return egressFailed(stderr, err)
+		}
 	}
 	r, err := applyChange(m, dir, "strict "+a.args[0], func(policy.Resolved) error { return dir.SetOverlayStrict(setting) },
 		a.opts["--system-conf"], a.opts["--user-conf"], stderr)

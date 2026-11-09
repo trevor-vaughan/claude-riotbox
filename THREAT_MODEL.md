@@ -1391,6 +1391,24 @@ egress proxy; without the flag the agent's HTTPS goes out directly.
   network address, is unchanged and goes through the forward proxy like any
   allowed name, so allowing it, or a wildcard covering it, exposes host
   services bound to non-loopback addresses.
+- **The agent edits its session's own egress.conf.** `RIOTBOX_EGRESS_CONF`
+  may point into a mounted project. An edit, or a new file at that path,
+  would apply at the user's next `riotbox egress reload` or `--save`.
+  Mitigation: the launch refuses when a read-write agent mount reaches the
+  file (read-only and `:O` mounts are allowed), and refuses any reaching
+  mount with `RIOTBOX_NESTED=1`, where `CAP_SYS_ADMIN` could remount it. A
+  read-only bind of the file alone is not enough: the agent could rename a
+  directory above it and recreate the file. Mounts are compared by real
+  path, so a host bind mount that shows the same directory under another
+  path, a named volume backed by a host directory, or a hard link to the
+  file made beforehand inside a read-write mount is not detected (all
+  user configuration; the agent cannot create a cross-mount hard link).
+  The check covers the session's own mounts only: another session whose
+  agent has a read-write mount over the file (for example `riotbox ~`)
+  could change it. An overlay's `upperdir`/`workdir` that holds the file
+  is refused like a read-write mount. The recorded path lives in the
+  session's state dir, which the agent cannot reach (masked if a mount
+  would show it).
 
 ## Findings
 

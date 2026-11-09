@@ -84,6 +84,105 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring OK
 
+  - name: RIOTBOX_EGRESS_CONF alone starts an egress session that uses the file in place of the user conf
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          unset RIOTBOX_EGRESS
+          mkdir -p "${XDG_CONFIG_HOME}/riotbox"
+          printf 'user.example\n' >"${XDG_CONFIG_HOME}/riotbox/egress.conf"
+          printf 'own.example\n' >"${TMP}/job.conf"
+          ln -s "${TMP}/job.conf" "${TMP}/link.conf"
+          RIOTBOX_EGRESS_CONF="${TMP}/link.conf" egress_launch
+          name="$(egress_agent_name)"
+          [ -n "${name}" ] || { echo "BAD: no egress session" >&2; exit 1; }
+          [ "$(cat "${EGRESS_ROOT}/${name}/own-conf")" = "$(realpath "${TMP}/job.conf")" ] ||
+            { echo "BAD: own-conf: $(cat "${EGRESS_ROOT}/${name}/own-conf" 2>&1)" >&2; exit 1; }
+          grep -qx 'own.example' "${EGRESS_ROOT}/${name}/applied.conf" || { echo "BAD: own.example not applied" >&2; exit 1; }
+          if grep -qx 'user.example' "${EGRESS_ROOT}/${name}/applied.conf"; then echo "BAD: the user conf was applied" >&2; exit 1; fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: RIOTBOX_EGRESS_CONF inside a read-write project is refused before anything starts, and allowed when the project is read-only
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          printf 'own.example\n' >"${HOME}/proj/egress.conf"
+          rc=0; err="$(RIOTBOX_EGRESS_CONF="${HOME}/proj/egress.conf" egress_launch 2>&1)" || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "BAD: exit ${rc}" >&2; exit 1; }
+          [[ "${err}" == *"ERROR: RIOTBOX_EGRESS_CONF refuses project mounting"*"read-write"* ]] || { echo "BAD: message: ${err}" >&2; exit 1; }
+          if [ -s "${FAKE_ENGINE_LOG:-/nonexistent}" ] && grep -q '^network create' "${FAKE_ENGINE_LOG}"; then
+            echo "BAD: the engine was used" >&2; exit 1
+          fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: RIOTBOX_EGRESS_CONF is refused, before anything starts, with RIOTBOX_EGRESS=0 or a file that cannot be read
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'chmod -R u+rwx "${TMP}"; rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          printf 'own.example\n' >"${TMP}/job.conf"
+          mkdir "${TMP}/dir.conf"
+          printf 'x\n' >"${TMP}/locked.conf"; chmod 000 "${TMP}/locked.conf"
+          check() {
+            local want="$1" rc=0 err
+            shift
+            err="$(env "$@" bash -c 'source "$1"; egress_launch' _ "{{.egress_helpers}}" 2>&1)" || rc=$?
+            [ "${rc}" -eq 1 ] || { echo "BAD: $*: exit ${rc}" >&2; exit 1; }
+            [[ "${err}" == *"${want}"* ]] || { echo "BAD: $*: message: ${err}" >&2; exit 1; }
+            if [ -s "${FAKE_ENGINE_LOG:-/nonexistent}" ] && grep -q '^network create' "${FAKE_ENGINE_LOG}"; then
+              echo "BAD: $*: the engine was used" >&2; exit 1
+            fi
+          }
+          check "ERROR: RIOTBOX_EGRESS_CONF needs egress mode, but RIOTBOX_EGRESS=0" RIOTBOX_EGRESS=0 RIOTBOX_EGRESS_CONF="${TMP}/job.conf"
+          check "ERROR: RIOTBOX_EGRESS_CONF: ${TMP}/gone.conf does not exist" RIOTBOX_EGRESS_CONF="${TMP}/gone.conf"
+          check "ERROR: RIOTBOX_EGRESS_CONF: ${TMP}/dir.conf is not a readable regular file" RIOTBOX_EGRESS_CONF="${TMP}/dir.conf"
+          if [ "$(id -u)" -ne 0 ]; then
+            check "ERROR: RIOTBOX_EGRESS_CONF: ${TMP}/locked.conf is not a readable regular file" RIOTBOX_EGRESS_CONF="${TMP}/locked.conf"
+          fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a relative RIOTBOX_EGRESS_CONF is recorded as an absolute real path, and an empty one leaves egress off
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          printf 'own.example\n' >"${TMP}/job.conf"
+          (cd "${TMP}" && RIOTBOX_EGRESS_CONF=job.conf egress_launch)
+          name="$(egress_agent_name)"
+          [ -n "${name}" ] || { echo "BAD: no egress session" >&2; exit 1; }
+          [ "$(cat "${EGRESS_ROOT}/${name}/own-conf")" = "$(realpath "${TMP}/job.conf")" ] ||
+            { echo "BAD: own-conf: $(cat "${EGRESS_ROOT}/${name}/own-conf" 2>&1)" >&2; exit 1; }
+          : >"${FAKE_ENGINE_LOG}"
+          RIOTBOX_EGRESS_CONF="" egress_launch
+          ! grep -q '^network create' "${FAKE_ENGINE_LOG}" || { echo "BAD: an empty RIOTBOX_EGRESS_CONF started a session" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
   - name: the agent learns its session name, and strict mode without @agent warns but still launches
     steps:
       - type: exec
@@ -517,6 +616,77 @@ testcases:
           RIOTBOX_EXTRA_ARGS="-v ${TMP}/proj:/p:O,upperdir=${TMP}/up,workdir=${TMP}/wk"
           egress_mask_data || { echo "BAD: an overlay elsewhere was refused" >&2; exit 1; }
           [ "${#EGRESS_MASK_FLAGS[@]}" -eq 0 ] || { echo "BAD: an overlay elsewhere was masked" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: egress_guard_conf refuses a read-write agent mount that reaches RIOTBOX_EGRESS_CONF, and allows read-only, overlay and unrelated ones
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          source "${EGRESS_REPO_ROOT}/libexec/egress-lib.sh"
+          unset RIOTBOX_NESTED
+          mkdir -p "${TMP}/proj/sub" "${TMP}/other"
+          ln -s "${TMP}/proj" "${TMP}/link"
+          conf="${TMP}/proj/sub/egress.conf"; touch "${conf}"
+          RIOTBOX_EGRESS_CONF="${conf}"
+          # run <var>=<flags>: only that variable is set; the guard's verdict
+          # lands in rc and its stderr in err.
+          run() {
+            PROJECT_VOLUME_FLAGS="" MOUNTS="" CREDFILE_FLAGS="" RIOTBOX_EXTRA_ARGS=""
+            printf -v "$1" '%s' "$2"
+            rc=0; err="$(egress_guard_conf 2>&1)" || rc=$?
+          }
+          ok() {
+            run "$@"
+            [ "${rc}" -eq 0 ] || { echo "BAD: $1=$2 was refused: ${err}" >&2; exit 1; }
+          }
+          refused() {
+            local want="$3"; run "$1" "$2"
+            [ "${rc}" -eq 1 ] || { echo "BAD: $1=$2 was allowed" >&2; exit 1; }
+            [[ "${err}" == *"${want}"* ]] || { echo "BAD: $1=$2: unclear message: ${err}" >&2; exit 1; }
+            [[ "${err}" == *'See README "Egress proxy".' ]] || { echo "BAD: $1=$2: no README pointer: ${err}" >&2; exit 1; }
+          }
+          refused PROJECT_VOLUME_FLAGS "-v ${TMP}/proj:/workspace:z" "ERROR: RIOTBOX_EGRESS_CONF refuses project mounting ${TMP}/proj read-write"
+          refused CREDFILE_FLAGS "-v ${conf}:/etc/job.conf" "refuses credential files mounting ${conf} read-write"
+          refused MOUNTS "--mount type=bind,src=${TMP}/proj/sub,dst=/w2/" "refuses mounts.conf mounting ${TMP}/proj/sub read-write"
+          refused MOUNTS "--mount type=bind,src=${TMP}/proj,dest=/w3,ro=false" "read-write"
+          refused MOUNTS "--mount type=bind,src=${TMP}/proj,dst=/w,ro,rw" "read-write"
+          refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/link:/l" "RIOTBOX_EXTRA_ARGS mounting ${TMP}/link read-write"
+          refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/proj:/p:ro,rw" "read-write"
+          refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/proj:/p" "read-write"
+          PROJECT_VOLUME_FLAGS="-v ${TMP}/proj:/workspace:ro,z" MOUNTS="" CREDFILE_FLAGS="" RIOTBOX_EXTRA_ARGS="-v ${TMP}/proj/sub:/s"
+          rc=0; err="$(egress_guard_conf 2>&1)" || rc=$?
+          [ "${rc}" -eq 1 ] && [[ "${err}" == *"RIOTBOX_EXTRA_ARGS mounting ${TMP}/proj/sub read-write"* ]] ||
+            { echo "BAD: a read-only project hid a read-write extra mount: rc=${rc} ${err}" >&2; exit 1; }
+          ok PROJECT_VOLUME_FLAGS "-v ${TMP}/proj:/workspace:ro,z"
+          ok PROJECT_VOLUME_FLAGS "-v ${TMP}/proj:/workspace:O"
+          for opt in ro readonly ro=true readonly=true; do
+            ok MOUNTS "--mount type=bind,src=${TMP}/proj,dst=/w,${opt}"
+          done
+          ok RIOTBOX_EXTRA_ARGS "-v ${TMP}/other:/o"
+          ok RIOTBOX_EXTRA_ARGS "-v named:/n"
+          # An overlay's upperdir or workdir is a host dir podman writes to:
+          # one that holds the file is as bad as a read-write mount of it.
+          for opt in "upperdir=${TMP}/proj/sub,workdir=${TMP}/wk" "upperdir=${TMP}/up,workdir=${TMP}/proj" "upperdir=${TMP}/proj/sub/x/.."; do
+            refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/other:/o:O,${opt}" "ERROR: RIOTBOX_EGRESS_CONF refuses RIOTBOX_EXTRA_ARGS with "
+          done
+          refused MOUNTS "--mount type=bind,src=${TMP}/other,dst=/o,upperdir=${TMP}/proj,workdir=${TMP}/wk" "refuses mounts.conf with upperdir=${TMP}/proj"
+          ok RIOTBOX_EXTRA_ARGS "-v ${TMP}/other:/o:O,upperdir=${TMP}/up,workdir=${TMP}/wk"
+          # A guard with nothing to guard.
+          RIOTBOX_EGRESS_CONF=""
+          ok PROJECT_VOLUME_FLAGS "-v ${TMP}/proj:/workspace:z"
+          RIOTBOX_EGRESS_CONF="${conf}"
+          # Nested mode keeps CAP_SYS_ADMIN: even a read-only reach is refused.
+          export RIOTBOX_NESTED=1
+          refused PROJECT_VOLUME_FLAGS "-v ${TMP}/proj:/workspace:ro,z" "ERROR: RIOTBOX_EGRESS_CONF with RIOTBOX_NESTED=1 refuses project mounting ${TMP}/proj"
+          refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/other:/o:O,upperdir=${TMP}/proj/sub" "refuses RIOTBOX_EXTRA_ARGS with upperdir="
+          ok RIOTBOX_EXTRA_ARGS "-v ${TMP}/other:/o"
           echo OK
         assertions:
           - result.code ShouldEqual 0
