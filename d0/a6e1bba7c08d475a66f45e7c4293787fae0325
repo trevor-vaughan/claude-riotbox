@@ -1,0 +1,19 @@
+libexec/egress-lib.sh
+  s_960e57a310f0ac::t_ab46c822f89e6b 300-309,323-324,341,343,346-391,395-402,405-421
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "d0a6e1bba7c08d475a66f45e7c4293787fae0325",
+  "prompts": {},
+  "sessions": {
+    "s_960e57a310f0ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7edc1c10-4aaf-41e4-b66b-4fc55fe6f1bf",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
