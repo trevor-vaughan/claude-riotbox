@@ -27,6 +27,7 @@ internal/egress/state/state.go
   s_bc8713f657ae59::t_8a79099985af8e 117,120,123-124,129-130
   s_bc8713f657ae59::t_cb348af756af6a 629-634,638
   s_bc8713f657ae59::t_e48352b0633482 35,114-116,118-119,121-122,125-128
+  s_1887f52fff4370::t_13a5e41aaa99b4 587-589,623-625
 container/entrypoint.sh
   s_bc8713f657ae59::t_5a852baaf4233d 108
   s_bc8713f657ae59::t_158e0f4491e99b 109-110
@@ -37,6 +38,7 @@ internal/egress/state/state_test.go
   s_bc8713f657ae59::t_59427ac9e876e3 415-434
   s_bc8713f657ae59::t_862c579bba5e83 435
   s_bc8713f657ae59::t_4549fa5615adbd 174-183
+  s_1887f52fff4370::t_d32a8b958f3a30 436-468
 scripts/lib/egress-hostlink.sh
   s_bc8713f657ae59::t_edbd5d18ed22e9 9-10
 internal/egress/pod/sessions.go
@@ -59,14 +61,18 @@ THREAT_MODEL.md
 docs/dev/decisions/egress-proxy.md
   s_bc8713f657ae59::t_2330aae58c3326 291-308,313-339
   s_bc8713f657ae59::t_4ebf4a1e143363 309-312
+  s_1887f52fff4370::t_8d33059d857644 283-290
 docs/dev/egress.md
   s_bc8713f657ae59::t_3f515403ae6c3d 23,26,41,51,245,425-476,479-480,483-486
   s_bc8713f657ae59::t_6575b9da8efc84 477-478,481-482
   s_bc8713f657ae59::t_82793a5015d88e 244
+  s_1887f52fff4370::t_3b2b70e7d3fddb 198-202
+  s_1887f52fff4370::t_09c400a4a77d97 300-301
 scripts/configs/egress.conf
   s_bc8713f657ae59::t_ef2fd9523d695a 102-107
 internal/egress/envoyconfig/envoyconfig.go
   s_bc8713f657ae59::t_040fc76c8275c0 633-634
+  s_1887f52fff4370::t_352bd020f60a31 27,355-361,363-379,382-390,393-394,447-480,488-490
 internal/egress/hostlink/hostlink.go
   s_bc8713f657ae59::t_60b4fe99723916 60,64
 internal/egress/hostlink/ports_test.go
@@ -75,6 +81,10 @@ internal/egress/policy/resolve.go
   s_bc8713f657ae59::t_507de390d67355 143-147
 internal/egress/policy/resolve_test.go
   s_bc8713f657ae59::t_0bca07964f2759 317-325
+internal/egress/envoyconfig/check_test.go
+  s_1887f52fff4370::t_b3940c33140564 1-48
+libexec/egress.sh
+  s_1887f52fff4370::t_a939df04f01c36 18-22
 ---
 {
   "schema_version": "authorship/3.0.0",
@@ -82,6 +92,14 @@ internal/egress/policy/resolve_test.go
   "base_commit_sha": "605bfd16a65ea9b6e322ba6c99dfc100f712fd02",
   "prompts": {},
   "sessions": {
+    "s_1887f52fff4370": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a84bb8a714d291610",
+        "model": "unknown"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    },
     "s_bc8713f657ae59": {
       "agent_id": {
         "tool": "claude",
