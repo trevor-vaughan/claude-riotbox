@@ -1309,6 +1309,47 @@ starts, so restart any egress session started before this release, or
 `riotbox egress reload` fails for it while its own allowlist or your
 `egress.conf` names `@centos`.
 
+#### Reaching services on your host (ssh -L)
+
+An `ssh -L 18000:db.internal:5432 bastion` forward binds the host's
+`127.0.0.1:18000`. Allow that port, in `egress.conf` or live, and the agent
+reaches it:
+
+```ini
+host.containers.internal:18000          # one port
+host.containers.internal:18000-18099    # a range (at most 1024 ports)
+```
+
+```bash
+riotbox egress allow host.containers.internal:18000
+```
+
+The agent then uses `localhost:18000` or `host.containers.internal:18000`.
+Allowing a port exposes whatever listens on it: an `ssh -L` forward reaches
+its far end, so allow only the ports you mean. This needs rootless podman on
+pasta (the default since podman 5); otherwise the launch warns and those
+connections fail with `503`. Notes:
+
+- The relay starts only when the allowlist names `host.containers.internal`
+  itself at launch (a wildcard does not count). It costs a session about two
+  of the user's `fs.inotify.max_user_instances` (default 128), so sessions
+  without one do not start it. If you allow the host live in a session that
+  started without it, `riotbox egress allow` warns: restart the session.
+  Ports you then add or remove apply live.
+- `localhost` listeners come one per port, within about 2 s of a change. A range wider
+  than 1024 ports, such as `host.containers.internal:*`, gets none: use
+  `host.containers.internal:PORT` through the proxy.
+- Ports below 1024 get no `localhost` listener either: the agent runs
+  unprivileged and cannot bind them (the listener logs a warning to
+  `~/.riotbox/hostlink.log`). Use `host.containers.internal:PORT` for them.
+- Tunnels only: a plain `http://host.containers.internal` entry and an
+  `[inject]` row for it are refused. Plain HTTP still works over a tunnel:
+  allow `host.containers.internal:18080` and use `http://localhost:18080`
+  in the session.
+- `host.docker.internal` is not covered. It is podman's alias for the
+  host's network address, and is allowed or refused by name like any other
+  host. See [THREAT_MODEL.md](THREAT_MODEL.md).
+
 ### Changing a running session
 
 `egress.conf` is read when a session starts. To change a session without

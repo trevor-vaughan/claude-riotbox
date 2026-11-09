@@ -56,6 +56,8 @@ var _ = Describe("an [inject] section", func() {
 		Entry("a wildcard", "K *.k.example x-api-key", `invalid host "*.k.example": a wildcard cannot carry a key`),
 		Entry("a port", "K api.k.example:8443 x-api-key", `invalid host "api.k.example:8443": give a host without a port`),
 		Entry("a bare name", "K localhost x-api-key", `invalid host "localhost"`),
+		Entry("the host's loopback", "K host.containers.internal x-api-key", `invalid host "host.containers.internal": it is the host's loopback, which the proxy never intercepts, so it cannot carry a key`),
+		Entry("the host's loopback, in capitals", "K Host.Containers.Internal x-api-key", `invalid host "Host.Containers.Internal": it is the host's loopback`),
 		// U+212A KELVIN SIGN lowercases to ASCII "k": it must be refused, not folded.
 		Entry("a Kelvin-sign look-alike host", "K api.\u212aey.example x-api-key", "invalid host \"api.\u212aey.example\": only printable ASCII is allowed"),
 		Entry("an uppercase header", "K api.k.example X-Api-Key", `"X-Api-Key" is not a lowercase HTTP header name`),

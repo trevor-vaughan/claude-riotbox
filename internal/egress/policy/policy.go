@@ -26,6 +26,12 @@ const (
 // host:* is how an entry allows every port.
 const MaxPortRange = 1024
 
+// HostLink is the name an egress session reaches the host's loopback by:
+// the proxy routes its CONNECTs to the session's hostlink relay
+// (internal/egress/hostlink), never to the forward-proxy cluster, so it
+// never means the host's network address. It only tunnels.
+const HostLink = "host.containers.internal"
+
 // plainScheme is the prefix of a plain-HTTP entry.
 const plainScheme = "http://"
 
@@ -158,7 +164,38 @@ func Parse(raw string) (e Entry, remove bool, err error) {
 	if cerr := checkHost(strings.TrimPrefix(host, "*.")); cerr != nil {
 		return Entry{}, false, cerr
 	}
+	if plain && host == HostLink {
+		return Entry{}, false, hostLinkPlainError(remove, port, end)
+	}
 	return Entry{Host: host, Port: port, PortEnd: end, Plain: plain}, remove, nil
+}
+
+// hostLinkPlainError refuses an http:// entry for HostLink and names the
+// entry to write instead. The relay carries only tunnels, but a tunnel
+// carries plain HTTP too: the agent's localhost listener for the port
+// tunnels it, except below 1024, where the unprivileged agent gets none.
+func hostLinkPlainError(remove bool, port, end int) error {
+	const refused = "plain HTTP to " + HostLink + " is not supported, as the host relay only tunnels; "
+	every := port == 1 && end == 65535
+	ports := strconv.Itoa(port)
+	switch {
+	case every:
+		ports = "*"
+	case end > port:
+		ports += "-" + strconv.Itoa(end)
+	}
+	switch {
+	case remove:
+		return fmt.Errorf(refused+"write -%s:%s (no http://)", HostLink, ports)
+	case every:
+		return errors.New(refused + "allow " + HostLink + ":PORT (no http://) for each port, then use http://localhost:PORT in the session")
+	case end > port:
+		return fmt.Errorf(refused+"allow %s:%s (no http://), then use http://localhost:PORT in the session", HostLink, ports)
+	case port < 1024:
+		return fmt.Errorf(refused+"allow %s:%d (no http://) and tunnel to it through the proxy, as ports below 1024 get no localhost listener", HostLink, port)
+	default:
+		return fmt.Errorf(refused+"allow %s:%d (no http://), then use http://localhost:%d in the session", HostLink, port, port)
+	}
 }
 
 // parsePort reads one port number, 1 to 65535.

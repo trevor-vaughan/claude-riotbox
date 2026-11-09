@@ -112,6 +112,13 @@ verbs:
                 --user-conf <file> [--session <name>]
                          re-read the conf files into the named session, or
                          every running one
+  hostlink-relay --socket <path> --ports <file> --target <ip>
+                         serve the egress hostlink relay on a Unix socket:
+                         tunnel CONNECTs to host.containers.internal:<port>
+                         to <ip>:<port> for each port the file lists
+  hostlink-listen --ports <file> --proxy http://<host>:<port>
+                         listen on 127.0.0.1 for each port the file lists
+                         and tunnel each connection through the proxy
 `
 
 // unbounded is a verb's maxArgs when it takes any number of positionals.
@@ -196,14 +203,16 @@ var verbs = map[string]verb{
 		minArgs:  1, maxArgs: 1,
 		run: egressUp,
 	},
-	"egress-down":   {options: []string{"--engine", "--state-root"}, minArgs: 1, maxArgs: 1, run: egressDown},
-	"egress-sweep":  {options: []string{"--engine", "--state-root"}, run: egressSweep},
-	"egress-list":   {options: []string{"--engine", "--state-root"}, run: egressList},
-	"egress-allow":  {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressEdit("egress-allow", false)},
-	"egress-deny":   {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressEdit("egress-deny", true)},
-	"egress-strict": {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressStrict},
-	"egress-groups": {options: egressConfOptions, optional: []string{"--os-dir"}, run: egressGroups},
-	"egress-reload": {options: egressConfOptions, optional: []string{"--session"}, run: egressReload},
+	"egress-down":     {options: []string{"--engine", "--state-root"}, minArgs: 1, maxArgs: 1, run: egressDown},
+	"egress-sweep":    {options: []string{"--engine", "--state-root"}, run: egressSweep},
+	"egress-list":     {options: []string{"--engine", "--state-root"}, run: egressList},
+	"egress-allow":    {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressEdit("egress-allow", false)},
+	"egress-deny":     {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressEdit("egress-deny", true)},
+	"egress-strict":   {options: egressConfOptions, optional: []string{"--session", "--save-to"}, minArgs: 1, maxArgs: 1, run: egressStrict},
+	"egress-groups":   {options: egressConfOptions, optional: []string{"--os-dir"}, run: egressGroups},
+	"egress-reload":   {options: egressConfOptions, optional: []string{"--session"}, run: egressReload},
+	"hostlink-relay":  {options: []string{"--socket", "--ports", "--target"}, run: hostlinkRelay},
+	"hostlink-listen": {options: []string{"--ports", "--proxy"}, run: hostlinkListen},
 }
 
 func main() {

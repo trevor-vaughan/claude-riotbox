@@ -119,6 +119,31 @@ var _ = Describe("Parse", func() {
 		Entry("a star with digits", "a.example:8*", "port must be a number from 1 to 65535"),
 		Entry("a star as the host", "*:*", "at least two labels"),
 	)
+
+	DescribeTable("refuses plain HTTP to the host's loopback name, which only tunnels, and says what to write instead",
+		func(raw, want string) {
+			_, _, err := policy.Parse(raw)
+			Expect(err).To(MatchError("plain HTTP to host.containers.internal is not supported, as the host relay only tunnels; " + want))
+		},
+		Entry("a port", "http://host.containers.internal:18080",
+			"allow host.containers.internal:18080 (no http://), then use http://localhost:18080 in the session"),
+		Entry("a range", "http://host.containers.internal:18000-18099",
+			"allow host.containers.internal:18000-18099 (no http://), then use http://localhost:PORT in the session"),
+		Entry("every port", "http://host.containers.internal:*",
+			"allow host.containers.internal:PORT (no http://) for each port, then use http://localhost:PORT in the session"),
+		Entry("the default port, below 1024", "http://host.containers.internal",
+			"allow host.containers.internal:80 (no http://) and tunnel to it through the proxy, as ports below 1024 get no localhost listener"),
+		Entry("a removal", "-http://Host.Containers.Internal:8080",
+			"write -host.containers.internal:8080 (no http://)"),
+		Entry("a removal of every port", "-http://host.containers.internal:*",
+			"write -host.containers.internal:* (no http://)"),
+	)
+
+	It("accepts tunnels to the host's loopback name", func() {
+		e, _, err := policy.Parse("host.containers.internal:18000-18099")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(e).To(Equal(policy.Entry{Host: policy.HostLink, Port: 18000, PortEnd: 18099}))
+	})
 })
 
 var _ = Describe("Entry", func() {

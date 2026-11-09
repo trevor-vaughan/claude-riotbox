@@ -171,11 +171,12 @@ testcases:
           err="$(e2e_core egress-down -- "${name}" 2>&1)"
           echo "${err}"
           [[ "${err}" == *"1 denied request(s)"* ]] || { echo "BAD: no denial report" >&2; exit 1; }
-          for obj in "container exists ${name}-egress" \
+          for obj in "container exists ${name}-egress" "container exists ${name}-hostlink" \
               "network exists ${name}-int" "network exists ${name}-ext"; do
             # shellcheck disable=SC2086 # split on purpose
             if podman ${obj}; then echo "BAD: left behind: ${obj}" >&2; exit 1; fi
           done
+          [ ! -e "${E2E_ROOT}/${name}/hostlink/relay.sock" ] || { echo "BAD: the relay's socket was left behind" >&2; exit 1; }
           e2e_core egress-down -- "${name}" || { echo "BAD: second teardown failed" >&2; exit 1; }
           echo OK
         assertions:
@@ -199,7 +200,7 @@ testcases:
           e2e_up "${killed}" "${dead}"
           podman run -d --name "${killed}" "${E2E_FLAGS[@]}" "${E2E_BUSYBOX_IMAGE}" sleep 300 >/dev/null
           e2e_core egress-sweep
-          for obj in "container exists rbx-e2e-orphan-$$-egress" "network exists rbx-e2e-orphan-$$-int"; do
+          for obj in "container exists rbx-e2e-orphan-$$-egress" "container exists rbx-e2e-orphan-$$-hostlink" "network exists rbx-e2e-orphan-$$-int"; do
             # shellcheck disable=SC2086 # split on purpose
             if podman ${obj}; then echo "BAD: orphan kept: ${obj}" >&2; exit 1; fi
           done
@@ -477,6 +478,95 @@ testcases:
           check debian "${debian}" "${apt}"
           check ubuntu "${ubuntu}" "${apt}"
           check arch "${E2E_ARCH_IMAGE}" "pacman -Sy --noconfirm"
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: an allowed host-loopback port reaches the host's 127.0.0.1, through the proxy and as localhost, and others are refused
+    steps:
+      - type: exec
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          e2e_require_pasta
+          mkdir "${E2E_TMP}/www"; echo hostlink-ok >"${E2E_TMP}/www/index.html"
+          e2e_host_server "${E2E_TMP}/www"
+          port="${E2E_HOST_PORT}"
+          e2e_up "rbx-e2e-hostlink-$$" $$ "host.containers.internal:${port}"
+          got="$(e2e_agent "${E2E_AGENT_IMAGE}" curl -s -p --max-time 20 "http://host.containers.internal:${port}/" || :)"
+          [ "${got}" = hostlink-ok ] || { echo "BAD: through the proxy: ${got}" >&2; exit 1; }
+          got="$(e2e_codes "http://host.containers.internal:$((port + 1))/" -p)"
+          [ "${got}" = "403 000" ] || { echo "BAD: an unlisted port: ${got}" >&2; exit 1; }
+          got="$(e2e_codes "http://host.containers.internal:${port}/")"
+          [ "${got}" = "000 403" ] || { echo "BAD: plain HTTP to the host: ${got}" >&2; exit 1; }
+          got="$(e2e_listen_probe "${port}")"
+          [ "${got}" = hostlink-ok ] || { echo "BAD: as localhost: ${got}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a live allow adds the localhost listener and a live deny drops it
+    steps:
+      - type: exec
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          e2e_require_pasta
+          mkdir "${E2E_TMP}/www"; echo hostlink-ok >"${E2E_TMP}/www/index.html"
+          e2e_host_server "${E2E_TMP}/www"
+          port="${E2E_HOST_PORT}"
+          name="rbx-e2e-hostlive-$$"
+          # Another host port at launch, so the session starts its relay.
+          e2e_up "${name}" $$ "host.containers.internal:$((port + 1))"
+          # Named as the session's agent, so teardown removes it.
+          podman run -d --name "${name}" "${E2E_FLAGS[@]}" "${E2E_AGENT_IMAGE}" sh -c '
+            /run/riotbox-egress-share/riotbox-core hostlink-listen \
+              --ports /run/riotbox-egress-share/hostlink.ports --proxy "$HTTPS_PROXY" & sleep 300' >/dev/null
+          probe() { podman exec "${name}" curl -s --max-time 5 "http://127.0.0.1:${port}/" || :; }
+          eventually() {
+            local want="$1" got=""
+            for _ in $(seq 20); do got="$(probe)"; [ "${got}" = "${want}" ] && return 0; sleep 1; done
+            echo "BAD: want '${want}', got '${got}'" >&2; return 1
+          }
+          eventually ""
+          e2e_core egress-allow --session "${name}" -- "host.containers.internal:${port}"
+          eventually hostlink-ok
+          e2e_core egress-deny --session "${name}" -- "host.containers.internal:${port}"
+          eventually ""
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: two sessions that allow the same host port both reach it
+    steps:
+      - type: exec
+        script: |
+          #!/bin/bash
+          set -euo pipefail
+          source "{{.e2e_helpers}}"
+          e2e_require
+          e2e_setup
+          e2e_require_pasta
+          mkdir "${E2E_TMP}/www"; echo hostlink-ok >"${E2E_TMP}/www/index.html"
+          e2e_host_server "${E2E_TMP}/www"
+          port="${E2E_HOST_PORT}"
+          e2e_up "rbx-e2e-hosta-$$" $$ "host.containers.internal:${port}"
+          first=("${E2E_FLAGS[@]}")
+          e2e_up "rbx-e2e-hostb-$$" $$ "host.containers.internal:${port}"
+          got="$(e2e_listen_probe "${port}")"
+          [ "${got}" = hostlink-ok ] || { echo "BAD: second session: ${got}" >&2; exit 1; }
+          E2E_FLAGS=("${first[@]}")
+          got="$(e2e_listen_probe "${port}")"
+          [ "${got}" = hostlink-ok ] || { echo "BAD: first session: ${got}" >&2; exit 1; }
           echo OK
         assertions:
           - result.code ShouldEqual 0

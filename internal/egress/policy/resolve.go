@@ -140,6 +140,11 @@ func Resolve(s Sources) (Resolved, error) {
 	if r.AllowPlain {
 		var derived []Entry
 		for _, e := range r.Entries {
+			// HostLink is tunnels only: Parse refuses its http:// entry, so
+			// one derived here could be neither asked for nor denied.
+			if e.Host == HostLink {
+				continue
+			}
 			if p := (Entry{Host: e.Host, Port: PlainPort, Plain: true}); !e.Plain && !slices.Contains(plainRemoved, p) {
 				derived = append(derived, p)
 			}

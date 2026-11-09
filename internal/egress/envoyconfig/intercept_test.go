@@ -124,12 +124,12 @@ var _ = Describe("credential interception", func() {
 
 	It("forwards each host to itself over TLS verified against the system roots, with SNI and SAN of that host", func() {
 		cds := decode(envoyconfig.Render("s1", sample, both).CDS)
-		Expect(dig(cds, "resources")).To(HaveLen(5))
-		in := dig(cds, "resources", 1)
+		Expect(dig(cds, "resources")).To(HaveLen(6))
+		in := dig(cds, "resources", 2)
 		Expect(dig(in, "name")).To(Equal("intercept-api.anthropic.com"))
 		Expect(dig(in, "load_assignment", "endpoints", 0, "lb_endpoints", 0, "endpoint", "address", "envoy_internal_address", "server_listener_name")).
 			To(Equal("intercept-api.anthropic.com"))
-		up := dig(cds, "resources", 2)
+		up := dig(cds, "resources", 3)
 		Expect(dig(up, "name")).To(Equal("upstream-api.anthropic.com"))
 		Expect(dig(up, "type")).To(Equal("LOGICAL_DNS"))
 		Expect(dig(up, "dns_lookup_family")).To(Equal("V4_ONLY"))
@@ -158,7 +158,7 @@ var _ = Describe("credential interception", func() {
 	It("renders what it rendered before interception existed when nothing is intercepted", func() {
 		f := envoyconfig.Render("s1", sample, nil)
 		Expect(dig(decode(f.LDS), "resources")).To(HaveLen(1))
-		Expect(dig(decode(f.CDS), "resources")).To(HaveLen(1))
+		Expect(dig(decode(f.CDS), "resources")).To(HaveLen(2))
 		for _, b := range [][]byte{f.Bootstrap, f.CDS, f.LDS, f.RDS} {
 			Expect(string(b)).NotTo(ContainSubstring("intercept"))
 		}
@@ -205,7 +205,7 @@ var _ = Describe("credential interception", func() {
 	It("inlines the interception in the static rendering, without resource @types", func() {
 		s := decode(envoyconfig.RenderStatic("s1", allowed, both))
 		Expect(dig(s, "static_resources", "listeners")).To(HaveLen(3))
-		Expect(dig(s, "static_resources", "clusters")).To(HaveLen(5))
+		Expect(dig(s, "static_resources", "clusters")).To(HaveLen(6))
 		Expect(dig(s, "static_resources", "listeners", 1)).NotTo(HaveKey("@type"))
 		Expect(dig(s, "bootstrap_extensions", 0, "name")).To(Equal("envoy.bootstrap.internal_listener"))
 		rc := dig(s, "static_resources", "listeners", 0, "filter_chains", 0, "filters", 0, "typed_config", "route_config", "virtual_hosts", 1, "name")

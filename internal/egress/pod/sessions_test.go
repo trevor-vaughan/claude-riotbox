@@ -482,6 +482,83 @@ var _ = Describe("sessions", func() {
 			Expect(stderr.String()).To(ContainSubstring("junk"))
 		})
 
+		Describe("an orphaned hostlink sidecar", func() {
+			// sidecar is a hostlink container as podman lists it.
+			sidecar := func(name, session, pid, pidns string) string {
+				return fmt.Sprintf(`{"Names":[%q],"Labels":{"riotbox.egress":%q,"riotbox.egress-role":"hostlink","riotbox.owner-pid":%q,"riotbox.owner-pidns":%q}}`, name, session, pid, pidns)
+			}
+			var sidecars []string
+			// withSidecars answers the hostlink container list with
+			// sidecars, and the rest as listed does.
+			withSidecars := func() {
+				listed()
+				base := engine.respond
+				engine.respond = func(args []string) ([]byte, error) {
+					if strings.Join(args, " ") == "ps -a --filter label=riotbox.egress-role=hostlink --format json" {
+						return []byte("[" + strings.Join(sidecars, ",") + "]"), nil
+					}
+					return base(args)
+				}
+			}
+			BeforeEach(func() { sidecars = nil })
+
+			It("removes one whose session has no networks left and whose owner is gone", func() {
+				sidecars = []string{sidecar("gone-hostlink", "gone", fmt.Sprint(deadPID()), pod.PIDNamespace())}
+				withSidecars()
+				Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+				Expect(engine.lines()).To(ContainElement("rm --force --ignore gone-hostlink"))
+			})
+
+			It("leaves one alone while its owner lives", func() {
+				sidecars = []string{sidecar("busy-hostlink", "busy", fmt.Sprint(os.Getpid()), pod.PIDNamespace())}
+				withSidecars()
+				Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+				Expect(engine.index("rm")).To(Equal(-1))
+			})
+
+			DescribeTable("leaves one alone when its owner cannot be judged dead",
+				func(pid, pidns func() string) {
+					sidecars = []string{sidecar("odd-hostlink", "odd", pid(), pidns())}
+					withSidecars()
+					Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+					Expect(engine.index("rm")).To(Equal(-1))
+				},
+				Entry("another PID namespace", func() string { return fmt.Sprint(deadPID()) }, func() string { return "pid:[1]" }),
+				Entry("no owner label", func() string { return "" }, pod.PIDNamespace),
+				Entry("a malformed owner", func() string { return "-3" }, pod.PIDNamespace),
+			)
+
+			It("leaves one whose session still has networks to that session's teardown", func() {
+				networks = []string{sessionJSON("busy", fmt.Sprint(os.Getpid()), pod.PIDNamespace())}
+				sidecars = []string{sidecar("busy-hostlink", "busy", fmt.Sprint(deadPID()), pod.PIDNamespace())}
+				withSidecars()
+				Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+				Expect(engine.index("rm")).To(Equal(-1))
+			})
+
+			It("skips, and warns about, a container whose name does not match its label", func() {
+				sidecars = []string{sidecar("victim", "gone", fmt.Sprint(deadPID()), pod.PIDNamespace())}
+				withSidecars()
+				Expect(m.Sweep(root, []string{rt}, week, now)).To(Succeed())
+				Expect(engine.index("rm")).To(Equal(-1))
+				Expect(stderr.String()).To(ContainSubstring("victim"))
+			})
+
+			It("reports a container list it cannot read, and still sweeps the state dirs", func() {
+				d := oldDir("old", 30*24*time.Hour)
+				listed()
+				base := engine.respond
+				engine.respond = func(args []string) ([]byte, error) {
+					if args[0] == "ps" && args[1] == "-a" {
+						return nil, errors.New("ps: engine down")
+					}
+					return base(args)
+				}
+				Expect(m.Sweep(root, []string{rt}, week, now)).To(MatchError(ContainSubstring("ps: engine down")))
+				Expect(d.Path()).NotTo(BeAnExistingFile())
+			})
+		})
+
 		It("keeps an orphan's state, and reports, when its teardown fails", func() {
 			engine.respond = func(args []string) ([]byte, error) {
 				switch args[0] {

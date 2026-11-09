@@ -97,11 +97,16 @@ func egressUp(a parsedArgs, stdout, stderr io.Writer) int {
 			return egressFailed(stderr, err)
 		}
 	}
+	core, err := os.Executable()
+	if err != nil {
+		return egressFailed(stderr, fmt.Errorf("finding riotbox-core for the hostlink relay: %w", err))
+	}
 	flags, err := pod.NewManager(a.opts["--engine"], stderr).Up(pod.UpRequest{
 		Dir:         dir,
 		SessionKey:  a.opts["--session-key"],
 		OwnerPID:    pid,
 		Image:       a.opts["--image"],
+		Core:        core,
 		AgentHosts:  hosts,
 		Projects:    a.multi["--project"],
 		SystemConf:  a.opts["--system-conf"],
@@ -325,6 +330,7 @@ func egressEdit(verbName string, remove bool) func(a parsedArgs, stdout, stderr 
 		if err != nil {
 			return egressFailed(stderr, err)
 		}
+		warnNoRelay(dir, r, stderr)
 		if save {
 			if err := state.SaveItem(saveTo, it, stderr); err != nil {
 				return egressFailed(stderr, fmt.Errorf("the session was changed, but saving to %s failed: %w", display.Quote(saveTo), err))
@@ -446,6 +452,23 @@ func applyChange(m pod.Manager, dir state.Dir, what string, change func(before p
 	return policy.Resolved{}, fmt.Errorf("%s was not applied: %w", what, err)
 }
 
+// warnNoRelay warns on stderr when r, just applied to dir's session,
+// allows policy.HostLink but the session has no hostlink relay
+// (state.Dir.HasRelay): pod.Up starts one only for a launch whose
+// allowlist names the host, so a live allow cannot reach it.
+func warnNoRelay(dir state.Dir, r policy.Resolved, stderr io.Writer) {
+	if !slices.ContainsFunc(r.Entries, func(e policy.Entry) bool { return e.Host == policy.HostLink }) {
+		return
+	}
+	relay, err := dir.HasRelay()
+	switch {
+	case err != nil:
+		_, _ = fmt.Fprintf(stderr, "WARNING: egress: %s is allowed, but whether session %s has a host-loopback relay cannot be told: %v\n", policy.HostLink, dir.Name(), err)
+	case !relay:
+		_, _ = fmt.Fprintf(stderr, "WARNING: egress: %s is allowed, but session %s has no host-loopback relay (it starts only when the allowlist names %s at launch, on rootless podman with pasta); restart the session to reach it. Until then its CONNECTs fail with 503.\n", policy.HostLink, dir.Name(), policy.HostLink)
+	}
+}
+
 // checkRunning fails unless dir's session is still running: it may have
 // stopped while the command waited for the lock, and a reload of a dead
 // session would be reported as applied. The caller holds the lock.
@@ -499,6 +522,7 @@ func egressReload(a parsedArgs, stdout, stderr io.Writer) int {
 			status = egressFailed(stderr, fmt.Errorf("%s: %w", dir.Name(), err))
 			continue
 		}
+		warnNoRelay(dir, r, stderr)
 		if _, err := fmt.Fprintf(stdout, "egress: %s: reloaded, %d allowed\n", dir.Name(), len(r.Entries)); err != nil {
 			return written(err, stderr)
 		}
@@ -559,6 +583,7 @@ func egressStrict(a parsedArgs, stdout, stderr io.Writer) int {
 	if w := r.LockoutWarning(); w != "" {
 		_, _ = fmt.Fprintln(stderr, w)
 	}
+	warnNoRelay(dir, r, stderr)
 	changed := false
 	if save {
 		if changed, err = state.SaveStrict(saveTo, setting, stderr); err != nil {

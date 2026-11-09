@@ -54,6 +54,15 @@ const (
 // read-only into the proxy alone.
 const SecretsDir = "/etc/riotbox-egress-secrets"
 
+// HostlinkDir holds the hostlink relay's socket, HostlinkSocketName: it
+// is mounted read-write into the session's hostlink sidecar and read-only
+// into the proxy (connecting to a socket needs no write access to its
+// mount).
+const (
+	HostlinkDir        = "/run/riotbox-hostlink"
+	HostlinkSocketName = "relay.sock"
+)
+
 // SystemCABundle is the pinned Envoy image's CA bundle, which the proxy
 // verifies credential hosts against.
 const SystemCABundle = "/etc/ssl/certs/ca-certificates.crt"
@@ -123,7 +132,8 @@ func RenderCredential(host, value string) []byte {
 // (localReply); it is a state.Dir name, which holds no "%", so Envoy
 // reads no command operator in it. The listeners and clusters depend on
 // intercepts alone, never on entries, so lds.json and cds.json never
-// change after start.
+// change after start. The hostlink cluster is always present, so a
+// host-loopback allow needs no CDS change.
 func Render(session string, entries []policy.Entry, intercepts []Intercept) Files {
 	intercepts = byHost(intercepts)
 	listeners, clusters := interceptResources(intercepts)
@@ -135,7 +145,7 @@ func Render(session string, entries []policy.Entry, intercepts []Intercept) File
 				"cds_config": fileSource(CDSFile),
 			},
 		}, intercepts)),
-		CDS: mustMarshal(resources(typeCluster, append([]obj{cluster()}, clusters...)...)),
+		CDS: mustMarshal(resources(typeCluster, append([]obj{cluster(), hostlinkCluster()}, clusters...)...)),
 		LDS: mustMarshal(resources(typeListener, append([]obj{listener(session, obj{
 			"rds": obj{"route_config_name": "egress", "config_source": fileSource(RDSFile)},
 		})}, listeners...)...)),
@@ -160,7 +170,7 @@ func RenderStatic(session string, entries []policy.Entry, intercepts []Intercept
 		"node": node(),
 		"static_resources": obj{
 			"listeners": append([]obj{listener(session, obj{"route_config": routeConfig(entries, intercepts)})}, listeners...),
-			"clusters":  append([]obj{cluster()}, clusters...),
+			"clusters":  append([]obj{cluster(), hostlinkCluster()}, clusters...),
 		},
 	}, intercepts))
 }
@@ -222,6 +232,24 @@ func cluster() obj {
 		"cluster_type": obj{
 			"name":         "envoy.clusters.dynamic_forward_proxy",
 			"typed_config": obj{"@type": typeDFPCluster, "dns_cache_config": dnsCache()},
+		},
+	}
+}
+
+// hostlinkCluster reaches the hostlink relay over its socket, speaking
+// HTTP/1 (the default), to which passthroughRoute hands CONNECTs. With no
+// relay running (rootless podman without pasta) its CONNECTs fail with
+// 503.
+func hostlinkCluster() obj {
+	return obj{
+		"name":            "hostlink",
+		"connect_timeout": "5s",
+		"type":            "STATIC",
+		"load_assignment": obj{
+			"cluster_name": "hostlink",
+			"endpoints": []any{obj{"lb_endpoints": []any{obj{"endpoint": obj{
+				"address": obj{"pipe": obj{"path": HostlinkDir + "/" + HostlinkSocketName}},
+			}}}}},
 		},
 	}
 }
@@ -349,6 +377,8 @@ func Check(entries []policy.Entry, intercepts []Intercept) error {
 			n++
 		}
 	}
+	open, closed, _, _ := hostlinkPorts(entries, domains)
+	n += len(open) + len(closed)
 	if n > MaxDomains {
 		return fmt.Errorf("the allowlist needs %d single-port domains, more than the %d allowed; use fewer or narrower port ranges, or host:* for every port", n, MaxDomains)
 	}
@@ -358,10 +388,14 @@ func Check(entries []policy.Entry, intercepts []Intercept) error {
 // planDomains returns the virtual-host domains of entries (see
 // routeConfig), the *.s:* entries that only the "*" host's regex routes
 // can say, and the intercepted host:port entries that get a virtual host
-// of their own.
+// of their own. Entries for policy.HostLink are left to hostlinkVHosts, and
+// it is never intercepted.
 func planDomains(entries []policy.Entry, intercepts []Intercept) (domains []domain, wildAll []policy.Entry, intercepted map[policy.Entry]bool) {
 	intercepted = map[policy.Entry]bool{}
 	for _, i := range intercepts {
+		if i.Host == policy.HostLink {
+			continue
+		}
 		if e := (policy.Entry{Host: i.Host, Port: policy.DefaultPort}); policy.Allows(entries, e) {
 			intercepted[e] = true
 		}
@@ -375,6 +409,9 @@ func planDomains(entries []policy.Entry, intercepts []Intercept) (domains []doma
 	}
 	isWild := func(host string) bool { return strings.HasPrefix(host, "*.") }
 	for _, e := range entries {
+		if e.Host == policy.HostLink {
+			continue
+		}
 		switch {
 		case e.AllPorts() && isWild(e.Host):
 			wildAll = append(wildAll, e)
@@ -441,8 +478,13 @@ const portRE = "(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|
 // A CONNECT to an intercepted host that entries allow on port 443 goes to
 // that host's internal listener, from a virtual host of its own that no
 // other domain shares; its 403 refuses plain HTTP there, so plain HTTP
-// never reaches an interception. Ports are never stripped. With no
-// entries only the deny host is emitted.
+// never reaches an interception. Ports are never stripped.
+//
+// policy.HostLink always means the host's loopback (hostlinkVHosts): its
+// allowed CONNECTs go to the hostlink relay, never to the forward proxy,
+// and no wildcard covers it.
+//
+// With no entries only the deny host is emitted.
 func routeConfig(entries []policy.Entry, intercepts []Intercept) obj {
 	forbidden := obj{"status": 403}
 	domains, wildAll, intercepted := planDomains(entries, intercepts)
@@ -519,6 +561,7 @@ func routeConfig(entries []policy.Entry, intercepts []Intercept) obj {
 		}
 	}
 	vhosts = append(vhosts, portHosts...)
+	vhosts = append(vhosts, hostlinkVHosts(entries, domains)...)
 	for _, i := range intercepts {
 		e := policy.Entry{Host: i.Host, Port: policy.DefaultPort}
 		if !intercepted[e] {
@@ -560,6 +603,98 @@ func connectRoute(cluster string) obj {
 			"upgrade_configs": []any{obj{"upgrade_type": "CONNECT", "connect_config": obj{}}},
 		},
 	}
+}
+
+// passthroughRoute hands a CONNECT itself, unterminated, to the hostlink
+// relay, which reads the port from it: one cluster then serves every
+// port, so CDS never changes. Its timeout is off as connectRoute's is.
+func passthroughRoute() obj {
+	return obj{
+		"match": obj{"connect_matcher": obj{}},
+		"route": obj{
+			"cluster":         "hostlink",
+			"timeout":         "0s",
+			"upgrade_configs": []any{obj{"upgrade_type": "CONNECT"}},
+		},
+	}
+}
+
+// hostlinkPorts returns the exact policy.HostLink ports the hostlink
+// virtual hosts hold, sorted: open, those entries allow, and closed, those
+// of a rendered *.t:p domain covering the host that they do not (a *.t:p
+// domain outranks the host:* one, so without its own exact domain such a
+// port would follow the wildcard to the forward proxy). all reports
+// host.containers.internal:*, which allows every port; needed, whether any
+// entry names the host or a wildcard covers it.
+func hostlinkPorts(entries []policy.Entry, domains []domain) (open, closed []int, all, needed bool) {
+	allowed := map[int]bool{}
+	for _, e := range entries {
+		switch {
+		case e.Host == policy.HostLink && e.Plain:
+			// The relay carries tunnels only; policy never makes such an entry.
+		case e.Host == policy.HostLink:
+			needed = true
+			if e.AllPorts() {
+				all = true
+				continue
+			}
+			for p := e.Port; p <= e.Last(); p++ {
+				allowed[p] = true
+			}
+		case policy.HostCovers(e.Host, policy.HostLink):
+			needed = true
+		}
+	}
+	shut := map[int]bool{}
+	for _, d := range domains {
+		if d.all || !strings.HasPrefix(d.host, "*.") || !policy.HostCovers(d.host, policy.HostLink) {
+			continue
+		}
+		if all {
+			allowed[d.port] = true
+		} else if !allowed[d.port] {
+			shut[d.port] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(allowed)), slices.Sorted(maps.Keys(shut)), all, needed
+}
+
+// hostlinkVHosts are policy.HostLink's virtual hosts, none when no entry
+// names or covers it (the "*" host then refuses it): "hostlink" holds an
+// exact domain per open port, passed to the relay; "hostlink-rest" holds
+// the closed ports, the bare name (a port-less plain request would
+// otherwise match a bare *.t domain) and host:*, refused unless
+// host.containers.internal:* allows every port, under the same port guard
+// as other host:* domains.
+func hostlinkVHosts(entries []policy.Entry, domains []domain) []any {
+	open, closed, all, needed := hostlinkPorts(entries, domains)
+	if !needed {
+		return nil
+	}
+	authorities := func(ports []int) []any {
+		var out []any
+		for _, p := range ports {
+			out = append(out, policy.Entry{Host: policy.HostLink, Port: p}.Authority())
+		}
+		return out
+	}
+	forbidden := obj{"status": 403}
+	refuseConnect := obj{"match": obj{"connect_matcher": obj{}}, "direct_response": forbidden}
+	refuseRest := obj{"match": obj{"prefix": "/"}, "direct_response": forbidden}
+	var vhosts []any
+	if len(open) > 0 {
+		vhosts = append(vhosts, obj{"name": "hostlink", "domains": authorities(open), "routes": []any{passthroughRoute(), refuseRest}})
+	}
+	rest := []any{refuseConnect, refuseRest}
+	if all {
+		guard := "(?i)^" + regexp.QuoteMeta(policy.HostLink) + ":" + portRE + "$"
+		rest = append([]any{matchAuthority(passthroughRoute(), guard)}, rest...)
+	}
+	return append(vhosts, obj{
+		"name":    "hostlink-rest",
+		"domains": append(authorities(closed), policy.HostLink, policy.HostLink+":*"),
+		"routes":  rest,
+	})
 }
 
 // plainRoute forwards a plain-HTTP request to the forward-proxy cluster,

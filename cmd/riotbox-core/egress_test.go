@@ -1,6 +1,7 @@
 package main_test
 
 import (
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -759,6 +760,59 @@ var _ = Describe("egress verbs", func() {
 		})
 	})
 
+	Describe("a live change that allows the host's loopback", func() {
+		const noRelay = "WARNING: egress: host.containers.internal is allowed, but session s1 has no host-loopback relay (it starts only when the allowlist names host.containers.internal at launch, on rootless podman with pasta); restart the session to reach it. Until then its CONNECTs fail with 503.\n"
+		var d state.Dir
+		BeforeEach(func() {
+			d = seed("s1")
+			env = append(env, gatewaysJSON("s1"))
+		})
+		userConf := func(conf string) {
+			Expect(os.MkdirAll(filepath.Dir(user), 0o700)).To(Succeed())
+			Expect(os.WriteFile(user, []byte(conf), 0o600)).To(Succeed())
+		}
+
+		DescribeTable("warns when the session has no relay",
+			func(prepare func(), args ...string) {
+				prepare()
+				s := runEgress(append(confArgs(args[0]), args[1:]...)...)
+				Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+				Expect(string(s.Err.Contents())).To(ContainSubstring(noRelay))
+			},
+			Entry("egress-allow", func() {}, "egress-allow", "--", policy.HostLink+":2222"),
+			Entry("egress-deny of one port, leaving another", func() { userConf(policy.HostLink + ":2222\n" + policy.HostLink + ":3333\n") },
+				"egress-deny", "--", policy.HostLink+":2222"),
+			Entry("egress-reload", func() { userConf(policy.HostLink + ":2222\n") }, "egress-reload"),
+			Entry("egress-strict", func() { userConf(policy.HostLink + ":2222\n") }, "egress-strict", "--", "off"),
+		)
+
+		It("warns when the session's relay left its socket behind and no longer answers", func() {
+			userConf(policy.HostLink + ":2222\n")
+			l, err := net.ListenUnix("unix", &net.UnixAddr{Name: d.HostlinkSocket(), Net: "unix"})
+			Expect(err).NotTo(HaveOccurred())
+			l.SetUnlinkOnClose(false)
+			Expect(l.Close()).To(Succeed())
+			s := runEgress(confArgs("egress-reload")...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Err.Contents())).To(ContainSubstring(noRelay))
+		})
+
+		It("does not warn when the session's relay serves its socket", func() {
+			l, err := net.Listen("unix", d.HostlinkSocket())
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(l.Close)
+			s := runEgress(append(confArgs("egress-allow"), "--", policy.HostLink+":2222")...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("WARNING"))
+		})
+
+		It("does not warn for a change that leaves the host off the allowlist", func() {
+			s := runEgress(append(confArgs("egress-allow"), "--", "*.containers.internal:2222")...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("WARNING"))
+		})
+	})
+
 	Describe("egress-list", func() {
 		It("says when no session runs", func() {
 			s := runEgress("egress-list", "--engine", engine, "--state-root", root)
@@ -1154,7 +1208,7 @@ var _ = Describe("egress verbs", func() {
 			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
 			calls, err := os.ReadFile(log)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(string(calls)).To(HavePrefix("stop --ignore --time 10 s1-egress\nrm --force --ignore s1 s1-egress\n"))
+			Expect(string(calls)).To(HavePrefix("stop --ignore --time 10 s1-egress\nrm --force --ignore s1 s1-egress s1-hostlink\n"))
 		})
 
 		It("sweeps with nothing to do", func() {

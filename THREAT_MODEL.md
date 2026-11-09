@@ -1376,6 +1376,21 @@ egress proxy; without the flag the agent's HTTPS goes out directly.
   RiotBox checkout run on itself) can add hosts to an OS group for later
   launches that allow it. A running session keeps the `os.conf` snapshot
   taken at its launch, in the masked state root.
+- **Host loopback.** An allowed `host.containers.internal:PORT` reaches the
+  host's `127.0.0.1:PORT` by design: allowing a port exposes whatever
+  listens there, and an `ssh -L` forward reaches its far end. The relay
+  sidecar (`<name>-hostlink`, rootless podman on pasta) has no network the
+  agent is on and is reachable only through Envoy's Unix socket. The relay
+  accepts only a CONNECT to `host.containers.internal` on a port in the
+  session's ports file, re-read per connection, and refuses everything if
+  the file is malformed; Envoy has already checked the port. Wildcards never
+  cover the name, and plain HTTP and `[inject]` rows for it are refused. The
+  agent can read the session's `share/` dir (read-only: the ports list and a
+  copy of the public `riotbox-core` binary) but nothing else of the state
+  dir. Residual: `host.docker.internal`, podman's alias for the host's
+  network address, is unchanged and goes through the forward proxy like any
+  allowed name, so allowing it, or a wildcard covering it, exposes host
+  services bound to non-loopback addresses.
 
 ## Findings
 

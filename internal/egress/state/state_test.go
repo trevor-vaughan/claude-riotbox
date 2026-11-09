@@ -3,6 +3,7 @@ package state_test
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,6 +124,76 @@ var _ = Describe("Dir", func() {
 				Expect(perm(target)).To(Equal(os.FileMode(0o755)), "must not chmod through the link")
 			})
 		}
+	})
+
+	Describe("host loopback", func() {
+		It("creates the share and hostlink dirs mode 0700", func() {
+			Expect(d.Create()).To(Succeed())
+			for _, p := range []string{d.ShareDir(), d.HostlinkDir()} {
+				info, err := os.Lstat(p)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(info.IsDir()).To(BeTrue())
+				Expect(info.Mode().Perm()).To(Equal(os.FileMode(0o700)))
+			}
+			Expect(d.HostlinkSocket()).To(Equal(filepath.Join(d.HostlinkDir(), "relay.sock")))
+			Expect(d.HostlinkPorts()).To(Equal(filepath.Join(d.ShareDir(), "hostlink.ports")))
+			Expect(d.Core()).To(Equal(filepath.Join(d.ShareDir(), "riotbox-core")))
+		})
+
+		It("refuses a share dir that is a link", func() {
+			Expect(os.MkdirAll(d.Path(), 0o700)).To(Succeed())
+			Expect(os.Symlink(GinkgoT().TempDir(), d.ShareDir())).To(Succeed())
+			Expect(d.Create()).To(MatchError(ContainSubstring("is not a directory")))
+		})
+
+		It("copies riotbox-core into the share dir, executable by its owner alone, replacing an old copy", func() {
+			Expect(d.Create()).To(Succeed())
+			src := filepath.Join(GinkgoT().TempDir(), "riotbox-core")
+			Expect(os.WriteFile(src, []byte("new"), 0o755)).To(Succeed())
+			Expect(os.WriteFile(d.Core(), []byte("old"), 0o700)).To(Succeed())
+			Expect(d.InstallCore(src)).To(Succeed())
+			Expect(os.ReadFile(d.Core())).To(Equal([]byte("new")))
+			Expect(perm(d.Core())).To(Equal(os.FileMode(0o700)))
+		})
+
+		It("says what failed when riotbox-core cannot be read", func() {
+			Expect(d.Create()).To(Succeed())
+			Expect(d.InstallCore(filepath.Join(GinkgoT().TempDir(), "missing"))).
+				To(MatchError(ContainSubstring("copying riotbox-core for the hostlink relay")))
+		})
+
+		It("has a relay only while the relay's socket is there", func() {
+			Expect(d.Create()).To(Succeed())
+			Expect(d.HasRelay()).To(BeFalse())
+			l, err := net.Listen("unix", d.HostlinkSocket())
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(l.Close)
+			Expect(d.HasRelay()).To(BeTrue())
+		})
+
+		It("has no relay when the socket is left behind with nothing listening", func() {
+			Expect(d.Create()).To(Succeed())
+			l, err := net.ListenUnix("unix", &net.UnixAddr{Name: d.HostlinkSocket(), Net: "unix"})
+			Expect(err).NotTo(HaveOccurred())
+			l.SetUnlinkOnClose(false)
+			Expect(l.Close()).To(Succeed())
+			Expect(d.HostlinkSocket()).To(BeAnExistingFile())
+			Expect(d.HasRelay()).To(BeFalse())
+		})
+
+		It("has no relay when a plain file takes the socket's place", func() {
+			Expect(d.Create()).To(Succeed())
+			Expect(os.WriteFile(d.HostlinkSocket(), nil, 0o600)).To(Succeed())
+			Expect(d.HasRelay()).To(BeFalse())
+		})
+
+		It("reports an error when it cannot tell", func() {
+			Expect(d.Create()).To(Succeed())
+			Expect(os.Chmod(d.HostlinkDir(), 0o000)).To(Succeed())
+			DeferCleanup(os.Chmod, d.HostlinkDir(), os.FileMode(0o700))
+			_, err := d.HasRelay()
+			Expect(err).To(HaveOccurred())
+		})
 	})
 
 	Describe("Policy", func() {
@@ -315,6 +386,51 @@ var _ = Describe("Dir", func() {
 			_, err = d.Reload("/nonexistent/sys", "/nonexistent/user")
 			Expect(err).To(MatchError(ContainSubstring("no group named @nosuch")))
 			Expect(os.ReadFile(rds)).To(Equal(before))
+		})
+
+		It("writes the host-loopback ports file with the config", func() {
+			Expect(d.WriteConfig(policy.Resolved{Entries: []policy.Entry{{Host: policy.HostLink, Port: 18000}}})).To(Succeed())
+			Expect(os.ReadFile(d.HostlinkPorts())).To(Equal([]byte("18000\n")))
+		})
+
+		It("rewrites the ports file on reload, before the proxy's rds.json applies it", func() {
+			Expect(d.WriteConfig(policy.Resolved{StrictFrom: policy.SourceDefault})).To(Succeed())
+			user := filepath.Join(GinkgoT().TempDir(), "egress.conf")
+			Expect(os.WriteFile(user, []byte(policy.HostLink+":2222\n"), 0o600)).To(Succeed())
+			_, err := d.Reload("/nonexistent/sys", user)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(os.ReadFile(d.HostlinkPorts())).To(Equal([]byte("2222\n")))
+		})
+
+		It("reloads a session an earlier release started, which has no share dir, without making one", func() {
+			Expect(d.WriteConfig(policy.Resolved{StrictFrom: policy.SourceDefault})).To(Succeed())
+			Expect(os.RemoveAll(d.ShareDir())).To(Succeed())
+			user := filepath.Join(GinkgoT().TempDir(), "egress.conf")
+			Expect(os.WriteFile(user, []byte(policy.HostLink+":2222\n"), 0o600)).To(Succeed())
+			_, err := d.Reload("/nonexistent/sys", user)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(d.ShareDir()).NotTo(BeADirectory())
+		})
+
+		It("refuses a reload whose share path is not a real directory", func() {
+			Expect(d.WriteConfig(policy.Resolved{StrictFrom: policy.SourceDefault})).To(Succeed())
+			Expect(os.RemoveAll(d.ShareDir())).To(Succeed())
+			Expect(os.Symlink(GinkgoT().TempDir(), d.ShareDir())).To(Succeed())
+			_, err := d.Reload("/nonexistent/sys", "/nonexistent/user")
+			Expect(err).To(MatchError(ContainSubstring("is not a directory")))
+			Expect(err).To(MatchError(ContainSubstring(d.ShareDir())))
+		})
+
+		It("writes the ports file before rds.json, so a failed rds write still leaves the new ports", func() {
+			Expect(d.WriteConfig(policy.Resolved{StrictFrom: policy.SourceDefault})).To(Succeed())
+			rds := filepath.Join(d.ConfigDir(), "rds.json")
+			Expect(os.Remove(rds)).To(Succeed())
+			Expect(os.MkdirAll(filepath.Join(rds, "blocker"), 0o700)).To(Succeed())
+			user := filepath.Join(GinkgoT().TempDir(), "egress.conf")
+			Expect(os.WriteFile(user, []byte(policy.HostLink+":2222\n"), 0o600)).To(Succeed())
+			_, err := d.Reload("/nonexistent/sys", user)
+			Expect(err).To(HaveOccurred())
+			Expect(os.ReadFile(d.HostlinkPorts())).To(Equal([]byte("2222\n")))
 		})
 
 		Describe("an allowlist over the rendering's domain cap", func() {

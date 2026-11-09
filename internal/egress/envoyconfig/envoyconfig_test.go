@@ -501,6 +501,15 @@ var _ = Describe("the pinned Envoy image", Label("e2e"), func() {
 		validate(envoyconfig.RenderStatic("s1", sample, nil), "")
 	})
 
+	It("accepts a rendering that reaches the host's loopback", func() {
+		validate(envoyconfig.RenderStatic("s1", append(slices.Clone(sample),
+			policy.Entry{Host: policy.HostLink, Port: 18000, PortEnd: 18099},
+			policy.Entry{Host: policy.HostLink, Port: 1, PortEnd: 65535},
+			policy.Entry{Host: "*.internal", Port: 443},
+			policy.Entry{Host: "*.containers.internal", Port: 1, PortEnd: 65535},
+		), nil), "")
+	})
+
 	It("accepts a rendering that intercepts a credential host, with its leaf, key and credential", func() {
 		const host = "api.example.com"
 		secrets := GinkgoT().TempDir()

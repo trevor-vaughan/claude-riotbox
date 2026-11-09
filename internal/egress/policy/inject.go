@@ -69,6 +69,9 @@ func (p *confParser) injectRow(n int, line string) error {
 	default:
 		row.Host = strings.ToLower(rawHost)
 		err = checkHost(row.Host)
+		if err == nil && row.Host == HostLink {
+			err = errors.New("it is the host's loopback, which the proxy never intercepts, so it cannot carry a key")
+		}
 	}
 	if err != nil {
 		return p.errorf(n, "invalid host %q: %v", rawHost, err)

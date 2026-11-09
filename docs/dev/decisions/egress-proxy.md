@@ -288,3 +288,52 @@ total of single-port domains at `envoyconfig.MaxDomains` (65536); `WriteConfig`
 and `Reload` refuse an allowlist over it, naming the count, and a reload
 that is refused leaves the running proxy's rules as they were. The fix is
 fewer or narrower ranges, or `host:*`.
+
+## Host loopback through a relay sidecar, 2026-11-08
+
+A host's `ssh -L` forward binds the host's `127.0.0.1`, which neither Envoy
+(on a bridge) nor the agent (on an internal network) can reach. The name
+`host.containers.internal` had to mean the host's loopback, not its network
+address.
+
+**Chosen:** a sidecar `<name>-hostlink` on pasta alone with
+`--map-host-loopback,169.254.1.2`, running `riotbox-core hostlink-relay` on
+a Unix socket. Envoy forwards each allowed CONNECT to that socket
+unterminated (a route without `connect_config`) over one static `pipe`
+cluster, and the relay dials `169.254.1.2:PORT`. The agent gets `localhost`
+listeners (`hostlink-listen`) that tunnel through the proxy.
+
+- **Gated on the launch's allowlist naming the host itself.** The sidecar's
+  conmon and pasta cost about 2 of the user's shared
+  `fs.inotify.max_user_instances` (default 128) per session, and Envoy
+  aborts when they run out. A wildcard does not count. The trade-off: a
+  live allow of the host in a session started without a relay cannot work
+  until a restart, so live changes (allow, deny, reload, strict) warn, and
+  the CONNECTs get 503 meanwhile.
+- **One socket with CONNECT passthrough, not a cluster per port.** CDS stays
+  static; a live allow needs only `rds.json` and the ports file.
+- **The relay re-checks the port** against the ports file, read on each
+  connection: defence in depth if a route bug passes a port. `Reload`
+  writes the ports file before `rds.json`, so an allow opens the relay
+  first and a deny closes it first. A malformed file refuses every port.
+- **A copy of `riotbox-core` in `share/`,** not a mount of the install:
+  `:z` would relabel the user's install on SELinux. `Down` deletes the copy.
+- **`share/` is not under `/run/riotbox-egress`,** where `ca.crt` is a file
+  mount; it is mounted read-only at `/run/riotbox-egress-share`.
+- **`169.254.1.2`** is link-local, so it never shadows a real destination.
+
+**Turned down:**
+
+- `pasta_options` in `containers.conf`: user-wide, it changes every bridge
+  container.
+- A host process: cruft, and a host port binding that concurrent sessions
+  would fight over.
+- A sidecar in every session: the inotify cost above.
+- Closing `host.docker.internal` (podman's alias for the host's network
+  address, reachable through the forward proxy like any allowed name): left
+  unchanged by decision. See THREAT_MODEL.md.
+
+**Cost:** one more container and a pasta process per relayed session;
+rootless podman on pasta only (otherwise `Up` warns and starts without it);
+plain `http://host.containers.internal` and `[inject]` rows for it are
+refused; no listeners for `host.containers.internal:*`.

@@ -35,7 +35,7 @@ testcases:
           if grep -q '^pod \|--pod' "${log}"; then echo "BAD: a pod is used" >&2; exit 1; fi
           grep -q "^run -d --name ${name}-egress " "${log}" || { echo "BAD: no proxy" >&2; exit 1; }
           grep -qx "stop --ignore --time 10 ${name}-egress" "${log}" || { echo "BAD: proxy not stopped" >&2; exit 1; }
-          grep -qx "rm --force --ignore ${name} ${name}-egress" "${log}" || { echo "BAD: containers not removed" >&2; exit 1; }
+          grep -qx "rm --force --ignore ${name} ${name}-egress ${name}-hostlink" "${log}" || { echo "BAD: containers not removed" >&2; exit 1; }
           grep -qx "network rm ${name}-int" "${log}" || { echo "BAD: internal network not removed" >&2; exit 1; }
           sweep="$(grep -n '^network ls ' "${log}" | head -1 | cut -d: -f1)"
           create="$(grep -n '^network create --internal' "${log}" | head -1 | cut -d: -f1)"

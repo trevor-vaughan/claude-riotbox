@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -62,8 +64,10 @@ var _ = Describe("Manager", func() {
 		engine = &fakeEngine{}
 		stderr = &bytes.Buffer{}
 		m = pod.Manager{Engine: engine, Stderr: stderr, ReadyTimeout: time.Second, PollInterval: time.Millisecond}
+		core := filepath.Join(GinkgoT().TempDir(), "riotbox-core")
+		Expect(os.WriteFile(core, []byte("core-binary"), 0o755)).To(Succeed())
 		req = pod.UpRequest{
-			Dir: dir, SessionKey: "key1", OwnerPID: 42, Image: image,
+			Dir: dir, SessionKey: "key1", OwnerPID: 42, Image: image, Core: core,
 			AgentHosts: []byte("api.agent.example\n"), Projects: []string{"/home/u/proj"},
 			SystemConf: filepath.Join(root, "none-sys"), UserConf: filepath.Join(root, "none-user"),
 		}
@@ -107,6 +111,7 @@ var _ = Describe("Manager", func() {
 			Expect(lines[3]).To(ContainSubstring(fmt.Sprintf(" --network s1-int,s1-ext --userns=keep-id --user %d:%d --read-only --cap-drop=ALL --security-opt no-new-privileges --ulimit core=0 --log-driver=none ", os.Getuid(), os.Getgid())))
 			Expect(lines[3]).To(ContainSubstring(" -v " + dir.ConfigDir() + ":/etc/riotbox-egress:ro,z "))
 			Expect(lines[3]).To(ContainSubstring(" -v " + dir.LogDir() + ":/var/log/riotbox-egress:rw,z "))
+			Expect(lines[3]).To(ContainSubstring(" -v " + dir.HostlinkDir() + ":/run/riotbox-hostlink:ro,z "))
 			Expect(lines[3]).To(HaveSuffix(" --entrypoint /usr/local/bin/envoy " + image + " -c /etc/riotbox-egress/bootstrap.json --log-path /var/log/riotbox-egress/envoy.log --file-flush-interval-msec 1000"))
 
 			Expect(lines[len(lines)-1]).To(Equal("container inspect --format " + networksFormat + " s1-egress"))
@@ -389,6 +394,143 @@ var _ = Describe("Manager", func() {
 			Expect(err).To(MatchError(ContainSubstring("stop: wedged")))
 		})
 
+		Describe("reaching the host's loopback", func() {
+			// withPasta answers `info` with pasta and, when the sidecar
+			// starts, opens its socket, as the relay does.
+			withPasta := func() {
+				base := healthy(dir)
+				engine.respond = func(args []string) ([]byte, error) {
+					switch {
+					case args[0] == "info":
+						return []byte("pasta\n"), nil
+					case args[0] == "run" && slices.Contains(args, "s1-hostlink"):
+						l, err := net.Listen("unix", dir.HostlinkSocket())
+						Expect(err).NotTo(HaveOccurred())
+						DeferCleanup(l.Close)
+						return []byte("0123abcd\n"), nil
+					}
+					return base(args)
+				}
+			}
+
+			// The sidecar starts only for a launch whose allowlist names
+			// the host.
+			BeforeEach(func() {
+				req.AgentHosts = []byte("api.agent.example\nhost.containers.internal:2222\n")
+			})
+
+			It("on pasta, starts no sidecar, copies no riotbox-core and mounts nothing new when the allowlist does not name the host", func() {
+				req.AgentHosts = []byte("api.agent.example\n*.containers.internal:2222\n")
+				withPasta()
+				flags, err := m.Up(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(engine.lines()).NotTo(ContainElement(ContainSubstring("s1-hostlink")))
+				Expect(engine.lines()).NotTo(ContainElement(HavePrefix("info ")))
+				Expect(strings.Join(flags, " ")).NotTo(ContainSubstring("riotbox-egress-share"))
+				Expect(dir.Core()).NotTo(BeAnExistingFile())
+				Expect(stderr.String()).NotTo(ContainSubstring("WARNING"))
+			})
+
+			It("refuses an empty riotbox-core path before creating any engine object", func() {
+				req.Core = ""
+				withPasta()
+				_, err := m.Up(req)
+				Expect(err).To(MatchError(ContainSubstring("no riotbox-core")))
+				Expect(engine.lines()).NotTo(ContainElement(HavePrefix("network create")))
+				Expect(engine.lines()).NotTo(ContainElement(HavePrefix("run ")))
+			})
+
+			It("creates no engine object, and removes the secrets, when riotbox-core cannot be copied", func() {
+				req.Core = filepath.Join(GinkgoT().TempDir(), "missing")
+				req.Credentials = []inject.Credential{{Env: "ANTHROPIC_API_KEY", Host: "api.anthropic.com", Header: "x-api-key", Value: "sk-ant-for-core-spec"}}
+				withPasta()
+				_, err := m.Up(req)
+				Expect(err).To(MatchError(ContainSubstring("copying riotbox-core for the hostlink relay")))
+				Expect(engine.lines()).NotTo(ContainElement(HavePrefix("network create")))
+				Expect(engine.lines()).NotTo(ContainElement(HavePrefix("run ")))
+				Expect(dir.SecretsDir()).NotTo(BeAnExistingFile())
+			})
+
+			It("removes the sidecar when the proxy fails to start after it", func() {
+				withPasta()
+				pasta := engine.respond
+				engine.respond = func(args []string) ([]byte, error) {
+					if args[0] == "run" && slices.Contains(args, "s1-egress") {
+						return nil, errors.New("run: boom")
+					}
+					return pasta(args)
+				}
+				_, err := m.Up(req)
+				Expect(err).To(MatchError(ContainSubstring("run: boom")))
+				Expect(engine.lines()).To(ContainElement(HavePrefix("run -d --name s1-hostlink ")))
+				Expect(engine.lines()).To(ContainElement("rm --force --ignore s1 s1-egress s1-hostlink"))
+			})
+
+			It("starts the relay sidecar on pasta alone, after the networks and before the proxy, and gives the agent the share dir", func() {
+				withPasta()
+				flags, err := m.Up(req)
+				Expect(err).NotTo(HaveOccurred())
+				labels := fmt.Sprintf("--label riotbox.egress=s1 --label riotbox.session=key1 --label riotbox.owner-pid=42 --label riotbox.owner-pidns=%s", pod.PIDNamespace())
+				lines := engine.lines()
+				Expect(lines[2]).To(HavePrefix("network create --internal"))
+				Expect(lines[3]).To(HavePrefix("network create "))
+				Expect(lines[4]).To(Equal("run -d --name s1-hostlink " + labels + " --label riotbox.egress-role=hostlink" +
+					" --network pasta:--map-host-loopback,169.254.1.2" +
+					fmt.Sprintf(" --userns=keep-id --user %d:%d", os.Getuid(), os.Getgid()) +
+					" --read-only --cap-drop=ALL --security-opt no-new-privileges --ulimit core=0 --log-driver=none" +
+					" -v " + dir.ShareDir() + ":/run/riotbox-egress-share:ro,z" +
+					" -v " + dir.HostlinkDir() + ":/run/riotbox-hostlink:rw,z" +
+					" --entrypoint /run/riotbox-egress-share/riotbox-core " + image +
+					" hostlink-relay --socket /run/riotbox-hostlink/relay.sock --ports /run/riotbox-egress-share/hostlink.ports --target 169.254.1.2"))
+				envoy := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "run -d --name s1-egress ") })
+				Expect(envoy).To(BeNumerically(">", 4))
+				Expect(os.ReadFile(dir.Core())).To(Equal([]byte("core-binary")))
+				Expect(flags[len(flags)-2:]).To(Equal([]string{"-v", dir.ShareDir() + ":/run/riotbox-egress-share:ro,z"}))
+			})
+
+			It("rolls back, without starting the proxy, when the sidecar exits before its socket appears", func() {
+				base := healthy(dir)
+				engine.respond = func(args []string) ([]byte, error) {
+					switch {
+					case args[0] == "info":
+						return []byte("pasta\n"), nil
+					case args[0] == "container" && args[1] == "inspect" && args[len(args)-1] == "s1-hostlink":
+						return []byte("false\n"), nil
+					}
+					return base(args)
+				}
+				_, err := m.Up(req)
+				Expect(err).To(MatchError(ContainSubstring("the egress hostlink relay exited during startup")))
+				Expect(engine.lines()).NotTo(ContainElement(HavePrefix("run -d --name s1-egress ")))
+				Expect(engine.lines()).To(ContainElement(HavePrefix("rm --force --ignore s1 s1-egress s1-hostlink")))
+			})
+
+			It("without pasta starts no sidecar and mounts nothing new into the agent", func() {
+				engine.respond = healthy(dir)
+				flags, err := m.Up(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(engine.lines()).NotTo(ContainElement(ContainSubstring("s1-hostlink")))
+				Expect(strings.Join(flags, " ")).NotTo(ContainSubstring("riotbox-egress-share"))
+				Expect(dir.Core()).NotTo(BeAnExistingFile())
+			})
+
+			It("without pasta warns when the allowlist names the host", func() {
+				engine.respond = healthy(dir)
+				_, err := m.Up(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(stderr.String()).To(ContainSubstring("WARNING: egress: host.containers.internal is on the allowlist, but reaching the host's loopback needs rootless podman with pasta"))
+			})
+
+			It("removes a reused session dir's stale socket before starting", func() {
+				Expect(dir.Create()).To(Succeed())
+				Expect(os.WriteFile(dir.HostlinkSocket(), nil, 0o600)).To(Succeed())
+				engine.respond = healthy(dir)
+				_, err := m.Up(req)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(dir.HostlinkSocket()).NotTo(BeAnExistingFile())
+			})
+		})
+
 		Describe("with keys to inject", func() {
 			const key = "sk-ant-s3cret-for-pod-specs"
 
@@ -560,6 +702,21 @@ var _ = Describe("Manager", func() {
 			Expect(dir.LogDir()).To(BeADirectory())
 		})
 
+		It("removes the relay's socket", func() {
+			Expect(dir.Create()).To(Succeed())
+			Expect(os.WriteFile(dir.HostlinkSocket(), nil, 0o600)).To(Succeed())
+			Expect(m.Down(dir, false)).To(Succeed())
+			Expect(dir.HostlinkSocket()).NotTo(BeAnExistingFile())
+		})
+
+		It("removes the session's riotbox-core copy", func() {
+			Expect(dir.Create()).To(Succeed())
+			Expect(os.WriteFile(dir.Core(), []byte("core-binary"), 0o700)).To(Succeed())
+			Expect(m.Down(dir, false)).To(Succeed())
+			Expect(dir.Core()).NotTo(BeAnExistingFile())
+			Expect(dir.ShareDir()).To(BeADirectory())
+		})
+
 		It("succeeds when there is no secrets dir, or no state dir at all", func() {
 			Expect(m.Down(dir, false)).To(Succeed())
 			Expect(dir.Create()).To(Succeed())
@@ -576,7 +733,7 @@ var _ = Describe("Manager", func() {
 			Expect(m.Down(dir, false)).To(Succeed())
 			Expect(engine.lines()).To(Equal([]string{
 				"stop --ignore --time 10 s1-egress",
-				"rm --force --ignore s1 s1-egress",
+				"rm --force --ignore s1 s1-egress s1-hostlink",
 				"network exists s1-int",
 				"network rm s1-int",
 				"network exists s1-ext",

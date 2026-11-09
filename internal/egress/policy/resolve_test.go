@@ -314,6 +314,15 @@ var _ = Describe("Resolve", func() {
 			}))
 		})
 
+		It("adds no http:// entry for host.containers.internal under allow_plain", func() {
+			r, err := policy.Resolve(files("strict\nallow_plain = on\na.example\nhost.containers.internal:2222\n", ""))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(r.Entries).To(Equal([]policy.Entry{
+				plain("a.example", 80), entry("a.example", 443),
+				entry(policy.HostLink, 2222),
+			}))
+		})
+
 		DescribeTable("takes allow_plain from the user file, else the system file, else off",
 			func(sys, user string, want bool) {
 				r, err := policy.Resolve(files(sys, user))
