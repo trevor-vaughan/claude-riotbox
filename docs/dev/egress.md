@@ -175,6 +175,28 @@ minutes would cut a quiet model stream).
    exact entry would shadow the wildcard's other way. A plain entry on port
    80 also lists its bare host, because clients omit `:80`. Plain requests
    never reach an interception, so no key is injected over cleartext.
+   Port ranges and `host:*` lean on the same domain precedence, so they
+   need these rules (`envoyconfig.routeConfig`):
+   - Envoy picks the most specific matching domain: exact, then the longest
+     `*.suffix`, then `host:*`, then `*`. Whatever it picks must allow what
+     every less specific entry allows.
+   - The intersection rule: where a more specific domain would take a
+     request that only a less specific entry allows, the intersection of
+     the two is added as a domain of its own, so the overlap never hides
+     an allow.
+   - `host:*` is a prefix domain, which would also match `host:x` and
+     `host:443@evil:443`, so its routes carry an `:authority` regex guard,
+     `(?i)^host:PORT$`, where PORT matches exactly 1 to 65535 with no
+     leading zeros (`envoyconfig.portRE`): Envoy matches the exact domain
+     `api.s:443` by string, so `api.s:0443` would miss it, and its
+     interception, and take the raw tunnel. `*.s:*` has no domain form; it
+     is a regex route in the catch-all `*` host, guarded the same way.
+   - A range expands to one `host:port` domain per port, which is why it is
+     capped, and the intersection rule multiplies them (a wildcard range
+     times each `host:*` under it), so `envoyconfig.Check` also caps the
+     total of single-port domains at `envoyconfig.MaxDomains` (65536).
+     `Dir.WriteConfig` and `Dir.Reload` call it and refuse an allowlist over
+     the cap; the `Render*` functions do not check it.
 6. **Logs are untrusted.** The proxy can write anything into `log/`. The host
    opens those files refusing links and non-regular files, and reads at most
    1 MiB per line or tail (`state.CountDenied`, `Dir.EnvoyLogTail`); the
@@ -265,9 +287,13 @@ skipped, a trailing CR is ignored. A preamble, then sections:
 - **`[allow]`**: `host[:port]`, `*.domain[:port]`, `http://host[:port]`,
   `http://*.domain[:port]`, `-entry`, `@group`, `-@group`, one per line (`policy.ParseItem`). Several `[allow]` sections
   concatenate.
+  A port is a number from 1 to 65535, a range `low-high`, or `*` (every
+  port). A range covers at most 1024 ports (`policy.MaxPortRange`), `low-low`
+  means `low`, and `1-65535` is refused in favour of `*`.
 - **`[group NAME]`**: `NAME` matches `^[a-z0-9][a-z0-9-]{0,62}$`; members are
   `host[:port]`, `*.domain[:port]`, `http://host[:port]` or
-  `http://*.domain[:port]`, at least one, no `-` or `@`.
+  `http://*.domain[:port]`, where a port is a number, a range `low-high` or
+  `*` as in `[allow]`; at least one, no `-` or `@`.
 - **`[inject]`** (`policy.InjectRow`): `VARIABLE host header` then
   `prefix=WORD` / `base-url=VARIABLE`, each at most once, any order. Inside
   `[inject]` every line is a row: `line` dispatches to `injectRow` before

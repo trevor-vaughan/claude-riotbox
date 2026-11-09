@@ -337,6 +337,34 @@ var _ = Describe("egress verbs", func() {
 			Expect(os.ReadFile(user)).To(Equal([]byte("*.example.org\n-a.example.org\n")))
 		})
 
+		DescribeTable("denies a port entry and notes the entries that still allow some or all of it",
+			func(conf, denied, note string) {
+				Expect(os.MkdirAll(filepath.Dir(user), 0o700)).To(Succeed())
+				Expect(os.WriteFile(user, []byte(conf), 0o600)).To(Succeed())
+				seed("s1")
+				env = append(env, gatewaysJSON("s1"))
+				s := runEgress(append(confArgs("egress-deny"), "--", denied)...)
+				Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+				Expect(string(s.Err.Contents())).To(ContainSubstring("egress: note: " + note + "\n"))
+			},
+			Entry("a range covering the denied port", "h.example:8000-8100\n", "h.example:8080", "h.example:8080 is still allowed by h.example:8000-8100"),
+			Entry("every port covering the denied port", "h.example:*\n", "h.example:443", "h.example is still allowed by h.example:*"),
+			Entry("a single port inside the denied every-port entry", "h.example:*\nh.example:443\n", "h.example:*", "h.example:* is still partly allowed by h.example"),
+			Entry("a single port inside the denied range", "h.example:8000-8100\nh.example:8080\n", "h.example:8000-8100", "h.example:8000-8100 is still partly allowed by h.example:8080"),
+			Entry("a range overlapping the denied range", "h.example:8000-8100\nh.example:8050-8200\n", "h.example:8000-8100", "h.example:8000-8100 is still partly allowed by h.example:8050-8200"),
+			Entry("a name under the denied wildcard", "*.example.com:*\na.example.com:443\n", "*.example.com:*", "*.example.com:* is still partly allowed by a.example.com"),
+		)
+
+		It("notes no overlap for a disjoint port or the other kind", func() {
+			Expect(os.MkdirAll(filepath.Dir(user), 0o700)).To(Succeed())
+			Expect(os.WriteFile(user, []byte("h.example:8000-8100\nh.example:9000\nhttp://h.example:*\n"), 0o600)).To(Succeed())
+			seed("s1")
+			env = append(env, gatewaysJSON("s1"))
+			s := runEgress(append(confArgs("egress-deny"), "--", "h.example:8000-8100")...)
+			Expect(s.ExitCode()).To(Equal(0), string(s.Err.Contents()))
+			Expect(string(s.Err.Contents())).NotTo(ContainSubstring("egress: note:"))
+		})
+
 		It("refuses an entry written with a leading dash", func() {
 			s := runEgress(append(confArgs("egress-deny"), "--", "-a.example.org")...)
 			Expect(s.ExitCode()).To(Equal(1))

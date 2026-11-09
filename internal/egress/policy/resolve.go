@@ -184,8 +184,8 @@ func (r Resolved) StrictLabel() string {
 	return state + " (" + r.StrictFrom + ")"
 }
 
-// Allows reports whether entries let e through: e itself is listed, or a
-// wildcard on its port matches it.
+// Allows reports whether entries let e through: e itself is listed, or another
+// entry of its kind covers it (a wildcard, a range, or every port).
 func Allows(entries []Entry, e Entry) bool {
 	return slices.Contains(entries, e) || len(Covering(entries, e)) > 0
 }

@@ -530,6 +530,9 @@ func (d Dir) WriteConfig(r policy.Resolved) error {
 	if err != nil {
 		return err
 	}
+	if err := envoyconfig.Check(r.Entries, intercepts); err != nil {
+		return err
+	}
 	files := envoyconfig.Render(d.name, r.Entries, intercepts)
 	for _, f := range []struct {
 		name string
@@ -557,6 +560,9 @@ func (d Dir) Reload(systemConf, userConf string) (policy.Resolved, error) {
 	}
 	intercepts, err := d.intercepts()
 	if err != nil {
+		return policy.Resolved{}, err
+	}
+	if err := envoyconfig.Check(r.Entries, intercepts); err != nil {
 		return policy.Resolved{}, err
 	}
 	if err := WriteAtomic(filepath.Join(d.ConfigDir(), envoyconfig.RDSFile), envoyconfig.RenderRDS(r.Entries, intercepts)); err != nil {

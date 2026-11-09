@@ -116,6 +116,12 @@ var _ = Describe("Groups", func() {
 var _ = Describe("Resolve", func() {
 	agent := []policy.Entry{entry("api.agent.example", 443)}
 
+	It("keeps a range and its single ports apart, and removes a range only exactly", func() {
+		r, err := policy.Resolve(policy.Sources{User: conf("user", "strict\na.example:8000-8100\na.example:8080\n-a.example:8000-8001\n")})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Entries).To(Equal([]policy.Entry{{Host: "a.example", Port: 8000, PortEnd: 8100}, {Host: "a.example", Port: 8080}}))
+	})
+
 	It("allows exactly @registries and @agent, strict off by default, when no file says anything", func() {
 		r, err := policy.Resolve(policy.Sources{Agent: agent})
 		Expect(err).NotTo(HaveOccurred())

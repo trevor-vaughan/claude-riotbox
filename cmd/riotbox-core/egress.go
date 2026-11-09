@@ -375,9 +375,11 @@ func forgetGroup(m pod.Manager, dir state.Dir, group string, save bool, systemCo
 	return true, checkRunning(m, dir)
 }
 
-// noteStillAllowed says on stderr which wildcard still allows each host a
-// deny named: the entry, or each member of the group. The overlay applies
-// last and in order, so nothing else can keep a denied host allowed.
+// noteStillAllowed says on stderr which entries still allow what a deny
+// named, for the entry or each member of the group: those covering all of
+// it (a wildcard, a range, every port), then those allowing only part of it
+// (a narrower or overlapping range, a name under a denied wildcard). The
+// overlay applies last and in order, so nothing else can keep it allowed.
 func noteStillAllowed(r policy.Resolved, it policy.Item, stderr io.Writer) {
 	denied := []policy.Entry{it.Entry}
 	if it.Group != "" {
@@ -386,6 +388,9 @@ func noteStillAllowed(r policy.Resolved, it policy.Item, stderr io.Writer) {
 	for _, e := range denied {
 		for _, w := range policy.Covering(r.Entries, e) {
 			_, _ = fmt.Fprintf(stderr, "egress: note: %s is still allowed by %s\n", e, w)
+		}
+		for _, w := range policy.Overlapping(r.Entries, e) {
+			_, _ = fmt.Fprintf(stderr, "egress: note: %s is still partly allowed by %s\n", e, w)
 		}
 	}
 }

@@ -260,3 +260,31 @@ sends or receives. The OS-mirror rewrite stays HTTPS. `allow_plain` derives
 port-80 plain HTTP for every tunnel host, including `[inject]` provider hosts
 and hosts allowed only on other ports; no key is injected over it, but
 per-host `http://` entries avoid opening those.
+
+## Port ranges and every port, 2026-11-08
+
+Entries could name one port only, so a service on a run of ports, or on
+any port, needed one line per port.
+
+**Chosen:** `host:low-high` expands to one domain per port, capped at 1024
+ports. `host:*` is a prefix domain guarded by an `:authority` regex, and
+`*.s:*` is a regex route in the `*` host. Intersection domains are added so
+that Envoy's domain precedence never hides an allow.
+
+**Turned down:**
+
+- A regex for every range: it has the same precedence problem, plus the
+  regexes for numeric ranges.
+- Refusing `*.domain:*`.
+- Any width without a cap: a 1-65535 range would be about 1.6 MB of routes
+  per host.
+
+**Cost:** the route file grows with range width, and routing is harder to
+read. Where a wildcard range meets each `host:*` under it, their
+intersection adds a domain per port per host, so the domains grow as the
+product of the two, not their sum (a 1024-port `*.example.com` range with 64
+`hN.example.com:*` entries is 66560 domains). `envoyconfig.Check` caps the
+total of single-port domains at `envoyconfig.MaxDomains` (65536); `WriteConfig`
+and `Reload` refuse an allowlist over it, naming the count, and a reload
+that is refused leaves the running proxy's rules as they were. The fix is
+fewer or narrower ranges, or `host:*`.

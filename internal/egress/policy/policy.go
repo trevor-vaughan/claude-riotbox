@@ -22,6 +22,10 @@ const (
 	PlainPort   = 80
 )
 
+// MaxPortRange is the most ports one host:low-high entry may cover;
+// host:* is how an entry allows every port.
+const MaxPortRange = 1024
+
 // plainScheme is the prefix of a plain-HTTP entry.
 const plainScheme = "http://"
 
@@ -43,35 +47,57 @@ type Entry struct {
 	// rest itself.
 	Host string
 	Port int
+	// PortEnd is the last port of a range host:Port-PortEnd, or 0 for the
+	// single port Port. Every port is Port 1, PortEnd 65535: host:*.
+	PortEnd int
 	// Plain is true for plain (non-CONNECT) HTTP to Host:Port, which a
 	// conf file spells http://host[:port]; false for a CONNECT tunnel.
 	Plain bool
 }
 
+// AllPorts reports whether e allows every port (host:*).
+func (e Entry) AllPorts() bool { return e.Port == 1 && e.PortEnd == 65535 }
+
+// Last is e's last port: PortEnd for a range, else Port.
+func (e Entry) Last() int {
+	if e.PortEnd == 0 {
+		return e.Port
+	}
+	return e.PortEnd
+}
+
 // String is the entry as a conf file spells it: http:// for a plain
-// entry, and the port only when it is not that kind's default.
+// entry, and the port only when it is not that kind's default; host:* for
+// every port, host:low-high for a range.
 func (e Entry) String() string {
 	scheme, port := "", DefaultPort
 	if e.Plain {
 		scheme, port = plainScheme, PlainPort
 	}
-	if e.Port == port {
+	switch {
+	case e.AllPorts():
+		return scheme + e.Host + ":*"
+	case e.PortEnd != 0:
+		return scheme + e.Host + ":" + strconv.Itoa(e.Port) + "-" + strconv.Itoa(e.PortEnd)
+	case e.Port == port:
 		return scheme + e.Host
+	default:
+		return scheme + e.Host + ":" + strconv.Itoa(e.Port)
 	}
-	return scheme + e.Host + ":" + strconv.Itoa(e.Port)
 }
 
-// Authority is the entry as Envoy matches a CONNECT request's authority:
+// Authority is a single-port entry as Envoy matches a request's authority:
 // always host:port.
 func (e Entry) Authority() string {
 	return e.Host + ":" + strconv.Itoa(e.Port)
 }
 
-// Parse reads one entry: ["-"] ["http://"] host [":" port], where host is
+// Parse reads one entry: ["-"] ["http://"] host [":" (port | low "-" high | "*")], where host is
 // a DNS name of at least two labels or "*." and one. "http://" makes it a
 // plain-HTTP entry, port 80 unless one is given; without it the entry is
-// a CONNECT tunnel, port 443 unless one is given. remove reports the
-// leading "-". Only printable ASCII is accepted, and it is checked before
+// a CONNECT tunnel, port 443 unless one is given. A range covers at most
+// MaxPortRange ports and low-low is the single port low; "*" is every
+// port. remove reports the leading "-". Only printable ASCII is accepted, and it is checked before
 // lowercasing: Unicode case folding maps some non-ASCII letters (U+212A
 // KELVIN SIGN) to ASCII ones, which would let a look-alike pass
 // validation.
@@ -94,17 +120,37 @@ func Parse(raw string) (e Entry, remove bool, err error) {
 	if plain {
 		port = PlainPort
 	}
+	end := 0
 	if i := strings.LastIndexByte(s, ':'); i >= 0 {
 		host = s[:i]
-		digits := s[i+1:]
-		if strings.HasPrefix(digits, "//") {
+		spec := s[i+1:]
+		if strings.HasPrefix(spec, "//") {
 			return Entry{}, false, errors.New("a URL is not an entry; give host or host:port")
 		}
-		n, convErr := strconv.Atoi(digits)
-		if !portDigits.MatchString(digits) || convErr != nil || n < 1 || n > 65535 {
-			return Entry{}, false, errors.New("port must be a number from 1 to 65535")
+		if spec == "*" {
+			port, end = 1, 65535
+		} else {
+			lo, hi, isRange := strings.Cut(spec, "-")
+			var perr error
+			if port, perr = parsePort(lo); perr != nil {
+				return Entry{}, false, perr
+			}
+			if isRange {
+				last, herr := parsePort(hi)
+				if herr != nil {
+					return Entry{}, false, herr
+				}
+				if last < port {
+					return Entry{}, false, errors.New("a port range runs low-high")
+				}
+				if last-port+1 > MaxPortRange {
+					return Entry{}, false, fmt.Errorf("a port range covers at most %d ports; use host:* for every port", MaxPortRange)
+				}
+				if last > port {
+					end = last
+				}
+			}
 		}
-		port = n
 	}
 	if strings.ContainsAny(host, ":[]") {
 		return Entry{}, false, errIPLiteral
@@ -112,7 +158,16 @@ func Parse(raw string) (e Entry, remove bool, err error) {
 	if cerr := checkHost(strings.TrimPrefix(host, "*.")); cerr != nil {
 		return Entry{}, false, cerr
 	}
-	return Entry{Host: host, Port: port, Plain: plain}, remove, nil
+	return Entry{Host: host, Port: port, PortEnd: end, Plain: plain}, remove, nil
+}
+
+// parsePort reads one port number, 1 to 65535.
+func parsePort(digits string) (int, error) {
+	n, err := strconv.Atoi(digits)
+	if !portDigits.MatchString(digits) || err != nil || n < 1 || n > 65535 {
+		return 0, errors.New("port must be a number from 1 to 65535")
+	}
+	return n, nil
 }
 
 // checkHost validates a DNS name (a wildcard's part after "*.").
@@ -138,20 +193,53 @@ func checkHost(name string) error {
 	return nil
 }
 
-// Covering returns the wildcard entries on e's port that still match e's
-// host (other than e itself), so a deny can say why a host stays allowed.
+// HostCovers reports whether pattern matches host: the same name, or a
+// wildcard "*.s" and a host (a name, or a narrower wildcard) ending in
+// ".s".
+func HostCovers(pattern, host string) bool {
+	if pattern == host {
+		return true
+	}
+	suffix, wild := strings.CutPrefix(pattern, "*")
+	return wild && strings.HasSuffix(host, suffix)
+}
+
+// Covers reports whether w allows every host and port e names, whatever
+// either one's kind.
+func Covers(w, e Entry) bool {
+	return HostCovers(w.Host, e.Host) && w.Port <= e.Port && e.Last() <= w.Last()
+}
+
+// Covering returns the other entries of e's kind that cover e (a wildcard
+// matching its host, a range or every port holding its ports), so a deny
+// can say why a host stays allowed.
 func Covering(entries []Entry, e Entry) []Entry {
 	var out []Entry
 	for _, w := range entries {
-		suffix, wild := strings.CutPrefix(w.Host, "*")
-		if wild && w != e && w.Port == e.Port && w.Plain == e.Plain && strings.HasSuffix(e.Host, suffix) {
+		if w != e && w.Plain == e.Plain && Covers(w, e) {
 			out = append(out, w)
 		}
 	}
 	return out
 }
 
-// merge returns add minus remove, each entry once, sorted by host, then port, then tunnel before plain.
+// Overlapping returns the other entries of e's kind that allow some of e's
+// hosts and ports but do not cover e: a narrower or partly overlapping
+// range, or a name under a wildcard, so a deny can say what stays allowed.
+func Overlapping(entries []Entry, e Entry) []Entry {
+	var out []Entry
+	for _, w := range entries {
+		if w != e && w.Plain == e.Plain && !Covers(w, e) &&
+			(HostCovers(w.Host, e.Host) || HostCovers(e.Host, w.Host)) &&
+			w.Port <= e.Last() && e.Port <= w.Last() {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// merge returns add minus remove, each entry once, sorted by host, port, port end, then
+// tunnel before plain.
 func merge(add, remove []Entry) []Entry {
 	removed := map[Entry]bool{}
 	for _, e := range remove {
@@ -172,6 +260,9 @@ func merge(add, remove []Entry) []Entry {
 		}
 		if a.Port != b.Port {
 			return a.Port - b.Port
+		}
+		if a.PortEnd != b.PortEnd {
+			return a.PortEnd - b.PortEnd
 		}
 		switch {
 		case a.Plain == b.Plain:

@@ -153,7 +153,7 @@ var _ = Describe("RenderRDS", func() {
 			}, nil)
 			noSharedDomain(rds)
 			v := vhost(rds, "plain")
-			Expect(dig(v, "domains")).To(Equal([]any{"mirror.example.org:80", "mirror.example.org", "*.example.net:80", "*.example.net", "alt.example.org:8080"}))
+			Expect(dig(v, "domains")).To(Equal([]any{"mirror.example.org:80", "*.example.net:80", "alt.example.org:8080", "mirror.example.org", "*.example.net"}))
 			Expect(dig(v, "routes", 0, "match", "connect_matcher")).To(Equal(map[string]any{}))
 			Expect(dig(v, "routes", 0, "direct_response", "status")).To(BeEquivalentTo(403))
 			plainRouteOK(dig(v, "routes", 1))
@@ -242,6 +242,125 @@ var _ = Describe("RenderRDS", func() {
 			noSharedDomain(rds)
 			connect, _ := allowsVia(rds, "a.example.com:80")
 			Expect(connect).To(BeFalse())
+		})
+
+		Describe("port ranges", func() {
+			ports := func(host string, from, to int) []any {
+				var out []any
+				for p := from; p <= to; p++ {
+					out = append(out, fmt.Sprintf("%s:%d", host, p))
+				}
+				return out
+			}
+			headerRegex := func(r any) any {
+				ExpectWithOffset(1, dig(r, "match", "headers", 0, "name")).To(Equal(":authority"))
+				return dig(r, "match", "headers", 0, "string_match", "safe_regex", "regex")
+			}
+
+			It("renders a range as one exact domain per port", func() {
+				rds := envoyconfig.RenderRDS([]policy.Entry{{Host: "a.example", Port: 8000, PortEnd: 8002}}, nil)
+				Expect(dig(vhost(rds, "allowed"), "domains")).To(Equal([]any{"a.example:8000", "a.example:8001", "a.example:8002"}))
+			})
+
+			It("renders host:* as a prefix domain whose CONNECT route requires host:digits", func() {
+				rds := envoyconfig.RenderRDS([]policy.Entry{{Host: "a.example", Port: 1, PortEnd: 65535}}, nil)
+				noSharedDomain(rds)
+				v := vhost(rds, "ports-a.example")
+				Expect(dig(v, "domains")).To(Equal([]any{"a.example:*"}))
+				Expect(headerRegex(dig(v, "routes", 0))).To(Equal(`(?i)^a\.example:(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$`))
+				Expect(dig(v, "routes", 0, "route", "cluster")).To(Equal("egress"))
+				Expect(dig(v, "routes", 0, "route", "upgrade_configs", 0, "upgrade_type")).To(Equal("CONNECT"))
+				Expect(dig(v, "routes")).To(HaveLen(3))
+				Expect(dig(v, "routes", 1, "match", "connect_matcher")).To(Equal(map[string]any{}))
+				Expect(dig(v, "routes", 1, "direct_response", "status")).To(BeEquivalentTo(403))
+				Expect(dig(v, "routes", 2, "match", "prefix")).To(Equal("/"))
+				Expect(dig(v, "routes", 2, "direct_response", "status")).To(BeEquivalentTo(403))
+			})
+
+			It("renders http://host:* as a guarded plain route, no CONNECT route, and a bare host in plain", func() {
+				rds := envoyconfig.RenderRDS([]policy.Entry{{Host: "a.example", Port: 1, PortEnd: 65535, Plain: true}}, nil)
+				noSharedDomain(rds)
+				v := vhost(rds, "ports-a.example")
+				Expect(dig(v, "routes")).To(HaveLen(3))
+				Expect(headerRegex(dig(v, "routes", 0))).To(Equal(`(?i)^a\.example:(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$`))
+				plainRouteOK(dig(v, "routes", 0))
+				Expect(dig(v, "routes", 1, "match", "connect_matcher")).To(Equal(map[string]any{}))
+				Expect(dig(v, "routes", 1, "direct_response", "status")).To(BeEquivalentTo(403))
+				Expect(dig(vhost(rds, "plain"), "domains")).To(Equal([]any{"a.example"}))
+			})
+
+			It("renders *.domain:* as a CONNECT regex route in the deny host", func() {
+				rds := envoyconfig.RenderRDS([]policy.Entry{{Host: "*.example.org", Port: 1, PortEnd: 65535}}, nil)
+				noSharedDomain(rds)
+				Expect(dig(decode(rds), "resources", 0, "virtual_hosts")).To(HaveLen(1))
+				deny := vhost(rds, "deny")
+				Expect(dig(deny, "domains")).To(Equal([]any{"*"}))
+				Expect(dig(deny, "routes")).To(HaveLen(3))
+				Expect(dig(deny, "routes", 0, "route", "upgrade_configs", 0, "upgrade_type")).To(Equal("CONNECT"))
+				Expect(headerRegex(dig(deny, "routes", 0))).To(Equal(`(?i)^([a-z0-9-]+\.)+example\.org:(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$`))
+				Expect(dig(deny, "routes", 1, "match", "connect_matcher")).To(Equal(map[string]any{}))
+				Expect(dig(deny, "routes", 2, "match", "prefix")).To(Equal("/"))
+			})
+
+			It("renders http://*.domain:* as a plain regex route whose port is optional", func() {
+				rds := envoyconfig.RenderRDS([]policy.Entry{{Host: "*.example.org", Port: 1, PortEnd: 65535, Plain: true}}, nil)
+				deny := vhost(rds, "deny")
+				plainRouteOK(dig(deny, "routes", 0))
+				Expect(headerRegex(dig(deny, "routes", 0))).To(Equal(`(?i)^([a-z0-9-]+\.)+example\.org(:(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$`))
+			})
+
+			It("folds a regex entry's CONNECT into a plain exact entry it covers", func() {
+				rds := envoyconfig.RenderRDS([]policy.Entry{
+					{Host: "*.example.org", Port: 1, PortEnd: 65535},
+					{Host: "a.example.org", Port: 80, Plain: true},
+				}, nil)
+				noSharedDomain(rds)
+				connect, plain := allowsVia(rds, "a.example.org:80")
+				Expect(connect).To(BeTrue())
+				Expect(plain).To(BeTrue())
+				Expect(dig(vhost(rds, "allowed-plain"), "domains")).To(ContainElement("a.example.org:80"))
+			})
+
+			It("adds the exact host:port where a host:* and a wildcard port meet", func() {
+				rds := envoyconfig.RenderRDS([]policy.Entry{
+					{Host: "a.example.org", Port: 1, PortEnd: 65535, Plain: true},
+					{Host: "*.example.org", Port: 443},
+				}, nil)
+				noSharedDomain(rds)
+				connect, plain := allowsVia(rds, "a.example.org:443")
+				Expect(connect).To(BeTrue())
+				Expect(plain).To(BeTrue())
+				Expect(dig(vhost(rds, "allowed-plain"), "domains")).To(ContainElement("a.example.org:443"))
+			})
+
+			It("adds the narrower wildcard where a *.s:* and a broader *.t:port meet", func() {
+				rds := envoyconfig.RenderRDS([]policy.Entry{
+					{Host: "*.a.example.org", Port: 1, PortEnd: 65535, Plain: true},
+					{Host: "*.example.org", Port: 443},
+				}, nil)
+				noSharedDomain(rds)
+				connect, plain := allowsVia(rds, "*.a.example.org:443")
+				Expect(connect).To(BeTrue())
+				Expect(plain).To(BeTrue())
+				Expect(dig(vhost(rds, "allowed-plain"), "domains")).To(ContainElement("*.a.example.org:443"))
+			})
+
+			It("leaves an intercepted port to its interception even inside a range", func() {
+				rds := envoyconfig.RenderRDS(
+					[]policy.Entry{{Host: "api.example.com", Port: 400, PortEnd: 500}},
+					[]envoyconfig.Intercept{{Host: "api.example.com", Header: "x-api-key"}})
+				noSharedDomain(rds)
+				Expect(dig(vhost(rds, "intercept-api.example.com"), "domains")).To(Equal([]any{"api.example.com:443"}))
+				want := append(ports("api.example.com", 400, 442), ports("api.example.com", 444, 500)...)
+				Expect(dig(vhost(rds, "allowed"), "domains")).To(Equal(want))
+			})
+
+			It("intercepts a host that only a wildcard-port entry covers", func() {
+				rds := envoyconfig.RenderRDS(
+					[]policy.Entry{{Host: "*.example.com", Port: 1, PortEnd: 65535}},
+					[]envoyconfig.Intercept{{Host: "api.example.com", Header: "x-api-key"}})
+				Expect(dig(vhost(rds, "intercept-api.example.com"), "domains")).To(Equal([]any{"api.example.com:443"}))
+			})
 		})
 	})
 })
@@ -405,6 +524,11 @@ var _ = Describe("the pinned Envoy image", Label("e2e"), func() {
 			policy.Entry{Host: "git.example.net", Port: 80, Plain: true},
 			policy.Entry{Host: "*.example.net", Port: 80},
 			policy.Entry{Host: "a.example.net", Port: 80, Plain: true},
+			policy.Entry{Host: "a.example.net", Port: 8000, PortEnd: 8003},
+			policy.Entry{Host: "b.example.net", Port: 1, PortEnd: 65535},
+			policy.Entry{Host: "b.example.net", Port: 1, PortEnd: 65535, Plain: true},
+			policy.Entry{Host: "*.example.io", Port: 1, PortEnd: 65535},
+			policy.Entry{Host: "*.example.io", Port: 1, PortEnd: 65535, Plain: true},
 		), nil), "")
 	})
 

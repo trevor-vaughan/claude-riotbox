@@ -317,6 +317,39 @@ var _ = Describe("Dir", func() {
 			Expect(os.ReadFile(rds)).To(Equal(before))
 		})
 
+		Describe("an allowlist over the rendering's domain cap", func() {
+			// 65 ranges of 1024 ports are 66560 single-port domains.
+			var conf string
+			var entries []policy.Entry
+			BeforeEach(func() {
+				conf, entries = "", nil
+				for i := 0; i < 65; i++ {
+					host := fmt.Sprintf("h%d.example.com", i)
+					conf += host + ":1-1024\n"
+					entries = append(entries, policy.Entry{Host: host, Port: 1, PortEnd: 1024})
+				}
+			})
+
+			It("is refused by WriteConfig before any file is written", func() {
+				err := d.WriteConfig(policy.Resolved{Entries: entries, StrictFrom: policy.SourceDefault})
+				Expect(err).To(MatchError(ContainSubstring("66560 single-port domains, more than the 65536 allowed")))
+				Expect(filepath.Join(d.ConfigDir(), "rds.json")).NotTo(BeAnExistingFile())
+				Expect(d.Applied()).To(BeEmpty())
+			})
+
+			It("is refused by Reload, leaving rds.json and the applied policy as they were", func() {
+				Expect(d.WriteConfig(policy.Resolved{StrictFrom: policy.SourceDefault})).To(Succeed())
+				rds := filepath.Join(d.ConfigDir(), "rds.json")
+				before, err := os.ReadFile(rds)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(os.WriteFile(d.SessionConf(), []byte(conf), 0o600)).To(Succeed())
+				_, err = d.Reload("/nonexistent/sys", "/nonexistent/user")
+				Expect(err).To(MatchError(ContainSubstring("single-port domains, more than the 65536 allowed")))
+				Expect(os.ReadFile(rds)).To(Equal(before))
+				Expect(d.Applied()).To(BeEmpty())
+			})
+		})
+
 		It("leaves no temporary files behind", func() {
 			Expect(d.WriteConfig(policy.Resolved{StrictFrom: policy.SourceDefault})).To(Succeed())
 			_, err := d.Reload("/nonexistent/sys", "/nonexistent/user")

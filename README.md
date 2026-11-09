@@ -1195,6 +1195,8 @@ Unless strict mode is on, the allowlist is the union of:
   [allow]                   # lines before any section are [allow] lines too
   example.com               # port 443
   example.com:8443          # that port only
+  example.com:8000-8100     # a range (at most 1024 ports)
+  example.com:*             # every port
   *.example.com             # any subdomain at any depth, not example.com itself
   http://mirror.example.org # plain HTTP to one host, port 80 (http://host:port for another)
   @agent                    # the agent's own API hosts (needed under strict)
