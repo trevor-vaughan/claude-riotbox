@@ -3,8 +3,8 @@
 ---
 {
   "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "a9493c15daafcb81b988c6285c90f225db85208d",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d62daf557aadf27bafe9865dacfd39e899745cd4",
   "prompts": {},
   "sessions": {
     "s_1437b4f5da9bcb": {
