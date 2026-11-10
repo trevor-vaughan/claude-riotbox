@@ -1,0 +1,24 @@
+libexec/hub.sh
+  s_99fbde63668daa::t_7d1bee67eaba00 56-71,156-164,167-168,170-173,192
+  s_99fbde63668daa::t_cf368858dd237f 179-181
+tests/anywhere.venom.yml
+  s_99fbde63668daa::t_ad7c41c3cebd13 406
+  s_99fbde63668daa::t_846f3a6aceb0b4 264,303,327-330,344-345,391-403,405,407-459
+  s_99fbde63668daa::t_4edd98fcde85cc 404,460
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "02d01cbce5e54bb6cdbd9159714af0c7bc9abaa1",
+  "prompts": {},
+  "sessions": {
+    "s_99fbde63668daa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "06d2f793-d3b8-444d-a05c-6833c67727a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
