@@ -1,0 +1,27 @@
+README.md
+  s_52fb192b888148::t_a1d5094d35d129 314-320,355-363,387-388
+THREAT_MODEL.md
+  s_52fb192b888148::t_ea0cb7d10318b9 1219-1220,1228-1236,1239-1249,1278-1281,1286-1288,1326-1338
+docs/dev/decisions/yep-anywhere.md
+  s_52fb192b888148::t_baa8b65ec8549c 171-199
+docs/dev/riotbox-core.md
+  s_52fb192b888148::t_8dfad77df443f6 204
+libexec/hub.sh
+  s_52fb192b888148::t_91164ceca12906 12-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "0b3e5900f0d571695fc88c67c2acf0b6ffa5084a",
+  "prompts": {},
+  "sessions": {
+    "s_52fb192b888148": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a748b171e32a84881",
+        "model": "unknown"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
