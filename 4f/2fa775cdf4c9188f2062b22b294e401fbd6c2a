@@ -1,12 +1,12 @@
 README.md
   s_99fbde63668daa::t_9cea7061c22203 367-376
 THREAT_MODEL.md
-  s_99fbde63668daa::t_1ca8367b31ccfb 1247-1249,1347-1360
+  s_99fbde63668daa::t_1ca8367b31ccfb 1247-1249,1347-1359
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.6",
-  "base_commit_sha": "aa957788abdb181d70ab7ca2859ba8c6a0c6d1ec",
+  "base_commit_sha": "4f2fa775cdf4c9188f2062b22b294e401fbd6c2a",
   "prompts": {},
   "sessions": {
     "s_99fbde63668daa": {
