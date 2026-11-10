@@ -1,0 +1,28 @@
+docs/dev/decisions/yep-anywhere.md
+  s_99fbde63668daa::t_58a92c6eed608a 120-123,142-167
+  s_99fbde63668daa::t_4da29c05831be8 168
+THREAT_MODEL.md
+  s_99fbde63668daa::t_c8416ebfa8b216 1208-1210,1227-1233,1261,1263,1284-1320
+  s_99fbde63668daa::t_7bda926ebd3122 1262
+  s_99fbde63668daa::t_d026df1064e38d 1321
+docs/dev/riotbox-core.md
+  s_99fbde63668daa::t_58a92c6eed608a 48,204
+README.md
+  s_99fbde63668daa::t_387e30f9f4df9c 290-291,295-296,311-312,331-334,343-371,412
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "b745b3c0d54a5a1ba669c5d0326e6dcf467983db",
+  "prompts": {},
+  "sessions": {
+    "s_99fbde63668daa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "06d2f793-d3b8-444d-a05c-6833c67727a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
