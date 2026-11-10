@@ -1,0 +1,29 @@
+container/anywhere.sh
+  s_99fbde63668daa::t_9174481c69320c 27-35,82-89,95,106
+libexec/anywhere-lib.sh
+  s_99fbde63668daa::t_9174481c69320c 179-181
+  s_99fbde63668daa::t_8fb50cdd53f298 10-11,31-37,161-178,182-195,197-211
+  s_99fbde63668daa::t_884bf77340b230 196
+  s_99fbde63668daa::t_f641056ee83f8b 212-213
+scripts/mount-projects.sh
+  s_99fbde63668daa::t_9174481c69320c 833-839,844-845,847
+tests/anywhere.venom.yml
+  s_99fbde63668daa::t_eb4075173ff162 12-13,15-16,133,146,412,434-442,446
+  s_99fbde63668daa::t_d911b9ac4ce45c 252-401,476,486,498,503-505,512,514-517,524,528,530,532,534-537,543-545,551,553,560-561,564-568
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "13b560d2352fd0992e4dd5d5d1ef00dbc6c9486e",
+  "prompts": {},
+  "sessions": {
+    "s_99fbde63668daa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "06d2f793-d3b8-444d-a05c-6833c67727a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
