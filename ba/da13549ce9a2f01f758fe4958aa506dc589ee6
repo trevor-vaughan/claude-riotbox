@@ -1,0 +1,24 @@
+internal/hub/proxy.go
+  s_99fbde63668daa::t_104a3b850ef298 399-401,405-407,421,425-427,483-487,496,501,509,513-514,516-526,537-636
+  s_99fbde63668daa::t_91ea2e846769e7 10,39-49,360,382-386,388
+  s_99fbde63668daa::t_5dd91cfc838e1c 637
+internal/hub/proxy_test.go
+  s_99fbde63668daa::t_c16f9a6642a2af 14,17,60-72,190,202,204-227,249,277-355
+  s_99fbde63668daa::t_e697839d651177 356
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "bada13549ce9a2f01f758fe4958aa506dc589ee6",
+  "prompts": {},
+  "sessions": {
+    "s_99fbde63668daa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "06d2f793-d3b8-444d-a05c-6833c67727a0",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
