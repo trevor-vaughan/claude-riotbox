@@ -1,0 +1,1035 @@
+name: riotbox anywhere — Yep Anywhere launch gate, in-container launcher, image pin
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Three layers, tested where each one decides something:
+#   * libexec/anywhere-lib.sh: which bind addresses are accepted, which modes
+#     are refused, and the engine flags a launch gets.
+#   * libexec/launch.sh + scripts/mount-projects.sh, through a fake engine:
+#     the port and the state mount appear only for `riotbox anywhere`.
+#   * container/anywhere.sh, against a stub yepanywhere: the password is set
+#     applied when new or when auth.json is missing, the server binds the
+#     fixed port with TLS, and Claude is pointed at the RiotBox wrapper rather
+#     than the Agent SDK's bundled binary.
+#   * anywhere_password: the host keeps the password the hub signs browsers in
+#     with, and hands it to the container by environment variable name only.
+# The image layer itself cannot run here; its repo-side half (the lockfile pin
+# and the guards the layer relies on) is checked statically at the end.
+
+testcases:
+  - name: anywhere_parse_bind accepts IPv4 and bracketed IPv6 literals
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          anywhere_parse_bind 192.168.1.20:3400 || { echo "BAD: rejected a LAN IPv4"; exit 1; }
+          [ "${ANYWHERE_ADDR}:${ANYWHERE_PORT}" = "192.168.1.20:3400" ] || { echo "BAD: ${ANYWHERE_ADDR}:${ANYWHERE_PORT}"; exit 1; }
+          anywhere_parse_bind '[fd00::20]:8443' || { echo "BAD: rejected an IPv6"; exit 1; }
+          [ "${ANYWHERE_ADDR}" = "[fd00::20]" ] && [ "${ANYWHERE_PORT}" = 8443 ] || { echo "BAD: v6 ${ANYWHERE_ADDR} ${ANYWHERE_PORT}"; exit 1; }
+          anywhere_parse_bind 10.0.0.1:08080 || { echo "BAD: rejected a zero-padded port"; exit 1; }
+          [ "${ANYWHERE_PORT}" = 8080 ] || { echo "BAD: port read as ${ANYWHERE_PORT}, not decimal 8080"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_parse_bind refuses host names, bad octets, bad ports and a missing port
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          for bad in laptop.local:3400 192.168.1.300:3400 192.168.1.20:0 192.168.1.20:70000 \
+                     192.168.1.20 '[]:3400' '[1.2.3.4]:3400' ':3400' '192.168.1.20:34x0'; do
+            if anywhere_parse_bind "${bad}" 2>/dev/null; then
+              echo "BAD: accepted ${bad}"; exit 1
+            fi
+            msg="$(anywhere_parse_bind "${bad}" 2>&1)" || true
+            echo "${msg}" | grep -q RIOTBOX_ANYWHERE_BIND || { echo "BAD: refusal of ${bad} does not name the setting: ${msg}"; exit 1; }
+          done
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # The wildcard warning and the loopback note match ANYWHERE_ADDR as a
+  # string, so every spelling the engine reads as the same address must come
+  # out of the parser in the one form they match.
+  - name: anywhere_parse_bind gives every spelling of the wildcard and loopback one form, and refuses IPv4 inside IPv6
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          for spelling in '[::]' '[0::]' '[::0]' '[0:0:0:0:0:0:0:0]' '[0000::0000]'; do
+            anywhere_parse_bind "${spelling}:3400" || { echo "BAD: rejected ${spelling}"; exit 1; }
+            [ "${ANYWHERE_ADDR}" = "[::]" ] || { echo "BAD: ${spelling} parsed as ${ANYWHERE_ADDR}"; exit 1; }
+          done
+          for spelling in '[::1]' '[0::1]' '[0:0:0:0:0:0:0:1]' '[::0001]'; do
+            anywhere_parse_bind "${spelling}:3400" || { echo "BAD: rejected ${spelling}"; exit 1; }
+            [ "${ANYWHERE_ADDR}" = "[::1]" ] || { echo "BAD: ${spelling} parsed as ${ANYWHERE_ADDR}"; exit 1; }
+          done
+          anywhere_parse_bind 000.0.00.0:3400 || { echo "BAD: rejected 000.0.00.0"; exit 1; }
+          [ "${ANYWHERE_ADDR}" = 0.0.0.0 ] || { echo "BAD: 000.0.00.0 parsed as ${ANYWHERE_ADDR}"; exit 1; }
+          anywhere_parse_bind 192.168.001.020:3400 || { echo "BAD: rejected a zero-padded LAN IPv4"; exit 1; }
+          [ "${ANYWHERE_ADDR}" = 192.168.1.20 ] || { echo "BAD: parsed as ${ANYWHERE_ADDR}"; exit 1; }
+          for bad in '[::ffff:0.0.0.0]:3400' '[::ffff:0:0]:3400' '[::FFFF:127.0.0.1]:3400' '[::127.0.0.1]:3400'; do
+            msg="$(anywhere_parse_bind "${bad}" 2>&1)" && { echo "BAD: accepted ${bad}"; exit 1; }
+            echo "${msg}" | grep -q "embeds an IPv4 address" || { echo "BAD: refusal of ${bad} does not say why: ${msg}"; exit 1; }
+          done
+          # Malformed text must be refused, not canonicalised into a wildcard
+          # or loopback address.
+          for bad in '[:]:3400' '[:::]:3400' '[:1]:3400' '[0:1]:3400' '[:::1]:3400' '[0:0:0:0:0:0:0:0:0]:3400' \
+                     '[1::2::3]:3400' '[12345::1]:3400' '[1:2:3:4:5:6:7]:3400' '[1:2:3:4:5:6:7::8]:3400'; do
+            msg="$(anywhere_parse_bind "${bad}" 2>&1)" && { echo "BAD: accepted ${bad} as ${ANYWHERE_ADDR}"; exit 1; }
+            echo "${msg}" | grep -q "is not an IPv6 address" || { echo "BAD: refusal of ${bad}: ${msg}"; exit 1; }
+          done
+          for good in '[1:2:3:4:5:6:7:8]' '[1::]' '[::10]' '[fe80::1:2]' '[1:2:3:4:5:6::7]'; do
+            anywhere_parse_bind "${good}:3400" || { echo "BAD: rejected ${good}"; exit 1; }
+            [ "${ANYWHERE_ADDR}" = "${good}" ] || { echo "BAD: ${good} rewritten to ${ANYWHERE_ADDR}"; exit 1; }
+          done
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_gate refuses RIOTBOX_EGRESS=1 and RIOTBOX_NETWORK=none
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          out="$(RIOTBOX_EGRESS=1 anywhere_gate 2>&1)" && { echo "BAD: egress mode was accepted"; exit 1; }
+          echo "${out}" | grep -q "RIOTBOX_EGRESS=1" || { echo "BAD: egress refusal: ${out}"; exit 1; }
+          out="$(RIOTBOX_NETWORK=none anywhere_gate 2>&1)" && { echo "BAD: --network=none was accepted"; exit 1; }
+          echo "${out}" | grep -q "RIOTBOX_NETWORK=none" || { echo "BAD: network refusal: ${out}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_gate defaults to loopback, says how to reach it from a phone, and publishes the fixed port
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          anywhere_port_in_use() { return 1; }
+          unset RIOTBOX_ANYWHERE_BIND RIOTBOX_EGRESS RIOTBOX_NETWORK RIOTBOX_ANYWHERE_RESET_PASSWORD
+          err="$(anywhere_gate 2>&1 >/dev/null)"
+          anywhere_gate 2>/dev/null || { echo "BAD: default refused"; exit 1; }
+          echo "${err}" | grep -q "RIOTBOX_ANYWHERE_BIND" || { echo "BAD: no hint for the phone: ${err}"; exit 1; }
+          echo "${err}" | grep -q "riotbox hub" || { echo "BAD: no hub hint for the phone: ${err}"; exit 1; }
+          flags="${ANYWHERE_FLAGS[*]}"
+          [ "${flags}" = "-p 127.0.0.1:3400:3400 -e RIOTBOX_ANYWHERE=1 -e RIOTBOX_ANYWHERE_URL=https://127.0.0.1:3400 --label riotbox.anywhere.url=https://127.0.0.1:3400 -e RIOTBOX_ANYWHERE_HOST=127.0.0.1" ] \
+            || { echo "BAD: flags: ${flags}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_gate warns on a wildcard bind and leaves the password reset to the host side
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          anywhere_port_in_use() { return 1; }
+          export RIOTBOX_ANYWHERE_BIND=0.0.0.0:9000 RIOTBOX_ANYWHERE_RESET_PASSWORD=1
+          err="$(anywhere_gate 2>&1 >/dev/null)"
+          echo "${err}" | grep -q "EVERY network" || { echo "BAD: no wildcard warning: ${err}"; exit 1; }
+          anywhere_gate 2>/dev/null
+          flags="${ANYWHERE_FLAGS[*]}"
+          echo "${flags}" | grep -q -- "-p 0.0.0.0:9000:3400" || { echo "BAD: flags: ${flags}"; exit 1; }
+          echo "${flags}" | grep -q -- "RESET_PASSWORD" && { echo "BAD: the reset was forwarded to the container: ${flags}"; exit 1; }
+          echo "${flags}" | grep -q -- "RIOTBOX_ANYWHERE_HOST" && { echo "BAD: a wildcard bind named an allowed host: ${flags}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # Yep Anywhere's Host-header check allows localhost, private IPv4 and
+  # *.ts.net only; any other bind address must reach it as ALLOWED_HOSTS or
+  # every API call from the phone is refused with 403.
+  - name: anywhere_gate passes a Tailscale or IPv6 bind address on as the allowed host
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          anywhere_port_in_use() { return 1; }
+          unset RIOTBOX_ANYWHERE_RESET_PASSWORD
+          RIOTBOX_ANYWHERE_BIND=100.64.1.2:3400 anywhere_gate 2>/dev/null
+          echo "${ANYWHERE_FLAGS[*]}" | grep -q -- "-e RIOTBOX_ANYWHERE_HOST=100.64.1.2$" || { echo "BAD: v4 ${ANYWHERE_FLAGS[*]}"; exit 1; }
+          RIOTBOX_ANYWHERE_BIND='[fd00::20]:3400' anywhere_gate 2>/dev/null
+          echo "${ANYWHERE_FLAGS[*]}" | grep -q -- "-e RIOTBOX_ANYWHERE_HOST=fd00::20$" || { echo "BAD: v6 (brackets must go) ${ANYWHERE_FLAGS[*]}"; exit 1; }
+          echo "${ANYWHERE_FLAGS[*]}" | grep -q -- "-p \[fd00::20\]:3400:3400" || { echo "BAD: v6 publish ${ANYWHERE_FLAGS[*]}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # Several `riotbox anywhere` sessions share one RIOTBOX_ANYWHERE_BIND: each
+  # launch takes the first free port from the configured one up. The probe is
+  # replaced so the case does not depend on what this host listens on.
+  - name: anywhere_gate moves to the next free port and gives up after the configured range
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          unset RIOTBOX_ANYWHERE_RESET_PASSWORD
+          anywhere_port_in_use() { [ "$2" -lt 3402 ]; }
+          err="$(RIOTBOX_ANYWHERE_BIND=192.168.1.20:3400 anywhere_gate 2>&1 >/dev/null)"
+          RIOTBOX_ANYWHERE_BIND=192.168.1.20:3400 anywhere_gate 2>/dev/null
+          echo "${ANYWHERE_FLAGS[*]}" | grep -q -- "-p 192.168.1.20:3402:3400 " || { echo "BAD: ${ANYWHERE_FLAGS[*]}"; exit 1; }
+          echo "${ANYWHERE_FLAGS[*]}" | grep -q -- "--label riotbox.anywhere.url=https://192.168.1.20:3402" || { echo "BAD: label ${ANYWHERE_FLAGS[*]}"; exit 1; }
+          echo "${err}" | grep -q "3400 is in use; Yep Anywhere takes 192.168.1.20:3402" || { echo "BAD: no notice: ${err}"; exit 1; }
+          anywhere_port_in_use() { return 0; }
+          out="$(RIOTBOX_ANYWHERE_BIND=192.168.1.20:3400 anywhere_gate 2>&1)" && { echo "BAD: accepted with every port taken"; exit 1; }
+          echo "${out}" | grep -q "no free port on 192.168.1.20 from 3400 to 3419" || { echo "BAD: ${out}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_port_in_use answers no for a closed port and never hangs
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          start=$(date +%s)
+          anywhere_port_in_use 127.0.0.1 1 && { echo "BAD: port 1 reported in use"; exit 1; }
+          anywhere_port_in_use 0.0.0.0 1 && { echo "BAD: wildcard probe reported in use"; exit 1; }
+          [ $(( $(date +%s) - start )) -lt 10 ] || { echo "BAD: the probe took too long"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: riotbox hub refuses arguments and a bad address before starting anything
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          run() {
+            HOME="${TMP}" XDG_CONFIG_HOME="${TMP}/xdg" XDG_DATA_HOME="${TMP}/data" RIOTBOX_SYSCONF_DIR="${TMP}/etc" \
+            ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD=false bash "{{.riotbox_dir}}/libexec/hub.sh" "$@"
+          }
+          run --help | grep -q "RIOTBOX_HUB_BIND" || { echo "BAD: help"; exit 1; }
+          run extra >/dev/null 2>&1; [ $? = 2 ] || { echo "BAD: an argument was accepted"; exit 1; }
+          out="$(RIOTBOX_HUB_BIND=laptop.local:3399 run 2>&1)" && { echo "BAD: a host name was accepted"; exit 1; }
+          echo "${out}" | grep -q "RIOTBOX_HUB_BIND=laptop.local:3399 is not ADDRESS:PORT" || { echo "BAD: ${out}"; exit 1; }
+          [ ! -e "${TMP}/data/riotbox-hub" ] || { echo "BAD: created its data dir before refusing"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # A wildcard listen address has no address a phone can open, so the link
+  # riotbox-core prints (https://0.0.0.0:...) needs the LAN address put in.
+  - name: riotbox hub on a wildcard bind, in any spelling, warns and says how to open the printed link
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          port=$((30000 + RANDOM % 20000))
+          out="$(HOME="${TMP}" XDG_CONFIG_HOME="${TMP}/xdg" XDG_DATA_HOME="${TMP}/data" RIOTBOX_SYSCONF_DIR="${TMP}/etc" \
+            ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD=false RIOTBOX_HUB_BIND="[0::]:${port}" \
+            timeout 3 bash "{{.riotbox_dir}}/libexec/hub.sh" 2>&1)"
+          echo "${out}" | grep -q "listens on every network" || { echo "BAD: no wildcard warning: ${out}"; exit 1; }
+          echo "${out}" | grep -q "replace \[::\] with this host's LAN address" || { echo "BAD: no hint for the printed link: ${out}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: riotbox hub install writes the exact unit, then reloads, enables and restarts, and prints the link
+    steps:
+      - &hubfix
+        type: exec
+        script: |
+          set -uo pipefail
+          TMP="$(mktemp -d)"
+          cat >"${TMP}/env.sh" <<'ENVEOF'
+          set -uo pipefail
+          TMP="$(dirname "$(realpath "${BASH_SOURCE[0]}")")"
+          trap 'rm -rf "${TMP}"' EXIT
+          SRC="{{.riotbox_dir}}"
+          unset RIOTBOX_CONTEXT_LEDGER RIOTBOX_HUB_BIND
+          LOG="${TMP}/calls.log"; : >"${LOG}"; export LOG
+          mkdir -p "${TMP}/stubs" "${TMP}/xdg" "${TMP}/data"
+          make_app() {
+            APP="$1"
+            mkdir -p "${APP}/libexec" "${APP}/scripts" "${APP}/bin"
+            cp "${SRC}/libexec/hub.sh" "${SRC}/libexec/anywhere-lib.sh" "${APP}/libexec/"
+            cp -r "${SRC}/scripts/." "${APP}/scripts/"
+            cp "${SRC}/VERSION" "${APP}/VERSION"
+            cat >"${APP}/libexec/riotbox-core" <<'STUB'
+          #!/usr/bin/env bash
+          if [ "$1" = version ]; then cat "$(dirname "$0")/../VERSION"; exit 0; fi
+          echo "core $*" >>"${LOG}"
+          echo "https://stub-link/$1"
+          STUB
+            chmod +x "${APP}/libexec/riotbox-core"
+          }
+          make_app "${TMP}/app"
+          cat >"${TMP}/stubs/systemctl" <<'STUB'
+          #!/usr/bin/env bash
+          echo "systemctl $*" >>"${LOG}"
+          case "$2" in
+          show-environment) exit "${SYSTEMCTL_USABLE:-0}" ;;
+          disable) [ -z "${DISABLE_MSG:-}" ] || { echo "${DISABLE_MSG}" >&2; exit 1; } ;;
+          --no-pager) exit "${STATUS_CODE:-0}" ;;
+          esac
+          STUB
+          cat >"${TMP}/stubs/journalctl" <<'STUB'
+          #!/usr/bin/env bash
+          echo "journalctl $*" >>"${LOG}"
+          STUB
+          cat >"${TMP}/stubs/loginctl" <<'STUB'
+          #!/usr/bin/env bash
+          echo "loginctl $*" >>"${LOG}"
+          echo "${LINGER:-no}"
+          STUB
+          chmod +x "${TMP}/stubs/"*
+          UNIT="${TMP}/xdg/systemd/user/riotbox-hub.service"
+          hub() {
+            HOME="${TMP}/home" USER=tester XDG_CONFIG_HOME="${TMP}/xdg" XDG_DATA_HOME="${HUB_XDG_DATA_HOME-${TMP}/data}" \
+            RIOTBOX_SYSCONF_DIR="${TMP}/etc" ROOT_DIR="${APP}" CONTAINER_CMD=false \
+            PATH="${TMP}/stubs:${PATH}" bash "${APP}/libexec/hub.sh" "$@"
+          }
+          ENVEOF
+          echo "${TMP}"
+        assertions:
+          - result.code ShouldEqual 0
+        vars:
+          tmp:
+            from: result.systemout
+      - type: exec
+        script: |
+          source "{{.tmp}}/env.sh"
+          out="$(LINGER=yes RIOTBOX_HUB_BIND=192.168.1.20:3400 hub install 2>"${TMP}/err")" || { echo "BAD: exit $?: $(cat "${TMP}/err")"; exit 1; }
+          [ "${out}" = "https://stub-link/hub-link" ] || { echo "BAD: output ${out}"; exit 1; }
+          want="$(cat <<UNITEOF
+          # Written by \`riotbox hub install\`; \`riotbox hub uninstall\` removes it.
+          [Unit]
+          Description=RiotBox hub: the riotbox anywhere sessions through one place
+
+          [Service]
+          Type=simple
+          Environment="PATH=${TMP}/stubs:${PATH}"
+          Environment="XDG_DATA_HOME=${TMP}/data"
+          Environment="XDG_CONFIG_HOME=${TMP}/xdg"
+          Environment="RIOTBOX_SYSCONF_DIR=${TMP}/etc"
+          Environment="RIOTBOX_HUB_BIND=192.168.1.20:3400"
+          ExecStart="${TMP}/app/bin/riotbox" hub
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=default.target
+          UNITEOF
+          )"
+          [ "$(cat "${UNIT}")" = "${want}" ] || { echo "BAD: unit differs:"; cat "${UNIT}"; exit 1; }
+          [ "$(stat -c %a "${UNIT}")" = 644 ] || { echo "BAD: mode $(stat -c %a "${UNIT}")"; exit 1; }
+          [ -z "$(ls -A "${TMP}/xdg/systemd/user" | grep -v '^riotbox-hub.service$')" ] || { echo "BAD: temp file left behind"; exit 1; }
+          calls="$(grep '^systemctl' "${LOG}" | grep -v show-environment | tr '\n' ';')"
+          [ "${calls}" = "systemctl --user daemon-reload;systemctl --user enable riotbox-hub.service;systemctl --user restart riotbox-hub.service;" ] || { echo "BAD: calls ${calls}"; exit 1; }
+          # The link is created before the service starts, so the hub starts with the token the link carries.
+          [ "$(grep -v show-environment "${LOG}" | head -n1 | cut -d' ' -f1-2)" = "core hub-link" ] || { echo "BAD: the link was not created first: $(cat "${LOG}")"; exit 1; }
+          grep -q -- "core hub-link --data-dir ${TMP}/data/riotbox-hub --listen 192.168.1.20:3400" "${LOG}" || { echo "BAD: link call"; cat "${LOG}"; exit 1; }
+          echo "${out}$(cat "${TMP}/err")" | grep -q "enable-linger" && { echo "BAD: linger note although lingering is on"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: riotbox hub install says how to keep the hub running after logout, and never runs enable-linger itself
+    steps:
+      - *hubfix
+      - type: exec
+        script: |
+          source "{{.tmp}}/env.sh"
+          LINGER=no hub install >"${TMP}/out" 2>"${TMP}/err" || { echo "BAD: exit $?"; exit 1; }
+          grep -q "loginctl enable-linger tester" "${TMP}/err" || { echo "BAD: no linger note: $(cat "${TMP}/err")"; exit 1; }
+          grep -q -- "show-user tester -p Linger --value" "${LOG}" || { echo "BAD: linger not asked: $(cat "${LOG}")"; exit 1; }
+          grep -q "enable-linger" "${LOG}" && { echo "BAD: enable-linger was run"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: riotbox hub install refuses a PATH or ROOT_DIR a unit file would misread, and writes nothing
+    steps:
+      - *hubfix
+      - type: exec
+        script: |
+          source "{{.tmp}}/env.sh"
+          nl=$'\n'
+          for bad in 'a%b' 'a"b' 'a\b' "a${nl}b"; do
+            err="$(PATH="${bad}:${TMP}/stubs:${PATH}" hub install 2>&1 >/dev/null)"; rc=$?
+            [ "${rc}" = 1 ] || { echo "BAD: PATH ${bad@Q} exited ${rc}"; exit 1; }
+            echo "${err}" | grep -q "ERROR: PATH contains" || { echo "BAD: PATH ${bad@Q}: ${err}"; exit 1; }
+            [ ! -e "${TMP}/xdg/systemd" ] || { echo "BAD: wrote for PATH ${bad@Q}"; exit 1; }
+          done
+          make_app "${TMP}/a%b"
+          err="$(hub install 2>&1 >/dev/null)"; rc=$?
+          [ "${rc}" = 1 ] && echo "${err}" | grep -q "ERROR: ROOT_DIR contains" || { echo "BAD: ROOT_DIR with %: ${rc} ${err}"; exit 1; }
+          [ ! -e "${TMP}/xdg/systemd" ] || { echo "BAD: wrote for ROOT_DIR"; exit 1; }
+          grep -q 'systemctl --user \(daemon-reload\|enable\|restart\)' "${LOG}" && { echo "BAD: systemd was driven after a refusal"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: riotbox hub install records only the environment variables that are set, and refuses unsafe values
+    steps:
+      - *hubfix
+      - type: exec
+        script: |
+          source "{{.tmp}}/env.sh"
+          HUB_XDG_DATA_HOME= hub install >/dev/null 2>&1 || { echo "BAD: install failed"; exit 1; }
+          grep -q '^Environment="XDG_DATA_HOME=' "${UNIT}" && { echo "BAD: unset XDG_DATA_HOME was recorded"; exit 1; }
+          grep -q 'RIOTBOX_CONTEXT_LEDGER\|RIOTBOX_HUB_BIND' "${UNIT}" && { echo "BAD: unset variables were recorded"; exit 1; }
+          mkdir -p "${TMP}/xdg/riotbox"
+          echo ': "${RIOTBOX_HUB_BIND:=192.168.1.20:3401}"' >"${TMP}/xdg/riotbox/config"
+          hub install >/dev/null 2>&1 || { echo "BAD: install with a config bind failed"; exit 1; }
+          grep -q 'RIOTBOX_HUB_BIND' "${UNIT}" && { echo "BAD: a bind set by the config was recorded"; exit 1; }
+          rm -f "${TMP}/xdg/riotbox/config"
+          RIOTBOX_CONTEXT_LEDGER="${TMP}/ledger" hub install >/dev/null 2>&1
+          grep -qx "Environment=\"RIOTBOX_CONTEXT_LEDGER=${TMP}/ledger\"" "${UNIT}" || { echo "BAD: ledger not recorded"; cat "${UNIT}"; exit 1; }
+          rm -rf "${TMP}/xdg/systemd"; : >"${LOG}"
+          nl=$'\n'
+          for var in HUB_XDG_DATA_HOME RIOTBOX_CONTEXT_LEDGER; do
+            for bad in 'a%b' 'a"b' 'a\b' "a${nl}b"; do
+              err="$( (export "${var}=${bad}"; hub install) 2>&1 >/dev/null)"
+              echo "${err}" | grep -q "ERROR: ${var#HUB_} contains" || { echo "BAD: ${var} ${bad@Q}: ${err}"; exit 1; }
+              [ ! -e "${TMP}/xdg/systemd" ] || { echo "BAD: wrote for ${var} ${bad@Q}"; exit 1; }
+            done
+          done
+          grep -q 'systemctl --user \(daemon-reload\|enable\|restart\)' "${LOG}" && { echo "BAD: systemd was driven after a refusal"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: riotbox hub install refuses a $ in ROOT_DIR, which systemd expands even in quotes, and quotes a space
+    steps:
+      - *hubfix
+      - type: exec
+        script: |
+          source "{{.tmp}}/env.sh"
+          make_app "${TMP}/a\$b"
+          err="$(hub install 2>&1 >/dev/null)"; rc=$?
+          [ "${rc}" = 1 ] && echo "${err}" | grep -q 'ERROR: ROOT_DIR contains' || { echo "BAD: ROOT_DIR with \$: ${rc} ${err}"; exit 1; }
+          [ ! -e "${TMP}/xdg/systemd" ] || { echo "BAD: wrote for ROOT_DIR with \$"; exit 1; }
+          make_app "${TMP}/a b"
+          hub install >/dev/null 2>&1 || { echo "BAD: a space in ROOT_DIR refused"; exit 1; }
+          grep -qxF "ExecStart=\"${TMP}/a b/bin/riotbox\" hub" "${UNIT}" || { echo "BAD: $(cat "${UNIT}")"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: riotbox hub subcommands print usage for --help and refuse other arguments, doing nothing either way
+    steps:
+      - *hubfix
+      - type: exec
+        script: |
+          source "{{.tmp}}/env.sh"
+          hub install >/dev/null 2>&1; : >"${LOG}"
+          for sub in install uninstall status link new-token; do
+            out="$(hub "${sub}" --help 2>&1)" || { echo "BAD: ${sub} --help exited $?"; exit 1; }
+            echo "${out}" | grep -q "^Usage: riotbox hub" || { echo "BAD: ${sub} --help printed no usage"; exit 1; }
+            out="$(hub "${sub}" -x -h 2>&1)" || { echo "BAD: ${sub} -x -h exited $?"; exit 1; }
+            [ ! -s "${LOG}" ] || { echo "BAD: ${sub} --help did something: $(cat "${LOG}")"; exit 1; }
+            err="$(hub "${sub}" extra 2>&1 >/dev/null)"; rc=$?
+            [ "${rc}" = 2 ] || { echo "BAD: ${sub} extra exited ${rc}"; exit 1; }
+            echo "${err}" | grep -q "^Usage: riotbox hub" || { echo "BAD: ${sub} extra printed no usage to stderr"; exit 1; }
+            [ ! -s "${LOG}" ] || { echo "BAD: ${sub} extra did something: $(cat "${LOG}")"; exit 1; }
+          done
+          [ -e "${UNIT}" ] || { echo "BAD: uninstall --help or extra removed the unit"; exit 1; }
+          rm -rf "${TMP}/xdg/systemd"
+          hub install -n >/dev/null 2>&1; [ $? = 2 ] || { echo "BAD: install -n"; exit 1; }
+          [ ! -e "${TMP}/xdg/systemd" ] || { echo "BAD: install -n wrote a unit"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: riotbox hub install without a user systemd instance fails and writes nothing
+    steps:
+      - *hubfix
+      - type: exec
+        script: |
+          source "{{.tmp}}/env.sh"
+          err="$(SYSTEMCTL_USABLE=1 hub install 2>&1 >/dev/null)"; rc=$?
+          [ "${rc}" = 1 ] || { echo "BAD: exit ${rc}"; exit 1; }
+          echo "${err}" | grep -q "needs a user systemd instance" || { echo "BAD: ${err}"; exit 1; }
+          [ ! -e "${TMP}/xdg/systemd" ] || { echo "BAD: wrote a unit"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: riotbox hub uninstall stops, removes the unit and reloads, tolerates a missing unit, and names what stays
+    steps:
+      - *hubfix
+      - type: exec
+        script: |
+          source "{{.tmp}}/env.sh"
+          hub install >/dev/null 2>&1; : >"${LOG}"
+          out="$(hub uninstall 2>&1)" || { echo "BAD: exit $?: ${out}"; exit 1; }
+          [ ! -e "${UNIT}" ] || { echo "BAD: unit still there"; exit 1; }
+          [ "$(cat "${LOG}" | tr '\n' ';')" = "systemctl --user disable --now riotbox-hub.service;systemctl --user daemon-reload;" ] || { echo "BAD: calls $(cat "${LOG}")"; exit 1; }
+          echo "${out}" | grep -q "${TMP}/data/riotbox-hub" || { echo "BAD: data dir not named: ${out}"; exit 1; }
+          for msg in "Failed to disable unit: Unit file riotbox-hub.service does not exist." "Unit riotbox-hub.service not loaded."; do
+            DISABLE_MSG="${msg}" hub uninstall >/dev/null 2>&1 || { echo "BAD: not-installed refused: ${msg}"; exit 1; }
+          done
+          out="$(DISABLE_MSG='Failed to connect to bus: No medium found' hub uninstall 2>&1)" && { echo "BAD: a real failure was swallowed"; exit 1; }
+          echo "${out}" | grep -q "No medium found" || { echo "BAD: failure not shown: ${out}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: riotbox hub status prints the link and passes systemctl's exit code through; logs passes its arguments to journalctl
+    steps:
+      - *hubfix
+      - type: exec
+        script: |
+          source "{{.tmp}}/env.sh"
+          out="$(STATUS_CODE=3 hub status 2>&1)"; rc=$?
+          [ "${rc}" = 3 ] || { echo "BAD: exit ${rc}, want 3"; exit 1; }
+          [ "$(echo "${out}" | head -n1)" = "https://stub-link/hub-link" ] || { echo "BAD: link not first: ${out}"; exit 1; }
+          grep -q "systemctl --user --no-pager status riotbox-hub.service" "${LOG}" || { echo "BAD: $(cat "${LOG}")"; exit 1; }
+          hub logs -f -n 5 >/dev/null 2>&1 || { echo "BAD: logs failed"; exit 1; }
+          grep -qx "journalctl --user -u riotbox-hub.service -f -n 5" "${LOG}" || { echo "BAD: $(cat "${LOG}")"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: riotbox hub link and new-token call their riotbox-core verb with the data dir and the bind, and new-token says to reopen the link
+    steps:
+      - *hubfix
+      - type: exec
+        script: |
+          source "{{.tmp}}/env.sh"
+          out="$(RIOTBOX_HUB_BIND=192.168.1.20:3400 hub link 2>&1)" || { echo "BAD: link exit"; exit 1; }
+          [ "${out}" = "https://stub-link/hub-link" ] || { echo "BAD: link output ${out}"; exit 1; }
+          out="$(RIOTBOX_HUB_BIND=192.168.1.20:3400 hub new-token 2>&1)" || { echo "BAD: new-token exit"; exit 1; }
+          echo "${out}" | head -n1 | grep -qx "https://stub-link/hub-new-token" || { echo "BAD: ${out}"; exit 1; }
+          echo "${out}" | grep -q "every browser must open this link again" || { echo "BAD: no reopen hint: ${out}"; exit 1; }
+          [ "$(cat "${LOG}")" = "core hub-link --data-dir ${TMP}/data/riotbox-hub --listen 192.168.1.20:3400
+          core hub-new-token --data-dir ${TMP}/data/riotbox-hub --listen 192.168.1.20:3400" ] || { echo "BAD: calls $(cat "${LOG}")"; exit 1; }
+          RIOTBOX_HUB_BIND=laptop.local:1 hub link >/dev/null 2>&1 && { echo "BAD: link accepted a bad bind"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # The host owns the password: the hub reads this file to sign browsers in,
+  # and no container mounts it.
+  - name: anywhere_password creates a 0600 file of 24 alphanumerics and exports it as new
+    steps:
+      - type: exec
+        script: |
+          set -u
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          unset RIOTBOX_ANYWHERE_RESET_PASSWORD
+          anywhere_password "${TMP}" || { echo "BAD: refused"; exit 1; }
+          f="${TMP}/anywhere-password"
+          [ "$(stat -c %a "${f}")" = 600 ] || { echo "BAD: mode $(stat -c %a "${f}")"; exit 1; }
+          grep -Eq '^[A-Za-z0-9]{24}$' "${f}" || { echo "BAD: content: $(cat "${f}")"; exit 1; }
+          [ "$(wc -l < "${f}")" = 1 ] || { echo "BAD: not one line"; exit 1; }
+          [ "${RIOTBOX_ANYWHERE_PASSWORD}" = "$(cat "${f}")" ] || { echo "BAD: not exported"; exit 1; }
+          [ "${RIOTBOX_ANYWHERE_PASSWORD_NEW}" = 1 ] || { echo "BAD: NEW=${RIOTBOX_ANYWHERE_PASSWORD_NEW}"; exit 1; }
+          [ "$(ls -A "${TMP}" | wc -l)" = 1 ] || { echo "BAD: a temp file was left: $(ls -A "${TMP}")"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_password keeps an existing password and reports it as not new
+    steps:
+      - type: exec
+        script: |
+          set -u
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          unset RIOTBOX_ANYWHERE_RESET_PASSWORD
+          anywhere_password "${TMP}"
+          pw="${RIOTBOX_ANYWHERE_PASSWORD}"
+          unset RIOTBOX_ANYWHERE_PASSWORD RIOTBOX_ANYWHERE_PASSWORD_NEW
+          anywhere_password "${TMP}" || { echo "BAD: refused"; exit 1; }
+          [ "${RIOTBOX_ANYWHERE_PASSWORD}" = "${pw}" ] || { echo "BAD: password changed"; exit 1; }
+          [ "${RIOTBOX_ANYWHERE_PASSWORD_NEW}" = 0 ] || { echo "BAD: NEW=${RIOTBOX_ANYWHERE_PASSWORD_NEW}"; exit 1; }
+          [ "$(cat "${TMP}/anywhere-password")" = "${pw}" ] || { echo "BAD: file changed"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_password replaces the password on RIOTBOX_ANYWHERE_RESET_PASSWORD=1
+    steps:
+      - type: exec
+        script: |
+          set -u
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          unset RIOTBOX_ANYWHERE_RESET_PASSWORD
+          anywhere_password "${TMP}"
+          pw="${RIOTBOX_ANYWHERE_PASSWORD}"
+          chmod 644 "${TMP}/anywhere-password"
+          RIOTBOX_ANYWHERE_RESET_PASSWORD=1 anywhere_password "${TMP}" || { echo "BAD: refused"; exit 1; }
+          [ "${RIOTBOX_ANYWHERE_PASSWORD}" != "${pw}" ] || { echo "BAD: password reused"; exit 1; }
+          [ "${RIOTBOX_ANYWHERE_PASSWORD_NEW}" = 1 ] || { echo "BAD: NEW=${RIOTBOX_ANYWHERE_PASSWORD_NEW}"; exit 1; }
+          [ "$(cat "${TMP}/anywhere-password")" = "${RIOTBOX_ANYWHERE_PASSWORD}" ] || { echo "BAD: file not rewritten"; exit 1; }
+          [ "$(stat -c %a "${TMP}/anywhere-password")" = 600 ] || { echo "BAD: mode"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # A leading "-" would be read by --setup-auth as the next flag; a short or
+  # spaced value is not something this launcher wrote.
+  - name: anywhere_password refuses a file it did not write, naming it and how to recover
+    steps:
+      - type: exec
+        script: |
+          set -u
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          unset RIOTBOX_ANYWHERE_RESET_PASSWORD RIOTBOX_ANYWHERE_PASSWORD RIOTBOX_ANYWHERE_PASSWORD_NEW
+          for bad in '-x' 'a b c d e f' 'abc12'; do
+            printf '%s\n' "${bad}" > "${TMP}/anywhere-password"
+            err="$(anywhere_password "${TMP}" 2>&1 >/dev/null)" && { echo "BAD: accepted '${bad}'"; exit 1; }
+            echo "${err}" | grep -q "^ERROR:" || { echo "BAD: no ERROR for '${bad}': ${err}"; exit 1; }
+            echo "${err}" | grep -q "${TMP}/anywhere-password" || { echo "BAD: file not named: ${err}"; exit 1; }
+            echo "${err}" | grep -q "RIOTBOX_ANYWHERE_RESET_PASSWORD" || { echo "BAD: no way out: ${err}"; exit 1; }
+            [ -z "${RIOTBOX_ANYWHERE_PASSWORD:-}" ] || { echo "BAD: exported '${bad}'"; exit 1; }
+            [ "$(cat "${TMP}/anywhere-password")" = "${bad}" ] || { echo "BAD: refused file was touched"; exit 1; }
+          done
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_password generates an empty file's replacement, and a directory in its way is an error
+    steps:
+      - type: exec
+        script: |
+          set -u
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          unset RIOTBOX_ANYWHERE_RESET_PASSWORD
+          : > "${TMP}/anywhere-password"
+          anywhere_password "${TMP}" || { echo "BAD: empty file refused"; exit 1; }
+          grep -Eq '^[A-Za-z0-9]{24}$' "${TMP}/anywhere-password" || { echo "BAD: empty file not filled"; exit 1; }
+          rm -f "${TMP}/anywhere-password"; mkdir "${TMP}/anywhere-password"
+          unset RIOTBOX_ANYWHERE_PASSWORD
+          anywhere_password "${TMP}" 2>/dev/null && { echo "BAD: a directory was accepted"; exit 1; }
+          [ -z "${RIOTBOX_ANYWHERE_PASSWORD:-}" ] || { echo "BAD: exported after failure"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_password refuses a symlink and a FIFO at the file's path, leaving them alone
+    steps:
+      - type: exec
+        script: |
+          set -u
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          unset RIOTBOX_ANYWHERE_RESET_PASSWORD RIOTBOX_ANYWHERE_PASSWORD RIOTBOX_ANYWHERE_PASSWORD_NEW
+          f="${TMP}/anywhere-password"
+          printf 'Abcdefgh12345678Abcdefgh\n' > "${TMP}/elsewhere"
+          ln -s "${TMP}/elsewhere" "${f}"
+          for reset in 0 1; do
+            err="$(RIOTBOX_ANYWHERE_RESET_PASSWORD=${reset} anywhere_password "${TMP}" 2>&1 >/dev/null)" && { echo "BAD: accepted a symlink (reset=${reset})"; exit 1; }
+            echo "${err}" | grep -q "^ERROR: ${f} is not a regular file" || { echo "BAD: symlink message: ${err}"; exit 1; }
+            [ -L "${f}" ] || { echo "BAD: the symlink was replaced"; exit 1; }
+          done
+          [ -z "${RIOTBOX_ANYWHERE_PASSWORD:-}" ] || { echo "BAD: exported after a symlink"; exit 1; }
+          rm -f "${f}"; mkfifo "${f}"
+          # timeout: a FIFO that were opened for reading would hang the launch.
+          for reset in 0 1; do
+            err="$(RIOTBOX_ANYWHERE_RESET_PASSWORD=${reset} timeout 5 bash -c 'source "$1"; anywhere_password "$2"' _ "{{.riotbox_dir}}/libexec/anywhere-lib.sh" "${TMP}" 2>&1 >/dev/null)" && { echo "BAD: accepted a FIFO (reset=${reset})"; exit 1; }
+            echo "${err}" | grep -q "^ERROR: ${f} is not a regular file" || { echo "BAD: FIFO message (a timeout is a hang): ${err}"; exit 1; }
+            [ -p "${f}" ] || { echo "BAD: the FIFO was replaced"; exit 1; }
+          done
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # Two launches of one project set must end up with the password that is in
+  # the file; without the lock each makes its own and the last rename wins.
+  - name: concurrent launches through the migrate lock agree on one password, the file's
+    steps:
+      - type: exec
+        script: |
+          set -u
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          cat > "${TMP}/launch.sh" <<'LAUNCH'
+          source "$1/libexec/anywhere-lib.sh"
+          source "$1/scripts/lib/session-state.sh"
+          unset RIOTBOX_ANYWHERE_RESET_PASSWORD
+          while [ ! -e "$2/go" ]; do :; done
+          _with_migrate_lock "$2" anywhere_password "$2" 2>/dev/null || exit 1
+          printf '%s %s\n' "${RIOTBOX_ANYWHERE_PASSWORD}" "${RIOTBOX_ANYWHERE_PASSWORD_NEW}" > "$2/out.$3"
+          LAUNCH
+          for i in $(seq 25); do
+            d="${TMP}/set${i}"; mkdir "${d}"
+            bash "${TMP}/launch.sh" "{{.riotbox_dir}}" "${d}" 1 & p1=$!
+            bash "${TMP}/launch.sh" "{{.riotbox_dir}}" "${d}" 2 & p2=$!
+            touch "${d}/go"
+            wait "${p1}" && wait "${p2}" || { echo "BAD: a launch failed in set ${i}"; exit 1; }
+            pw="$(cat "${d}/anywhere-password")"
+            [ "$(cut -d' ' -f1 "${d}/out.1")" = "${pw}" ] && [ "$(cut -d' ' -f1 "${d}/out.2")" = "${pw}" ] \
+              || { echo "BAD: set ${i}: file ${pw}, launches got $(cat "${d}/out.1") and $(cat "${d}/out.2")"; exit 1; }
+            [ "$(cat "${d}/out.1" "${d}/out.2" | grep -c ' 1$')" = 1 ] \
+              || { echo "BAD: set ${i}: not exactly one launch made the password: $(cat "${d}/out.1" "${d}/out.2")"; exit 1; }
+          done
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: setup_projects makes the Yep Anywhere password under the state dir's migrate lock
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/proj"
+          export XDG_DATA_HOME="${TMP}/store" ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_ANYWHERE=1
+          unset RIOTBOX_DRY_RUN RIOTBOX_ANYWHERE_PASSWORD RIOTBOX_ANYWHERE_PASSWORD_NEW RIOTBOX_ANYWHERE_RESET_PASSWORD
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          _with_migrate_lock() { printf '%s\n' "$*" >> "${TMP}/lock-calls"; : > "${TMP}/held"; "${@:2}"; rc=$?; rm -f "${TMP}/held"; return "${rc}"; }
+          anywhere_password() { [ -e "${TMP}/held" ] || { echo "BAD: anywhere_password ran outside the lock" >&2; return 1; }; echo "${FUNCNAME[0]} $*" >> "${TMP}/pw-calls"; export RIOTBOX_ANYWHERE_PASSWORD=x RIOTBOX_ANYWHERE_PASSWORD_NEW=1; }
+          setup_projects "${TMP}/proj"
+          # Other steps of setup_projects take the lock too; only ours matters.
+          [ "$(grep -c ' anywhere_password ' "${TMP}/lock-calls")" = 1 ] || { echo "BAD: lock calls: $(cat "${TMP}/lock-calls" 2>&1)"; exit 1; }
+          grep -qxF "${RIOTBOX_STATE_DIR} anywhere_password ${RIOTBOX_STATE_DIR}" "${TMP}/lock-calls" || { echo "BAD: lock call: $(cat "${TMP}/lock-calls")"; exit 1; }
+          [ "$(cat "${TMP}/pw-calls")" = "anywhere_password ${RIOTBOX_STATE_DIR}" ] || { echo "BAD: password calls: $(cat "${TMP}/pw-calls" 2>&1)"; exit 1; }
+          [ "${RIOTBOX_ANYWHERE_PASSWORD}" = x ] || { echo "BAD: exports did not survive the lock"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # yepanywhere 0.11.0's cli.js refuses a --setup-auth value that starts with
+  # "-" (it reads it as the next flag). A base64 alphabet mapped to "-_" led
+  # with "-" on about 1 launch in 64, and the launch then failed.
+  - name: anywhere_password generates passwords --setup-auth accepts, every time
+    steps:
+      - type: exec
+        script: |
+          set -u
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          export RIOTBOX_ANYWHERE_RESET_PASSWORD=1
+          for _ in $(seq 200); do
+            anywhere_password "${TMP}" || { echo "BAD: refused"; exit 1; }
+            printf '%s\n' "${RIOTBOX_ANYWHERE_PASSWORD}"
+          done > "${TMP}/all"
+          [ "$(wc -l < "${TMP}/all")" = 200 ] || { echo "BAD: not every call made a password"; exit 1; }
+          bad="$(grep -cvE '^[A-Za-z0-9]{24}$' "${TMP}/all" || true)"
+          [ "${bad}" = 0 ] || { echo "BAD: ${bad} passwords are not 24 alphanumerics"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: a dry run of the Yep Anywhere mount passes the password by name and writes no file
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/proj"
+          export XDG_DATA_HOME="${TMP}/store" ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_ANYWHERE=1 RIOTBOX_DRY_RUN=1
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          source "{{.riotbox_dir}}/scripts/mount-projects.sh"
+          setup_projects "${TMP}/proj"
+          echo "${PROJECT_VOLUME_FLAGS}" | grep -Eq -- "-e RIOTBOX_ANYWHERE_PASSWORD -e RIOTBOX_ANYWHERE_PASSWORD_NEW( |$)" || { echo "BAD: flags: ${PROJECT_VOLUME_FLAGS}"; exit 1; }
+          [ -z "${RIOTBOX_ANYWHERE_PASSWORD:-}" ] || { echo "BAD: a dry run made a password"; exit 1; }
+          [ ! -e "${TMP}/store" ] || { echo "BAD: a dry run wrote: $(find "${TMP}/store")"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: launch.sh publishes the port and mounts the Yep Anywhere state only for riotbox anywhere
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg/riotbox" "${TMP}/data" "${TMP}/proj"
+          cat > "${TMP}/fake-cmd" <<'FAKE'
+          #!/usr/bin/env bash
+          printf '%s\n' "$*" > "${CAPTURE}"
+          printf '%s %s\n' "${RIOTBOX_ANYWHERE_PASSWORD:-unset}" "${RIOTBOX_ANYWHERE_PASSWORD_NEW:-unset}" > "${CAPTURE}.env"
+          FAKE
+          chmod +x "${TMP}/fake-cmd"
+          export CAPTURE="${TMP}/argv"
+          # The bind comes from the user config, as the README tells people to set it.
+          printf ': "${RIOTBOX_ANYWHERE_BIND:=192.168.1.20:8443}"\n' > "${TMP}/xdg/riotbox/config"
+          launch() {
+            RIOTBOX_PROJECTS="${TMP}/proj" RIOTBOX_DATA_DIR="${TMP}/data" \
+            RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" HOME="${TMP}" \
+            ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+              bash "{{.riotbox_dir}}/libexec/launch.sh" "$@" 2>/dev/null
+          }
+          RIOTBOX_ANYWHERE=1 launch /home/llm/.riotbox/anywhere.sh
+          argv="$(cat "${CAPTURE}")"
+          echo "${argv}" | grep -q -- "-p 192.168.1.20:8443:3400" || { echo "BAD: port not published: ${argv}"; exit 1; }
+          echo "${argv}" | grep -q -- "-e RIOTBOX_ANYWHERE=1" || { echo "BAD: RIOTBOX_ANYWHERE not passed: ${argv}"; exit 1; }
+          echo "${argv}" | grep -q -- "-e RIOTBOX_ANYWHERE_URL=https://192.168.1.20:8443" || { echo "BAD: URL not passed: ${argv}"; exit 1; }
+          echo "${argv}" | grep -q -- "--label riotbox.anywhere.url=https://192.168.1.20:8443" || { echo "BAD: no hub label: ${argv}"; exit 1; }
+          echo "${argv}" | grep -Eq -- "/yep-anywhere:/home/llm/\.yep-anywhere:z" || { echo "BAD: no state mount: ${argv}"; exit 1; }
+          echo "${argv}" | grep -Eq -- "[[:space:]]riotbox /home/llm/\.riotbox/anywhere\.sh$" || { echo "BAD: main command not after the image: ${argv}"; exit 1; }
+          state_dir="$(echo "${argv}" | grep -oE -- "-v [^ ]*/yep-anywhere:" | sed -E 's/^-v //; s/:$//')"
+          [ -d "${state_dir}" ] || { echo "BAD: state dir ${state_dir} was not created"; exit 1; }
+          # The password travels by name; its value is in the engine's environment only.
+          echo "${argv}" | grep -Eq -- "-e RIOTBOX_ANYWHERE_PASSWORD( |$)" || { echo "BAD: password not passed by name: ${argv}"; exit 1; }
+          echo "${argv}" | grep -Eq -- "-e RIOTBOX_ANYWHERE_PASSWORD_NEW( |$)" || { echo "BAD: NEW not passed by name: ${argv}"; exit 1; }
+          echo "${argv}" | grep -q -- "RIOTBOX_ANYWHERE_PASSWORD=" && { echo "BAD: a value is on the engine argv: ${argv}"; exit 1; }
+          pwfile="$(dirname "${state_dir}")/anywhere-password"
+          [ -f "${pwfile}" ] || { echo "BAD: no ${pwfile}"; exit 1; }
+          pw="$(cat "${pwfile}")"
+          [ "$(cat "${CAPTURE}.env")" = "${pw} 1" ] || { echo "BAD: engine environment: $(cat "${CAPTURE}.env")"; exit 1; }
+          echo "${argv}" | grep -qF -- "${pw}" && { echo "BAD: the password is on the engine argv"; exit 1; }
+          rm -f "${CAPTURE}"
+          launch bash
+          argv="$(cat "${CAPTURE}")"
+          echo "${argv}" | grep -q -- "RIOTBOX_ANYWHERE_PASSWORD" && { echo "BAD: a plain launch passed the password: ${argv}"; exit 1; }
+          echo "${argv}" | grep -q -- " -p " && { echo "BAD: a plain launch published a port: ${argv}"; exit 1; }
+          echo "${argv}" | grep -q -- "yep-anywhere" && { echo "BAD: a plain launch mounted Yep Anywhere state: ${argv}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: launch.sh refuses a bad bind before the engine runs
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
+          printf '#!/usr/bin/env bash\ntouch "%s/ran"\n' "${TMP}" > "${TMP}/fake-cmd"
+          chmod +x "${TMP}/fake-cmd"
+          out="$(RIOTBOX_ANYWHERE=1 RIOTBOX_ANYWHERE_BIND=laptop.local:3400 \
+            RIOTBOX_PROJECTS="${TMP}/proj" RIOTBOX_DATA_DIR="${TMP}/data" \
+            RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" HOME="${TMP}" \
+            ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" /home/llm/.riotbox/anywhere.sh 2>&1)" && { echo "BAD: launch succeeded"; exit 1; }
+          [ ! -e "${TMP}/ran" ] || { echo "BAD: the engine ran"; exit 1; }
+          [ -z "$(ls -A "${TMP}/data" 2>/dev/null)" ] || { echo "BAD: session state was created before the refusal"; exit 1; }
+          echo "${out}" | grep -q "is not ADDRESS:PORT" || { echo "BAD: message: ${out}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: container/anywhere.sh applies the given password once, points Claude at the wrapper, and serves TLS on the fixed port
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/home/.riotbox/bin"
+          printf '#!/usr/bin/env bash\nexit 0\n' > "${TMP}/home/.riotbox/bin/claude"
+          # Stub yepanywhere: --setup-auth records the password and writes
+          # auth.json the way the real one does; a serve records its argv and
+          # the variables anywhere.sh is responsible for.
+          cat > "${TMP}/yep" <<'STUB'
+          #!/usr/bin/env bash
+          if [ "$1" = "--setup-auth" ]; then
+            printf '%s\n' "$2" >> "${LOG}/passwords"
+            printf '{"hash":"x"}\n' > "${YEP_DATA_DIR}/auth.json"
+            exit 0
+          fi
+          printf '%s\n' "$*" > "${LOG}/serve-argv"
+          printf '%s\n' "${CLAUDE_CODE_EXECUTABLE:-unset}" > "${LOG}/claude-exe"
+          printf '%s\n' "${CLAUDE_CODE_PATH:-unset}" > "${LOG}/claude-path"
+          printf '%s\n' "${ALLOWED_HOSTS:-unset}" > "${LOG}/allowed-hosts"
+          printf '%s|%s\n' "${RIOTBOX_ANYWHERE_PASSWORD:-unset}" "${RIOTBOX_ANYWHERE_PASSWORD_NEW:-unset}" > "${LOG}/serve-env"
+          STUB
+          chmod +x "${TMP}/yep" "${TMP}/home/.riotbox/bin/claude"
+          export LOG="${TMP}" HOME="${TMP}/home" RIOTBOX_YEP_BIN="${TMP}/yep"
+          export RIOTBOX_ANYWHERE_URL=https://100.64.1.2:8443 RIOTBOX_ANYWHERE_HOST=100.64.1.2 CLAUDE_CODE_PATH=/somewhere/else
+          pw=Abcdefgh12345678Abcdefgh
+          first="$(RIOTBOX_ANYWHERE_PASSWORD="${pw}" RIOTBOX_ANYWHERE_PASSWORD_NEW=1 bash "{{.riotbox_dir}}/container/anywhere.sh")"
+          [ "$(cat "${TMP}/passwords")" = "${pw}" ] || { echo "BAD: --setup-auth got: $(cat "${TMP}/passwords")"; exit 1; }
+          echo "${first}" | grep -q "Password: *${pw}$" || { echo "BAD: password not shown: ${first}"; exit 1; }
+          echo "${first}" | grep -q "https://100.64.1.2:8443" || { echo "BAD: URL not shown: ${first}"; exit 1; }
+          [ "$(cat "${TMP}/serve-argv")" = "--host 0.0.0.0 --port 3400 --https-self-signed" ] || { echo "BAD: serve argv: $(cat "${TMP}/serve-argv")"; exit 1; }
+          [ "$(cat "${TMP}/claude-exe")" = "${TMP}/home/.riotbox/bin/claude" ] || { echo "BAD: CLAUDE_CODE_EXECUTABLE=$(cat "${TMP}/claude-exe")"; exit 1; }
+          [ "$(cat "${TMP}/claude-path")" = unset ] || { echo "BAD: CLAUDE_CODE_PATH survived"; exit 1; }
+          [ "$(cat "${TMP}/allowed-hosts")" = 100.64.1.2 ] || { echo "BAD: ALLOWED_HOSTS=$(cat "${TMP}/allowed-hosts")"; exit 1; }
+          [ "$(cat "${TMP}/serve-env")" = "unset|unset" ] || { echo "BAD: the server (and the agents it starts) inherited the password: $(cat "${TMP}/serve-env")"; exit 1; }
+          [ "$(stat -c %a "${TMP}/home/.yep-anywhere")" = 700 ] || { echo "BAD: data dir mode"; exit 1; }
+          second="$(RIOTBOX_ANYWHERE_PASSWORD="${pw}" RIOTBOX_ANYWHERE_PASSWORD_NEW=0 bash "{{.riotbox_dir}}/container/anywhere.sh")"
+          [ "$(wc -l < "${TMP}/passwords")" = 1 ] || { echo "BAD: second launch put the password on an argv again"; exit 1; }
+          echo "${second}" | grep -q "Password: *${pw}" && { echo "BAD: second launch printed the password"; exit 1; }
+          echo "${second}" | grep -q "unchanged" || { echo "BAD: second launch: ${second}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # --setup-auth takes the password as an argument, which any host user can read
+  # in /proc while it runs; the ordinary launch must not run it.
+  - name: container/anywhere.sh runs --setup-auth only for a new password or a missing or empty auth.json
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/home/.riotbox/bin" "${TMP}/home/.yep-anywhere"
+          printf '#!/usr/bin/env bash\nexit 0\n' > "${TMP}/home/.riotbox/bin/claude"
+          cat > "${TMP}/yep" <<'STUB'
+          #!/usr/bin/env bash
+          if [ "$1" = "--setup-auth" ]; then
+            printf '%s\n' "$2" >> "${LOG}/passwords"
+            printf '{"hash":"x"}\n' > "${YEP_DATA_DIR}/auth.json"
+          fi
+          exit 0
+          STUB
+          chmod +x "${TMP}/yep" "${TMP}/home/.riotbox/bin/claude"
+          export LOG="${TMP}" HOME="${TMP}/home" RIOTBOX_YEP_BIN="${TMP}/yep"
+          auth="${TMP}/home/.yep-anywhere/auth.json"
+          launch() { RIOTBOX_ANYWHERE_PASSWORD=Abcdefgh12345678Abcdefgh RIOTBOX_ANYWHERE_PASSWORD_NEW="$1" bash "{{.riotbox_dir}}/container/anywhere.sh" >/dev/null; }
+          calls() { if [ -e "${TMP}/passwords" ]; then wc -l < "${TMP}/passwords"; else echo 0; fi; }
+          rm -f "${TMP}/passwords"; printf '{"hash":"y"}\n' > "${auth}"
+          launch 0
+          [ "$(calls)" = 0 ] || { echo "BAD: NEW=0 with an auth.json ran --setup-auth"; exit 1; }
+          launch 1
+          [ "$(calls)" = 1 ] || { echo "BAD: NEW=1 did not run --setup-auth"; exit 1; }
+          rm -f "${TMP}/passwords" "${auth}"
+          launch 0
+          [ "$(calls)" = 1 ] || { echo "BAD: NEW=0 with no auth.json did not run --setup-auth"; exit 1; }
+          rm -f "${TMP}/passwords"; : > "${auth}"
+          launch 0
+          [ "$(calls)" = 1 ] || { echo "BAD: NEW=0 with an empty auth.json did not run --setup-auth"; exit 1; }
+          rm -f "${TMP}/passwords"; printf '{"hash":"y"}\n' > "${auth}"
+          launch 1
+          [ "$(calls)" = 1 ] || { echo "BAD: NEW=1 with an auth.json did not run --setup-auth"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: container/anywhere.sh refuses to start without a password and never serves
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/home/.riotbox/bin"
+          printf '#!/usr/bin/env bash\nexit 0\n' > "${TMP}/home/.riotbox/bin/claude"
+          printf '#!/usr/bin/env bash\ntouch "%s/ran"\n' "${TMP}" > "${TMP}/yep"
+          chmod +x "${TMP}/yep" "${TMP}/home/.riotbox/bin/claude"
+          unset RIOTBOX_ANYWHERE_PASSWORD
+          out="$(HOME="${TMP}/home" RIOTBOX_YEP_BIN="${TMP}/yep" bash "{{.riotbox_dir}}/container/anywhere.sh" 2>&1)" && { echo "BAD: started without a password"; exit 1; }
+          echo "${out}" | grep -q "^ERROR:.*riotbox anywhere" || { echo "BAD: message: ${out}"; exit 1; }
+          [ ! -e "${TMP}/ran" ] || { echo "BAD: yepanywhere ran without a password"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # At its default level Yep Anywhere logs every request to the terminal, which
+  # scrolled the once-shown password out of sight within seconds.
+  - name: container/anywhere.sh keeps the banner on screen and the full log in a file emptied at each launch
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/home/.riotbox/bin" "${TMP}/home/.yep-anywhere/logs"
+          printf '#!/usr/bin/env bash\nexit 0\n' > "${TMP}/home/.riotbox/bin/claude"
+          echo "last session" > "${TMP}/home/.yep-anywhere/logs/server.log"
+          cat > "${TMP}/yep" <<'STUB'
+          #!/usr/bin/env bash
+          if [ "$1" = "--setup-auth" ]; then
+            printf '{"hash":"x"}\n' > "${YEP_DATA_DIR}/auth.json"
+            exit 0
+          fi
+          printf '%s %s %s\n' "${LOG_LEVEL:-unset}" "${LOG_FILE_LEVEL:-unset}" "${LOG_TO_FILE:-unset}" > "${LOG}/levels"
+          wc -c < "${YEP_DATA_DIR}/logs/server.log" > "${LOG}/log-size-at-start"
+          STUB
+          chmod +x "${TMP}/yep" "${TMP}/home/.riotbox/bin/claude"
+          export LOG="${TMP}" HOME="${TMP}/home" RIOTBOX_YEP_BIN="${TMP}/yep" LOG_LEVEL=debug
+          out="$(RIOTBOX_ANYWHERE_PASSWORD=Abcdefgh12345678Abcdefgh RIOTBOX_ANYWHERE_PASSWORD_NEW=1 bash "{{.riotbox_dir}}/container/anywhere.sh")"
+          [ "$(cat "${TMP}/levels")" = "warn info true" ] || { echo "BAD: LOG_LEVEL LOG_FILE_LEVEL LOG_TO_FILE = $(cat "${TMP}/levels")"; exit 1; }
+          [ "$(cat "${TMP}/log-size-at-start")" = 0 ] || { echo "BAD: the last session's log was kept"; exit 1; }
+          echo "${out}" | grep -q 'Log: *~/.yep-anywhere/logs/server.log' || { echo "BAD: log path not shown: ${out}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: container/anywhere.sh fails clearly when the image has no Yep Anywhere or no claude wrapper
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/home/.riotbox/bin"
+          out="$(HOME="${TMP}/home" RIOTBOX_YEP_BIN="${TMP}/missing" bash "{{.riotbox_dir}}/container/anywhere.sh" 2>&1)" && { echo "BAD: ran without yepanywhere"; exit 1; }
+          echo "${out}" | grep -q "riotbox build" || { echo "BAD: message: ${out}"; exit 1; }
+          printf '#!/usr/bin/env bash\ntouch "%s/served"\n' "${TMP}" > "${TMP}/yep"; chmod +x "${TMP}/yep"
+          out="$(HOME="${TMP}/home" RIOTBOX_YEP_BIN="${TMP}/yep" bash "{{.riotbox_dir}}/container/anywhere.sh" 2>&1)" && { echo "BAD: ran without the wrapper"; exit 1; }
+          echo "${out}" | grep -q "claude wrapper" || { echo "BAD: message: ${out}"; exit 1; }
+          [ ! -e "${TMP}/served" ] || { echo "BAD: served without the wrapper"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # The lockfile is the pin on what the layer installs; npm ci refuses a
+  # package.json it does not satisfy, so this is the repo-side half: the
+  # committed lockfile resolves the release the ARG names, with an integrity
+  # hash, and the layer still carries the guards the session relies on.
+  - name: the image layer pins the lockfile's yepanywhere and removes the SDK's bundled Claude
+    steps:
+      - type: exec
+        script: |
+          set -u
+          cd "{{.riotbox_dir}}"
+          lock=container/yepanywhere-package-lock.json
+          [ "$(grep -c '^ARG YEPANYWHERE_VERSION=' Containerfile)" = 1 ] || { echo "BAD: expected one ARG YEPANYWHERE_VERSION"; exit 1; }
+          version="$(sed -nE 's/^ARG YEPANYWHERE_VERSION=(.+)$/\1/p' Containerfile)"
+          [ "$(jq -r '.packages[""].dependencies.yepanywhere' "${lock}")" = "${version}" ] || { echo "BAD: ${lock} does not depend on exactly ${version}"; exit 1; }
+          [ "$(jq -r '.packages["node_modules/yepanywhere"].version' "${lock}")" = "${version}" ] || { echo "BAD: ${lock} resolves another release — regenerate it"; exit 1; }
+          jq -r '.packages["node_modules/yepanywhere"].integrity' "${lock}" | grep -qE '^sha512-' || { echo "BAD: no sha512 integrity"; exit 1; }
+          grep -q 'COPY --chown=llm:llm container/yepanywhere-package-lock.json' Containerfile || { echo "BAD: lockfile not copied"; exit 1; }
+          grep -q 'npm" ci --ignore-scripts' Containerfile || { echo "BAD: npm ci --ignore-scripts missing"; exit 1; }
+          grep -q 'rm -rf "${YEP_ROOT}"/node_modules/@anthropic-ai/claude-agent-sdk-\*' Containerfile || { echo "BAD: bundled Claude binaries are no longer removed"; exit 1; }
+          grep -q 'process.env.CLAUDE_CODE_EXECUTABLE' Containerfile || { echo "BAD: the CLAUDE_CODE_EXECUTABLE guard is gone"; exit 1; }
+          grep -q 'COPY --chown=llm:llm container/anywhere.sh /home/llm/.riotbox/anywhere.sh' Containerfile || { echo "BAD: anywhere.sh not copied"; exit 1; }
+          grep -q 'container/yepanywhere-package-lock.json linguist-generated=true' .gitattributes || { echo "BAD: lockfile not marked generated"; exit 1; }
+          # --https-self-signed runs the openssl CLI to make its certificate,
+          # and openssl-devel does not install it: without the package every
+          # launch dies at start.
+          awk '/^FROM .* AS runtime/{r=1} r' Containerfile | grep -qE '^[[:space:]]+openssl \\$' || { echo "BAD: the runtime stage does not install the openssl CLI"; exit 1; }
+          grep -q 'command -v openssl' Containerfile || { echo "BAD: the Yep Anywhere layer no longer checks for openssl"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"

@@ -224,6 +224,9 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         python3-pip \
         python3-devel \
         openssl-devel \
+        # The CLI, which openssl-devel does not pull in: Yep Anywhere's
+        # --https-self-signed (riotbox anywhere) runs it to make its certificate.
+        openssl \
         zlib-devel \
         bzip2-devel \
         readline-devel \
@@ -748,6 +751,7 @@ COPY --chown=llm:llm container/context-mode-setup.sh /home/llm/.riotbox/context-
 COPY --chown=llm:llm container/context-mode-summary.sh /home/llm/.riotbox/context-mode-summary.sh
 COPY --chown=llm:llm container/context-mode-stats.mjs /home/llm/.riotbox/context-mode-stats.mjs
 COPY --chown=llm:llm container/git-ai-setup.sh /home/llm/.riotbox/git-ai-setup.sh
+COPY --chown=llm:llm container/anywhere.sh /home/llm/.riotbox/anywhere.sh
 # The entrypoint sources lib/overlay-ignore.sh from this path, so the shared
 # shell library has to exist inside the image as well as on the host. The
 # directory is copied wholesale rather than file by file, so anything added
@@ -763,7 +767,8 @@ RUN chmod +x /home/llm/.riotbox/entrypoint.sh \
     /home/llm/.riotbox/run-main.sh \
     /home/llm/.riotbox/nested-podman-setup.sh /home/llm/.riotbox/headroom-summary.sh \
     /home/llm/.riotbox/codegraph-setup.sh /home/llm/.riotbox/context-mode-setup.sh \
-    /home/llm/.riotbox/context-mode-summary.sh /home/llm/.riotbox/git-ai-setup.sh
+    /home/llm/.riotbox/context-mode-summary.sh /home/llm/.riotbox/git-ai-setup.sh \
+    /home/llm/.riotbox/anywhere.sh
 ENTRYPOINT ["/home/llm/.riotbox/entrypoint.sh"]
 CMD ["bash"]
 
@@ -1545,6 +1550,87 @@ RUN bash -o pipefail -c '\
 COPY --chown=llm:llm container/opencode/smoke.sh /tmp/riotbox-opencode-smoke.sh
 RUN bash /tmp/riotbox-opencode-smoke.sh /home/llm/.riotbox && \
     rm -f /tmp/riotbox-opencode-smoke.sh
+
+# ── Yep Anywhere (served only by `riotbox anywhere`) ─────────────────────────
+# A mobile-first web UI that starts Claude Code and opencode itself, so it
+# lives here beside them; container/anywhere.sh runs it. Pinned the way the
+# Context Mode layer is: `npm ci` of a generated package.json that depends on
+# exactly YEPANYWHERE_VERSION, against container/yepanywhere-package-lock.json,
+# whose integrity hashes are the only pin on the bytes. `ci` refuses a
+# package.json the lockfile does not satisfy, so bumping the ARG without
+# regenerating the lockfile fails here.
+#
+# To refresh, under docker.io/library/node:<CONTEXT_MODE_NODE>, from an empty
+# directory:
+#   printf '{"name":"riotbox-yepanywhere","private":true,"dependencies":{"yepanywhere":"%s"}}\n' \
+#     <VERSION> > package.json
+#   npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+#   cp package-lock.json container/yepanywhere-package-lock.json
+# then set YEPANYWHERE_VERSION to the same <VERSION>.
+#
+# --ignore-scripts: the one install script in the graph is bcrypt's
+# `node-gyp-build`, which only compiles when no prebuilt binary matches; bcrypt
+# ships linux-x64 and linux-arm64 prebuilds, which node-gyp-build loads at
+# run time. The --setup-auth smoke below hashes a password, so a missing
+# prebuild fails the layer.
+#
+# Node: Yep Anywhere wants ^22.16 || >=24.10, and NODE_DEFAULT is whatever the
+# host had. The Context Mode layer above already installed CONTEXT_MODE_NODE
+# (24.x), so the shim pins that one instead of downloading a second toolchain.
+#
+# The Agent SDK's bundled Claude binaries (@anthropic-ai/claude-agent-sdk-*)
+# are deleted. container/anywhere.sh points the SDK at the RiotBox wrapper
+# through CLAUDE_CODE_EXECUTABLE; without the bundle a regression there fails
+# a session instead of running a second, unwrapped Claude Code. It also drops
+# about 300 MB.
+#
+# Outbound traffic, for THREAT_MODEL: nothing at start. Features the user
+# opens can reach updates.yepanywhere.com (version check), push.yepanywhere.com
+# (push notifications), api.github.com (issue links) and the relay
+# (relay.yepanywhere.com, only if remote access is set up in its settings).
+ARG YEPANYWHERE_VERSION=0.11.0
+COPY --chown=llm:llm container/yepanywhere-package-lock.json \
+    /tmp/yepanywhere-package-lock.json
+RUN bash -o pipefail -c '\
+    set -e; \
+    : "${YEPANYWHERE_VERSION:?}"; \
+    export NVM_DIR=/home/llm/.nvm; \
+    . "${NVM_DIR}/nvm.sh"; \
+    YEP_NODE_EXE="$(nvm which "${CONTEXT_MODE_NODE}")"; \
+    YEP_NODE_BIN="$(dirname "${YEP_NODE_EXE}")"; \
+    YEP_ROOT=/home/llm/.riotbox/yepanywhere; \
+    rm -rf "${YEP_ROOT}"; \
+    mkdir -p "${YEP_ROOT}/bin"; \
+    printf "{\"name\":\"riotbox-yepanywhere\",\"private\":true,\"dependencies\":{\"yepanywhere\":\"%s\"}}\n" "${YEPANYWHERE_VERSION}" > "${YEP_ROOT}/package.json"; \
+    mv /tmp/yepanywhere-package-lock.json "${YEP_ROOT}/package-lock.json"; \
+    PATH="${YEP_NODE_BIN}:${PATH}" \
+        "${YEP_NODE_BIN}/npm" ci --ignore-scripts --no-audit --no-fund --prefix "${YEP_ROOT}"; \
+    YEP_PKG="${YEP_ROOT}/node_modules/yepanywhere"; \
+    command -v openssl >/dev/null || { \
+        echo "no openssl CLI in the image — yepanywhere --https-self-signed needs it to make its certificate" >&2; exit 1; }; \
+    [ "$(jq -r .version "${YEP_PKG}/package.json")" = "${YEPANYWHERE_VERSION}" ] || { \
+        echo "npm ci installed yepanywhere $(jq -r .version "${YEP_PKG}/package.json"), not ${YEPANYWHERE_VERSION}" >&2; exit 1; }; \
+    rm -rf "${YEP_ROOT}"/node_modules/@anthropic-ai/claude-agent-sdk-*; \
+    yep_left="$(find "${YEP_ROOT}/node_modules" -path "*claude-agent-sdk-*" -name claude -type f)"; \
+    [ -z "${yep_left}" ] || { \
+        echo "a bundled Claude binary survived the delete — the SDK could run it instead of the wrapper: ${yep_left}" >&2; exit 1; }; \
+    grep -q "process.env.CLAUDE_CODE_EXECUTABLE" "${YEP_PKG}/dist/sdk/providers/claude.js" || { \
+        echo "yepanywhere ${YEPANYWHERE_VERSION} no longer reads CLAUDE_CODE_EXECUTABLE — container/anywhere.sh could not point it at the RiotBox wrapper" >&2; exit 1; }; \
+    printf "%s\n" \
+        "#!/usr/bin/env bash" \
+        "# Generated by the RiotBox image build: pins the Node Yep Anywhere runs on." \
+        "exec \"${YEP_NODE_EXE}\" --no-warnings \"${YEP_PKG}/dist/cli.js\" \"\$@\"" \
+        > "${YEP_ROOT}/bin/yepanywhere"; \
+    chmod +x "${YEP_ROOT}/bin/yepanywhere"; \
+    [ "$("${YEP_ROOT}/bin/yepanywhere" --version)" = "yepanywhere v${YEPANYWHERE_VERSION}" ] || { \
+        echo "the yepanywhere shim does not report ${YEPANYWHERE_VERSION}" >&2; exit 1; }; \
+    yep_probe="$(mktemp -d)"; \
+    HOME="${yep_probe}" YEP_DATA_DIR="${yep_probe}/data" "${YEP_ROOT}/bin/yepanywhere" --setup-auth riotbox-build-probe >/dev/null \
+        || { echo "yepanywhere --setup-auth failed — bcrypt has no usable prebuild here, so no session could set a password" >&2; exit 1; }; \
+    [ -s "${yep_probe}/data/auth.json" ] || { echo "yepanywhere --setup-auth wrote no auth.json under YEP_DATA_DIR" >&2; exit 1; }; \
+    rm -rf "${yep_probe}"; \
+    find /home/llm/.npm -mindepth 1 -delete; \
+    echo "staged yepanywhere ${YEPANYWHERE_VERSION} at ${YEP_ROOT} ($(du -sh "${YEP_ROOT}" | cut -f1))"'
 
 # ── Pre-stage plugins (no auth needed — just clones a public GitHub repo) ────
 # Installed to a staging dir because ~/.claude is bind-mounted at runtime.

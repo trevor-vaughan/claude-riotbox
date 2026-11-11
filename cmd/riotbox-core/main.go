@@ -125,6 +125,14 @@ verbs:
   hostlink-listen --ports <file> --proxy http://<host>:<port>
                          listen on 127.0.0.1 for each port the file lists
                          and tunnel each connection through the proxy
+  hub --engine <engine> --state-root <dir> --data-dir <dir> --listen <addr:port>
+                         serve the page that lists running riotbox anywhere
+                         sessions; prints its link, runs until killed
+  hub-link --data-dir <dir> --listen <addr:port>
+                         print the hub's link, creating its token if missing
+  hub-new-token --data-dir <dir> --listen <addr:port>
+                         replace the hub's token and print the new link; a
+                         running hub takes it from its next request
 `
 
 // unbounded is a verb's maxArgs when it takes any number of positionals.
@@ -219,6 +227,9 @@ var verbs = map[string]verb{
 	"egress-reload":   {options: egressConfOptions, optional: []string{"--session"}, run: egressReload},
 	"hostlink-relay":  {options: []string{"--socket", "--ports", "--target"}, run: hostlinkRelay},
 	"hostlink-listen": {options: []string{"--ports", "--proxy"}, run: hostlinkListen},
+	"hub":             {options: []string{"--engine", "--state-root", "--data-dir", "--listen"}, run: hubServe},
+	"hub-link":        {options: []string{"--data-dir", "--listen"}, run: hubLink},
+	"hub-new-token":   {options: []string{"--data-dir", "--listen"}, run: hubNewToken},
 }
 
 func main() {

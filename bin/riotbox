@@ -63,6 +63,12 @@ Session commands:
   run "prompt" [projects...]   Run the agent with a prompt
   resume [projects...]         Resume the last session
   audit [args...]              Audit an untrusted repo (read-only workspace)
+  anywhere [projects...]       Serve Yep Anywhere, a phone-friendly web UI that
+                               drives Claude Code and opencode (see README)
+  hub [install|status|logs|link|new-token|uninstall]
+                               Serve one page listing every running
+                               riotbox anywhere session, with links; install
+                               runs it as a systemd user service
   reown [flags...]             Rewrite the agent's commits to your git identity
 
 Privileged session modes (reduced isolation — see README):
@@ -183,6 +189,7 @@ print_command_help() {
 	case "$1" in
 	audit) exec "${LIBEXEC}/audit.sh" --help ;;
 	egress) exec "${LIBEXEC}/egress.sh" --help ;;
+	hub) exec "${LIBEXEC}/hub.sh" --help ;;
 	install-hooks) exec "${LIBEXEC}/install-hooks.sh" --help ;;
 	ctx-stats) exec "${SCRIPTS}/ctx-stats.sh" --help ;;
 	build | rebuild | update)
@@ -255,6 +262,18 @@ print_command_help() {
 		echo "  RIOTBOX_DOCTOR_FIRST_FAIL=1  Stop at the first failure"
 		echo "  IMAGE_NAME=<tag>             Probe a tag other than 'riotbox'"
 		;;
+	anywhere)
+		echo "Usage: riotbox anywhere [project ...]"
+		echo ""
+		echo "Start Yep Anywhere in the session container and publish it on one"
+		echo "host address, so a phone browser can drive Claude Code and opencode."
+		echo "Prints the URL and, on first use, a generated password. Ctrl-C stops it."
+		echo "Environment knobs:"
+		echo "  RIOTBOX_ANYWHERE_BIND=<ip:port>     Host address to publish on"
+		echo "                                      (default 127.0.0.1:3400 — this host only)"
+		echo "  RIOTBOX_ANYWHERE_RESET_PASSWORD=1   Generate and print a new password"
+		echo "Not available with RIOTBOX_EGRESS=1 or RIOTBOX_NETWORK=none."
+		;;
 	mounts)
 		echo "Usage: riotbox mounts [project ...]"
 		echo ""
@@ -313,6 +332,12 @@ shell)
 	"${LIBEXEC}/checkpoint.sh"
 	exec "${LIBEXEC}/launch.sh" bash
 	;;
+anywhere)
+	ensure_image
+	export RIOTBOX_ANYWHERE=1 RIOTBOX_PROJECTS="${*:-.}"
+	"${LIBEXEC}/checkpoint.sh"
+	exec "${LIBEXEC}/launch.sh" /home/llm/.riotbox/anywhere.sh
+	;;
 resume)
 	ensure_image
 	export RIOTBOX_PROJECTS="${*:-.}"
@@ -362,6 +387,7 @@ session-remove) exec "${LIBEXEC}/remove-session.sh" "$@" ;;
 session-reset) exec "${LIBEXEC}/reset-session.sh" "$@" ;;
 session-migrate) exec "${LIBEXEC}/migrate-session.sh" "$@" ;;
 egress) exec "${LIBEXEC}/egress.sh" "$@" ;;
+hub) exec "${LIBEXEC}/hub.sh" "$@" ;;
 
 overlays) exec "${SCRIPTS}/overlay.sh" list ;;
 overlay-diff) exec "${SCRIPTS}/overlay.sh" diff "$@" ;;

@@ -49,6 +49,20 @@
 # The Envoy image, pinned by digest. Override only to try another Envoy.
 # : "${RIOTBOX_EGRESS_IMAGE:=docker.io/envoyproxy/envoy:distroless-v1.40.1@sha256:48a8c5ec92d9775d5483e32fbb2d6775439bdf957c1602d47afb90644526c093}"
 
+# ── riotbox anywhere (Yep Anywhere web UI) ───────────────────────────────
+# The host address `riotbox anywhere` publishes its web UI on, as IP:PORT.
+# The default, 127.0.0.1:3400, is reachable from this host only; for your
+# phone, name this host's LAN address. An IP literal only, never a host name.
+# 0.0.0.0 listens on every network the host joins and prints a warning.
+# Not available with RIOTBOX_EGRESS=1 or RIOTBOX_NETWORK=none.
+# Several sessions can share this setting: each launch takes the first free
+# port from the one given, up to 19 above it.
+# : "${RIOTBOX_ANYWHERE_BIND:=192.168.1.20:3400}"
+#
+# Where `riotbox hub` serves the page listing every running anywhere session.
+# Same rules; default 127.0.0.1:3399.
+# : "${RIOTBOX_HUB_BIND:=192.168.1.20:3399}"
+
 # ── Overlay mode (podman only) ───────────────────────────────────────────
 # When enabled, project directories are mounted via fuse-overlayfs so that
 # changes stay inside the container until you explicitly accept them with
