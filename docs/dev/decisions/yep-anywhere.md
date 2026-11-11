@@ -14,7 +14,11 @@ and fork or contribute upstream for the gaps below.
 > block in the `Containerfile`.
 
 **Verified against:** yepanywhere 0.11.0 from npm, run on the host (Node 22)
-with a stub `claude`. **Not yet verified in a built image or on a phone.**
+with a stub `claude`; then, on 2026-11-08, installed the way the image layer
+does and run by `container/anywhere.sh` inside a RiotBox container (Node 25,
+the real wrapper and Claude Code 2.1.319), driven from headless Chromium at
+phone size (see *Trial run* below). **Not yet verified in a freshly built image
+or on a real phone.**
 
 ## Requirements
 
@@ -78,7 +82,9 @@ These are where we expect to fork or send fixes upstream.
    `OPENCODE_EXECUTABLE` (or similar) environment variable, as Claude already
    does. Until then, opencode sessions lose headroom wrapping. opencode's own
    config (permission policy, plugins, RiotBox prompt) still applies.
-2. **Permission mode.** Yep Anywhere passes `--permission-mode=default` and
+2. **Permission mode.** *Settled by the trial run: the wrapper's
+   `--dangerously-skip-permissions` wins and no approval prompt appears.*
+   Yep Anywhere passes `--permission-mode=default` and
    `--permission-prompt-tool=stdio`, and the wrapper adds
    `--dangerously-skip-permissions`. Which one Claude Code honours, and whether
    Yep Anywhere's approval UI then appears, needs a real image. Either outcome
@@ -89,7 +95,11 @@ These are where we expect to fork or send fixes upstream.
    port published from it does not reach the host. Plan: a sidecar on
    `<name>-int` plus a publishing bridge network that forwards one port to the
    agent and nothing else, in the shape of the egress proxy.
-4. **Certificate trust.** The self-signed certificate is trust-on-first-use,
+4. **Certificate trust.** The certificate's names come from `--host` (here
+   `0.0.0.0`, which it skips) and the container's own interfaces, so it never
+   names the host LAN address the phone uses: the phone sees a name mismatch
+   on top of the unknown issuer. A RiotBox CA would have to issue for
+   `RIOTBOX_ANYWHERE_HOST`. The self-signed certificate is trust-on-first-use,
    and phone browsers may restrict PWA install and push notifications for it.
    A RiotBox CA the phone installs once would fix both.
 5. **Image and phone tests.** Build the image, confirm the layer's smoke
@@ -116,3 +126,25 @@ running `riotbox anywhere` sessions and links to each. Several sessions share
   host no other route in, so it would need every launch to reserve a port in
   advance. Even then Yep Anywhere could only watch a terminal Claude's
   conversation (it marks such sessions "external"), not take it over.
+
+## Trial run (2026-11-08)
+
+`podman build` does not work in the development container, so the layer's
+install (lockfile `npm ci --ignore-scripts`, SDK binaries deleted, shim) was
+run by hand in a RiotBox container and started by `container/anywhere.sh`.
+
+- **Found:** the server died at start, because `--https-self-signed` runs the
+  `openssl` CLI and the image installed only `openssl-devel`. Fixed in the
+  `Containerfile`, with a check in the layer.
+- Over HTTPS the login page served and plain HTTP got no answer; the API
+  answered 401 until login. A session created through the API ran the real
+  Claude Code through the wrapper (its argv: `--dangerously-skip-permissions`
+  before Yep Anywhere's `--permission-mode=default`) and wrote a file in the
+  project with no approval prompt.
+- Its project list is every project under the session's `~/.claude/projects`,
+  which in a RiotBox session is that project set's own history.
+- `riotbox hub` against podman listed a container launched with
+  `anywhere_gate`'s flags (the port picker moved it to 3401, since 3400 was
+  taken), with its recorded project, and left out a container labelled with
+  another host's URL and one labelled with no published port. No token got
+  401 and a foreign Host header got 421.
