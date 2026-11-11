@@ -215,6 +215,25 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
+  # A wildcard listen address has no address a phone can open, so the link
+  # riotbox-core prints (https://0.0.0.0:...) needs the LAN address put in.
+  - name: riotbox hub on a wildcard bind, in any spelling, warns and says how to open the printed link
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          port=$((30000 + RANDOM % 20000))
+          out="$(HOME="${TMP}" XDG_CONFIG_HOME="${TMP}/xdg" XDG_DATA_HOME="${TMP}/data" RIOTBOX_SYSCONF_DIR="${TMP}/etc" \
+            ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD=false RIOTBOX_HUB_BIND="[0::]:${port}" \
+            timeout 3 bash "{{.riotbox_dir}}/libexec/hub.sh" 2>&1)"
+          echo "${out}" | grep -q "listens on every network" || { echo "BAD: no wildcard warning: ${out}"; exit 1; }
+          echo "${out}" | grep -q "replace \[::\] with this host's LAN address" || { echo "BAD: no hint for the printed link: ${out}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
   - name: launch.sh publishes the port and mounts the Yep Anywhere state only for riotbox anywhere
     steps:
       - type: exec

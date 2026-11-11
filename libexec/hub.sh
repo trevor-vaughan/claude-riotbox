@@ -58,6 +58,7 @@ hub_addr="${ANYWHERE_ADDR}" hub_port="${ANYWHERE_PORT}"
 case "${hub_addr}" in
 0.0.0.0 | "[::]")
 	echo "WARNING: RIOTBOX_HUB_BIND=${bind} listens on every network this host joins." >&2
+	echo "         In the link below, replace ${hub_addr} with this host's LAN address." >&2
 	;;
 127.* | "[::1]")
 	echo "NOTE: the hub is bound to ${hub_addr}, which only this host can reach." >&2
