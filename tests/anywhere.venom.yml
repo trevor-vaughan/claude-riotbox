@@ -74,7 +74,18 @@ testcases:
           [ "${ANYWHERE_ADDR}" = 192.168.1.20 ] || { echo "BAD: parsed as ${ANYWHERE_ADDR}"; exit 1; }
           for bad in '[::ffff:0.0.0.0]:3400' '[::ffff:0:0]:3400' '[::FFFF:127.0.0.1]:3400' '[::127.0.0.1]:3400'; do
             msg="$(anywhere_parse_bind "${bad}" 2>&1)" && { echo "BAD: accepted ${bad}"; exit 1; }
-            echo "${msg}" | grep -q "IPv4 form" || { echo "BAD: refusal of ${bad} does not say what to use: ${msg}"; exit 1; }
+            echo "${msg}" | grep -q "embeds an IPv4 address" || { echo "BAD: refusal of ${bad} does not say why: ${msg}"; exit 1; }
+          done
+          # Malformed text must be refused, not canonicalised into a wildcard
+          # or loopback address.
+          for bad in '[:]:3400' '[:::]:3400' '[:1]:3400' '[0:1]:3400' '[:::1]:3400' '[0:0:0:0:0:0:0:0:0]:3400' \
+                     '[1::2::3]:3400' '[12345::1]:3400' '[1:2:3:4:5:6:7]:3400' '[1:2:3:4:5:6:7::8]:3400'; do
+            msg="$(anywhere_parse_bind "${bad}" 2>&1)" && { echo "BAD: accepted ${bad} as ${ANYWHERE_ADDR}"; exit 1; }
+            echo "${msg}" | grep -q "is not an IPv6 address" || { echo "BAD: refusal of ${bad}: ${msg}"; exit 1; }
+          done
+          for good in '[1:2:3:4:5:6:7:8]' '[1::]' '[::10]' '[fe80::1:2]' '[1:2:3:4:5:6::7]'; do
+            anywhere_parse_bind "${good}:3400" || { echo "BAD: rejected ${good}"; exit 1; }
+            [ "${ANYWHERE_ADDR}" = "${good}" ] || { echo "BAD: ${good} rewritten to ${ANYWHERE_ADDR}"; exit 1; }
           done
           echo "OK"
         assertions:

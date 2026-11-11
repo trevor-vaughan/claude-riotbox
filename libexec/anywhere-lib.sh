@@ -52,7 +52,28 @@ anywhere_parse_bind() {
 		# loopback spellings are endless; refuse it rather than classify it.
 		local lower="${addr,,}"
 		if [[ "${lower}" == *.* ]] || [[ "${lower}" =~ ^[0:]*:ffff: ]]; then
-			printf 'ERROR: RIOTBOX_ANYWHERE_BIND=%q: [%s] is an IPv4 address inside IPv6; use the IPv4 form.\n' "${bind}" "${addr}" >&2
+			printf 'ERROR: RIOTBOX_ANYWHERE_BIND=%q: [%s] embeds an IPv4 address; use a plain IPv4 or IPv6 address.\n' "${bind}" "${addr}" >&2
+			return 1
+		fi
+		# Eight groups of 1-4 hex digits, or fewer around exactly one "::".
+		# Checked before canonicalising, so a typo such as [:] or [0:1] is
+		# refused instead of becoming the wildcard or loopback.
+		local groups='^[0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4})*$' given="${addr}" left right count=0 side colons
+		if [[ "${addr}" == *::* ]]; then
+			left="${addr%%::*}" right="${addr#*::}"
+			for side in "${left}" "${right}"; do
+				[[ -z "${side}" ]] && continue
+				[[ "${side}" =~ ${groups} ]] || count=99
+				colons="${side//[^:]/}"
+				((count += ${#colons} + 1))
+			done
+			((count <= 7)) || addr=""
+		else
+			colons="${addr//[^:]/}"
+			[[ "${addr}" =~ ${groups} ]] && ((${#colons} == 7)) || addr=""
+		fi
+		if [[ -z "${addr}" ]]; then
+			printf 'ERROR: RIOTBOX_ANYWHERE_BIND=%q: [%s] is not an IPv6 address.\n' "${bind}" "${given}" >&2
 			return 1
 		fi
 		# Every other spelling of the wildcard or loopback address, in the one
