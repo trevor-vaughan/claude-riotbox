@@ -429,6 +429,11 @@ testcases:
           grep -q 'process.env.CLAUDE_CODE_EXECUTABLE' Containerfile || { echo "BAD: the CLAUDE_CODE_EXECUTABLE guard is gone"; exit 1; }
           grep -q 'COPY --chown=llm:llm container/anywhere.sh /home/llm/.riotbox/anywhere.sh' Containerfile || { echo "BAD: anywhere.sh not copied"; exit 1; }
           grep -q 'container/yepanywhere-package-lock.json linguist-generated=true' .gitattributes || { echo "BAD: lockfile not marked generated"; exit 1; }
+          # --https-self-signed runs the openssl CLI to make its certificate,
+          # and openssl-devel does not install it: without the package every
+          # launch dies at start.
+          awk '/^FROM .* AS runtime/{r=1} r' Containerfile | grep -qE '^[[:space:]]+openssl \\$' || { echo "BAD: the runtime stage does not install the openssl CLI"; exit 1; }
+          grep -q 'command -v openssl' Containerfile || { echo "BAD: the Yep Anywhere layer no longer checks for openssl"; exit 1; }
           echo "OK"
         assertions:
           - result.code ShouldEqual 0

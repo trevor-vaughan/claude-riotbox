@@ -224,6 +224,9 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         python3-pip \
         python3-devel \
         openssl-devel \
+        # The CLI, which openssl-devel does not pull in: Yep Anywhere's
+        # --https-self-signed (riotbox anywhere) runs it to make its certificate.
+        openssl \
         zlib-devel \
         bzip2-devel \
         readline-devel \
@@ -1603,6 +1606,8 @@ RUN bash -o pipefail -c '\
     PATH="${YEP_NODE_BIN}:${PATH}" \
         "${YEP_NODE_BIN}/npm" ci --ignore-scripts --no-audit --no-fund --prefix "${YEP_ROOT}"; \
     YEP_PKG="${YEP_ROOT}/node_modules/yepanywhere"; \
+    command -v openssl >/dev/null || { \
+        echo "no openssl CLI in the image — yepanywhere --https-self-signed needs it to make its certificate" >&2; exit 1; }; \
     [ "$(jq -r .version "${YEP_PKG}/package.json")" = "${YEPANYWHERE_VERSION}" ] || { \
         echo "npm ci installed yepanywhere $(jq -r .version "${YEP_PKG}/package.json"), not ${YEPANYWHERE_VERSION}" >&2; exit 1; }; \
     rm -rf "${YEP_ROOT}"/node_modules/@anthropic-ai/claude-agent-sdk-*; \
