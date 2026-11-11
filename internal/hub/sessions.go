@@ -5,7 +5,8 @@
 // libexec/anywhere-lib.sh labels every `riotbox anywhere` container with
 // LabelURL, and launch.sh labels every container with LabelSession, whose
 // state dir records the session's projects. Each session keeps its own
-// container, password and certificate; the hub only links to them.
+// container, and each project set its own password and certificate; the hub
+// only links to them.
 package hub
 
 import (

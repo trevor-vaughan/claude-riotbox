@@ -6,7 +6,7 @@ host address the user names. Claude runs through the RiotBox wrapper. Pin Yep
 Anywhere with a committed lockfile, refuse egress mode until a sidecar exists,
 and fork or contribute upstream for the gaps below.
 
-**Date:** 2026-11-08 · **Branch:** `claude/riotbox-phone-local-network-4ccfjs`
+**Date:** 2026-11-08 · **Branch:** `riotbox-anywhere` (from `claude/riotbox-phone-local-network-4ccfjs`)
 
 > **Frozen record.** For the current implementation, read
 > [THREAT_MODEL § Yep Anywhere web UI](../../../THREAT_MODEL.md#yep-anywhere-web-ui-riotbox-anywhere-opt-in),

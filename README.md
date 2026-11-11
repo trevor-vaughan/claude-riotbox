@@ -336,7 +336,7 @@ riotbox hub
 It prints a link once; open it on the phone and bookmark the page. The page
 lists every running `riotbox anywhere` session (its projects, address and age),
 refreshes every 15 seconds, and links to each one, which still asks for that
-session's own password. The link's token becomes a cookie on first visit;
+session's password (sessions of the same project set share one). The link's token becomes a cookie on first visit;
 the token and the hub's certificate persist in `~/.local/share/riotbox-hub`, so
 the bookmark keeps working. Delete that directory to revoke the link. Stopping
 the hub does not affect the sessions.

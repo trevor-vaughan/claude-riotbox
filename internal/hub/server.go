@@ -200,7 +200,7 @@ code{font-size:.9em}
 </a></li>
 {{end}}</ul>
 {{else if not .Err}}<p class="empty">No <code>riotbox anywhere</code> session is running. Start one with <code>riotbox anywhere [projects...]</code>.</p>{{end}}
-<p class="foot">Each session has its own password and certificate. This page refreshes every 15 seconds.</p>
+<p class="foot">Each project set has its own password and certificate. This page refreshes every 15 seconds.</p>
 </main></body></html>
 `))
 
