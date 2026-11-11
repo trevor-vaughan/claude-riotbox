@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -21,10 +22,15 @@ func hubServe(a parsedArgs, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "riotbox-core: hub: %v\n", err)
 		return 1
 	}
-	if _, err := fmt.Fprintf(stdout, "RiotBox hub: %s\n", link); err != nil {
-		return written(err, stderr)
+	ln, err := s.Listen()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "riotbox-core: hub: %v\n", err)
+		return 1
 	}
-	if err := s.Serve(cert); err != nil {
+	if _, err := fmt.Fprintf(stdout, "RiotBox hub: %s\n", link); err != nil {
+		return written(errors.Join(err, ln.Close()), stderr)
+	}
+	if err := s.Serve(ln, cert); err != nil {
 		_, _ = fmt.Fprintf(stderr, "riotbox-core: hub: %v\n", err)
 		return 1
 	}

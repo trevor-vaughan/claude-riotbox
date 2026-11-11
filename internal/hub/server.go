@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -74,16 +75,28 @@ func (s *Server) now() time.Time {
 	return time.Now()
 }
 
-// Serve listens on Addr and serves until the listener fails. Prepare must
-// have run.
-func (s *Server) Serve(cert tls.Certificate) error {
+// Listen opens Addr. The caller prints the link only after this succeeds,
+// so an address the hub cannot serve on never yields a link. An address no
+// interface of this host carries (a mistyped RIOTBOX_HUB_BIND) is named as
+// such: the kernel's "cannot assign requested address" does not say which
+// setting is wrong.
+func (s *Server) Listen() (net.Listener, error) {
+	ln, err := net.Listen("tcp", s.Addr)
+	if errors.Is(err, syscall.EADDRNOTAVAIL) {
+		host, _, _ := net.SplitHostPort(s.Addr)
+		return nil, fmt.Errorf("%s is not an address of this host; set RIOTBOX_HUB_BIND to one that is (ip -br addr lists them): %w", host, err)
+	}
+	return ln, err
+}
+
+// Serve serves on ln until it fails. Prepare must have run.
+func (s *Server) Serve(ln net.Listener, cert tls.Certificate) error {
 	srv := &http.Server{
-		Addr:              s.Addr,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
 	}
-	return srv.ListenAndServeTLS("", "")
+	return srv.ServeTLS(ln, "", "")
 }
 
 // Handler is the hub's routes, exported for the tests.
