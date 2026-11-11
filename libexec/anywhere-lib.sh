@@ -35,7 +35,9 @@ ANYWHERE_DEFAULT_BIND="127.0.0.1:${ANYWHERE_CONTAINER_PORT}"
 
 # anywhere_parse_bind <bind> — split an `address:port` into ANYWHERE_ADDR and
 # ANYWHERE_PORT. The address must be an IPv4 literal or a bracketed IPv6
-# literal; the port 1-65535. Returns 1, after saying why, otherwise.
+# literal; the port 1-65535. The wildcard and loopback come out as 0.0.0.0,
+# 127.x.y.z, [::] or [::1] however they were spelt. Returns 1, after saying
+# why, otherwise.
 anywhere_parse_bind() {
 	local bind="$1" addr port
 	if [[ "${bind}" =~ ^\[([0-9A-Fa-f:.]+)\]:([0-9]+)$ ]]; then
@@ -45,9 +47,25 @@ anywhere_parse_bind() {
 			printf 'ERROR: RIOTBOX_ANYWHERE_BIND=%q: [%s] is not an IPv6 address.\n' "${bind}" "${addr}" >&2
 			return 1
 		}
+		# An IPv4-mapped or -compatible address (::ffff:0.0.0.0, ::ffff:0:0,
+		# ::127.0.0.1) is an IPv4 address in disguise, and its wildcard and
+		# loopback spellings are endless; refuse it rather than classify it.
+		local lower="${addr,,}"
+		if [[ "${lower}" == *.* ]] || [[ "${lower}" =~ ^[0:]*:ffff: ]]; then
+			printf 'ERROR: RIOTBOX_ANYWHERE_BIND=%q: [%s] is an IPv4 address inside IPv6; use the IPv4 form.\n' "${bind}" "${addr}" >&2
+			return 1
+		fi
+		# Every other spelling of the wildcard or loopback address, in the one
+		# form the callers match on.
+		if [[ "${addr}" =~ ^[0:]+$ ]]; then
+			addr="::"
+		elif [[ "${addr}" =~ ^[0:]*:0*1$ ]]; then
+			addr="::1"
+		fi
 		ANYWHERE_ADDR="[${addr}]"
 	elif [[ "${bind}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3}):([0-9]+)$ ]]; then
-		local i octet
+		local i octet octets=()
+		port="${BASH_REMATCH[5]}"
 		for i in 1 2 3 4; do
 			octet="${BASH_REMATCH[i]}"
 			# 10# so a leading zero is not read as octal; >255 is not an address.
@@ -55,9 +73,10 @@ anywhere_parse_bind() {
 				printf 'ERROR: RIOTBOX_ANYWHERE_BIND=%q: %s is not an IPv4 address.\n' "${bind}" "${bind%:*}" >&2
 				return 1
 			fi
+			octets+=("$((10#${octet}))")
 		done
-		ANYWHERE_ADDR="${bind%:*}"
-		port="${BASH_REMATCH[5]}"
+		# Rebuilt without leading zeros, so 000.0.0.0 is matched as the wildcard.
+		ANYWHERE_ADDR="${octets[0]}.${octets[1]}.${octets[2]}.${octets[3]}"
 	else
 		printf 'ERROR: RIOTBOX_ANYWHERE_BIND=%q is not ADDRESS:PORT.\n' "${bind}" >&2
 		echo "  ADDRESS is an IP literal, not a host name: 192.168.1.20:3400, or [fd00::20]:3400 for IPv6." >&2

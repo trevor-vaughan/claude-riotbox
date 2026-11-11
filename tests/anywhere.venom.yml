@@ -51,6 +51,36 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
+  # The wildcard warning and the loopback note match ANYWHERE_ADDR as a
+  # string, so every spelling the engine reads as the same address must come
+  # out of the parser in the one form they match.
+  - name: anywhere_parse_bind gives every spelling of the wildcard and loopback one form, and refuses IPv4 inside IPv6
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          for spelling in '[::]' '[0::]' '[::0]' '[0:0:0:0:0:0:0:0]' '[0000::0000]'; do
+            anywhere_parse_bind "${spelling}:3400" || { echo "BAD: rejected ${spelling}"; exit 1; }
+            [ "${ANYWHERE_ADDR}" = "[::]" ] || { echo "BAD: ${spelling} parsed as ${ANYWHERE_ADDR}"; exit 1; }
+          done
+          for spelling in '[::1]' '[0::1]' '[0:0:0:0:0:0:0:1]' '[::0001]'; do
+            anywhere_parse_bind "${spelling}:3400" || { echo "BAD: rejected ${spelling}"; exit 1; }
+            [ "${ANYWHERE_ADDR}" = "[::1]" ] || { echo "BAD: ${spelling} parsed as ${ANYWHERE_ADDR}"; exit 1; }
+          done
+          anywhere_parse_bind 000.0.00.0:3400 || { echo "BAD: rejected 000.0.00.0"; exit 1; }
+          [ "${ANYWHERE_ADDR}" = 0.0.0.0 ] || { echo "BAD: 000.0.00.0 parsed as ${ANYWHERE_ADDR}"; exit 1; }
+          anywhere_parse_bind 192.168.001.020:3400 || { echo "BAD: rejected a zero-padded LAN IPv4"; exit 1; }
+          [ "${ANYWHERE_ADDR}" = 192.168.1.20 ] || { echo "BAD: parsed as ${ANYWHERE_ADDR}"; exit 1; }
+          for bad in '[::ffff:0.0.0.0]:3400' '[::ffff:0:0]:3400' '[::FFFF:127.0.0.1]:3400' '[::127.0.0.1]:3400'; do
+            msg="$(anywhere_parse_bind "${bad}" 2>&1)" && { echo "BAD: accepted ${bad}"; exit 1; }
+            echo "${msg}" | grep -q "IPv4 form" || { echo "BAD: refusal of ${bad} does not say what to use: ${msg}"; exit 1; }
+          done
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
   - name: anywhere_gate refuses RIOTBOX_EGRESS=1 and RIOTBOX_NETWORK=none
     steps:
       - type: exec
