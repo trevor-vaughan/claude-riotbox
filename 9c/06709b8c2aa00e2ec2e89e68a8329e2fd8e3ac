@@ -1,0 +1,25 @@
+README.md
+  s_39e619da963185::t_00de3ed78f8dd9 339
+internal/hub/sessions.go
+  s_39e619da963185::t_00de3ed78f8dd9 8-9
+internal/hub/server.go
+  s_39e619da963185::t_00de3ed78f8dd9 203
+docs/dev/decisions/yep-anywhere.md
+  s_39e619da963185::t_00de3ed78f8dd9 9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "faf60b3af284081ade8ec2c96d2196da6c923ba8",
+  "prompts": {},
+  "sessions": {
+    "s_39e619da963185": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "445fdd53-32ab-4f92-905c-1763b8c2e3db",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}

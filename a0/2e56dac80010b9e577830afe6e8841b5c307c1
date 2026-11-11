@@ -1,0 +1,27 @@
+docs/dev/decisions/yep-anywhere.md
+  s_ab67ae1bdcdd0e::t_fb185c7f797e2e 66-72
+  s_ab67ae1bdcdd0e::t_47c4d24cf940ae 73-74
+README.md
+  s_ab67ae1bdcdd0e::t_fb185c7f797e2e 304-306
+container/anywhere.sh
+  s_ab67ae1bdcdd0e::t_0a682e1a401980 106
+  s_ab67ae1bdcdd0e::t_894d0d3c7788d6 69-78
+tests/anywhere.venom.yml
+  s_ab67ae1bdcdd0e::t_2459ffa83f7014 359-389
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "2ef564dfbb72c94c01556beb4d8b1dd854d72268",
+  "prompts": {},
+  "sessions": {
+    "s_ab67ae1bdcdd0e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1297a30-2266-42ad-bf56-35abf02e853d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}

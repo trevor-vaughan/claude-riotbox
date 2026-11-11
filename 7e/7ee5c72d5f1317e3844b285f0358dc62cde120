@@ -1,0 +1,50 @@
+internal/hub/server.go
+  s_a4055c83dc67be::t_c013fb74fd6c37 1-355
+internal/hub/export_test.go
+  s_a4055c83dc67be::t_c013fb74fd6c37 1-4
+cmd/riotbox-core/main.go
+  s_a4055c83dc67be::t_e36f46b5e0c577 225
+  s_a4055c83dc67be::t_c013fb74fd6c37 128-130
+scripts/configs/config
+  s_a4055c83dc67be::t_c013fb74fd6c37 58-59,61-64
+docs/dev/decisions/yep-anywhere.md
+  s_a4055c83dc67be::t_c013fb74fd6c37 97-118
+cmd/riotbox-core/hub.go
+  s_a4055c83dc67be::t_c013fb74fd6c37 1-32
+internal/hub/hub_test.go
+  s_a4055c83dc67be::t_c013fb74fd6c37 1-254
+internal/hub/sessions.go
+  s_a4055c83dc67be::t_c013fb74fd6c37 1-141
+tests/anywhere.venom.yml
+  s_a4055c83dc67be::t_c013fb74fd6c37 75,81,94,117,129-187,214
+libexec/hub.sh
+  s_a4055c83dc67be::t_c013fb74fd6c37 1-79
+README.md
+  s_a4055c83dc67be::t_c013fb74fd6c37 322-347,383
+bin/riotbox
+  s_a4055c83dc67be::t_c013fb74fd6c37 68-69,190,388
+internal/hub/hub_suite_test.go
+  s_a4055c83dc67be::t_c013fb74fd6c37 1-13
+THREAT_MODEL.md
+  s_a4055c83dc67be::t_c013fb74fd6c37 1242-1264
+docs/dev/riotbox-core.md
+  s_a4055c83dc67be::t_c013fb74fd6c37 48,97,204
+libexec/anywhere-lib.sh
+  s_a4055c83dc67be::t_c013fb74fd6c37 73-111,138-139,160-162
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "2ba45afb017e0a419c02911065afa8b0b913038f",
+  "prompts": {},
+  "sessions": {
+    "s_a4055c83dc67be": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51dd8a39-bab4-4a8f-aa38-66aba8bc7973",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
