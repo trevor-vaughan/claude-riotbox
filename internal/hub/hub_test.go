@@ -1,0 +1,254 @@
+package hub_test
+
+import (
+	"crypto/tls"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
+	"github.com/trevor-vaughan/claude-riotbox/internal/hub"
+)
+
+// fakeEngine answers ps with ids and container inspect with inspect, and
+// records every call.
+type fakeEngine struct {
+	ids, inspect string
+	psErr        error
+	calls        [][]string
+}
+
+func (f *fakeEngine) output(_ string, args ...string) ([]byte, error) {
+	f.calls = append(f.calls, args)
+	switch args[0] {
+	case "ps":
+		return []byte(f.ids), f.psErr
+	case "container":
+		return []byte(f.inspect), nil
+	}
+	return nil, errors.New("unexpected call")
+}
+
+func writeRecord(root, key string, projects ...string) {
+	dir := filepath.Join(root, key)
+	Expect(os.MkdirAll(dir, 0o700)).To(Succeed())
+	Expect(os.WriteFile(filepath.Join(dir, "projects"), []byte(strings.Join(projects, "\n")+"\n"), 0o600)).To(Succeed())
+}
+
+const inspectTwo = `[
+ {"Name":"/riotbox-b","Config":{"Labels":{"riotbox.anywhere.url":"https://192.168.1.20:3401","riotbox.session":"key-b"}},"State":{"Running":true,"StartedAt":"2026-11-08T12:00:00.5Z"}},
+ {"Name":"riotbox-a","Config":{"Labels":{"riotbox.anywhere.url":"https://127.0.0.1:3400","riotbox.session":"key-a"}},"State":{"Running":true,"StartedAt":"2026-11-08T10:00:00Z"}}
+]`
+
+var _ = Describe("Lister", func() {
+	var root string
+	BeforeEach(func() { root = GinkgoT().TempDir() })
+
+	It("lists running sessions oldest first, with their recorded projects", func() {
+		writeRecord(root, "key-a", "/home/u/alpha")
+		writeRecord(root, "key-b", "/home/u/beta", "/home/u/lib")
+		f := &fakeEngine{ids: "id1\nid2\n", inspect: inspectTwo}
+		sessions, err := hub.Lister{Engine: "podman", StateRoot: root, Output: f.output}.List()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sessions).To(HaveLen(2))
+		Expect(sessions[0].Container).To(Equal("riotbox-a"))
+		Expect(sessions[0].LocalOnly).To(BeTrue())
+		Expect(sessions[0].Projects).To(Equal([]string{"/home/u/alpha"}))
+		Expect(sessions[1].Container).To(Equal("riotbox-b"))
+		Expect(sessions[1].URL).To(Equal("https://192.168.1.20:3401"))
+		Expect(sessions[1].LocalOnly).To(BeFalse())
+		Expect(sessions[1].Projects).To(Equal([]string{"/home/u/beta", "/home/u/lib"}))
+		Expect(f.calls).To(Equal([][]string{
+			{"ps", "--filter", "label=riotbox.anywhere.url", "--format", "{{.ID}}"},
+			{"container", "inspect", "id1", "id2"},
+		}))
+	})
+
+	It("asks the engine nothing more when no container carries the label", func() {
+		f := &fakeEngine{ids: "\n"}
+		sessions, err := hub.Lister{Engine: "podman", Output: f.output}.List()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sessions).To(BeEmpty())
+		Expect(f.calls).To(HaveLen(1))
+	})
+
+	It("passes on an engine failure", func() {
+		f := &fakeEngine{psErr: errors.New("engine down")}
+		_, err := hub.Lister{Engine: "podman", Output: f.output}.List()
+		Expect(err).To(MatchError(ContainSubstring("engine down")))
+	})
+
+	DescribeTable("leaves out a container whose URL label RiotBox would not have written",
+		func(url string) {
+			f := &fakeEngine{ids: "id1", inspect: `[{"Name":"x","Config":{"Labels":{"riotbox.anywhere.url":"` + url + `"}},"State":{"Running":true}}]`}
+			sessions, err := hub.Lister{Engine: "podman", Output: f.output}.List()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sessions).To(BeEmpty())
+		},
+		Entry("plain http", "http://192.168.1.20:3400"),
+		Entry("a script URL", "javascript:alert(1)"),
+		Entry("credentials", "https://u:p@192.168.1.20:3400"),
+		Entry("a path", "https://192.168.1.20:3400/elsewhere"),
+		Entry("a query", "https://192.168.1.20:3400/?x=1"),
+		Entry("empty", ""),
+	)
+
+	It("skips stopped containers", func() {
+		f := &fakeEngine{ids: "id1", inspect: `[{"Name":"x","Config":{"Labels":{"riotbox.anywhere.url":"https://10.0.0.2:3400"}},"State":{"Running":false}}]`}
+		sessions, err := hub.Lister{Engine: "podman", Output: f.output}.List()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sessions).To(BeEmpty())
+	})
+
+	It("never reads a state dir outside the root when the session label is not one path element", func() {
+		outside := GinkgoT().TempDir()
+		writeRecord(outside, "secret", "/etc")
+		rel, err := filepath.Rel(root, filepath.Join(outside, "secret"))
+		Expect(err).NotTo(HaveOccurred())
+		f := &fakeEngine{ids: "id1", inspect: `[{"Name":"x","Config":{"Labels":{"riotbox.anywhere.url":"https://10.0.0.2:3400","riotbox.session":"` + rel + `"}},"State":{"Running":true}}]`}
+		sessions, err := hub.Lister{Engine: "podman", StateRoot: root, Output: f.output}.List()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sessions).To(HaveLen(1))
+		Expect(sessions[0].Projects).To(BeNil())
+	})
+})
+
+var _ = DescribeTable("HostAllowed",
+	func(hostHeader, listen string, want bool) {
+		Expect(hub.HostAllowed(hostHeader, listen)).To(Equal(want))
+	},
+	Entry("the listen address", "192.168.1.20:3399", "192.168.1.20", true),
+	Entry("another address", "192.168.1.21:3399", "192.168.1.20", false),
+	Entry("a name that resolves anywhere", "evil.example:3399", "192.168.1.20", false),
+	Entry("localhost", "localhost:3399", "192.168.1.20", true),
+	Entry("loopback", "127.0.0.1:3399", "192.168.1.20", true),
+	Entry("IPv6 listen address", "[fd00::20]:3399", "fd00::20", true),
+	Entry("wildcard accepts any IP", "10.1.2.3:3399", "0.0.0.0", true),
+	Entry("wildcard still refuses a name", "evil.example:3399", "0.0.0.0", false),
+)
+
+type staticLister struct {
+	sessions []hub.Session
+	err      error
+}
+
+func (s staticLister) List() ([]hub.Session, error) { return s.sessions, s.err }
+
+var _ = Describe("Server", func() {
+	var (
+		dir    string
+		server *hub.Server
+		link   string
+	)
+	now := time.Date(2026, 11, 8, 13, 0, 0, 0, time.UTC)
+
+	BeforeEach(func() {
+		dir = filepath.Join(GinkgoT().TempDir(), "hub")
+		server = &hub.Server{
+			Addr: "192.168.1.20:3399", DataDir: dir, Now: func() time.Time { return now },
+			Lister: staticLister{sessions: []hub.Session{{
+				Container: "riotbox-x", URL: "https://192.168.1.20:3401",
+				Projects: []string{"/home/u/<b>proj</b>"}, Started: now.Add(-90 * time.Minute),
+			}}},
+		}
+		var err error
+		link, _, err = server.Prepare()
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	get := func(target string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		r.Host = "192.168.1.20:3399"
+		for _, c := range cookies {
+			r.AddCookie(c)
+		}
+		w := httptest.NewRecorder()
+		server.Handler().ServeHTTP(w, r)
+		return w
+	}
+
+	It("keeps the token and the key private", func() {
+		for _, f := range []string{"token", "key.pem", "cert.pem"} {
+			info, err := os.Stat(filepath.Join(dir, f))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(info.Mode().Perm()).To(Equal(os.FileMode(0o600)), f)
+		}
+		info, err := os.Stat(dir)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0o700)))
+	})
+
+	It("refuses a visit without the token", func() {
+		Expect(get("/").Code).To(Equal(http.StatusUnauthorized))
+		Expect(get("/?k=wrong").Code).To(Equal(http.StatusForbidden))
+	})
+
+	It("turns the printed link into a cookie, then serves the list with the input escaped", func() {
+		Expect(link).To(HavePrefix("https://192.168.1.20:3399/?k="))
+		w := get(strings.TrimPrefix(link, "https://192.168.1.20:3399"))
+		Expect(w.Code).To(Equal(http.StatusSeeOther))
+		Expect(w.Header().Get("Location")).To(Equal("/"))
+		cookies := w.Result().Cookies()
+		Expect(cookies).To(HaveLen(1))
+		Expect(cookies[0].HttpOnly).To(BeTrue())
+		Expect(cookies[0].Secure).To(BeTrue())
+		Expect(cookies[0].SameSite).To(Equal(http.SameSiteStrictMode))
+
+		page := get("/", cookies[0])
+		Expect(page.Code).To(Equal(http.StatusOK))
+		body := page.Body.String()
+		Expect(body).To(ContainSubstring(`href="https://192.168.1.20:3401/"`))
+		Expect(body).To(ContainSubstring("&lt;b&gt;proj&lt;/b&gt;"))
+		Expect(body).NotTo(ContainSubstring("<b>proj</b>"))
+		Expect(body).To(ContainSubstring("started 1 h ago"))
+		Expect(page.Header().Get("Content-Security-Policy")).To(ContainSubstring("default-src 'none'"))
+	})
+
+	It("refuses a request addressed to another host", func() {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.Host = "evil.example:3399"
+		w := httptest.NewRecorder()
+		server.Handler().ServeHTTP(w, r)
+		Expect(w.Code).To(Equal(http.StatusMisdirectedRequest))
+	})
+
+	It("reuses the token and certificate on the next start, and reissues the certificate for a new address", func() {
+		cert1, err := os.ReadFile(filepath.Join(dir, "cert.pem"))
+		Expect(err).NotTo(HaveOccurred())
+		again := &hub.Server{Addr: server.Addr, DataDir: dir, Now: server.Now, Lister: staticLister{}}
+		link2, c2, err := again.Prepare()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(link2).To(Equal(link))
+		cert2, err := os.ReadFile(filepath.Join(dir, "cert.pem"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cert2).To(Equal(cert1))
+		Expect(leafIPs(c2)).To(ContainElement("192.168.1.20"))
+
+		moved := &hub.Server{Addr: "10.0.0.5:3399", DataDir: dir, Now: server.Now, Lister: staticLister{}}
+		_, c3, err := moved.Prepare()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(leafIPs(c3)).To(ContainElement("10.0.0.5"))
+	})
+
+	It("shows the engine's error instead of an empty list", func() {
+		server.Lister = staticLister{err: errors.New("podman: not running")}
+		w := get(strings.TrimPrefix(link, "https://192.168.1.20:3399"))
+		page := get("/", w.Result().Cookies()[0])
+		Expect(page.Body.String()).To(ContainSubstring("podman: not running"))
+		Expect(page.Body.String()).NotTo(ContainSubstring("No <code>riotbox anywhere</code> session is running"))
+	})
+})
+
+func leafIPs(c tls.Certificate) []string {
+	var ips []string
+	for _, ip := range c.Leaf.IPAddresses {
+		ips = append(ips, ip.String())
+	}
+	return ips
+}

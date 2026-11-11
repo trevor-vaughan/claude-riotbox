@@ -319,6 +319,32 @@ summary, session-branch merge).
   off in its settings if traffic must stay on your network.
 - **Not with** `RIOTBOX_EGRESS=1` (planned: a sidecar) or `RIOTBOX_NETWORK=none`.
 
+### Several sessions: `riotbox hub`
+
+Each `riotbox anywhere` is its own container, with its own server, password and
+certificate. Several can share one `RIOTBOX_ANYWHERE_BIND`: a launch whose port
+is taken uses the next free one and says so. To switch between them from the
+phone, run the hub once on the host:
+
+```sh
+# ~/.config/riotbox/config
+: "${RIOTBOX_HUB_BIND:=192.168.1.20:3399}"
+
+riotbox hub
+```
+
+It prints a link once; open it on the phone and bookmark the page. The page
+lists every running `riotbox anywhere` session (its projects, address and age),
+refreshes every 15 seconds, and links to each one, which still asks for that
+session's own password. The link's token becomes a cookie on first visit;
+the token and the hub's certificate persist in `~/.local/share/riotbox-hub`, so
+the bookmark keeps working. Delete that directory to revoke the link. Stopping
+the hub does not affect the sessions.
+
+The hub cannot attach to a `riotbox run` or `riotbox shell` that is already
+running: a container's ports are fixed when it starts. Start long-running work
+with `riotbox anywhere` and use the same UI from the desk browser and the phone.
+
 Whoever has the URL and the password can do anything the agent can. See
 [THREAT_MODEL § Yep Anywhere web UI](THREAT_MODEL.md#yep-anywhere-web-ui-riotbox-anywhere-opt-in).
 
@@ -354,6 +380,7 @@ Whoever has the URL and the password can do anything the agent can. See
 | `riotbox backup-prune [dir...]`       | Free backup space; one selector: `--keep <N>`, `--older-than <N>d` (then `git gc`), or `--orphans` (whole stores); `--all` for every store  |
 | `riotbox audit "<task>" [dir]`        | Read-only session for inspecting untrusted code (workspace mounted RO)                                                                      |
 | `riotbox anywhere [dir...]`           | Serve [Yep Anywhere](#using-riotbox-from-your-phone-riotbox-anywhere), a phone-friendly web UI that drives Claude Code and opencode in the session |
+| `riotbox hub`                         | Serve one page, on `RIOTBOX_HUB_BIND`, linking to every running `riotbox anywhere` session ([see](#several-sessions-riotbox-hub)) |
 | `riotbox install-hooks [global]`      | Install the pre-push hook that blocks container-identity commits ([details](#reclaiming-authorship))                                        |
 | `riotbox agents`                      | List registered agents (riotbox name + binary)                                                                                              |
 | `riotbox tokscale [args...]`          | Unified [tokscale](https://github.com/IvGolovach/tokscale) usage across your native agent home + every riotbox session, offline (no telemetry); args pass through to tokscale                     |

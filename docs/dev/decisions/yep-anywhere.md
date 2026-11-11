@@ -94,3 +94,25 @@ These are where we expect to fork or send fixes upstream.
    A RiotBox CA the phone installs once would fix both.
 5. **Image and phone tests.** Build the image, confirm the layer's smoke
    passes, then use it from a phone with both agents.
+
+## Follow-up: switching between sessions
+
+**Decision:** `riotbox hub`, one page on one host address that lists the
+running `riotbox anywhere` sessions and links to each. Several sessions share
+`RIOTBOX_ANYWHERE_BIND` by taking the next free port.
+
+- **One Yep Anywhere per session, not one for all.** Each project set has its
+  own `~/.claude` and its own container; a single server would need every
+  session's files and would undo the isolation the user runs them in for.
+- **Discovery from the engine.** The launch labels the container
+  `riotbox.anywhere.url`; the hub lists containers with that label and reads
+  their projects from the host-only state dir named by `riotbox.session`.
+  Nothing new is written, and a session that dies drops off the page.
+- **In `riotbox-core`, standard library only.** It has to run on the host, and
+  the Go binary is already pinned, built and released with checksums and a
+  signature; a Node or Python server would be a new runtime dependency.
+- **Attaching to a session that is already running was rejected.** A
+  container's published ports are fixed at start and rootless podman gives the
+  host no other route in, so it would need every launch to reserve a port in
+  advance. Even then Yep Anywhere could only watch a terminal Claude's
+  conversation (it marks such sessions "external"), not take it over.

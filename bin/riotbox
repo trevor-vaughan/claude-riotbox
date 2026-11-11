@@ -65,6 +65,8 @@ Session commands:
   audit [args...]              Audit an untrusted repo (read-only workspace)
   anywhere [projects...]       Serve Yep Anywhere, a phone-friendly web UI that
                                drives Claude Code and opencode (see README)
+  hub                          Serve one page listing every running
+                               riotbox anywhere session, with links
   reown [flags...]             Rewrite the agent's commits to your git identity
 
 Privileged session modes (reduced isolation — see README):
@@ -185,6 +187,7 @@ print_command_help() {
 	case "$1" in
 	audit) exec "${LIBEXEC}/audit.sh" --help ;;
 	egress) exec "${LIBEXEC}/egress.sh" --help ;;
+	hub) exec "${LIBEXEC}/hub.sh" --help ;;
 	install-hooks) exec "${LIBEXEC}/install-hooks.sh" --help ;;
 	ctx-stats) exec "${SCRIPTS}/ctx-stats.sh" --help ;;
 	build | rebuild | update)
@@ -382,6 +385,7 @@ session-remove) exec "${LIBEXEC}/remove-session.sh" "$@" ;;
 session-reset) exec "${LIBEXEC}/reset-session.sh" "$@" ;;
 session-migrate) exec "${LIBEXEC}/migrate-session.sh" "$@" ;;
 egress) exec "${LIBEXEC}/egress.sh" "$@" ;;
+hub) exec "${LIBEXEC}/hub.sh" "$@" ;;
 
 overlays) exec "${SCRIPTS}/overlay.sh" list ;;
 overlay-diff) exec "${SCRIPTS}/overlay.sh" diff "$@" ;;

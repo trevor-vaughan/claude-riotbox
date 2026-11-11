@@ -72,12 +72,13 @@ testcases:
         script: |
           set -u
           source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          anywhere_port_in_use() { return 1; }
           unset RIOTBOX_ANYWHERE_BIND RIOTBOX_EGRESS RIOTBOX_NETWORK RIOTBOX_ANYWHERE_RESET_PASSWORD
           err="$(anywhere_gate 2>&1 >/dev/null)"
           anywhere_gate 2>/dev/null || { echo "BAD: default refused"; exit 1; }
           echo "${err}" | grep -q "RIOTBOX_ANYWHERE_BIND" || { echo "BAD: no hint for the phone: ${err}"; exit 1; }
           flags="${ANYWHERE_FLAGS[*]}"
-          [ "${flags}" = "-p 127.0.0.1:3400:3400 -e RIOTBOX_ANYWHERE=1 -e RIOTBOX_ANYWHERE_URL=https://127.0.0.1:3400 -e RIOTBOX_ANYWHERE_HOST=127.0.0.1" ] \
+          [ "${flags}" = "-p 127.0.0.1:3400:3400 -e RIOTBOX_ANYWHERE=1 -e RIOTBOX_ANYWHERE_URL=https://127.0.0.1:3400 --label riotbox.anywhere.url=https://127.0.0.1:3400 -e RIOTBOX_ANYWHERE_HOST=127.0.0.1" ] \
             || { echo "BAD: flags: ${flags}"; exit 1; }
           echo "OK"
         assertions:
@@ -90,6 +91,7 @@ testcases:
         script: |
           set -u
           source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          anywhere_port_in_use() { return 1; }
           export RIOTBOX_ANYWHERE_BIND=0.0.0.0:9000 RIOTBOX_ANYWHERE_RESET_PASSWORD=1
           err="$(anywhere_gate 2>&1 >/dev/null)"
           echo "${err}" | grep -q "EVERY network" || { echo "BAD: no wildcard warning: ${err}"; exit 1; }
@@ -112,12 +114,72 @@ testcases:
         script: |
           set -u
           source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          anywhere_port_in_use() { return 1; }
           unset RIOTBOX_ANYWHERE_RESET_PASSWORD
           RIOTBOX_ANYWHERE_BIND=100.64.1.2:3400 anywhere_gate 2>/dev/null
           echo "${ANYWHERE_FLAGS[*]}" | grep -q -- "-e RIOTBOX_ANYWHERE_HOST=100.64.1.2$" || { echo "BAD: v4 ${ANYWHERE_FLAGS[*]}"; exit 1; }
           RIOTBOX_ANYWHERE_BIND='[fd00::20]:3400' anywhere_gate 2>/dev/null
           echo "${ANYWHERE_FLAGS[*]}" | grep -q -- "-e RIOTBOX_ANYWHERE_HOST=fd00::20$" || { echo "BAD: v6 (brackets must go) ${ANYWHERE_FLAGS[*]}"; exit 1; }
           echo "${ANYWHERE_FLAGS[*]}" | grep -q -- "-p \[fd00::20\]:3400:3400" || { echo "BAD: v6 publish ${ANYWHERE_FLAGS[*]}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # Several `riotbox anywhere` sessions share one RIOTBOX_ANYWHERE_BIND: each
+  # launch takes the first free port from the configured one up. The probe is
+  # replaced so the case does not depend on what this host listens on.
+  - name: anywhere_gate moves to the next free port and gives up after the configured range
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          unset RIOTBOX_ANYWHERE_RESET_PASSWORD
+          anywhere_port_in_use() { [ "$2" -lt 3402 ]; }
+          err="$(RIOTBOX_ANYWHERE_BIND=192.168.1.20:3400 anywhere_gate 2>&1 >/dev/null)"
+          RIOTBOX_ANYWHERE_BIND=192.168.1.20:3400 anywhere_gate 2>/dev/null
+          echo "${ANYWHERE_FLAGS[*]}" | grep -q -- "-p 192.168.1.20:3402:3400 " || { echo "BAD: ${ANYWHERE_FLAGS[*]}"; exit 1; }
+          echo "${ANYWHERE_FLAGS[*]}" | grep -q -- "--label riotbox.anywhere.url=https://192.168.1.20:3402" || { echo "BAD: label ${ANYWHERE_FLAGS[*]}"; exit 1; }
+          echo "${err}" | grep -q "3400 is in use; Yep Anywhere takes 192.168.1.20:3402" || { echo "BAD: no notice: ${err}"; exit 1; }
+          anywhere_port_in_use() { return 0; }
+          out="$(RIOTBOX_ANYWHERE_BIND=192.168.1.20:3400 anywhere_gate 2>&1)" && { echo "BAD: accepted with every port taken"; exit 1; }
+          echo "${out}" | grep -q "no free port on 192.168.1.20 from 3400 to 3419" || { echo "BAD: ${out}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_port_in_use answers no for a closed port and never hangs
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          start=$(date +%s)
+          anywhere_port_in_use 127.0.0.1 1 && { echo "BAD: port 1 reported in use"; exit 1; }
+          anywhere_port_in_use 0.0.0.0 1 && { echo "BAD: wildcard probe reported in use"; exit 1; }
+          [ $(( $(date +%s) - start )) -lt 10 ] || { echo "BAD: the probe took too long"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: riotbox hub refuses arguments and a bad address before starting anything
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          run() {
+            HOME="${TMP}" XDG_CONFIG_HOME="${TMP}/xdg" XDG_DATA_HOME="${TMP}/data" RIOTBOX_SYSCONF_DIR="${TMP}/etc" \
+            ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD=false bash "{{.riotbox_dir}}/libexec/hub.sh" "$@"
+          }
+          run --help | grep -q "RIOTBOX_HUB_BIND" || { echo "BAD: help"; exit 1; }
+          run extra >/dev/null 2>&1; [ $? = 2 ] || { echo "BAD: an argument was accepted"; exit 1; }
+          out="$(RIOTBOX_HUB_BIND=laptop.local:3399 run 2>&1)" && { echo "BAD: a host name was accepted"; exit 1; }
+          echo "${out}" | grep -q "RIOTBOX_HUB_BIND=laptop.local:3399 is not ADDRESS:PORT" || { echo "BAD: ${out}"; exit 1; }
+          [ ! -e "${TMP}/data/riotbox-hub" ] || { echo "BAD: created its data dir before refusing"; exit 1; }
           echo "OK"
         assertions:
           - result.code ShouldEqual 0
@@ -149,6 +211,7 @@ testcases:
           echo "${argv}" | grep -q -- "-p 192.168.1.20:8443:3400" || { echo "BAD: port not published: ${argv}"; exit 1; }
           echo "${argv}" | grep -q -- "-e RIOTBOX_ANYWHERE=1" || { echo "BAD: RIOTBOX_ANYWHERE not passed: ${argv}"; exit 1; }
           echo "${argv}" | grep -q -- "-e RIOTBOX_ANYWHERE_URL=https://192.168.1.20:8443" || { echo "BAD: URL not passed: ${argv}"; exit 1; }
+          echo "${argv}" | grep -q -- "--label riotbox.anywhere.url=https://192.168.1.20:8443" || { echo "BAD: no hub label: ${argv}"; exit 1; }
           echo "${argv}" | grep -Eq -- "/yep-anywhere:/home/llm/\.yep-anywhere:z" || { echo "BAD: no state mount: ${argv}"; exit 1; }
           echo "${argv}" | grep -Eq -- "[[:space:]]riotbox /home/llm/\.riotbox/anywhere\.sh$" || { echo "BAD: main command not after the image: ${argv}"; exit 1; }
           state_dir="$(echo "${argv}" | grep -oE -- "-v [^ ]*/yep-anywhere:" | sed -E 's/^-v //; s/:$//')"

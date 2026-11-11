@@ -70,6 +70,45 @@ anywhere_parse_bind() {
 	ANYWHERE_PORT="$((10#${port}))"
 }
 
+# anywhere_port_in_use <addr> <port> — 0 when something already accepts
+# connections there. A wildcard address is probed on loopback. The connect
+# is bounded so an unroutable address cannot hang the launch. The tests
+# replace this function.
+anywhere_port_in_use() {
+	local addr="$1" port="$2"
+	case "${addr}" in
+	0.0.0.0) addr=127.0.0.1 ;;
+	"[::]") addr=::1 ;;
+	*) addr="${addr#[}" addr="${addr%]}" ;;
+	esac
+	# shellcheck disable=SC2016 # expanded by the inner bash, from its arguments
+	timeout 2 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "${addr}" "${port}" 2>/dev/null
+}
+
+# How many ports above the configured one a launch tries before giving up.
+ANYWHERE_PORT_TRIES=20
+
+# anywhere_pick_port — move ANYWHERE_PORT up to the first free port, so
+# several `riotbox anywhere` sessions can share one RIOTBOX_ANYWHERE_BIND.
+# Another launch can still take the port between this check and the engine's
+# bind; the engine then fails with "address already in use".
+anywhere_pick_port() {
+	local first="${ANYWHERE_PORT}" port
+	for ((port = first; port < first + ANYWHERE_PORT_TRIES && port <= 65535; port++)); do
+		# shellcheck disable=SC2310 # its status is the answer
+		if ! anywhere_port_in_use "${ANYWHERE_ADDR}" "${port}"; then
+			if ((port != first)); then
+				echo "NOTE: ${ANYWHERE_ADDR}:${first} is in use; Yep Anywhere takes ${ANYWHERE_ADDR}:${port}." >&2
+			fi
+			ANYWHERE_PORT="${port}"
+			return 0
+		fi
+	done
+	printf 'ERROR: no free port on %s from %s to %s for Yep Anywhere.\n' "${ANYWHERE_ADDR}" "${first}" "$((port - 1))" >&2
+	echo "  Stop a session, or set another start port in RIOTBOX_ANYWHERE_BIND." >&2
+	return 1
+}
+
 # anywhere_gate — see the header. Sets ANYWHERE_FLAGS and ANYWHERE_URL.
 anywhere_gate() {
 	if [[ "${RIOTBOX_EGRESS:-}" = "1" ]]; then
@@ -96,6 +135,8 @@ EOF
 	local bind="${RIOTBOX_ANYWHERE_BIND:-${ANYWHERE_DEFAULT_BIND}}"
 	# shellcheck disable=SC2310 # it has already said why it failed
 	anywhere_parse_bind "${bind}" || return 1
+	# shellcheck disable=SC2310 # it has already said why it failed
+	anywhere_pick_port || return 1
 
 	case "${ANYWHERE_ADDR}" in
 	0.0.0.0 | "[::]")
@@ -116,6 +157,9 @@ EOF
 		-p "${ANYWHERE_ADDR}:${ANYWHERE_PORT}:${ANYWHERE_CONTAINER_PORT}"
 		-e "RIOTBOX_ANYWHERE=1"
 		-e "RIOTBOX_ANYWHERE_URL=${ANYWHERE_URL}"
+		# What `riotbox hub` lists (internal/hub). It reads only this label
+		# and riotbox.session; nothing else about the container.
+		--label "riotbox.anywhere.url=${ANYWHERE_URL}"
 	)
 	# Yep Anywhere refuses /api requests whose Host header is not localhost, a
 	# private IPv4 address or *.ts.net (DNS-rebinding protection), so a

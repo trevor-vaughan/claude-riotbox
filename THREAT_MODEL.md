@@ -1239,6 +1239,29 @@ Design and the upstream gaps: `docs/dev/decisions/yep-anywhere.md`.
   `relay.yepanywhere.com` relay. Do not enable remote access if the session
   must stay on the local network.
 
+### `riotbox hub`
+
+A host process (`riotbox-core hub`), not a container, listening on
+`RIOTBOX_HUB_BIND` (IP literal; default `127.0.0.1:3399`).
+
+- **What it shows and grants.** Project paths, start times and the URL of each
+  running `riotbox anywhere` session. It grants no access to them: each link
+  leads to a session's own login. Its sources are the engine's container
+  labels and the host-only state dirs; it writes nothing but its own data dir.
+- **Who sees it.** A request needs the 32-byte random token from the printed
+  link, held afterwards as a `Secure`, `HttpOnly`, `SameSite=Strict` cookie,
+  and a Host header that is the listen address or loopback (DNS rebinding).
+  The token and the self-signed certificate persist in
+  `$XDG_DATA_HOME/riotbox-hub` (0700, files 0600); deleting it revokes every
+  bookmark. Anyone who can read that directory, or the terminal it printed
+  to, can see the list.
+- **What a container can do to it.** An agent can set labels only on
+  containers it starts, and only with an engine socket (socket mode). The hub
+  links only to `https://host:port` URLs without path, query or credentials,
+  and treats the session label as one path element under the state root, so a
+  crafted label cannot point it at another file. The page is rendered with
+  `html/template` under a `default-src 'none'` content security policy.
+
 ## Egress proxy (opt-in feature)
 
 With `RIOTBOX_EGRESS=1` the agent container is attached only to a per-session
