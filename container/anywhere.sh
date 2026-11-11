@@ -66,6 +66,16 @@ fi
 mkdir -p "${YEP_DATA}"
 chmod 700 "${YEP_DATA}"
 
+# At "info" Yep Anywhere logs every request to the terminal and scrolls the
+# banner below, with its once-shown password, out of sight. The terminal gets
+# warnings and errors; the full log goes to a file that 0.11.0 only appends to
+# and never rotates, so each launch empties it. Sessions of one project set
+# share this directory, so a second concurrent launch empties the first's
+# log and both then append to it.
+export LOG_LEVEL=warn LOG_FILE_LEVEL=info LOG_TO_FILE=true
+mkdir -p "${YEP_DATA}/logs"
+: >"${YEP_DATA}/logs/server.log"
+
 password=""
 if [[ ! -s "${YEP_DATA}/auth.json" ]] || [[ "${RIOTBOX_ANYWHERE_RESET_PASSWORD:-0}" = "1" ]]; then
 	# 24 alphanumerics, ~143 bits; easy to type on a phone. No "-": the
@@ -93,6 +103,7 @@ else
 	echo "              (forgotten? RIOTBOX_ANYWHERE_RESET_PASSWORD=1 riotbox anywhere)"
 fi
 echo "Certificate:  self-signed; your browser asks you to accept it once."
+echo "Log:          ~/.yep-anywhere/logs/server.log in the container (only warnings and errors show here)"
 echo "Stop:         Ctrl-C here."
 echo ""
 unset password

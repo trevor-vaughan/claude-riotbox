@@ -301,7 +301,9 @@ riotbox anywhere . ../lib   # several projects, as with riotbox shell
 The launch prints the URL and, the first time, a generated password. Open the
 URL on the phone, accept the self-signed certificate once, and log in. Ctrl-C
 in the terminal stops the server and ends the session as usual (overlay
-summary, session-branch merge).
+summary, session-branch merge). The terminal shows only Yep Anywhere's warnings
+and errors, so the banner stays in view; the full log is
+`~/.yep-anywhere/logs/server.log` inside the container, emptied at each launch.
 
 - **Where it listens.** Only on the address in `RIOTBOX_ANYWHERE_BIND`, which
   must be an IP literal. The default, `127.0.0.1:3400`, is this host only.

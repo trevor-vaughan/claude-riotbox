@@ -63,6 +63,15 @@ or on a real phone.**
   or `*.ts.net` (403), so a Tailscale `100.x`, IPv6 or public bind failed every
   call. The launch passes the bind address as `ALLOWED_HOSTS`; with it a
   `100.64.1.2` Host logged in and created a session.
+- At its default level it logs every request to the console, which scrolled
+  the launch banner (and the once-shown password) away in seconds.
+  `dist/server-main.js` reads `LOG_LEVEL` (console), `LOG_FILE_LEVEL` and
+  `LOG_TO_FILE`; the file, `logs/server.log` under the data dir, is only ever
+  appended to. The launch sets the console to `warn`, the file to `info`, and
+  empties the file at each launch. Concurrent sessions of one project set
+  share the data dir, so the later launch empties the earlier one's log and
+  both append to it from then on; accepted over per-launch files, which would
+  pile up unrotated.
 - The install is ~440 MB, ~260 MB of it the SDK's native Claude binaries,
   which the layer deletes (~180 MB left). The one install script in the graph
   (bcrypt's `node-gyp-build`) is unnecessary: bcrypt ships linux-x64 and

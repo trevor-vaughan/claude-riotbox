@@ -356,6 +356,37 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
+  # At its default level Yep Anywhere logs every request to the terminal, which
+  # scrolled the once-shown password out of sight within seconds.
+  - name: container/anywhere.sh keeps the banner on screen and the full log in a file emptied at each launch
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/home/.riotbox/bin" "${TMP}/home/.yep-anywhere/logs"
+          printf '#!/usr/bin/env bash\nexit 0\n' > "${TMP}/home/.riotbox/bin/claude"
+          echo "last session" > "${TMP}/home/.yep-anywhere/logs/server.log"
+          cat > "${TMP}/yep" <<'STUB'
+          #!/usr/bin/env bash
+          if [ "$1" = "--setup-auth" ]; then
+            printf '{"hash":"x"}\n' > "${YEP_DATA_DIR}/auth.json"
+            exit 0
+          fi
+          printf '%s %s %s\n' "${LOG_LEVEL:-unset}" "${LOG_FILE_LEVEL:-unset}" "${LOG_TO_FILE:-unset}" > "${LOG}/levels"
+          wc -c < "${YEP_DATA_DIR}/logs/server.log" > "${LOG}/log-size-at-start"
+          STUB
+          chmod +x "${TMP}/yep" "${TMP}/home/.riotbox/bin/claude"
+          export LOG="${TMP}" HOME="${TMP}/home" RIOTBOX_YEP_BIN="${TMP}/yep" LOG_LEVEL=debug
+          out="$(bash "{{.riotbox_dir}}/container/anywhere.sh")"
+          [ "$(cat "${TMP}/levels")" = "warn info true" ] || { echo "BAD: LOG_LEVEL LOG_FILE_LEVEL LOG_TO_FILE = $(cat "${TMP}/levels")"; exit 1; }
+          [ "$(cat "${TMP}/log-size-at-start")" = 0 ] || { echo "BAD: the last session's log was kept"; exit 1; }
+          echo "${out}" | grep -q 'Log: *~/.yep-anywhere/logs/server.log' || { echo "BAD: log path not shown: ${out}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
   # yepanywhere 0.11.0's cli.js refuses a --setup-auth value that starts with
   # "-" (it reads it as the next flag). A base64 alphabet mapped to "-_" led
   # with "-" on about 1 launch in 64, and the launch then failed.
