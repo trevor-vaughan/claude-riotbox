@@ -68,8 +68,14 @@ chmod 700 "${YEP_DATA}"
 
 password=""
 if [[ ! -s "${YEP_DATA}/auth.json" ]] || [[ "${RIOTBOX_ANYWHERE_RESET_PASSWORD:-0}" = "1" ]]; then
-	# 18 random bytes → 24 URL-safe characters; easy to type, ~144 bits.
-	password="$(head -c 18 /dev/urandom | base64 | tr '+/' '-_')"
+	# 24 alphanumerics, ~143 bits; easy to type on a phone. No "-": the
+	# --setup-auth parser reads a value starting with "-" as the next flag.
+	# A finite read, not `tr < /dev/urandom | head`: under pipefail the
+	# SIGPIPE that tr gets when head exits would end the script.
+	while ((${#password} < 24)); do
+		password+="$(head -c 256 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9')"
+	done
+	password="${password:0:24}"
 	if ! "${YEP_BIN}" --setup-auth "${password}" >/dev/null 2>&1; then
 		echo "ERROR: yepanywhere --setup-auth failed; no password was set." >&2
 		exit 1

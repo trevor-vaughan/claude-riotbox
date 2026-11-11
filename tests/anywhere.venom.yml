@@ -296,6 +296,39 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
+  # yepanywhere 0.11.0's cli.js refuses a --setup-auth value that starts with
+  # "-" (it reads it as the next flag). A base64 alphabet mapped to "-_" led
+  # with "-" on about 1 launch in 64, and the launch then failed.
+  - name: container/anywhere.sh generates passwords --setup-auth accepts, every time
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/home/.riotbox/bin"
+          printf '#!/usr/bin/env bash\nexit 0\n' > "${TMP}/home/.riotbox/bin/claude"
+          cat > "${TMP}/yep" <<'STUB'
+          #!/usr/bin/env bash
+          if [ "$1" = "--setup-auth" ]; then
+            case "$2" in -*|"") exit 1 ;; esac
+            printf '%s\n' "$2" >> "${LOG}/passwords"
+            printf '{"hash":"x"}\n' > "${YEP_DATA_DIR}/auth.json"
+            exit 0
+          fi
+          STUB
+          chmod +x "${TMP}/yep" "${TMP}/home/.riotbox/bin/claude"
+          export LOG="${TMP}" HOME="${TMP}/home" RIOTBOX_YEP_BIN="${TMP}/yep" RIOTBOX_ANYWHERE_RESET_PASSWORD=1
+          for _ in $(seq 40); do
+            bash "{{.riotbox_dir}}/container/anywhere.sh" > /dev/null
+          done
+          [ "$(wc -l < "${TMP}/passwords")" = 40 ] || { echo "BAD: not every launch set a password"; exit 1; }
+          bad="$(grep -cvE '^[A-Za-z0-9]{24}$' "${TMP}/passwords" || true)"
+          [ "${bad}" = 0 ] || { echo "BAD: ${bad} passwords are not 24 alphanumerics"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
   - name: container/anywhere.sh fails clearly when the image has no Yep Anywhere or no claude wrapper
     steps:
       - type: exec
