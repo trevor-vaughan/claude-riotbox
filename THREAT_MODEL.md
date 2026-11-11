@@ -1207,7 +1207,9 @@ Design and the upstream gaps: `docs/dev/decisions/yep-anywhere.md`.
   `0.0.0.0`/`[::]`. Reaching it from a phone means naming the LAN address in
   the user config. Refused with `RIOTBOX_EGRESS=1` (a port published from the
   internal network would not reach the host; a sidecar is planned) and with
-  `RIOTBOX_NETWORK=none`.
+  `RIOTBOX_NETWORK=none`. Yep Anywhere's own DNS-rebinding check (Host
+  header must be localhost, private IPv4 or `*.ts.net`) stays on; the launch
+  adds only the bind address to it (`ALLOWED_HOSTS`), never `*`.
 - **Authentication and transport.** Yep Anywhere's own password login
   (bcrypt hash in `~/.yep-anywhere/auth.json`) and its self-signed HTTPS. The
   password is 18 random bytes, generated on first use, printed once to the

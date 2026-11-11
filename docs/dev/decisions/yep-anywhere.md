@@ -55,6 +55,10 @@ with a stub `claude`. **Not yet verified in a built image or on a phone.**
 - `--setup-auth <password>` stores a bcrypt hash and exits; afterwards the API
   answers `Authentication required` until login. `--https-self-signed` serves
   HTTPS and nothing on plain HTTP.
+- Its `/api` routes refuse a Host header other than localhost, private IPv4
+  or `*.ts.net` (403), so a Tailscale `100.x`, IPv6 or public bind failed every
+  call. The launch passes the bind address as `ALLOWED_HOSTS`; with it a
+  `100.64.1.2` Host logged in and created a session.
 - The install is ~440 MB, ~260 MB of it the SDK's native Claude binaries,
   which the layer deletes (~180 MB left). The one install script in the graph
   (bcrypt's `node-gyp-build`) is unnecessary: bcrypt ships linux-x64 and

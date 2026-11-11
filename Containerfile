@@ -1606,8 +1606,9 @@ RUN bash -o pipefail -c '\
     [ "$(jq -r .version "${YEP_PKG}/package.json")" = "${YEPANYWHERE_VERSION}" ] || { \
         echo "npm ci installed yepanywhere $(jq -r .version "${YEP_PKG}/package.json"), not ${YEPANYWHERE_VERSION}" >&2; exit 1; }; \
     rm -rf "${YEP_ROOT}"/node_modules/@anthropic-ai/claude-agent-sdk-*; \
-    if find "${YEP_ROOT}/node_modules" -path "*claude-agent-sdk-*" -name claude -type f | grep -q .; then \
-        echo "a bundled Claude binary survived the delete — the SDK could run it instead of the wrapper" >&2; exit 1; fi; \
+    yep_left="$(find "${YEP_ROOT}/node_modules" -path "*claude-agent-sdk-*" -name claude -type f)"; \
+    [ -z "${yep_left}" ] || { \
+        echo "a bundled Claude binary survived the delete — the SDK could run it instead of the wrapper: ${yep_left}" >&2; exit 1; }; \
     grep -q "process.env.CLAUDE_CODE_EXECUTABLE" "${YEP_PKG}/dist/sdk/providers/claude.js" || { \
         echo "yepanywhere ${YEPANYWHERE_VERSION} no longer reads CLAUDE_CODE_EXECUTABLE — container/anywhere.sh could not point it at the RiotBox wrapper" >&2; exit 1; }; \
     printf "%s\n" \
@@ -1616,7 +1617,7 @@ RUN bash -o pipefail -c '\
         "exec \"${YEP_NODE_EXE}\" --no-warnings \"${YEP_PKG}/dist/cli.js\" \"\$@\"" \
         > "${YEP_ROOT}/bin/yepanywhere"; \
     chmod +x "${YEP_ROOT}/bin/yepanywhere"; \
-    [ "$("${YEP_ROOT}/bin/yepanywhere" --version | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)" = "${YEPANYWHERE_VERSION}" ] || { \
+    [ "$("${YEP_ROOT}/bin/yepanywhere" --version)" = "yepanywhere v${YEPANYWHERE_VERSION}" ] || { \
         echo "the yepanywhere shim does not report ${YEPANYWHERE_VERSION}" >&2; exit 1; }; \
     yep_probe="$(mktemp -d)"; \
     HOME="${yep_probe}" YEP_DATA_DIR="${yep_probe}/data" "${YEP_ROOT}/bin/yepanywhere" --setup-auth riotbox-build-probe >/dev/null \

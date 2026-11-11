@@ -77,7 +77,7 @@ testcases:
           anywhere_gate 2>/dev/null || { echo "BAD: default refused"; exit 1; }
           echo "${err}" | grep -q "RIOTBOX_ANYWHERE_BIND" || { echo "BAD: no hint for the phone: ${err}"; exit 1; }
           flags="${ANYWHERE_FLAGS[*]}"
-          [ "${flags}" = "-p 127.0.0.1:3400:3400 -e RIOTBOX_ANYWHERE=1 -e RIOTBOX_ANYWHERE_URL=https://127.0.0.1:3400" ] \
+          [ "${flags}" = "-p 127.0.0.1:3400:3400 -e RIOTBOX_ANYWHERE=1 -e RIOTBOX_ANYWHERE_URL=https://127.0.0.1:3400 -e RIOTBOX_ANYWHERE_HOST=127.0.0.1" ] \
             || { echo "BAD: flags: ${flags}"; exit 1; }
           echo "OK"
         assertions:
@@ -97,6 +97,27 @@ testcases:
           flags="${ANYWHERE_FLAGS[*]}"
           echo "${flags}" | grep -q -- "-p 0.0.0.0:9000:3400" || { echo "BAD: flags: ${flags}"; exit 1; }
           echo "${flags}" | grep -q -- "-e RIOTBOX_ANYWHERE_RESET_PASSWORD=1" || { echo "BAD: reset not forwarded: ${flags}"; exit 1; }
+          echo "${flags}" | grep -q -- "RIOTBOX_ANYWHERE_HOST" && { echo "BAD: a wildcard bind named an allowed host: ${flags}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # Yep Anywhere's Host-header check allows localhost, private IPv4 and
+  # *.ts.net only; any other bind address must reach it as ALLOWED_HOSTS or
+  # every API call from the phone is refused with 403.
+  - name: anywhere_gate passes a Tailscale or IPv6 bind address on as the allowed host
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          unset RIOTBOX_ANYWHERE_RESET_PASSWORD
+          RIOTBOX_ANYWHERE_BIND=100.64.1.2:3400 anywhere_gate 2>/dev/null
+          echo "${ANYWHERE_FLAGS[*]}" | grep -q -- "-e RIOTBOX_ANYWHERE_HOST=100.64.1.2$" || { echo "BAD: v4 ${ANYWHERE_FLAGS[*]}"; exit 1; }
+          RIOTBOX_ANYWHERE_BIND='[fd00::20]:3400' anywhere_gate 2>/dev/null
+          echo "${ANYWHERE_FLAGS[*]}" | grep -q -- "-e RIOTBOX_ANYWHERE_HOST=fd00::20$" || { echo "BAD: v6 (brackets must go) ${ANYWHERE_FLAGS[*]}"; exit 1; }
+          echo "${ANYWHERE_FLAGS[*]}" | grep -q -- "-p \[fd00::20\]:3400:3400" || { echo "BAD: v6 publish ${ANYWHERE_FLAGS[*]}"; exit 1; }
           echo "OK"
         assertions:
           - result.code ShouldEqual 0
@@ -185,18 +206,20 @@ testcases:
           printf '%s\n' "$*" > "${LOG}/serve-argv"
           printf '%s\n' "${CLAUDE_CODE_EXECUTABLE:-unset}" > "${LOG}/claude-exe"
           printf '%s\n' "${CLAUDE_CODE_PATH:-unset}" > "${LOG}/claude-path"
+          printf '%s\n' "${ALLOWED_HOSTS:-unset}" > "${LOG}/allowed-hosts"
           STUB
           chmod +x "${TMP}/yep" "${TMP}/home/.riotbox/bin/claude"
           export LOG="${TMP}" HOME="${TMP}/home" RIOTBOX_YEP_BIN="${TMP}/yep"
-          export RIOTBOX_ANYWHERE_URL=https://192.168.1.20:8443 CLAUDE_CODE_PATH=/somewhere/else
+          export RIOTBOX_ANYWHERE_URL=https://100.64.1.2:8443 RIOTBOX_ANYWHERE_HOST=100.64.1.2 CLAUDE_CODE_PATH=/somewhere/else
           first="$(bash "{{.riotbox_dir}}/container/anywhere.sh")"
           pw="$(head -1 "${TMP}/passwords")"
           [ "${#pw}" -ge 20 ] || { echo "BAD: password too short: ${pw}"; exit 1; }
           echo "${first}" | grep -q "Password: *${pw}$" || { echo "BAD: password not shown: ${first}"; exit 1; }
-          echo "${first}" | grep -q "https://192.168.1.20:8443" || { echo "BAD: URL not shown: ${first}"; exit 1; }
+          echo "${first}" | grep -q "https://100.64.1.2:8443" || { echo "BAD: URL not shown: ${first}"; exit 1; }
           [ "$(cat "${TMP}/serve-argv")" = "--host 0.0.0.0 --port 3400 --https-self-signed" ] || { echo "BAD: serve argv: $(cat "${TMP}/serve-argv")"; exit 1; }
           [ "$(cat "${TMP}/claude-exe")" = "${TMP}/home/.riotbox/bin/claude" ] || { echo "BAD: CLAUDE_CODE_EXECUTABLE=$(cat "${TMP}/claude-exe")"; exit 1; }
           [ "$(cat "${TMP}/claude-path")" = unset ] || { echo "BAD: CLAUDE_CODE_PATH survived"; exit 1; }
+          [ "$(cat "${TMP}/allowed-hosts")" = 100.64.1.2 ] || { echo "BAD: ALLOWED_HOSTS=$(cat "${TMP}/allowed-hosts")"; exit 1; }
           [ "$(stat -c %a "${TMP}/home/.yep-anywhere")" = 700 ] || { echo "BAD: data dir mode"; exit 1; }
           second="$(bash "{{.riotbox_dir}}/container/anywhere.sh")"
           [ "$(wc -l < "${TMP}/passwords")" = 1 ] || { echo "BAD: second launch reset the password"; exit 1; }

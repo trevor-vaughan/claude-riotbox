@@ -54,6 +54,14 @@ export CLAUDE_CODE_EXECUTABLE="${claude_wrapper}"
 unset CLAUDE_CODE_PATH
 export YEP_DATA_DIR="${YEP_DATA}"
 unset YEP_PROFILE
+# The bind address the host publishes on (libexec/anywhere-lib.sh). Without
+# it Yep Anywhere's Host-header check refuses API calls addressed to anything
+# but localhost, a private IPv4 address or *.ts.net.
+if [[ -n "${RIOTBOX_ANYWHERE_HOST:-}" ]]; then
+	export ALLOWED_HOSTS="${RIOTBOX_ANYWHERE_HOST}"
+else
+	unset ALLOWED_HOSTS
+fi
 
 mkdir -p "${YEP_DATA}"
 chmod 700 "${YEP_DATA}"

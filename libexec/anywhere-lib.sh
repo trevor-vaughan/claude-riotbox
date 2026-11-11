@@ -117,6 +117,18 @@ EOF
 		-e "RIOTBOX_ANYWHERE=1"
 		-e "RIOTBOX_ANYWHERE_URL=${ANYWHERE_URL}"
 	)
+	# Yep Anywhere refuses /api requests whose Host header is not localhost, a
+	# private IPv4 address or *.ts.net (DNS-rebinding protection), so a
+	# Tailscale 100.x, IPv6 or public bind would load the page and then fail
+	# every call. Allow the address the user chose; a wildcard has no single
+	# address, and its private-range clients are allowed anyway.
+	case "${ANYWHERE_ADDR}" in
+	0.0.0.0 | "[::]") ;;
+	*)
+		local host="${ANYWHERE_ADDR#[}"
+		ANYWHERE_FLAGS+=(-e "RIOTBOX_ANYWHERE_HOST=${host%]}")
+		;;
+	esac
 	if [[ "${RIOTBOX_ANYWHERE_RESET_PASSWORD:-0}" = "1" ]]; then
 		ANYWHERE_FLAGS+=(-e "RIOTBOX_ANYWHERE_RESET_PASSWORD=1")
 	fi
