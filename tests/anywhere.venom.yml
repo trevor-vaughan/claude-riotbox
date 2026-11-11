@@ -1,0 +1,256 @@
+name: riotbox anywhere — Yep Anywhere launch gate, in-container launcher, image pin
+vars:
+  root: "."
+  riotbox_dir: "{{.root}}"
+
+# Three layers, tested where each one decides something:
+#   * libexec/anywhere-lib.sh: which bind addresses are accepted, which modes
+#     are refused, and the engine flags a launch gets.
+#   * libexec/launch.sh + scripts/mount-projects.sh, through a fake engine:
+#     the port and the state mount appear only for `riotbox anywhere`.
+#   * container/anywhere.sh, against a stub yepanywhere: the password is set
+#     once, the server binds the fixed port with TLS, and Claude is pointed at
+#     the RiotBox wrapper rather than the Agent SDK's bundled binary.
+# The image layer itself cannot run here; its repo-side half (the lockfile pin
+# and the guards the layer relies on) is checked statically at the end.
+
+testcases:
+  - name: anywhere_parse_bind accepts IPv4 and bracketed IPv6 literals
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          anywhere_parse_bind 192.168.1.20:3400 || { echo "BAD: rejected a LAN IPv4"; exit 1; }
+          [ "${ANYWHERE_ADDR}:${ANYWHERE_PORT}" = "192.168.1.20:3400" ] || { echo "BAD: ${ANYWHERE_ADDR}:${ANYWHERE_PORT}"; exit 1; }
+          anywhere_parse_bind '[fd00::20]:8443' || { echo "BAD: rejected an IPv6"; exit 1; }
+          [ "${ANYWHERE_ADDR}" = "[fd00::20]" ] && [ "${ANYWHERE_PORT}" = 8443 ] || { echo "BAD: v6 ${ANYWHERE_ADDR} ${ANYWHERE_PORT}"; exit 1; }
+          anywhere_parse_bind 10.0.0.1:08080 || { echo "BAD: rejected a zero-padded port"; exit 1; }
+          [ "${ANYWHERE_PORT}" = 8080 ] || { echo "BAD: port read as ${ANYWHERE_PORT}, not decimal 8080"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_parse_bind refuses host names, bad octets, bad ports and a missing port
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          for bad in laptop.local:3400 192.168.1.300:3400 192.168.1.20:0 192.168.1.20:70000 \
+                     192.168.1.20 '[]:3400' '[1.2.3.4]:3400' ':3400' '192.168.1.20:34x0'; do
+            if anywhere_parse_bind "${bad}" 2>/dev/null; then
+              echo "BAD: accepted ${bad}"; exit 1
+            fi
+            msg="$(anywhere_parse_bind "${bad}" 2>&1)" || true
+            echo "${msg}" | grep -q RIOTBOX_ANYWHERE_BIND || { echo "BAD: refusal of ${bad} does not name the setting: ${msg}"; exit 1; }
+          done
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_gate refuses RIOTBOX_EGRESS=1 and RIOTBOX_NETWORK=none
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          out="$(RIOTBOX_EGRESS=1 anywhere_gate 2>&1)" && { echo "BAD: egress mode was accepted"; exit 1; }
+          echo "${out}" | grep -q "RIOTBOX_EGRESS=1" || { echo "BAD: egress refusal: ${out}"; exit 1; }
+          out="$(RIOTBOX_NETWORK=none anywhere_gate 2>&1)" && { echo "BAD: --network=none was accepted"; exit 1; }
+          echo "${out}" | grep -q "RIOTBOX_NETWORK=none" || { echo "BAD: network refusal: ${out}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_gate defaults to loopback, says how to reach it from a phone, and publishes the fixed port
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          unset RIOTBOX_ANYWHERE_BIND RIOTBOX_EGRESS RIOTBOX_NETWORK RIOTBOX_ANYWHERE_RESET_PASSWORD
+          err="$(anywhere_gate 2>&1 >/dev/null)"
+          anywhere_gate 2>/dev/null || { echo "BAD: default refused"; exit 1; }
+          echo "${err}" | grep -q "RIOTBOX_ANYWHERE_BIND" || { echo "BAD: no hint for the phone: ${err}"; exit 1; }
+          flags="${ANYWHERE_FLAGS[*]}"
+          [ "${flags}" = "-p 127.0.0.1:3400:3400 -e RIOTBOX_ANYWHERE=1 -e RIOTBOX_ANYWHERE_URL=https://127.0.0.1:3400" ] \
+            || { echo "BAD: flags: ${flags}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: anywhere_gate warns on a wildcard bind and forwards a password reset
+    steps:
+      - type: exec
+        script: |
+          set -u
+          source "{{.riotbox_dir}}/libexec/anywhere-lib.sh"
+          export RIOTBOX_ANYWHERE_BIND=0.0.0.0:9000 RIOTBOX_ANYWHERE_RESET_PASSWORD=1
+          err="$(anywhere_gate 2>&1 >/dev/null)"
+          echo "${err}" | grep -q "EVERY network" || { echo "BAD: no wildcard warning: ${err}"; exit 1; }
+          anywhere_gate 2>/dev/null
+          flags="${ANYWHERE_FLAGS[*]}"
+          echo "${flags}" | grep -q -- "-p 0.0.0.0:9000:3400" || { echo "BAD: flags: ${flags}"; exit 1; }
+          echo "${flags}" | grep -q -- "-e RIOTBOX_ANYWHERE_RESET_PASSWORD=1" || { echo "BAD: reset not forwarded: ${flags}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: launch.sh publishes the port and mounts the Yep Anywhere state only for riotbox anywhere
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg/riotbox" "${TMP}/data" "${TMP}/proj"
+          cat > "${TMP}/fake-cmd" <<'FAKE'
+          #!/usr/bin/env bash
+          printf '%s\n' "$*" > "${CAPTURE}"
+          FAKE
+          chmod +x "${TMP}/fake-cmd"
+          export CAPTURE="${TMP}/argv"
+          # The bind comes from the user config, as the README tells people to set it.
+          printf ': "${RIOTBOX_ANYWHERE_BIND:=192.168.1.20:8443}"\n' > "${TMP}/xdg/riotbox/config"
+          launch() {
+            RIOTBOX_PROJECTS="${TMP}/proj" RIOTBOX_DATA_DIR="${TMP}/data" \
+            RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" HOME="${TMP}" \
+            ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+              bash "{{.riotbox_dir}}/libexec/launch.sh" "$@" 2>/dev/null
+          }
+          RIOTBOX_ANYWHERE=1 launch /home/llm/.riotbox/anywhere.sh
+          argv="$(cat "${CAPTURE}")"
+          echo "${argv}" | grep -q -- "-p 192.168.1.20:8443:3400" || { echo "BAD: port not published: ${argv}"; exit 1; }
+          echo "${argv}" | grep -q -- "-e RIOTBOX_ANYWHERE=1" || { echo "BAD: RIOTBOX_ANYWHERE not passed: ${argv}"; exit 1; }
+          echo "${argv}" | grep -q -- "-e RIOTBOX_ANYWHERE_URL=https://192.168.1.20:8443" || { echo "BAD: URL not passed: ${argv}"; exit 1; }
+          echo "${argv}" | grep -Eq -- "/yep-anywhere:/home/llm/\.yep-anywhere:z" || { echo "BAD: no state mount: ${argv}"; exit 1; }
+          echo "${argv}" | grep -Eq -- "[[:space:]]riotbox /home/llm/\.riotbox/anywhere\.sh$" || { echo "BAD: main command not after the image: ${argv}"; exit 1; }
+          state_dir="$(echo "${argv}" | grep -oE -- "-v [^ ]*/yep-anywhere:" | sed -E 's/^-v //; s/:$//')"
+          [ -d "${state_dir}" ] || { echo "BAD: state dir ${state_dir} was not created"; exit 1; }
+          rm -f "${CAPTURE}"
+          launch bash
+          argv="$(cat "${CAPTURE}")"
+          echo "${argv}" | grep -q -- " -p " && { echo "BAD: a plain launch published a port: ${argv}"; exit 1; }
+          echo "${argv}" | grep -q -- "yep-anywhere" && { echo "BAD: a plain launch mounted Yep Anywhere state: ${argv}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: launch.sh refuses a bad bind before the engine runs
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/xdg" "${TMP}/data" "${TMP}/proj"
+          printf '#!/usr/bin/env bash\ntouch "%s/ran"\n' "${TMP}" > "${TMP}/fake-cmd"
+          chmod +x "${TMP}/fake-cmd"
+          out="$(RIOTBOX_ANYWHERE=1 RIOTBOX_ANYWHERE_BIND=laptop.local:3400 \
+            RIOTBOX_PROJECTS="${TMP}/proj" RIOTBOX_DATA_DIR="${TMP}/data" \
+            RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/xdg" HOME="${TMP}" \
+            ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+            bash "{{.riotbox_dir}}/libexec/launch.sh" /home/llm/.riotbox/anywhere.sh 2>&1)" && { echo "BAD: launch succeeded"; exit 1; }
+          [ ! -e "${TMP}/ran" ] || { echo "BAD: the engine ran"; exit 1; }
+          [ -z "$(ls -A "${TMP}/data" 2>/dev/null)" ] || { echo "BAD: session state was created before the refusal"; exit 1; }
+          echo "${out}" | grep -q "is not ADDRESS:PORT" || { echo "BAD: message: ${out}"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: container/anywhere.sh sets a password once, points Claude at the wrapper, and serves TLS on the fixed port
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/home/.riotbox/bin"
+          printf '#!/usr/bin/env bash\nexit 0\n' > "${TMP}/home/.riotbox/bin/claude"
+          # Stub yepanywhere: --setup-auth records the password and writes
+          # auth.json the way the real one does; a serve records its argv and
+          # the two variables anywhere.sh is responsible for.
+          cat > "${TMP}/yep" <<'STUB'
+          #!/usr/bin/env bash
+          if [ "$1" = "--setup-auth" ]; then
+            printf '%s\n' "$2" >> "${LOG}/passwords"
+            printf '{"hash":"x"}\n' > "${YEP_DATA_DIR}/auth.json"
+            exit 0
+          fi
+          printf '%s\n' "$*" > "${LOG}/serve-argv"
+          printf '%s\n' "${CLAUDE_CODE_EXECUTABLE:-unset}" > "${LOG}/claude-exe"
+          printf '%s\n' "${CLAUDE_CODE_PATH:-unset}" > "${LOG}/claude-path"
+          STUB
+          chmod +x "${TMP}/yep" "${TMP}/home/.riotbox/bin/claude"
+          export LOG="${TMP}" HOME="${TMP}/home" RIOTBOX_YEP_BIN="${TMP}/yep"
+          export RIOTBOX_ANYWHERE_URL=https://192.168.1.20:8443 CLAUDE_CODE_PATH=/somewhere/else
+          first="$(bash "{{.riotbox_dir}}/container/anywhere.sh")"
+          pw="$(head -1 "${TMP}/passwords")"
+          [ "${#pw}" -ge 20 ] || { echo "BAD: password too short: ${pw}"; exit 1; }
+          echo "${first}" | grep -q "Password: *${pw}$" || { echo "BAD: password not shown: ${first}"; exit 1; }
+          echo "${first}" | grep -q "https://192.168.1.20:8443" || { echo "BAD: URL not shown: ${first}"; exit 1; }
+          [ "$(cat "${TMP}/serve-argv")" = "--host 0.0.0.0 --port 3400 --https-self-signed" ] || { echo "BAD: serve argv: $(cat "${TMP}/serve-argv")"; exit 1; }
+          [ "$(cat "${TMP}/claude-exe")" = "${TMP}/home/.riotbox/bin/claude" ] || { echo "BAD: CLAUDE_CODE_EXECUTABLE=$(cat "${TMP}/claude-exe")"; exit 1; }
+          [ "$(cat "${TMP}/claude-path")" = unset ] || { echo "BAD: CLAUDE_CODE_PATH survived"; exit 1; }
+          [ "$(stat -c %a "${TMP}/home/.yep-anywhere")" = 700 ] || { echo "BAD: data dir mode"; exit 1; }
+          second="$(bash "{{.riotbox_dir}}/container/anywhere.sh")"
+          [ "$(wc -l < "${TMP}/passwords")" = 1 ] || { echo "BAD: second launch reset the password"; exit 1; }
+          echo "${second}" | grep -q "unchanged" || { echo "BAD: second launch: ${second}"; exit 1; }
+          echo "${second}" | grep -q "${pw}" && { echo "BAD: second launch printed the old password"; exit 1; }
+          RIOTBOX_ANYWHERE_RESET_PASSWORD=1 bash "{{.riotbox_dir}}/container/anywhere.sh" > /dev/null
+          [ "$(wc -l < "${TMP}/passwords")" = 2 ] || { echo "BAD: reset did not set a new password"; exit 1; }
+          [ "$(sed -n 2p "${TMP}/passwords")" != "${pw}" ] || { echo "BAD: reset reused the password"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  - name: container/anywhere.sh fails clearly when the image has no Yep Anywhere or no claude wrapper
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/home/.riotbox/bin"
+          out="$(HOME="${TMP}/home" RIOTBOX_YEP_BIN="${TMP}/missing" bash "{{.riotbox_dir}}/container/anywhere.sh" 2>&1)" && { echo "BAD: ran without yepanywhere"; exit 1; }
+          echo "${out}" | grep -q "riotbox build" || { echo "BAD: message: ${out}"; exit 1; }
+          printf '#!/usr/bin/env bash\ntouch "%s/served"\n' "${TMP}" > "${TMP}/yep"; chmod +x "${TMP}/yep"
+          out="$(HOME="${TMP}/home" RIOTBOX_YEP_BIN="${TMP}/yep" bash "{{.riotbox_dir}}/container/anywhere.sh" 2>&1)" && { echo "BAD: ran without the wrapper"; exit 1; }
+          echo "${out}" | grep -q "claude wrapper" || { echo "BAD: message: ${out}"; exit 1; }
+          [ ! -e "${TMP}/served" ] || { echo "BAD: served without the wrapper"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"
+
+  # The lockfile is the pin on what the layer installs; npm ci refuses a
+  # package.json it does not satisfy, so this is the repo-side half: the
+  # committed lockfile resolves the release the ARG names, with an integrity
+  # hash, and the layer still carries the guards the session relies on.
+  - name: the image layer pins the lockfile's yepanywhere and removes the SDK's bundled Claude
+    steps:
+      - type: exec
+        script: |
+          set -u
+          cd "{{.riotbox_dir}}"
+          lock=container/yepanywhere-package-lock.json
+          [ "$(grep -c '^ARG YEPANYWHERE_VERSION=' Containerfile)" = 1 ] || { echo "BAD: expected one ARG YEPANYWHERE_VERSION"; exit 1; }
+          version="$(sed -nE 's/^ARG YEPANYWHERE_VERSION=(.+)$/\1/p' Containerfile)"
+          [ "$(jq -r '.packages[""].dependencies.yepanywhere' "${lock}")" = "${version}" ] || { echo "BAD: ${lock} does not depend on exactly ${version}"; exit 1; }
+          [ "$(jq -r '.packages["node_modules/yepanywhere"].version' "${lock}")" = "${version}" ] || { echo "BAD: ${lock} resolves another release — regenerate it"; exit 1; }
+          jq -r '.packages["node_modules/yepanywhere"].integrity' "${lock}" | grep -qE '^sha512-' || { echo "BAD: no sha512 integrity"; exit 1; }
+          grep -q 'COPY --chown=llm:llm container/yepanywhere-package-lock.json' Containerfile || { echo "BAD: lockfile not copied"; exit 1; }
+          grep -q 'npm" ci --ignore-scripts' Containerfile || { echo "BAD: npm ci --ignore-scripts missing"; exit 1; }
+          grep -q 'rm -rf "${YEP_ROOT}"/node_modules/@anthropic-ai/claude-agent-sdk-\*' Containerfile || { echo "BAD: bundled Claude binaries are no longer removed"; exit 1; }
+          grep -q 'process.env.CLAUDE_CODE_EXECUTABLE' Containerfile || { echo "BAD: the CLAUDE_CODE_EXECUTABLE guard is gone"; exit 1; }
+          grep -q 'COPY --chown=llm:llm container/anywhere.sh /home/llm/.riotbox/anywhere.sh' Containerfile || { echo "BAD: anywhere.sh not copied"; exit 1; }
+          grep -q 'container/yepanywhere-package-lock.json linguist-generated=true' .gitattributes || { echo "BAD: lockfile not marked generated"; exit 1; }
+          echo "OK"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "OK"

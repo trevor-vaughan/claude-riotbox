@@ -102,6 +102,17 @@ if [[ "${RIOTBOX_EGRESS:-}" = "1" ]]; then
 	egress_gate || exit 1
 fi
 
+# RIOTBOX_ANYWHERE=1 (set only by `riotbox anywhere`) publishes the Yep
+# Anywhere port. Gated here, before any side effect, so a refused bind address
+# or an incompatible mode leaves nothing behind. See libexec/anywhere-lib.sh.
+ANYWHERE_FLAGS=()
+if [[ "${RIOTBOX_ANYWHERE:-}" = "1" ]]; then
+	# shellcheck source=./anywhere-lib.sh disable=SC1091
+	source "$(dirname "${BASH_SOURCE[0]}")/anywhere-lib.sh"
+	# shellcheck disable=SC2310 # it has already said why it failed
+	anywhere_gate || exit 1
+fi
+
 # A linked git worktree has no usable .git inside the container. Ask before any
 # session state is created, so declining leaves nothing behind.
 # shellcheck source=./worktree-prompt.sh disable=SC1091
@@ -379,6 +390,7 @@ ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${USER_FLAG} ${IN
 	--label "riotbox.session=${SESSION_KEY}" \
 	${NET_FLAG} \
 	"${EGRESS_FLAGS[@]}" \
+	"${ANYWHERE_FLAGS[@]}" \
 	${NESTED_FLAGS} \
 	${OVERLAY_FLAGS} \
 	${SOCKET_FLAGS} \

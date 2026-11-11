@@ -10,3 +10,4 @@
 # a ref bump: which of the resolved packages or integrity hashes moved.
 container/context-mode-package-lock.json linguist-generated=true
 container/pi/package-lock.json linguist-generated=true
+container/yepanywhere-package-lock.json linguist-generated=true

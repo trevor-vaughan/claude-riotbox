@@ -283,6 +283,45 @@ The `pi` command also runs with `PI_TELEMETRY=0` and `PI_SKIP_VERSION_CHECK=1`. 
 
 `riotbox tokscale` always counts Pi usage in RiotBox sessions. For your native Pi sessions on the host it relies on tokscale, which looks for them through `PI_CONFIG_DIR`, not `PI_CODING_AGENT_DIR`. If you relocated your Pi directory, native usage is missed unless you also set `PI_CONFIG_DIR`; the value tokscale expects has not been verified.
 
+## Using RiotBox from your phone (`riotbox anywhere`)
+
+`riotbox anywhere` starts [Yep Anywhere](https://github.com/kzahel/yepanywhere),
+a mobile-first web UI, inside the session container and publishes it on one
+address of this host. From a phone browser you can start, follow and steer
+Claude Code and opencode sessions in a chat layout instead of a terminal.
+
+```sh
+# ~/.config/riotbox/config — this host's LAN address and a port
+: "${RIOTBOX_ANYWHERE_BIND:=192.168.1.20:3400}"
+
+riotbox anywhere            # current directory
+riotbox anywhere . ../lib   # several projects, as with riotbox shell
+```
+
+The launch prints the URL and, the first time, a generated password. Open the
+URL on the phone, accept the self-signed certificate once, and log in. Ctrl-C
+in the terminal stops the server and ends the session as usual (overlay
+summary, session-branch merge).
+
+- **Where it listens.** Only on the address in `RIOTBOX_ANYWHERE_BIND`, which
+  must be an IP literal. The default, `127.0.0.1:3400`, is this host only.
+  `0.0.0.0` listens on every network the host joins and prints a warning.
+- **The password** is generated on first use and shown once. The certificate
+  and the password hash persist with the session's state, per project set, so
+  the next launch reuses both. `RIOTBOX_ANYWHERE_RESET_PASSWORD=1 riotbox
+  anywhere` prints a new one. `riotbox session-reset` removes both.
+- **Claude runs through RiotBox.** Yep Anywhere starts Claude Code through the
+  RiotBox wrapper, so the same flags, managed prompt, plugins and hooks apply
+  as for `riotbox run`. opencode runs with its RiotBox config, but skips the
+  wrapper (no headroom wrapping); see
+  [the decision record](docs/dev/decisions/yep-anywhere.md#open-items).
+- **Stay local.** Yep Anywhere has an optional remote-access relay; leave it
+  off in its settings if traffic must stay on your network.
+- **Not with** `RIOTBOX_EGRESS=1` (planned: a sidecar) or `RIOTBOX_NETWORK=none`.
+
+Whoever has the URL and the password can do anything the agent can. See
+[THREAT_MODEL § Yep Anywhere web UI](THREAT_MODEL.md#yep-anywhere-web-ui-riotbox-anywhere-opt-in).
+
 ## Commands
 
 | Command                               | Description                                                                                                                                 |
@@ -314,6 +353,7 @@ The `pi` command also runs with `PI_TELEMETRY=0` and `PI_SKIP_VERSION_CHECK=1`. 
 | `riotbox backups`                     | List checkpoint backup stores, largest first, with snapshot counts and whether each project still exists                                    |
 | `riotbox backup-prune [dir...]`       | Free backup space; one selector: `--keep <N>`, `--older-than <N>d` (then `git gc`), or `--orphans` (whole stores); `--all` for every store  |
 | `riotbox audit "<task>" [dir]`        | Read-only session for inspecting untrusted code (workspace mounted RO)                                                                      |
+| `riotbox anywhere [dir...]`           | Serve [Yep Anywhere](#using-riotbox-from-your-phone-riotbox-anywhere), a phone-friendly web UI that drives Claude Code and opencode in the session |
 | `riotbox install-hooks [global]`      | Install the pre-push hook that blocks container-identity commits ([details](#reclaiming-authorship))                                        |
 | `riotbox agents`                      | List registered agents (riotbox name + binary)                                                                                              |
 | `riotbox tokscale [args...]`          | Unified [tokscale](https://github.com/IvGolovach/tokscale) usage across your native agent home + every riotbox session, offline (no telemetry); args pass through to tokscale                     |

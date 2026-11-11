@@ -1188,6 +1188,55 @@ can publish a validly signed bad binary. The build provenance attestation
 (`gh attestation verify`) records which workflow run built each artifact; it
 does not prevent this.
 
+## Yep Anywhere web UI (`riotbox anywhere`, opt-in)
+
+`riotbox anywhere` runs [Yep Anywhere](https://github.com/kzahel/yepanywhere),
+a third-party web UI, as the session's main command and publishes its port on
+one host address (`RIOTBOX_ANYWHERE_BIND`, default `127.0.0.1:3400`), so a
+phone browser can start and steer Claude Code and opencode in the container.
+Design and the upstream gaps: `docs/dev/decisions/yep-anywhere.md`.
+
+- **What the port grants.** Anyone who reaches the address and has the
+  password can do anything the agent can: run commands in the container, read
+  and write the mounted projects, and spend the session's model credentials.
+  Nothing beyond that: the server runs inside the agent container, as the
+  agent's user, with no capability, network or mount the agent lacks except
+  its own data directory. It is not a shell on the host.
+- **Exposure is chosen, not guessed.** The launch accepts only an IP literal
+  (never a name it would resolve), defaults to loopback, and warns on
+  `0.0.0.0`/`[::]`. Reaching it from a phone means naming the LAN address in
+  the user config. Refused with `RIOTBOX_EGRESS=1` (a port published from the
+  internal network would not reach the host; a sidecar is planned) and with
+  `RIOTBOX_NETWORK=none`.
+- **Authentication and transport.** Yep Anywhere's own password login
+  (bcrypt hash in `~/.yep-anywhere/auth.json`) and its self-signed HTTPS. The
+  password is 18 random bytes, generated on first use, printed once to the
+  launching terminal (the container runs with `--log-driver=none`) and never
+  written in clear. The certificate is not issued by anything the phone
+  trusts, so the first connection is trust-on-first-use; a network attacker
+  present at that moment can intercept it. The data directory is a state-dir
+  mount, so the certificate and the hash persist per project set.
+- **The agent controls the server.** The agent shares the container, so it
+  can stop the server, rewrite `auth.json`, or put its own listener on the
+  port and phish the password. That password unlocks nothing the agent does
+  not already hold, which is why this is accepted; do not reuse it elsewhere.
+- **The agents still run through RiotBox.** Claude is started through the
+  RiotBox wrapper (`CLAUDE_CODE_EXECUTABLE`), and the image deletes the Agent
+  SDK's bundled Claude binaries so a regression fails instead of running an
+  unwrapped Claude. opencode is the known gap: Yep Anywhere finds the real
+  binary at `~/.local/bin/opencode` before PATH, so the wrapper (headroom
+  wrapping) is skipped. opencode's own config, which carries the permission
+  policy and the RiotBox prompt, still applies.
+- **Supply chain.** Pinned by `container/yepanywhere-package-lock.json`
+  (integrity hashes for all of its npm dependencies), installed with
+  `--ignore-scripts`. The same limit as the other lockfiles applies: it
+  catches bytes changing after review, not a release that was already bad.
+- **Outbound traffic.** None at start. Features the user opens can contact
+  `updates.yepanywhere.com`, `push.yepanywhere.com`, `api.github.com`, and,
+  only if remote access is configured in its settings, the
+  `relay.yepanywhere.com` relay. Do not enable remote access if the session
+  must stay on the local network.
+
 ## Egress proxy (opt-in feature)
 
 With `RIOTBOX_EGRESS=1` the agent container is attached only to a per-session

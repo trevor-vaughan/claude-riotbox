@@ -825,6 +825,19 @@ setup_projects() {
 	fi
 	PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${RIOTBOX_STATE_DIR}/context-mode:/home/llm/.context-mode:z"
 
+	# ── Yep Anywhere data (riotbox anywhere only) ───────────────────────
+	# The server's password hash, its self-signed certificate and its
+	# session index. Kept per project set so the phone accepts the
+	# certificate once and the password outlives the container; goes with
+	# `riotbox session-reset`. RIOTBOX_ANYWHERE is set by the verb alone.
+	if [[ "${RIOTBOX_ANYWHERE:-0}" = "1" ]]; then
+		if [[ "${RIOTBOX_DRY_RUN:-0}" != "1" ]]; then
+			# shellcheck disable=SC2310 # ensure_real_dir has already said why it failed
+			ensure_real_dir "${RIOTBOX_STATE_DIR}/yep-anywhere" || return 1
+		fi
+		PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${RIOTBOX_STATE_DIR}/yep-anywhere:/home/llm/.yep-anywhere:z"
+	fi
+
 	# ── Context Mode ledger (opt-in) ────────────────────────────────────
 	# One JSON record per session exit, for `riotbox ctx-stats`. Lives
 	# OUTSIDE riotbox_session_dir on purpose: the counters it accumulates
