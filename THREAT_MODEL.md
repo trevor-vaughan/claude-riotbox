@@ -1205,8 +1205,9 @@ Design and the upstream gaps: `docs/dev/decisions/yep-anywhere.md`.
 - **Exposure is chosen, not guessed.** The launch accepts only an IP literal
   (never a name it would resolve), defaults to loopback, and warns on
   `0.0.0.0`/`[::]` in any spelling (`[0::]`, `000.0.0.0`; malformed IPv6
-  and IPv6 that embeds an IPv4 address are refused). Reaching it from a phone means naming the LAN address in
-  the user config. Refused with `RIOTBOX_EGRESS=1` (a port published from the
+  and IPv6 that embeds an IPv4 address are refused). Reaching it from a phone
+  means either `riotbox hub` (below), which lets the session stay on loopback,
+  or naming the LAN address in the user config. Refused with `RIOTBOX_EGRESS=1` (a port published from the
   internal network would not reach the host; a sidecar is planned) and with
   `RIOTBOX_NETWORK=none`. Yep Anywhere's own DNS-rebinding check (Host
   header must be localhost, private IPv4 or `*.ts.net`) stays on; the launch
@@ -1215,14 +1216,44 @@ Design and the upstream gaps: `docs/dev/decisions/yep-anywhere.md`.
   (bcrypt hash in `~/.yep-anywhere/auth.json`) and its self-signed HTTPS. The
   password is 24 random alphanumerics (~143 bits), generated on first use,
   printed once to the launching terminal (the container runs with
-  `--log-driver=none`) and never written in clear. It is passed to
+  `--log-driver=none`) and kept in clear in a host file (Password custody,
+  below). It is passed to
   `yepanywhere --setup-auth` as an argument, the only way 0.11.0 accepts it,
   so for the second or so that command runs, a local user who can list the
   host's processes (no `hidepid`) can read it from `/proc/<pid>/cmdline`.
+  That happens on first use or after a reset only (a launch that finds a
+  non-empty `auth.json` and a password it did not just make skips it).
   The certificate is not issued by anything the phone trusts, so the first
   connection is trust-on-first-use; a network attacker
   present at that moment can intercept it. The data directory is a state-dir
   mount, so the certificate and the hash persist per project set.
+- **Through the hub, one key.** A session `riotbox hub` fronts does not
+  listen on the LAN; the hub does, on the session's port number. The hub signs
+  the browser in to the session it opens (see `riotbox hub` below), so the hub
+  token is the only key to it, not the first of two. Revoke it with
+  `riotbox hub new-token`; every browser then needs the new link. The password
+  still guards the session's loopback port against everything else on the host.
+  The hub carries session traffic and holds the password, so a defect in it
+  matters more than when it only linked. Yep Anywhere's loopback trust does not
+  stand in for the password: the hub's requests are loopback, but `/api/ws`
+  sits behind the login-cookie middleware, which has no loopback exemption.
+- **Password custody.** The host launcher, not the container, makes the
+  password (`anywhere_password`, `libexec/anywhere-lib.sh`) and keeps it in
+  `<state dir>/anywhere-password`: mode 0600, directly in the state dir, which
+  no container mounts (only its subdirectories are), written through a
+  temporary file and renamed, and refused if it is not a regular file. The
+  engine gets it as `-e RIOTBOX_ANYWHERE_PASSWORD`, by variable name, so the
+  value is in the launcher's environment for the launch, and in the
+  container's configuration (`podman inspect`), and not on the engine's argv.
+  Both are readable only by the user who can read the file anyway. The
+  container applies it with `--setup-auth` when it is new or `auth.json` is
+  missing or empty, and unsets it before Yep Anywhere starts agents. Launches
+  of one project set make or read it under the state dir's migrate lock, so
+  they agree. A reset (`RIOTBOX_ANYWHERE_RESET_PASSWORD=1`) applies to sessions
+  started after it; a running session of that project set keeps the old
+  password until restarted. The agent can still read the password in its
+  container, which grants nothing: it already controls its own Yep Anywhere.
+  A project set from before this change gets a new password at its next launch.
 - **The agent controls the server.** The agent shares the container, so it
   can stop the server, rewrite `auth.json`, or put its own listener on the
   port and phish the password. That password unlocks nothing the agent does
@@ -1250,16 +1281,34 @@ A host process (`riotbox-core hub`), not a container, listening on
 `RIOTBOX_HUB_BIND` (IP literal; default `127.0.0.1:3399`).
 
 - **What it shows and grants.** Project paths, start times and the URL of each
-  running `riotbox anywhere` session. It grants no access to them: each link
-  leads to a session's own login. Its sources are the engine's container
-  labels and the host-only state dirs; it writes nothing but its own data dir.
+  running `riotbox anywhere` session, and a reverse proxy to each session it
+  can listen for. Opening a session through it signs the browser in (below),
+  so the token reaches every such session. Its sources are the engine's
+  container labels and the host-only state dirs; it writes nothing but its own
+  data dir.
 - **Who sees it.** A request needs the 32-byte random token from the printed
   link, held afterwards as a `Secure`, `HttpOnly`, `SameSite=Strict` cookie,
   and a Host header that is the listen address or loopback (DNS rebinding).
   The token and the self-signed certificate persist in
-  `$XDG_DATA_HOME/riotbox-hub` (0700, files 0600); deleting it revokes every
-  bookmark. Anyone who can read that directory, or the terminal it printed
-  to, can see the list.
+  `$XDG_DATA_HOME/riotbox-hub` (0700, files 0600). `riotbox hub new-token`
+  writes a new token file atomically and revokes every bookmark at once: the
+  running hub reads the file on every request,
+  so it needs no restart. A token file that is missing or unreadable matches
+  nothing, so the hub refuses every request (it logs why, once) rather than
+  admitting any. Anyone who can read that file, or the terminal it printed to,
+  can see the list and open every session.
+- **As a user service.** `riotbox hub install` writes
+  `~/.config/systemd/user/riotbox-hub.service`, which runs
+  `riotbox hub` with the `PATH` of the shell that installed it, so a
+  directory on that `PATH` that others can write is a directory the service
+  runs the container engine from. The unit also records `XDG_DATA_HOME`,
+  `XDG_CONFIG_HOME`, `RIOTBOX_SYSCONF_DIR`, `RIOTBOX_CONTEXT_LEDGER` and
+  `RIOTBOX_HUB_BIND` when set in that shell, since they decide where the token,
+  the state and the configuration are read from. It refuses a value or RiotBox
+  directory that a unit file would misread (a newline, `"`, `\` or `%`; and,
+  for the directory, `$`, which systemd expands in `ExecStart=` even in quotes).
+  The service restarts after a failure and adds no privilege: it runs as the
+  user, with the same data directory.
 - **What a container can do to it.** Labels are claims: an agent can set them
   on containers it starts with an engine socket (socket mode, already
   host-equivalent, CT-018), and an image's labels are copied onto every
@@ -1271,6 +1320,76 @@ A host process (`riotbox-core hub`), not a container, listening on
   root, so a crafted label cannot point it at another file. The page is
   rendered with `html/template` under a `default-src 'none'` content security
   policy.
+
+- **One origin per session.** The hub listens on a port per session, the
+  session's own port number, because the agent controls the JavaScript its
+  session serves (it has passwordless sudo in the container that runs the
+  server). On one shared origin that script could drive another session with
+  that session's login or register a service worker that intercepts them all.
+  A port is an origin, so scripts, storage and service workers stay apart as
+  they did on direct ports. The upstream address always comes from the engine's
+  list, never from the request.
+- **Checks on a session port**, in order: the Host check, the hub token (any
+  `riotbox_hub` cookie that matches, so a session cannot shadow it with a
+  narrower `Path`; a miss is `401`), `Origin` equal to `https://` plus the
+  Host when present, and `Sec-Fetch-Site` `same-origin` or `none` (or
+  `same-site` only for a top-level navigation) when present. Ports are not
+  sites, so another session's port is `same-site`, and a no-cors `GET` carries
+  cookies but no `Origin`; the second check closes that. Refusals are `403`.
+- **Certificate pinning.** The hub connects to a session over its self-signed
+  HTTPS and accepts only a leaf equal, byte for byte, to the certificate in
+  `<state dir>/yep-anywhere/https/self-signed-cert.pem`. That file is in a
+  directory the container can write, so it is opened with `os.OpenRoot` and
+  `root.OpenFile` (a symlink cannot leave the state dir), must be a regular file (opened
+  non-blocking, so a FIFO cannot hang the hub), and is read up to 64 KiB.
+  Anything else, or a mismatch, is `502` with no unpinned fallback. This
+  keeps a different listener on the session's port from being proxied under
+  the user's token; it does not stop the agent from replacing the certificate
+  and the server together, which it controls anyway.
+- **Signing in.** On a session port, for a top-level navigation only (`GET`
+  with `Sec-Fetch-Mode: navigate`, or `Accept` containing `text/html` when
+  there are no Sec-Fetch headers), the hub asks the session's
+  `/api/auth/status` with the browser's own login cookie. If the session
+  answers that auth is enabled and the browser is not signed in, the hub reads
+  `<state dir>/anywhere-password` (opened with `os.OpenRoot`, non-blocking,
+  regular file only, small cap), posts it to `/api/auth/login` and forwards the
+  navigation with the resulting cookie, which it also hands to the browser
+  (renamed as below). Both calls use the session's pinned transport, so the
+  password goes only to the holder of the pinned certificate's key. Other
+  requests are never signed in. A failure (no password file, login refused,
+  status unreadable) is logged to the hub's stderr and the navigation goes on
+  unchanged, so Yep Anywhere's own login page appears.
+- **What signing in does not do.**
+  - Any page open on the hub's host, another session's included, can make the
+    browser load any session as a top-level `GET` navigation, and that
+    session signs it in. The page cannot read the result (it is cross-origin)
+    or frame it, and Yep Anywhere requires `X-Yep-Anywhere` for anything that
+    changes state, which a navigation cannot set.
+  - Logging out of Yep Anywhere through the hub does not stick: the next page
+    load signs in again. To revoke access, rotate the hub token. A password
+    reset does not end existing Yep logins (`--setup-auth` keeps them).
+  - A signed-out page load creates a login entry in the session (after a
+    bcrypt check). The hub reuses the login it made for a session for 10 s,
+    and concurrent loads share one, so this is at most one entry per session
+    per 10 s. It does not reuse a login the session has just refused from the
+    browser itself (a logout): that browser gets a fresh login. A browser that keeps dropping its cookies, for instance after a
+    cookie flood from a hostile session, still makes one per 10 s. This is a
+    known limit.
+- **Cookie isolation, and its limit.** Each session's `Set-Cookie` is renamed
+  with a per-session prefix and loses its `Domain`; only that session's prefix
+  goes back up, and the hub's own cookie never does. `Clear-Site-Data` is
+  stripped from proxied responses because it acts on the whole host, every
+  port, the hub's cookie included. Cookies are still shared by every port of
+  a host for writing: a hostile session can shadow another session's login
+  cookie (same name, longer `Path`, sent first) or flood the jar, and so log
+  the browser out of other sessions. It cannot read them: the hub forces
+  `HttpOnly` on every proxied cookie. That is denial of service, not
+  access, and was equally true of sessions published directly.
+- **Availability.** Each engine call is bounded by a 10 s timeout, and the
+  hub keeps serving the last list when it fails, so a hung engine does not
+  take the sessions down. A listener whose session has gone is closed at the
+  next re-list, which runs every 15 s (an engine call may take up to 10 s) and
+  sooner when a page load or lookup refreshes, so its port is free again.
 
 ## Egress proxy (opt-in feature)
 

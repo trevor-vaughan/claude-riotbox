@@ -830,12 +830,23 @@ setup_projects() {
 	# session index. Kept per project set so the phone accepts the
 	# certificate once and the password outlives the container; goes with
 	# `riotbox session-reset`. RIOTBOX_ANYWHERE is set by the verb alone.
+	# The password itself stays on the host (anywhere_password,
+	# libexec/anywhere-lib.sh) in <state dir>/anywhere-password, BESIDE the
+	# mounted directory and not in it, so no container reads the file; the
+	# hub signs browsers in with it. The container gets it as an environment
+	# variable, passed by name: the value is in the launcher's environment
+	# and never on the engine's argv, which any host user can read in `ps`.
+	# A dry run (`riotbox mounts`) writes nothing and so makes no password.
 	if [[ "${RIOTBOX_ANYWHERE:-0}" = "1" ]]; then
 		if [[ "${RIOTBOX_DRY_RUN:-0}" != "1" ]]; then
 			# shellcheck disable=SC2310 # ensure_real_dir has already said why it failed
 			ensure_real_dir "${RIOTBOX_STATE_DIR}/yep-anywhere" || return 1
+			# Under the lock so two launches of one project set do not each make
+			# a password; it runs in this shell, so the exports survive.
+			# shellcheck disable=SC2310 # anywhere_password has already said why it failed
+			_with_migrate_lock "${RIOTBOX_STATE_DIR}" anywhere_password "${RIOTBOX_STATE_DIR}" || return 1
 		fi
-		PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${RIOTBOX_STATE_DIR}/yep-anywhere:/home/llm/.yep-anywhere:z"
+		PROJECT_VOLUME_FLAGS="${PROJECT_VOLUME_FLAGS} -v ${RIOTBOX_STATE_DIR}/yep-anywhere:/home/llm/.yep-anywhere:z -e RIOTBOX_ANYWHERE_PASSWORD -e RIOTBOX_ANYWHERE_PASSWORD_NEW"
 	fi
 
 	# ── Context Mode ledger (opt-in) ────────────────────────────────────

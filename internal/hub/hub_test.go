@@ -12,6 +12,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega/gbytes"
 
 	"github.com/trevor-vaughan/claude-riotbox/internal/hub"
 )
@@ -71,6 +72,16 @@ var _ = Describe("Lister", func() {
 	var root string
 	BeforeEach(func() { root = GinkgoT().TempDir() })
 
+	It("gives up on an engine that does not answer, even when its child holds the output open", func() {
+		DeferCleanup(hub.SetEngineTimeout(200 * time.Millisecond))
+		engine := filepath.Join(GinkgoT().TempDir(), "engine")
+		Expect(os.WriteFile(engine, []byte("#!/bin/sh\nsleep 30\n"), 0o700)).To(Succeed())
+		start := time.Now()
+		_, err := hub.Lister{Engine: engine}.List()
+		Expect(err).To(MatchError(ContainSubstring("no answer within 200ms")))
+		Expect(time.Since(start)).To(BeNumerically("<", 3*time.Second))
+	})
+
 	It("lists running sessions oldest first, with their recorded projects", func() {
 		writeRecord(root, "key-a", "/home/u/alpha")
 		writeRecord(root, "key-b", "/home/u/beta", "/home/u/lib")
@@ -79,11 +90,11 @@ var _ = Describe("Lister", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(sessions).To(HaveLen(2))
 		Expect(sessions[0].Container).To(Equal("riotbox-a"))
-		Expect(sessions[0].LocalOnly).To(BeTrue())
+		Expect(sessions[0].StateDir).To(Equal(filepath.Join(root, "key-a")))
 		Expect(sessions[0].Projects).To(Equal([]string{"/home/u/alpha"}))
 		Expect(sessions[1].Container).To(Equal("riotbox-b"))
 		Expect(sessions[1].URL).To(Equal("https://192.168.1.20:3401"))
-		Expect(sessions[1].LocalOnly).To(BeFalse())
+		Expect(sessions[1].StateDir).To(Equal(filepath.Join(root, "key-b")))
 		Expect(sessions[1].Projects).To(Equal([]string{"/home/u/beta", "/home/u/lib"}))
 		Expect(f.calls).To(Equal([][]string{
 			{"ps", "--filter", "label=riotbox.anywhere.url", "--format", "{{.ID}}"},
@@ -182,6 +193,17 @@ var _ = Describe("Lister", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(sessions).To(HaveLen(1))
 		Expect(sessions[0].Projects).To(BeNil())
+		Expect(sessions[0].StateDir).To(BeEmpty())
+	})
+
+	It("gives no state dir without a state root", func() {
+		f := &fakeEngine{ids: "id1", inspect: inspectTwo}
+		sessions, err := hub.Lister{Engine: "podman", Output: f.output}.List()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sessions).NotTo(BeEmpty())
+		for _, s := range sessions {
+			Expect(s.StateDir).To(BeEmpty())
+		}
 	})
 })
 
@@ -274,6 +296,89 @@ var _ = Describe("Server", func() {
 		Expect(body).NotTo(ContainSubstring("<b>proj</b>"))
 		Expect(body).To(ContainSubstring("started 1 h ago"))
 		Expect(page.Header().Get("Content-Security-Policy")).To(ContainSubstring("default-src 'none'"))
+	})
+
+	It("accepts the token when a shadowing cookie comes first", func() {
+		cookie := get(strings.TrimPrefix(link, "https://192.168.1.20:3399")).Result().Cookies()[0]
+		Expect(get("/", &http.Cookie{Name: "riotbox_hub", Value: "planted"}, cookie).Code).To(Equal(http.StatusOK))
+	})
+
+	It("takes a new token from the next request, with no restart", func() {
+		old := get(strings.TrimPrefix(link, "https://192.168.1.20:3399")).Result().Cookies()[0]
+		Expect(get("/", old).Code).To(Equal(http.StatusOK))
+		newLink, err := server.NewToken()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(newLink).NotTo(Equal(link))
+		Expect(get("/", old).Code).To(Equal(http.StatusUnauthorized))
+		fresh := get(strings.TrimPrefix(newLink, "https://192.168.1.20:3399")).Result().Cookies()[0]
+		Expect(get("/", fresh).Code).To(Equal(http.StatusOK))
+		info, err := os.Stat(filepath.Join(dir, "token"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0o600)))
+	})
+
+	It("refuses everything while the token file is missing, and says so once", func() {
+		errs := gbytes.NewBuffer()
+		server.Stderr = errs
+		c := get(strings.TrimPrefix(link, "https://192.168.1.20:3399")).Result().Cookies()[0]
+		Expect(os.Remove(filepath.Join(dir, "token"))).To(Succeed())
+		Expect(get("/", c).Code).To(Equal(http.StatusUnauthorized))
+		Expect(get("/", c).Code).To(Equal(http.StatusUnauthorized))
+		Expect(strings.Count(string(errs.Contents()), "refusing every request")).To(Equal(1))
+	})
+
+	It("reads the token on every request, even when a rewrite keeps the size and modification time", func() {
+		path := filepath.Join(dir, "token")
+		old, err := os.ReadFile(path)
+		Expect(err).NotTo(HaveOccurred())
+		c := get(strings.TrimPrefix(link, "https://192.168.1.20:3399")).Result().Cookies()[0]
+		Expect(get("/", c).Code).To(Equal(http.StatusOK))
+		info, err := os.Stat(path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(os.WriteFile(path, []byte(strings.Repeat("x", len(old)-1)+"\n"), 0o600)).To(Succeed())
+		Expect(os.Chtimes(path, info.ModTime(), info.ModTime())).To(Succeed())
+		Expect(get("/", c).Code).To(Equal(http.StatusUnauthorized))
+	})
+
+	DescribeTable("refuses everything while the token file is unusable, logs each distinct failure once, and recovers when a valid file returns",
+		func(damage func(path string)) {
+			path := filepath.Join(dir, "token")
+			valid, err := os.ReadFile(path)
+			Expect(err).NotTo(HaveOccurred())
+			errs := gbytes.NewBuffer()
+			server.Stderr = errs
+			c := get(strings.TrimPrefix(link, "https://192.168.1.20:3399")).Result().Cookies()[0]
+			refusals := func() int { return strings.Count(string(errs.Contents()), "refusing every request") }
+
+			damage(path)
+			Expect(get("/", c).Code).To(Equal(http.StatusUnauthorized))
+			Expect(get("/", c).Code).To(Equal(http.StatusUnauthorized))
+			Expect(refusals()).To(Equal(1))
+
+			Expect(os.Chmod(path, 0o600)).To(Succeed())
+			Expect(os.WriteFile(path, valid, 0o600)).To(Succeed())
+			Expect(get("/", c).Code).To(Equal(http.StatusOK))
+
+			damage(path)
+			Expect(get("/", c).Code).To(Equal(http.StatusUnauthorized))
+			Expect(refusals()).To(Equal(2))
+		},
+		Entry("emptied", func(path string) { Expect(os.WriteFile(path, nil, 0o600)).To(Succeed()) }),
+		Entry("shorter than 32 characters", func(path string) {
+			Expect(os.WriteFile(path, []byte("short\n"), 0o600)).To(Succeed())
+		}),
+		Entry("unreadable", func(path string) {
+			if os.Geteuid() == 0 {
+				Skip("root reads a mode 0000 file")
+			}
+			Expect(os.WriteFile(path, []byte("unreadable"), 0o600)).To(Succeed())
+			Expect(os.Chmod(path, 0o000)).To(Succeed())
+		}),
+	)
+
+	It("gives the same link Prepare printed, without touching the certificate", func() {
+		again := &hub.Server{Addr: server.Addr, DataDir: dir}
+		Expect(again.Link()).To(Equal(link))
 	})
 
 	It("refuses a request addressed to another host", func() {

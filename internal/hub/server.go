@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -20,12 +21,30 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
 
 // cookieName carries the token after the first visit to the printed link.
 const cookieName = "riotbox_hub"
+
+// maxTokenFile bounds what readToken reads per request.
+const maxTokenFile = 1024
+
+// cookieMaxAge is how long the token cookie lasts.
+const cookieMaxAge = 400 * 24 * time.Hour
+
+// hubHeaders go on every response the hub writes itself. A session port's
+// proxied responses carry Yep Anywhere's own instead: proxy removes these
+// first, as ReverseProxy adds upstream headers to what is set and two CSP
+// headers are both enforced.
+var hubHeaders = map[string]string{
+	"Cache-Control":           "no-store",
+	"X-Content-Type-Options":  "nosniff",
+	"Referrer-Policy":         "no-referrer",
+	"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+}
 
 // certLifetime stays under the 398 days browsers accept for a server
 // certificate; the certificate is reissued when less than certRenew remains.
@@ -41,19 +60,23 @@ type Server struct {
 	DataDir string
 	Lister  interface{ List() ([]Session, error) }
 	Now     func() time.Time
-	token   string
+	Stderr  io.Writer // where proxy failures are logged; nil means os.Stderr
+
+	tokenMu     sync.Mutex
+	tokenWarned string // the last token error logged, so it is logged once
+
+	loginsMu sync.Mutex
+	logins   map[string]*recentLogin // by container name
+
+	cache     *sessionCache
+	ports     *sessionPorts
+	upstreams upstreams
 }
 
 // Prepare creates DataDir and loads or creates the token and the
 // certificate. It returns the link to print, which carries the token.
 func (s *Server) Prepare() (link string, cert tls.Certificate, err error) {
-	if err := os.MkdirAll(s.DataDir, 0o700); err != nil {
-		return "", tls.Certificate{}, err
-	}
-	if err := os.Chmod(s.DataDir, 0o700); err != nil {
-		return "", tls.Certificate{}, err
-	}
-	s.token, err = loadOrCreateToken(filepath.Join(s.DataDir, "token"))
+	link, err = s.Link()
 	if err != nil {
 		return "", tls.Certificate{}, err
 	}
@@ -65,7 +88,18 @@ func (s *Server) Prepare() (link string, cert tls.Certificate, err error) {
 	if err != nil {
 		return "", tls.Certificate{}, err
 	}
-	return "https://" + s.Addr + "/?k=" + s.token, cert, nil
+	s.logins = map[string]*recentLogin{}
+	s.ports = &sessionPorts{
+		host: host, handler: s.sessionHandler, stderr: s.stderr(),
+		servers: map[string]*http.Server{}, failed: map[string]string{},
+	}
+	s.cache = &sessionCache{
+		list:   func() ([]Session, error) { return s.Lister.List() },
+		now:    s.now,
+		onList: s.ports.reconcile,
+		stderr: s.stderr(),
+	}
+	return link, cert, nil
 }
 
 func (s *Server) now() time.Time {
@@ -73,6 +107,13 @@ func (s *Server) now() time.Time {
 		return s.Now()
 	}
 	return time.Now()
+}
+
+func (s *Server) stderr() io.Writer {
+	if s.Stderr != nil {
+		return s.Stderr
+	}
+	return os.Stderr
 }
 
 // Listen opens Addr. The caller prints the link only after this succeeds,
@@ -89,8 +130,16 @@ func (s *Server) Listen() (net.Listener, error) {
 	return ln, err
 }
 
-// Serve serves on ln until it fails. Prepare must have run.
+// Serve serves the list on ln, and the session ports, until ln fails. Prepare must have run.
 func (s *Server) Serve(ln net.Listener, cert tls.Certificate) error {
+	s.ports.start(cert)
+	_, _ = s.cache.fresh() // a failure is logged by refresh
+	tick := time.Tick(relistEvery)
+	go func() {
+		for range tick {
+			_, _ = s.cache.fresh() // a failure is logged by refresh
+		}
+	}()
 	srv := &http.Server{
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -99,43 +148,51 @@ func (s *Server) Serve(ln net.Listener, cert tls.Certificate) error {
 	return srv.ServeTLS(ln, "", "")
 }
 
-// Handler is the hub's routes, exported for the tests.
+// Handler is the list's routes, exported for the tests. Each session is
+// served on its own port (sessionHandler).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
-	return s.guard(mux)
+	return s.guard(mux, true)
 }
 
 // guard applies, in order: the Host check (DNS rebinding: a page on another
 // origin that resolves a name to this address must not be served), the
-// token in ?k=, which becomes a cookie, and the cookie.
-func (s *Server) guard(next http.Handler) http.Handler {
+// token in ?k= (on the list only: a session port passes k on to the session),
+// which becomes a cookie, and the cookie.
+func (s *Server) guard(next http.Handler, exchange bool) http.Handler {
 	listenHost, _, _ := net.SplitHostPort(s.Addr)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+		for k, v := range hubHeaders {
+			w.Header().Set(k, v)
+		}
 		if !hostAllowed(r.Host, listenHost) {
 			http.Error(w, "unexpected Host header", http.StatusMisdirectedRequest)
 			return
 		}
-		if k := r.URL.Query().Get("k"); k != "" {
-			if !s.tokenMatches(k) {
-				http.Error(w, "this link is not valid; open the one riotbox hub printed", http.StatusForbidden)
+		if exchange {
+			if k := r.URL.Query().Get("k"); k != "" {
+				if !s.tokenMatches(k) {
+					http.Error(w, "this link is not valid; open the one riotbox hub printed", http.StatusForbidden)
+					return
+				}
+				http.SetCookie(w, &http.Cookie{
+					Name: cookieName, Value: k, Path: "/",
+					HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
+					MaxAge: int(cookieMaxAge.Seconds()),
+				})
+				http.Redirect(w, r, "/", http.StatusSeeOther)
 				return
 			}
-			http.SetCookie(w, &http.Cookie{
-				Name: cookieName, Value: s.token, Path: "/",
-				HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
-				MaxAge: int((400 * 24 * time.Hour).Seconds()),
-			})
-			http.Redirect(w, r, "/", http.StatusSeeOther)
-			return
 		}
-		c, err := r.Cookie(cookieName)
-		if err != nil || !s.tokenMatches(c.Value) {
-			http.Error(w, "open the link riotbox hub printed in its terminal", http.StatusUnauthorized)
+		// Any matching cookie will do: a session's script can set another
+		// riotbox_hub cookie with a longer Path, which browsers send first.
+		if !slices.ContainsFunc(r.CookiesNamed(cookieName), func(c *http.Cookie) bool { return s.tokenMatches(c.Value) }) {
+			msg := "open the hub's link (riotbox hub link prints it)"
+			if !exchange {
+				msg = "open the RiotBox hub's list first: " + s.listURL(r)
+			}
+			http.Error(w, msg, http.StatusUnauthorized)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -143,7 +200,8 @@ func (s *Server) guard(next http.Handler) http.Handler {
 }
 
 func (s *Server) tokenMatches(v string) bool {
-	return s.token != "" && subtle.ConstantTimeCompare([]byte(v), []byte(s.token)) == 1
+	t := s.currentToken()
+	return t != "" && subtle.ConstantTimeCompare([]byte(v), []byte(t)) == 1
 }
 
 // hostAllowed accepts the listen address itself and loopback names. A
@@ -174,10 +232,28 @@ func hostAllowed(hostHeader, listenHost string) bool {
 	return ip.Equal(listen)
 }
 
+// requestHost is the host the browser addressed, without port or brackets.
+// guard has already checked it.
+func requestHost(r *http.Request) string {
+	h := r.Host
+	if hh, _, err := net.SplitHostPort(h); err == nil {
+		h = hh
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
+}
+
+// listURL is the list's address as this browser reaches the hub.
+func (s *Server) listURL(r *http.Request) string {
+	_, port, _ := net.SplitHostPort(s.Addr)
+	return "https://" + net.JoinHostPort(requestHost(r), port) + "/"
+}
+
 type pageSession struct {
 	Session
 	Title   string
 	Running string
+	Link    string // where the card goes
+	Note    string // why the hub does not front the session; empty when it does
 }
 
 var page = template.Must(template.New("hub").Parse(`<!doctype html>
@@ -205,30 +281,36 @@ code{font-size:.9em}
 <h1>RiotBox sessions</h1>
 {{if .Err}}<p class="warn">Could not list sessions: {{.Err}}</p>{{end}}
 {{if .Sessions}}<ul>
-{{range .Sessions}}<li><a class="card" href="{{.URL}}/" rel="noreferrer">
+{{range .Sessions}}<li><a class="card" href="{{.Link}}" rel="noreferrer">
 <div class="title">{{.Title}}</div>
 {{range .Projects}}<div class="paths">{{.}}</div>{{end}}
-<div class="meta">{{.URL}}{{if .Running}} · started {{.Running}}{{end}}</div>
-{{if .LocalOnly}}<div class="meta warn">Published on loopback: only reachable from the host itself.</div>{{end}}
+<div class="meta">{{.Container}}{{if .Running}} · started {{.Running}}{{end}}</div>
+{{if .Note}}<div class="meta warn">Not through the hub: {{.Note}}</div>{{end}}
 </a></li>
 {{end}}</ul>
 {{else if not .Err}}<p class="empty">No <code>riotbox anywhere</code> session is running. Start one with <code>riotbox anywhere [projects...]</code>.</p>{{end}}
-<p class="foot">Each project set has its own password and certificate. This page refreshes every 15 seconds.</p>
+<p class="foot">Each project set has its own password, and the hub serves each session on its own port. This page refreshes every 15 seconds.</p>
 </main></body></html>
 `))
 
-func (s *Server) index(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	var data struct {
 		Sessions []pageSession
 		Err      string
 	}
-	sessions, err := s.Lister.List()
+	sessions, err := s.cache.fresh()
 	if err != nil {
 		data.Err = err.Error()
 	}
 	now := s.now()
 	for _, ss := range sessions {
-		p := pageSession{Session: ss, Title: title(ss)}
+		p := pageSession{Session: ss, Title: title(ss), Link: ss.URL + "/"}
+		port := publishedPort(ss)
+		if served, reason := s.ports.status(port); served {
+			p.Link = "https://" + net.JoinHostPort(requestHost(r), port) + "/"
+		} else {
+			p.Note = reason
+		}
 		if !ss.Started.IsZero() {
 			p.Running = ago(now.Sub(ss.Started))
 		}
@@ -263,23 +345,101 @@ func ago(d time.Duration) string {
 	}
 }
 
-// loadOrCreateToken returns the token in path, writing a new one (32 random
-// bytes, base64url) when the file is missing or empty.
-func loadOrCreateToken(path string) (string, error) {
-	b, err := os.ReadFile(path)
-	if err == nil {
-		if t := strings.TrimSpace(string(b)); len(t) >= 32 {
-			return t, nil
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+// errNoToken marks a token file that exists but holds no token.
+var errNoToken = errors.New("holds no token")
+
+// readToken returns the token in path; one shorter than 32 characters is
+// not one the hub wrote.
+func readToken(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
 		return "", err
 	}
+	defer func() { _ = f.Close() }() // read-only: nothing to lose on close
+	// A token is under 100 bytes; the cap keeps a mistaken huge file from being read on every request.
+	b, err := io.ReadAll(io.LimitReader(f, maxTokenFile))
+	if err != nil {
+		return "", err
+	}
+	t := strings.TrimSpace(string(b))
+	if len(t) < 32 {
+		return "", fmt.Errorf("%s %w", path, errNoToken)
+	}
+	return t, nil
+}
+
+// newToken writes a fresh token (32 random bytes, base64url) to path.
+func newToken(path string) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
 	t := base64.RawURLEncoding.EncodeToString(raw)
 	return t, writePrivate(path, []byte(t+"\n"))
+}
+
+// loadOrCreateToken returns the token in path, writing a new one (32 random
+// bytes, base64url) when the file is missing or empty.
+func loadOrCreateToken(path string) (string, error) {
+	t, err := readToken(path)
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, errNoToken) {
+		return newToken(path)
+	}
+	return t, err
+}
+
+// prepareDir creates DataDir 0700.
+func (s *Server) prepareDir() error {
+	if err := os.MkdirAll(s.DataDir, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(s.DataDir, 0o700)
+}
+
+// Link returns the link that carries the token, creating DataDir and the
+// token when missing. It does not touch the certificate.
+func (s *Server) Link() (string, error) {
+	if err := s.prepareDir(); err != nil {
+		return "", err
+	}
+	t, err := loadOrCreateToken(filepath.Join(s.DataDir, "token"))
+	if err != nil {
+		return "", err
+	}
+	return "https://" + s.Addr + "/?k=" + t, nil
+}
+
+// NewToken replaces the token and returns the new link. A running hub
+// takes it from its next request (currentToken), so every browser must
+// open the new link: this is how the hub's key is revoked.
+func (s *Server) NewToken() (string, error) {
+	if err := s.prepareDir(); err != nil {
+		return "", err
+	}
+	t, err := newToken(filepath.Join(s.DataDir, "token"))
+	if err != nil {
+		return "", err
+	}
+	return "https://" + s.Addr + "/?k=" + t, nil
+}
+
+// currentToken is the token in DataDir/token, read on every request (it is
+// 44 bytes), so `riotbox hub new-token` takes effect on a running hub. A
+// token file that is missing or unusable matches nothing: the hub fails
+// closed, and logs each distinct reason once.
+func (s *Server) currentToken() string {
+	t, err := readToken(filepath.Join(s.DataDir, "token"))
+	s.tokenMu.Lock()
+	defer s.tokenMu.Unlock()
+	if err == nil {
+		s.tokenWarned = ""
+		return t
+	}
+	if err.Error() != s.tokenWarned {
+		_, _ = fmt.Fprintf(s.stderr(), "riotbox-core: hub: refusing every request: %v (riotbox hub new-token writes a new token)\n", err)
+		s.tokenWarned = err.Error()
+	}
+	return ""
 }
 
 // loadOrCreateCert reuses cert.pem/key.pem when they parse, name host, and

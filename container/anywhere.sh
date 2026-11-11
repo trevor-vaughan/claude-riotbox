@@ -24,11 +24,16 @@
 # what only the wrapper adds — headroom wrapping. Fixing it needs an upstream
 # setting for the opencode path; see docs/dev/decisions/yep-anywhere.md.
 #
-# The password: on first use, or with RIOTBOX_ANYWHERE_RESET_PASSWORD=1, a
-# random one is generated, handed to `yepanywhere --setup-auth` (which stores
-# only a bcrypt hash, in ~/.yep-anywhere/auth.json) and printed here once.
+# The password: the host launcher owns it (anywhere_password in
+# libexec/anywhere-lib.sh; `riotbox hub` signs the browser in with its copy)
+# and passes it in RIOTBOX_ANYWHERE_PASSWORD, with RIOTBOX_ANYWHERE_PASSWORD_NEW=1
+# when it has just been made. It goes to `yepanywhere --setup-auth` (which
+# stores only a bcrypt hash, in ~/.yep-anywhere/auth.json, and keeps existing
+# logins) only when new or when auth.json is missing or empty: the value is on
+# that command's argv, which any host user can read in /proc, so it is kept
+# off the argv of the ordinary launch. It is printed here only when new.
 # ~/.yep-anywhere is a state-dir mount (scripts/mount-projects.sh), so the
-# password and the self-signed certificate survive to the next session of the
+# hash and the self-signed certificate survive to the next session of the
 # same projects — the phone accepts the certificate once, not every launch.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -76,16 +81,12 @@ export LOG_LEVEL=warn LOG_FILE_LEVEL=info LOG_TO_FILE=true
 mkdir -p "${YEP_DATA}/logs"
 : >"${YEP_DATA}/logs/server.log"
 
-password=""
-if [[ ! -s "${YEP_DATA}/auth.json" ]] || [[ "${RIOTBOX_ANYWHERE_RESET_PASSWORD:-0}" = "1" ]]; then
-	# 24 alphanumerics, ~143 bits; easy to type on a phone. No "-": the
-	# --setup-auth parser reads a value starting with "-" as the next flag.
-	# A finite read, not `tr < /dev/urandom | head`: under pipefail the
-	# SIGPIPE that tr gets when head exits would end the script.
-	while ((${#password} < 24)); do
-		password+="$(head -c 256 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9')"
-	done
-	password="${password:0:24}"
+if [[ -z "${RIOTBOX_ANYWHERE_PASSWORD:-}" ]]; then
+	echo "ERROR: no Yep Anywhere password was passed in; start this with riotbox anywhere." >&2
+	exit 1
+fi
+password="${RIOTBOX_ANYWHERE_PASSWORD}"
+if [[ "${RIOTBOX_ANYWHERE_PASSWORD_NEW:-0}" = "1" ]] || [[ ! -s "${YEP_DATA}/auth.json" ]]; then
 	if ! "${YEP_BIN}" --setup-auth "${password}" >/dev/null 2>&1; then
 		echo "ERROR: yepanywhere --setup-auth failed; no password was set." >&2
 		exit 1
@@ -95,7 +96,7 @@ fi
 url="${RIOTBOX_ANYWHERE_URL:-https://localhost:${YEP_PORT}}"
 echo ""
 echo "Yep Anywhere: ${url}"
-if [[ -n "${password}" ]]; then
+if [[ "${RIOTBOX_ANYWHERE_PASSWORD_NEW:-0}" = "1" ]]; then
 	echo "Password:     ${password}"
 	echo "              (shown once; reset with RIOTBOX_ANYWHERE_RESET_PASSWORD=1 riotbox anywhere)"
 else
@@ -106,7 +107,7 @@ echo "Certificate:  self-signed; your browser asks you to accept it once."
 echo "Log:          ~/.yep-anywhere/logs/server.log in the container (only warnings and errors show here)"
 echo "Stop:         Ctrl-C here."
 echo ""
-unset password
+unset password RIOTBOX_ANYWHERE_PASSWORD RIOTBOX_ANYWHERE_PASSWORD_NEW
 
 # 0.0.0.0 inside the container only: the host publishes the port on the single
 # address RIOTBOX_ANYWHERE_BIND names (libexec/anywhere-lib.sh).

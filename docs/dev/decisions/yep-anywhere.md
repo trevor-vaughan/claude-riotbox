@@ -117,7 +117,10 @@ These are where we expect to fork or send fixes upstream.
 ## Follow-up: switching between sessions
 
 **Decision:** `riotbox hub`, one page on one host address that lists the
-running `riotbox anywhere` sessions and links to each. Several sessions share
+running `riotbox anywhere` sessions, plus one hub port per session that
+reverse-proxies it, so the sessions stay on loopback and the phone needs one
+firewall range (3399-3419 by default). For a session published on port N the
+hub listens on `<hub address>:N`. Several sessions share
 `RIOTBOX_ANYWHERE_BIND` by taking the next free port.
 
 - **One Yep Anywhere per session, not one for all.** Each project set has its
@@ -135,6 +138,64 @@ running `riotbox anywhere` sessions and links to each. Several sessions share
   host no other route in, so it would need every launch to reserve a port in
   advance. Even then Yep Anywhere could only watch a terminal Claude's
   conversation (it marks such sessions "external"), not take it over.
+
+- **Why a port per session.** The agent has passwordless sudo in the container
+  that serves Yep Anywhere, so a prompt-injected agent controls the JavaScript
+  its session sends. A port is an origin: per-port origins keep scripts,
+  storage and service workers of different sessions apart, as the sessions'
+  own ports did.
+- **Rejected: one origin with a session cookie** (the first design: one hub
+  port, `/_riotbox/open/<container>` selects a session). On a shared origin a
+  session's script could switch the browser to another session and drive it
+  with that session's login, or register a service worker over all of them.
+  Dropped after review.
+- **Rejected: Envoy in front.** Same routing problem, plus a sidecar whose
+  config must be regenerated as sessions come and go; the hub already
+  discovers sessions and terminates TLS.
+- **Rejected: path-prefix routing.** Yep Anywhere's client loads `/assets/...`
+  and `/api/...` from the root, and it would share one origin.
+- **Rejected: host-name routing.** Needs a DNS name per session on the phone's
+  network, a certificate per name, and relaxing the hub's IP-literal Host
+  check, its DNS-rebinding defence.
+- **Session ports are not muxed.** Each is its own `http.Server` with a
+  handler that proxies every path; `ServeMux` path cleaning (redirecting
+  `/a/../b`) does not apply, so paths reach the session as sent. Checks on
+  them: Host and token in `guard` (`internal/hub/server.go`), `Origin` and
+  `Sec-Fetch-Site` in `internal/hub/proxy.go`.
+- **Pinned upstream certificate.** The session's certificate sits in a
+  container-writable state dir, so the proxy opens it with `os.OpenRoot` and
+  `root.OpenFile` (`O_NONBLOCK`),
+  non-blocking, regular file only, 64 KiB, and dials only a byte-equal leaf.
+  See THREAT_MODEL.md.
+
+## Follow-up: the hub signs you in
+
+**Decision:** opening a session from the hub page logs the browser in; the
+per-session password stays, and the hub types it. The host launcher
+(`anywhere_password`, `libexec/anywhere-lib.sh`, called from
+`scripts/mount-projects.sh`) makes the password and keeps it in
+`<state dir>/anywhere-password` (0600), beside the state subdirectories and
+not in one, because only those are mounted. It reaches the container as
+`RIOTBOX_ANYWHERE_PASSWORD`, passed by name so it is not on the engine's argv;
+`container/anywhere.sh` applies it with `--setup-auth` only when new (or `auth.json` is missing) and
+prints it only when new. The hub (`signIn`, `internal/hub/proxy.go`) reads the
+file and logs in for top-level navigations only, over the pinned transport.
+A project set from before this change gets a new password on its next launch.
+
+- **Consequence.** The hub token is the one key to sessions reached through
+  the hub. Revoke it by deleting `~/.local/share/riotbox-hub/token` and
+  restarting the hub. The password still guards each loopback port against
+  the rest of the host.
+- **The agent can read the password** in its container. It already controls
+  its own Yep Anywhere, so this grants nothing.
+- **Rejected: showing the password on the list.** The same exposure as
+  signing in, with more taps.
+- **Rejected: `--auth-disable`.** Every session's loopback port would hand
+  agent control to anything on the host.
+- **Rejected: Yep Anywhere's desktop token.** `/api/auth/status` ignores
+  `X-Desktop-Token`, so the UI still shows its login page.
+- **Failure falls back.** If sign-in fails, the navigation is proxied
+  unchanged and Yep Anywhere's login page appears; the cause is logged.
 
 ## Trial run (2026-11-08)
 

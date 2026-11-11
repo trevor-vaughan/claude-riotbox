@@ -65,8 +65,10 @@ Session commands:
   audit [args...]              Audit an untrusted repo (read-only workspace)
   anywhere [projects...]       Serve Yep Anywhere, a phone-friendly web UI that
                                drives Claude Code and opencode (see README)
-  hub                          Serve one page listing every running
-                               riotbox anywhere session, with links
+  hub [install|status|logs|link|new-token|uninstall]
+                               Serve one page listing every running
+                               riotbox anywhere session, with links; install
+                               runs it as a systemd user service
   reown [flags...]             Rewrite the agent's commits to your git identity
 
 Privileged session modes (reduced isolation — see README):

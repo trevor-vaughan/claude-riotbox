@@ -1,15 +1,17 @@
 // Package hub is `riotbox hub`: one page on one LAN port that lists the
-// running `riotbox anywhere` sessions and links to each one's Yep Anywhere.
+// running `riotbox anywhere` sessions, and one hub port per session that
+// reverse-proxies it, so the sessions themselves can stay on loopback.
 //
 // It holds no session state of its own. The list comes from the engine:
 // libexec/anywhere-lib.sh labels every `riotbox anywhere` container with
 // LabelURL, and launch.sh labels every container with LabelSession, whose
-// state dir records the session's projects. Each session keeps its own
-// container, and each project set its own password and certificate; the hub
-// only links to them.
+// state dir records the session's projects and holds Yep Anywhere's
+// certificate, which the proxy pins. Each session keeps its own container,
+// and each project set its own password.
 package hub
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -45,7 +47,7 @@ type Session struct {
 	URL       string    // where its Yep Anywhere is published
 	Projects  []string  // the project dirs its state dir records; nil when unreadable
 	Started   time.Time // zero when the engine did not report it
-	LocalOnly bool      // published on loopback: unreachable from a phone
+	StateDir  string    // <state root>/<key>; empty when the key is not one path element or there is no state root
 }
 
 // Lister lists sessions. Engine is the container engine command (podman or
@@ -57,12 +59,24 @@ type Lister struct {
 	Output    func(name string, args ...string) ([]byte, error)
 }
 
+// engineTimeout bounds one engine call: the hub serves every session from
+// the list, so a hung engine must not hang it.
+var engineTimeout = 10 * time.Second
+
 func (l Lister) output(args ...string) ([]byte, error) {
 	if l.Output != nil {
 		return l.Output(l.Engine, args...)
 	}
-	out, err := exec.Command(l.Engine, args...).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), engineTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, l.Engine, args...)
+	// A child that keeps stdout open must not outlive the timeout for long.
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%s %s: no answer within %s", l.Engine, args[0], engineTimeout)
+		}
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
 			return nil, fmt.Errorf("%s %s: %w: %s", l.Engine, args[0], err, strings.TrimSpace(string(ee.Stderr)))
 		}
@@ -186,12 +200,11 @@ func (l Lister) session(c inspected) (Session, bool) {
 	if t, err := time.Parse(time.RFC3339Nano, c.State.StartedAt); err == nil {
 		s.Started = t
 	}
-	host := u.Hostname()
-	s.LocalOnly = host == "localhost" || strings.HasPrefix(host, "127.") || host == "::1"
 	// The key names a directory under the state root, so it must be one
 	// path element: a label is whatever the container was given.
 	if s.Key != "" && s.Key == filepath.Base(s.Key) && s.Key != "." && s.Key != ".." && l.StateRoot != "" {
-		if projects, err := records.Recorded(filepath.Join(l.StateRoot, s.Key)); err == nil {
+		s.StateDir = filepath.Join(l.StateRoot, s.Key)
+		if projects, err := records.Recorded(s.StateDir); err == nil {
 			s.Projects = projects
 		}
 	}

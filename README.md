@@ -287,11 +287,13 @@ The `pi` command also runs with `PI_TELEMETRY=0` and `PI_SKIP_VERSION_CHECK=1`. 
 
 `riotbox anywhere` starts [Yep Anywhere](https://github.com/kzahel/yepanywhere),
 a mobile-first web UI, inside the session container and publishes it on one
-address of this host. From a phone browser you can start, follow and steer
+address of this host (loopback by default; [`riotbox hub`](#several-sessions-riotbox-hub)
+serves it to the phone from there). From a phone browser you can start, follow and steer
 Claude Code and opencode sessions in a chat layout instead of a terminal.
 
 ```sh
-# ~/.config/riotbox/config — this host's LAN address and a port
+# ~/.config/riotbox/config — to open the session on the phone directly:
+# this host's LAN address and a port
 : "${RIOTBOX_ANYWHERE_BIND:=192.168.1.20:3400}"
 
 riotbox anywhere            # current directory
@@ -306,12 +308,18 @@ and errors, so the banner stays in view; the full log is
 `~/.yep-anywhere/logs/server.log` inside the container, emptied at each launch.
 
 - **Where it listens.** Only on the address in `RIOTBOX_ANYWHERE_BIND`, which
-  must be an IP literal. The default, `127.0.0.1:3400`, is this host only.
+  must be an IP literal. The default, `127.0.0.1:3400`, is this host only;
+  `riotbox hub` can still serve it to the phone.
   `0.0.0.0` listens on every network the host joins and prints a warning.
-- **The password** is generated on first use and shown once. The certificate
-  and the password hash persist with the session's state, per project set, so
-  the next launch reuses both. `RIOTBOX_ANYWHERE_RESET_PASSWORD=1 riotbox
-  anywhere` prints a new one. `riotbox session-reset` removes both.
+- **The password** is generated on first use, kept on the host with the
+  project set's state, and shown once in the session's terminal; type it when
+  you open the session directly. The certificate and the password persist per
+  project set, so the next launch reuses both. `RIOTBOX_ANYWHERE_RESET_PASSWORD=1
+  riotbox anywhere` makes a new one and prints it; it applies to sessions
+  started after it, and a session of that project set already running keeps the
+  old password until it is restarted. A project set from before
+  this change gets a new password on its next launch. `riotbox session-reset`
+  removes both.
 - **Claude runs through RiotBox.** Yep Anywhere starts Claude Code through the
   RiotBox wrapper, so the same flags, managed prompt, plugins and hooks apply
   as for `riotbox run`. opencode runs with its RiotBox config, but skips the
@@ -325,8 +333,10 @@ and errors, so the banner stays in view; the full log is
 
 Each `riotbox anywhere` is its own container, with its own server, password and
 certificate. Several can share one `RIOTBOX_ANYWHERE_BIND`: a launch whose port
-is taken uses the next free one and says so. To switch between them from the
-phone, run the hub once on the host:
+is taken uses the next free one and says so. To reach them from the phone with
+one firewall range and no session on the LAN, leave `RIOTBOX_ANYWHERE_BIND` at
+its loopback default and run the hub once on the host, bound to the host's LAN
+address:
 
 ```sh
 # ~/.config/riotbox/config
@@ -335,19 +345,162 @@ phone, run the hub once on the host:
 riotbox hub
 ```
 
-It prints a link once; open it on the phone and bookmark the page. The page
-lists every running `riotbox anywhere` session (its projects, address and age),
-refreshes every 15 seconds, and links to each one, which still asks for that
-session's password (sessions of the same project set share one). The link's token becomes a cookie on first visit;
-the token and the hub's certificate persist in `~/.local/share/riotbox-hub`, so
-the bookmark keeps working. Delete that directory to revoke the link. Stopping
-the hub does not affect the sessions.
+The hub lists every running `riotbox anywhere` session (its projects, address
+and age) at `RIOTBOX_HUB_BIND`, refreshing every 15 seconds. It also serves each
+session on its own hub port, the number the session publishes on loopback
+(3400, 3401, ...), and reverse-proxies it there, so the phone reaches the
+session at `https://192.168.1.20:3400/`. Allow the range 3399-3419 (the hub and
+the default session ports) in the host firewall; nothing else is exposed.
+
+It prints a link once; open it on the phone, once per browser, and bookmark the
+list. The link's token becomes a cookie, which also admits that browser to the
+session ports. Opening a session from the hub page signs you in: the hub types
+the session's password for you, so there is nothing to enter. The link is
+therefore the one key to every session reached through the hub; keep it as
+private as the passwords. The token and the hub's certificate persist in
+`~/.local/share/riotbox-hub`, so the bookmark keeps working. To revoke the
+link, run `riotbox hub new-token`: it replaces the token and prints the new
+link. A running hub uses the new token from its next request, with no restart,
+and every browser needs the new link. Stopping the hub does not affect the
+sessions, and the password still guards each session's loopback port against
+other users of the host.
+
+To keep the hub running without a terminal, install it as a systemd user
+service:
+
+```sh
+riotbox hub install     # write the unit, start it now and at every login
+riotbox hub status      # the link, then the service's status
+riotbox hub logs -f     # the journal (arguments go to journalctl)
+riotbox hub link        # print the link again
+riotbox hub uninstall   # stop and remove the service
+```
+
+`install` records in the unit the `PATH` it runs under (the service must find
+the container engine) and each of `XDG_DATA_HOME`, `XDG_CONFIG_HOME`,
+`RIOTBOX_SYSCONF_DIR`, `RIOTBOX_CONTEXT_LEDGER` and `RIOTBOX_HUB_BIND` that is
+set in that shell (they locate the token, the state and your config), then
+restarts the hub, so run it again after moving RiotBox or changing any of them.
+A value with a newline, `"`, `\` or `%` is refused, and so is a RiotBox
+directory with those or a `$` in its path; nothing is written. The service
+also reads `RIOTBOX_HUB_BIND` from your config at each start. `install` prints
+the link before it starts the service. The service restarts after a failure,
+10 seconds later. It runs only while you are logged in; to keep it running
+after you log out, run `loginctl enable-linger $USER` once. `uninstall` leaves
+the token and certificate in `~/.local/share/riotbox-hub`. `install`,
+`uninstall` and `status` need a user systemd instance (`systemctl --user`);
+`link` and `new-token` do not. Every subcommand but `logs` prints its usage for
+`-h` or `--help` and does nothing; any other extra argument is refused (exit 2).
+
+Signing in has limits. Any page open on the hub's host, another session's
+included, can make your browser open a session and be signed in to it; it
+cannot read or frame the result. Logging out of Yep Anywhere through the hub
+does not stick, because the next page load signs in again: to revoke a
+browser, rotate the hub token (a password reset keeps existing Yep logins).
+The hub reuses a login it made for a session for 10 seconds, and page loads
+that arrive together share one, so a signed-out browser adds at most one login
+entry per session per 10 seconds; a browser that keeps dropping its cookies
+still adds one per 10 seconds. When the session refuses the very login the
+browser sent (it logged out), the hub does not reuse its copy and logs in
+afresh. The password is in the
+launcher's environment while it launches and in the container's configuration
+(`podman inspect`), readable only by the user who can read the password file.
+
+The hub fronts a session only when it can listen on the session's port number.
+Bound to loopback or the wildcard it cannot, and a session published on the
+hub's own address or the wildcard holds its port itself; the list then links
+that session directly and says why. A port that two sessions publish is fronted
+for neither, and both cards link directly and say so.
+
+Limits:
+
+- A port goes to whichever session takes it next, as without the hub: a service
+  worker or storage a finished session left on `https://<hub address>:<port>`
+  meets the next session on that port.
+- The phone may ask to accept the hub's certificate once for the host or once
+  per port, depending on the browser.
+- Cookies are shared by every port of a host. A hostile session's script cannot
+  read another session's login (the hub forces `HttpOnly` on every cookie), but
+  it can shadow it (same name, longer `Path`, sent first) or flood the jar, and
+  so log the browser out of other sessions.
 
 The hub cannot attach to a `riotbox run` or `riotbox shell` that is already
 running: a container's ports are fixed when it starts. Start long-running work
 with `riotbox anywhere` and use the same UI from the desk browser and the phone.
 
-Whoever has the URL and the password can do anything the agent can. See
+### Reaching the hub over SSH (SOCKS5)
+
+An SSH connection to the host can carry the browser's traffic, so the phone
+needs no firewall opening. `ssh -D` starts a SOCKS5 proxy on the machine you
+run it on; the host sees each proxied connection as coming from itself.
+
+```sh
+# On the phone or laptop: a SOCKS5 proxy on local port 1080, no shell
+ssh -N -D 1080 user@192.168.1.20
+```
+
+- **Hub address.** Bind the hub to the host's LAN address, as above
+  (`RIOTBOX_HUB_BIND=192.168.1.20:3399`), but do not open 3399-3419 in the
+  firewall: proxied connections originate on the host, so no firewall rule
+  applies to them and nothing else on the LAN can reach the hub.
+- **Browser.** Point the browser's SOCKS5 proxy at `127.0.0.1:1080`, for the
+  host's address only (`192.168.1.20`), so other sites do not go through the
+  tunnel. Open the hub link as printed, and its session ports at the same
+  address (`https://192.168.1.20:3400/`).
+- **IP literals only.** Use the IP address in every URL. The hub refuses a
+  request whose Host header is not its listen address (or loopback), and `RIOTBOX_HUB_BIND` takes an
+  IP literal.
+- **Do not bind the hub to loopback for this.** Browsers do not send requests
+  for `localhost` and `127.0.0.1` through a proxy unless told to. Firefox:
+  set `network.proxy.allow_hijacking_localhost` to `true` in `about:config`.
+  Chromium: start it with `--proxy-bypass-list="<-loopback>"`. The LAN address
+  needs neither.
+
+On Android, [ConnectBot](https://github.com/connectbot/connectbot) holds the
+tunnel and Firefox with the [FoxyProxy](https://github.com/foxyproxy/browser-extension)
+add-on uses it:
+
+1. In ConnectBot, add a host for the machine and edit its port forwards
+   ("Port forwards"). Create a port forward of type "Dynamic (SOCKS)" with
+   source port 1080. Connect to the host and leave the connection open.
+2. In FoxyProxy, add a proxy of type SOCKS5 with hostname `127.0.0.1` and
+   port 1080. Add a URL pattern to it for the host's address only:
+   `https://192.168.1.20:*`. Then open FoxyProxy's toolbar popup and choose
+   "Proxy by Patterns", so only URLs that match a pattern use the proxy.
+3. Open the hub link in Firefox.
+
+The tunnel works only while the SSH connection is up; reconnect it before
+opening the bookmark.
+
+To give the phone a key that can do nothing but this tunnel, add it to
+`~/.ssh/authorized_keys` on the host with options (one line):
+
+```text
+restrict,port-forwarding,permitopen="192.168.1.20:*",command="/usr/bin/sleep infinity" ssh-ed25519 AAAA... phone
+```
+
+- `restrict` turns off everything at once: pty allocation, agent and X11
+  forwarding, port forwarding and `~/.ssh/rc`.
+- `port-forwarding` turns port forwarding back on, and nothing else.
+- `permitopen="192.168.1.20:*"` limits where forwarded connections may go.
+  `sshd(8)` documents it for `-L`; a SOCKS (`-D`) connection reaches the server
+  as the same kind of request (`direct-tcpip`), which `sshd` checks against
+  `permitopen`, so the phone's proxy can reach this address and nothing else
+  (the OpenSSH source, not the man page, says so). The hub's list and the
+  sessions' ports are all on that address, but `:*` also allows its other
+  ports. For the tighter form, give one `permitopen=` per port, for example
+  `permitopen="192.168.1.20:3399",permitopen="192.168.1.20:3400"`, and add a
+  port when a session needs it. `permitopen` matches literal addresses, with no
+  wildcards or name lookup.
+- `command="/usr/bin/sleep infinity"` stops the key from getting a shell: the
+  forced command runs instead of any command the client asks for. It also keeps
+  the session open for ConnectBot, which requests a shell by default. ConnectBot
+  can also skip the shell: turn off "Start shell session" ("Disable this
+  preference to only use port forwards") in the host's settings. Keep
+  `command=` either way.
+
+Whoever has the URL and the password (or, through the hub, the hub link) can do
+anything the agent can. See
 [THREAT_MODEL § Yep Anywhere web UI](THREAT_MODEL.md#yep-anywhere-web-ui-riotbox-anywhere-opt-in).
 
 ## Commands
@@ -382,7 +535,7 @@ Whoever has the URL and the password can do anything the agent can. See
 | `riotbox backup-prune [dir...]`       | Free backup space; one selector: `--keep <N>`, `--older-than <N>d` (then `git gc`), or `--orphans` (whole stores); `--all` for every store  |
 | `riotbox audit "<task>" [dir]`        | Read-only session for inspecting untrusted code (workspace mounted RO)                                                                      |
 | `riotbox anywhere [dir...]`           | Serve [Yep Anywhere](#using-riotbox-from-your-phone-riotbox-anywhere), a phone-friendly web UI that drives Claude Code and opencode in the session |
-| `riotbox hub`                         | Serve one page, on `RIOTBOX_HUB_BIND`, linking to every running `riotbox anywhere` session ([see](#several-sessions-riotbox-hub)) |
+| `riotbox hub`                         | Serve one page, on `RIOTBOX_HUB_BIND`, that lists every running `riotbox anywhere` session and proxies the one you open, on a port per session ([see](#several-sessions-riotbox-hub)) |
 | `riotbox install-hooks [global]`      | Install the pre-push hook that blocks container-identity commits ([details](#reclaiming-authorship))                                        |
 | `riotbox agents`                      | List registered agents (riotbox name + binary)                                                                                              |
 | `riotbox tokscale [args...]`          | Unified [tokscale](https://github.com/IvGolovach/tokscale) usage across your native agent home + every riotbox session, offline (no telemetry); args pass through to tokscale                     |

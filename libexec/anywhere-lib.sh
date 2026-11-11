@@ -7,6 +7,8 @@
 #   anywhere_gate  — refuse, before any side effect, the settings this mode
 #                    cannot honour, validate RIOTBOX_ANYWHERE_BIND, and set
 #                    ANYWHERE_FLAGS (an array) for the engine run command.
+#   anywhere_password — read or create the password of a project set's Yep
+#                    Anywhere and export it for the engine run command.
 #
 # Yep Anywhere runs INSIDE the agent container (container/anywhere.sh): it
 # starts `claude` and `opencode` itself, so it has to live where they do. The
@@ -26,6 +28,14 @@
 # --internal one, and a published port on it does not reach the host. Serving
 # it needs a sidecar on a second network, which is planned but not built. Until
 # then, failing loudly beats starting a server nobody can reach.
+#
+# Why the host keeps the password: `riotbox hub` signs a browser in to the
+# session it opens by reading <state dir>/anywhere-password (internal/hub), so
+# the password is generated here, not in the container. The file sits beside
+# the state subdirectories and not in one of them, because only those are
+# mounted: no container mounts the file. The container gets the value in its
+# environment, where its own agent can read it (harmless: that agent already
+# controls its own Yep Anywhere); container/anywhere.sh applies it.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # The port container/anywhere.sh binds inside the container. Fixed: the host
@@ -149,6 +159,59 @@ anywhere_pick_port() {
 	return 1
 }
 
+# anywhere_password <state dir> — keep the Yep Anywhere password of the project
+# set whose state directory this is in <state dir>/anywhere-password (mode
+# 0600, written through a temp file in the same directory and renamed). A new
+# one, 24 alphanumerics, is made when the file is missing or empty, or
+# RIOTBOX_ANYWHERE_RESET_PASSWORD=1. Exports RIOTBOX_ANYWHERE_PASSWORD and
+# RIOTBOX_ANYWHERE_PASSWORD_NEW (1 when just made, else 0); the launch passes
+# both to the engine by name only, so the value never reaches its argv. A file
+# that holds anything but 6 or more alphanumerics (--setup-auth would read a
+# leading "-" as the next flag) is refused, untouched, with how to recover;
+# nothing is exported. Returns 1, after saying why, on any failure.
+anywhere_password() {
+	local dir="$1" file="$1/anywhere-password" password="" tmp
+	if [[ -L "${file}" ]] || { [[ -e "${file}" ]] && [[ ! -f "${file}" ]]; }; then
+		printf 'ERROR: %s is not a regular file.\n' "${file}" >&2
+		echo "  Remove it and launch again." >&2
+		return 1
+	fi
+	if [[ "${RIOTBOX_ANYWHERE_RESET_PASSWORD:-0}" != "1" ]] && [[ -f "${file}" ]]; then
+		# read fails on an empty file, and on a last line without a newline
+		# (which it still returns).
+		IFS= read -r password <"${file}" || [[ -n "${password}" ]] || password=""
+	fi
+	if [[ -n "${password}" ]]; then
+		if [[ ! "${password}" =~ ^[A-Za-z0-9]{6,}$ ]]; then
+			printf 'ERROR: %s does not hold a Yep Anywhere password (6 or more letters and digits).\n' "${file}" >&2
+			echo "  Delete it, or launch once with RIOTBOX_ANYWHERE_RESET_PASSWORD=1, to get a new one." >&2
+			return 1
+		fi
+		RIOTBOX_ANYWHERE_PASSWORD_NEW=0
+	else
+		# 24 alphanumerics, ~143 bits; easy to type on a phone. No "-": the
+		# --setup-auth parser reads a value starting with "-" as the next flag.
+		# A finite read, not `tr < /dev/urandom | head`: under pipefail the
+		# SIGPIPE that tr gets when head exits would end the script.
+		while ((${#password} < 24)); do
+			# shellcheck disable=SC2312 # a failed read adds nothing, and the loop reads again
+			password+="$(head -c 256 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9')"
+		done
+		password="${password:0:24}"
+		if ! tmp="$(umask 077 && mktemp "${dir}/.anywhere-password.XXXXXX")"; then
+			printf 'ERROR: cannot create a file in %s for the Yep Anywhere password.\n' "${dir}" >&2
+			return 1
+		fi
+		if ! { printf '%s\n' "${password}" >"${tmp}" && chmod 600 "${tmp}" && mv -f "${tmp}" "${file}"; }; then
+			rm -f "${tmp}"
+			printf 'ERROR: cannot write %s.\n' "${file}" >&2
+			return 1
+		fi
+		RIOTBOX_ANYWHERE_PASSWORD_NEW=1
+	fi
+	export RIOTBOX_ANYWHERE_PASSWORD="${password}" RIOTBOX_ANYWHERE_PASSWORD_NEW
+}
+
 # anywhere_gate — see the header. Sets ANYWHERE_FLAGS and ANYWHERE_URL.
 anywhere_gate() {
 	if [[ "${RIOTBOX_EGRESS:-}" = "1" ]]; then
@@ -186,7 +249,8 @@ EOF
 		;;
 	127.* | "[::1]")
 		echo "NOTE: Yep Anywhere is bound to ${ANYWHERE_ADDR}, which only this host can reach." >&2
-		echo "      For your phone, set the host's LAN address in ~/.config/riotbox/config:" >&2
+		echo "      For your phone, run \`riotbox hub\` with RIOTBOX_HUB_BIND set to this host's LAN address: it serves each session on its own port." >&2
+		echo "      Or publish this session itself on the host's LAN address in ~/.config/riotbox/config:" >&2
 		echo "        : \"\${RIOTBOX_ANYWHERE_BIND:=192.168.1.20:${ANYWHERE_PORT}}\"" >&2
 		;;
 	*) ;; # a specific LAN address: what the user is told to set
@@ -213,7 +277,4 @@ EOF
 		ANYWHERE_FLAGS+=(-e "RIOTBOX_ANYWHERE_HOST=${host%]}")
 		;;
 	esac
-	if [[ "${RIOTBOX_ANYWHERE_RESET_PASSWORD:-0}" = "1" ]]; then
-		ANYWHERE_FLAGS+=(-e "RIOTBOX_ANYWHERE_RESET_PASSWORD=1")
-	fi
 }
