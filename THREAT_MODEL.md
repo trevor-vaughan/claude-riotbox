@@ -1204,7 +1204,8 @@ Design and the upstream gaps: `docs/dev/decisions/yep-anywhere.md`.
   its own data directory. It is not a shell on the host.
 - **Exposure is chosen, not guessed.** The launch accepts only an IP literal
   (never a name it would resolve), defaults to loopback, and warns on
-  `0.0.0.0`/`[::]`. Reaching it from a phone means naming the LAN address in
+  `0.0.0.0`/`[::]` in any spelling (`[0::]`, `000.0.0.0`; IPv4-mapped IPv6
+  is refused). Reaching it from a phone means naming the LAN address in
   the user config. Refused with `RIOTBOX_EGRESS=1` (a port published from the
   internal network would not reach the host; a sidecar is planned) and with
   `RIOTBOX_NETWORK=none`. Yep Anywhere's own DNS-rebinding check (Host
@@ -1212,9 +1213,12 @@ Design and the upstream gaps: `docs/dev/decisions/yep-anywhere.md`.
   adds only the bind address to it (`ALLOWED_HOSTS`), never `*`.
 - **Authentication and transport.** Yep Anywhere's own password login
   (bcrypt hash in `~/.yep-anywhere/auth.json`) and its self-signed HTTPS. The
-  password is 18 random bytes, generated on first use, printed once to the
-  launching terminal (the container runs with `--log-driver=none`) and never
-  written in clear. The certificate is not issued by anything the phone
+  password is 24 random alphanumerics (~143 bits), generated on first use,
+  printed once to the launching terminal (the container runs with
+  `--log-driver=none`) and never written in clear. It is passed to
+  `yepanywhere --setup-auth` as an argument, the only way 0.11.0 accepts it,
+  so for the second or so that command runs, a local user who can list the
+  host's processes (no `hidepid`) can read it from `/proc/<pid>/cmdline`. The certificate is not issued by anything the phone
   trusts, so the first connection is trust-on-first-use; a network attacker
   present at that moment can intercept it. The data directory is a state-dir
   mount, so the certificate and the hash persist per project set.
@@ -1255,11 +1259,15 @@ A host process (`riotbox-core hub`), not a container, listening on
   `$XDG_DATA_HOME/riotbox-hub` (0700, files 0600); deleting it revokes every
   bookmark. Anyone who can read that directory, or the terminal it printed
   to, can see the list.
-- **What a container can do to it.** An agent can set labels only on
-  containers it starts, and only with an engine socket (socket mode). The hub
-  links only to `https://host:port` URLs without path, query or credentials,
-  and treats the session label as one path element under the state root, so a
-  crafted label cannot point it at another file. The page is rendered with
+- **What a container can do to it.** Labels are claims: an agent can set them
+  on containers it starts with an engine socket (socket mode, already
+  host-equivalent, CT-018), and an image's labels are copied onto every
+  container run from it. So the hub lists a container only when its URL label
+  is `https://<IP literal>:<port>`, without path, query or credentials, and the
+  container really publishes Yep Anywhere's port (3400/tcp) on that address
+  and port. A labelled image therefore cannot put a link to another host on
+  the page. The session label is treated as one path element under the state
+  root, so a crafted label cannot point it at another file. The page is rendered with
   `html/template` under a `default-src 'none'` content security policy.
 
 ## Egress proxy (opt-in feature)

@@ -11,9 +11,11 @@ package hub
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -26,6 +28,14 @@ const (
 	LabelURL     = "riotbox.anywhere.url"
 	LabelSession = "riotbox.session"
 )
+
+// containerPort is the port container/anywhere.sh serves on inside the
+// container (ANYWHERE_CONTAINER_PORT in libexec/anywhere-lib.sh).
+const containerPort = "3400/tcp"
+
+// gone matches the engine's message for a container that exited after `ps`
+// listed it (the same pattern as internal/engine).
+var gone = regexp.MustCompile(`(?i)no such (object|container)`)
 
 // Session is one running `riotbox anywhere` container.
 type Session struct {
@@ -67,6 +77,12 @@ type inspected struct {
 	Config struct {
 		Labels map[string]string
 	}
+	HostConfig struct {
+		PortBindings map[string][]struct {
+			HostIP   string `json:"HostIp"`
+			HostPort string
+		}
+	}
 	State struct {
 		Running   bool
 		StartedAt string
@@ -74,8 +90,9 @@ type inspected struct {
 }
 
 // List returns the running sessions, oldest first. A container whose URL
-// label is not an https URL is left out: the page must link only to what
-// RiotBox itself published.
+// label is not an https URL, or is not where the container publishes Yep
+// Anywhere's port, is left out: the page must link only to what RiotBox
+// itself published, and an image can carry the label too.
 func (l Lister) List() ([]Session, error) {
 	ids, err := l.output("ps", "--filter", "label="+LabelURL, "--format", "{{.ID}}")
 	if err != nil {
@@ -85,15 +102,21 @@ func (l Lister) List() ([]Session, error) {
 	if len(fields) == 0 {
 		return nil, nil
 	}
-	out, err := l.output(append([]string{"container", "inspect"}, fields...)...)
+	containers, err := l.inspect(fields)
 	if err != nil {
 		// A container that exited between ps and inspect fails the whole
-		// inspect; the next refresh will not see it.
-		return nil, err
-	}
-	var containers []inspected
-	if err := json.Unmarshal(out, &containers); err != nil {
-		return nil, fmt.Errorf("reading %s container inspect: %w", l.Engine, err)
+		// inspect, so ask for each one and skip those that are gone.
+		containers = nil
+		for _, id := range fields {
+			one, err := l.inspect([]string{id})
+			if err != nil {
+				if gone.MatchString(err.Error()) {
+					continue
+				}
+				return nil, err
+			}
+			containers = append(containers, one...)
+		}
 	}
 	var sessions []Session
 	for _, c := range containers {
@@ -114,10 +137,44 @@ func (l Lister) List() ([]Session, error) {
 	return sessions, nil
 }
 
+func (l Lister) inspect(ids []string) ([]inspected, error) {
+	out, err := l.output(append([]string{"container", "inspect"}, ids...)...)
+	if err != nil {
+		return nil, err
+	}
+	var containers []inspected
+	if err := json.Unmarshal(out, &containers); err != nil {
+		return nil, fmt.Errorf("reading %s container inspect: %w", l.Engine, err)
+	}
+	return containers, nil
+}
+
+// publishes reports whether c publishes containerPort on exactly u's host
+// address and port. u's host must be an IP literal, as the launch writes it.
+func publishes(c inspected, u *url.URL) bool {
+	want := net.ParseIP(u.Hostname())
+	if want == nil || u.Port() == "" {
+		return false
+	}
+	for _, b := range c.HostConfig.PortBindings[containerPort] {
+		got := net.ParseIP(b.HostIP)
+		if b.HostIP == "" {
+			got = net.IPv4zero
+		}
+		if b.HostPort == u.Port() && got != nil && (got.Equal(want) || got.IsUnspecified() && want.IsUnspecified()) {
+			return true
+		}
+	}
+	return false
+}
+
 func (l Lister) session(c inspected) (Session, bool) {
 	raw := c.Config.Labels[LabelURL]
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return Session{}, false
+	}
+	if !publishes(c, u) {
 		return Session{}, false
 	}
 	s := Session{

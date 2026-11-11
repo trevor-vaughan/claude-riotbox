@@ -17,10 +17,14 @@ import (
 )
 
 // fakeEngine answers ps with ids and container inspect with inspect, and
-// records every call.
+// records every call. When gone is set, an inspect naming any of those ids
+// fails the way the engine does for a container that has exited, and an
+// inspect of one other id answers with byID[id].
 type fakeEngine struct {
 	ids, inspect string
 	psErr        error
+	gone         map[string]bool
+	byID         map[string]string
 	calls        [][]string
 }
 
@@ -30,9 +34,26 @@ func (f *fakeEngine) output(_ string, args ...string) ([]byte, error) {
 	case "ps":
 		return []byte(f.ids), f.psErr
 	case "container":
+		ids := args[2:]
+		for _, id := range ids {
+			if f.gone[id] {
+				return nil, errors.New("podman container inspect: exit status 125: Error: no such container " + id)
+			}
+		}
+		if len(ids) == 1 && f.byID != nil {
+			return []byte(f.byID[ids[0]]), nil
+		}
 		return []byte(f.inspect), nil
 	}
 	return nil, errors.New("unexpected call")
+}
+
+// running is one container inspect entry for a running container with the
+// given URL label and a 3400/tcp binding on hostIP:hostPort.
+func running(name, url, hostIP, hostPort string) string {
+	return `{"Name":"` + name + `","Config":{"Labels":{"riotbox.anywhere.url":"` + url + `"}},` +
+		`"HostConfig":{"PortBindings":{"3400/tcp":[{"HostIp":"` + hostIP + `","HostPort":"` + hostPort + `"}]}},` +
+		`"State":{"Running":true}}`
 }
 
 func writeRecord(root, key string, projects ...string) {
@@ -42,8 +63,8 @@ func writeRecord(root, key string, projects ...string) {
 }
 
 const inspectTwo = `[
- {"Name":"/riotbox-b","Config":{"Labels":{"riotbox.anywhere.url":"https://192.168.1.20:3401","riotbox.session":"key-b"}},"State":{"Running":true,"StartedAt":"2026-11-08T12:00:00.5Z"}},
- {"Name":"riotbox-a","Config":{"Labels":{"riotbox.anywhere.url":"https://127.0.0.1:3400","riotbox.session":"key-a"}},"State":{"Running":true,"StartedAt":"2026-11-08T10:00:00Z"}}
+ {"Name":"/riotbox-b","Config":{"Labels":{"riotbox.anywhere.url":"https://192.168.1.20:3401","riotbox.session":"key-b"}},"HostConfig":{"PortBindings":{"3400/tcp":[{"HostIp":"192.168.1.20","HostPort":"3401"}]}},"State":{"Running":true,"StartedAt":"2026-11-08T12:00:00.5Z"}},
+ {"Name":"riotbox-a","Config":{"Labels":{"riotbox.anywhere.url":"https://127.0.0.1:3400","riotbox.session":"key-a"}},"HostConfig":{"PortBindings":{"3400/tcp":[{"HostIp":"127.0.0.1","HostPort":"3400"}]}},"State":{"Running":true,"StartedAt":"2026-11-08T10:00:00Z"}}
 ]`
 
 var _ = Describe("Lister", func() {
@@ -99,6 +120,51 @@ var _ = Describe("Lister", func() {
 		Entry("empty", ""),
 	)
 
+	// The label is only a claim: an image can carry it (the engine copies
+	// image labels onto every container), so a session is listed only when
+	// the container really publishes Yep Anywhere's port at that URL.
+	DescribeTable("lists a container only when its URL is where it publishes Yep Anywhere's port",
+		func(entry string, listed bool) {
+			f := &fakeEngine{ids: "id1", inspect: "[" + entry + "]"}
+			sessions, err := hub.Lister{Engine: "podman", Output: f.output}.List()
+			Expect(err).NotTo(HaveOccurred())
+			if listed {
+				Expect(sessions).To(HaveLen(1))
+			} else {
+				Expect(sessions).To(BeEmpty())
+			}
+		},
+		Entry("the matching LAN binding", running("x", "https://192.168.1.20:3400", "192.168.1.20", "3400"), true),
+		Entry("an IPv6 binding, which the engine prints unbracketed", running("x", "https://[fd00::20]:3400", "fd00::20", "3400"), true),
+		Entry("a wildcard binding", running("x", "https://0.0.0.0:3400", "0.0.0.0", "3400"), true),
+		Entry("no port binding at all",
+			`{"Name":"x","Config":{"Labels":{"riotbox.anywhere.url":"https://192.168.1.20:3400"}},"State":{"Running":true}}`, false),
+		Entry("a host name, which no binding can match", running("x", "https://phish.example:3400", "0.0.0.0", "3400"), false),
+		Entry("another host address", running("x", "https://192.168.1.99:3400", "192.168.1.20", "3400"), false),
+		Entry("another host port", running("x", "https://192.168.1.20:3400", "192.168.1.20", "3401"), false),
+		Entry("no port in the URL", running("x", "https://192.168.1.20", "192.168.1.20", "443"), false),
+		Entry("the URL published from another container port",
+			`{"Name":"x","Config":{"Labels":{"riotbox.anywhere.url":"https://192.168.1.20:3400"}},"HostConfig":{"PortBindings":{"8080/tcp":[{"HostIp":"192.168.1.20","HostPort":"3400"}]}},"State":{"Running":true}}`, false),
+	)
+
+	It("skips a container that exits between ps and inspect, and lists the rest", func() {
+		f := &fakeEngine{
+			ids:  "id1\nid2\n",
+			gone: map[string]bool{"id1": true},
+			byID: map[string]string{"id2": "[" + running("riotbox-b", "https://192.168.1.20:3400", "192.168.1.20", "3400") + "]"},
+		}
+		sessions, err := hub.Lister{Engine: "podman", Output: f.output}.List()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sessions).To(HaveLen(1))
+		Expect(sessions[0].Container).To(Equal("riotbox-b"))
+	})
+
+	It("passes on an inspect failure that is not a container having gone", func() {
+		f := &fakeEngine{ids: "id1", inspect: "not json"}
+		_, err := hub.Lister{Engine: "podman", Output: f.output}.List()
+		Expect(err).To(HaveOccurred())
+	})
+
 	It("skips stopped containers", func() {
 		f := &fakeEngine{ids: "id1", inspect: `[{"Name":"x","Config":{"Labels":{"riotbox.anywhere.url":"https://10.0.0.2:3400"}},"State":{"Running":false}}]`}
 		sessions, err := hub.Lister{Engine: "podman", Output: f.output}.List()
@@ -111,7 +177,7 @@ var _ = Describe("Lister", func() {
 		writeRecord(outside, "secret", "/etc")
 		rel, err := filepath.Rel(root, filepath.Join(outside, "secret"))
 		Expect(err).NotTo(HaveOccurred())
-		f := &fakeEngine{ids: "id1", inspect: `[{"Name":"x","Config":{"Labels":{"riotbox.anywhere.url":"https://10.0.0.2:3400","riotbox.session":"` + rel + `"}},"State":{"Running":true}}]`}
+		f := &fakeEngine{ids: "id1", inspect: `[{"Name":"x","Config":{"Labels":{"riotbox.anywhere.url":"https://10.0.0.2:3400","riotbox.session":"` + rel + `"}},"HostConfig":{"PortBindings":{"3400/tcp":[{"HostIp":"10.0.0.2","HostPort":"3400"}]}},"State":{"Running":true}}]`}
 		sessions, err := hub.Lister{Engine: "podman", StateRoot: root, Output: f.output}.List()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(sessions).To(HaveLen(1))
