@@ -1,28 +1,28 @@
+THREAT_MODEL.md
+  s_28f68e3f1ee940::t_5dd4b0af5c7af3 1299-1301
 README.md
   s_28f68e3f1ee940::t_5dd4b0af5c7af3 356-358
-cmd/riotbox-core/hub.go
-  s_28f68e3f1ee940::t_a9371c6b85b375 7-10,38,60-61,68-86
-go.mod
-  s_28f68e3f1ee940::t_3013a6d8b7df46 6,9
-  s_28f68e3f1ee940::t_63b1e4fa74d6bb 508
 go.sum
   s_28f68e3f1ee940::t_630fe1537bdf21 1194-1195,1964-1965
 docs/dev/riotbox-core.md
   s_28f68e3f1ee940::t_5dd4b0af5c7af3 206-207
-libexec/hub.sh
-  s_28f68e3f1ee940::t_5dd4b0af5c7af3 23-24
 cmd/riotbox-core/hub_test.go
-  s_28f68e3f1ee940::t_4706ef530cd7ef 122-129,133-162
   s_6cb9d355dfcb2c::t_df7b43accd4aef 101,104-107
+  s_28f68e3f1ee940::t_4706ef530cd7ef 122-129,133-162
   s_28f68e3f1ee940::t_5a0d6414ee78d6 90-99
   s_6cb9d355dfcb2c::t_bc282a756d81de 100,102-103,108-112,130-132
-THREAT_MODEL.md
-  s_28f68e3f1ee940::t_5dd4b0af5c7af3 1299-1301
+libexec/hub.sh
+  s_28f68e3f1ee940::t_5dd4b0af5c7af3 23-24
+go.mod
+  s_28f68e3f1ee940::t_63b1e4fa74d6bb 508
+  s_28f68e3f1ee940::t_3013a6d8b7df46 6,9
+cmd/riotbox-core/hub.go
+  s_28f68e3f1ee940::t_a9371c6b85b375 7-10,38,60-61,68-86
 ---
 {
   "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "8fb6359c1c20f4545453dbcc2f9371290a391641",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4662262de28bff7e5f76cfd610183a97dd086fa8",
   "prompts": {},
   "sessions": {
     "s_28f68e3f1ee940": {
