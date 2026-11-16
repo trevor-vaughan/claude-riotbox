@@ -353,7 +353,9 @@ session at `https://192.168.1.20:3400/`. Allow the range 3399-3419 (the hub and
 the default session ports) in the host firewall; nothing else is exposed.
 
 It prints a link once; open it on the phone, once per browser, and bookmark the
-list. The link's token becomes a cookie, which also admits that browser to the
+list. In a terminal, `riotbox hub`, `riotbox hub link` and `riotbox hub
+new-token` also draw the link as a QR code (on stderr) for the phone's camera;
+piped output and the service's journal get the link alone. The link's token becomes a cookie, which also admits that browser to the
 session ports. Opening a session from the hub page signs you in: the hub types
 the session's password for you, so there is nothing to enter. The link is
 therefore the one key to every session reached through the hub; keep it as

@@ -20,7 +20,8 @@ Usage: riotbox hub [SUBCOMMAND]
 
 Serve one page that lists every running `riotbox anywhere` session, and one
 port per session (the number the session publishes on loopback) that proxies
-it. Prints the page's link once; open it on your phone and keep the bookmark.
+it. Prints the page's link once, drawn under it as a QR code on a terminal;
+open it on your phone and keep the bookmark.
 Ctrl-C stops it. Sessions are unaffected.
 
 To front sessions on loopback, bind the hub to the host's LAN address and
