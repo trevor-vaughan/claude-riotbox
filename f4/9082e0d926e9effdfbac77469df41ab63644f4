@@ -1,47 +1,24 @@
-libexec/egress.sh
-  s_76635f6acca604::t_aa0a3f4a1b946c 152,154
-container/opencode/smoke.sh
-  s_76635f6acca604::t_e84652f4ddf039 162
-scripts/repair-ai-notes.sh
-  s_76635f6acca604::t_e84652f4ddf039 226,236
----
-{
-  "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "39cb3b352ec6bdd0e2959721a69b95e1d823924b",
-  "prompts": {},
-  "sessions": {
-    "s_76635f6acca604": {
-      "agent_id": {
-        "tool": "claude",
-        "id": "0af8c2fe-be28-4c46-9713-ec4ca896d9ac",
-        "model": "claude-sonnet-5-5"
-      },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
-    }
-  }
-}
-
-go.mod
-  s_76635f6acca604::t_2c373f84fa4303 6
 cmd/riotbox-core/hub.go
-  s_76635f6acca604::t_2c373f84fa4303 9
+  h_4db53f42b9be42 9
+container/opencode/smoke.sh
+  h_4db53f42b9be42 162
+go.mod
+  h_4db53f42b9be42 6
 go.sum
-  s_76635f6acca604::t_67fa859d2c196d 1194-1195
+  h_4db53f42b9be42 1194-1195
+libexec/egress.sh
+  h_4db53f42b9be42 152,154
+scripts/repair-ai-notes.sh
+  h_4db53f42b9be42 226,236
 ---
 {
   "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "6b8acbfa58845d9175e1ca9f222b07820caa0d55",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f49082e0d926e9effdfbac77469df41ab63644f4",
   "prompts": {},
-  "sessions": {
-    "s_76635f6acca604": {
-      "agent_id": {
-        "tool": "claude",
-        "id": "0af8c2fe-be28-4c46-9713-ec4ca896d9ac",
-        "model": "claude-sonnet-5-5"
-      },
-      "human_author": "LLM (riotbox) <llm@riotbox>"
+  "humans": {
+    "h_4db53f42b9be42": {
+      "author": "Trevor Vaughan <peiriannydd@gmail.com>"
     }
   }
 }
