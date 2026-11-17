@@ -1,0 +1,21 @@
+tests/host-config.venom.yml
+  s_102237605dd52b::t_99d1d5fb9f1c20 1-91
+scripts/lib/host-config.sh
+  s_102237605dd52b::t_d45b6ed2304146 1-69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "b522cb988236c0a6882da263d0db85a79a4e4924",
+  "prompts": {},
+  "sessions": {
+    "s_102237605dd52b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8c9ff217-5395-49ed-8ccf-fdd97368c932",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
