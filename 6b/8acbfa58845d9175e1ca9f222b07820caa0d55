@@ -1,0 +1,23 @@
+go.mod
+  s_76635f6acca604::t_2c373f84fa4303 6
+cmd/riotbox-core/hub.go
+  s_76635f6acca604::t_2c373f84fa4303 9
+go.sum
+  s_76635f6acca604::t_67fa859d2c196d 1194-1195
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "6b8acbfa58845d9175e1ca9f222b07820caa0d55",
+  "prompts": {},
+  "sessions": {
+    "s_76635f6acca604": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0af8c2fe-be28-4c46-9713-ec4ca896d9ac",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
