@@ -1296,7 +1296,9 @@ A host process (`riotbox-core hub`), not a container, listening on
   so it needs no restart. A token file that is missing or unreadable matches
   nothing, so the hub refuses every request (it logs why, once) rather than
   admitting any. Anyone who can read that file, or the terminal it printed to,
-  can see the list and open every session.
+  can see the list and open every session. On a terminal the link is also
+  drawn as a QR code, which a camera can read from across a room or from a
+  screen share; treat the screen as you would the link.
 - **As a user service.** `riotbox hub install` writes
   `~/.config/systemd/user/riotbox-hub.service`, which runs
   `riotbox hub` with the `PATH` of the shell that installed it, so a

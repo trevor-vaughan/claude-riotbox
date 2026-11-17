@@ -3,8 +3,10 @@ module github.com/trevor-vaughan/claude-riotbox
 go 1.26.4
 
 require (
+	github.com/mdp/qrterminal/v4 v4.0.0
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
+	golang.org/x/term v0.47.0
 )
 
 require (
@@ -484,7 +486,6 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.52.0 // indirect
@@ -504,6 +505,7 @@ require (
 	lukechampine.com/blake3 v1.4.1 // indirect
 	mvdan.cc/gofumpt v0.12.0 // indirect
 	mvdan.cc/unparam v0.0.0-20260823230713-2fa3d841b0c8 // indirect
+	rsc.io/qr v0.2.0 // indirect
 	sigs.k8s.io/kind v0.32.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 	software.sslmate.com/src/go-pkcs12 v0.7.3 // indirect

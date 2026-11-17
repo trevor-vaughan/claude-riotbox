@@ -223,7 +223,7 @@ match_pass() {
 	done
 }
 
-# shellcheck disable=SC2317  # invoked indirectly via match_pass's keycmd parameter
+# shellcheck disable=SC2317,SC2329  # invoked indirectly via match_pass's keycmd parameter
 key_tree() { git rev-parse "${1}^{tree}"; }
 
 # Progress goes to stderr so stdout stays the plan report. PLAN_DEST holds only
@@ -233,7 +233,7 @@ match_pass "tree" key_tree
 
 # `--root` is required, or a root commit produces no patch-id at all and would
 # silently never match. patch-id prints "<id> <commit>"; only the id is the key.
-# shellcheck disable=SC2317  # invoked indirectly via match_pass's keycmd parameter
+# shellcheck disable=SC2317,SC2329  # invoked indirectly via match_pass's keycmd parameter
 key_patch() {
 	git diff-tree -p --root "${1}" | git patch-id --stable | cut -d' ' -f1
 }

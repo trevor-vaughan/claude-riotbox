@@ -159,7 +159,7 @@ opencode_smoke_run() (
 	# against the directory this removes, and outlive the RUN step.
 	# `git-ai bg shutdown` returns before the daemon exits; the daemon removes
 	# its daemon.pid.json on the way out, so wait for that before the rm.
-	# shellcheck disable=SC2317  # invoked indirectly, by the EXIT trap
+	# shellcheck disable=SC2317,SC2329  # invoked indirectly, by the EXIT trap
 	_opencode_smoke_cleanup() {
 		local pidfile="${home}/.git-ai/internal/daemon/daemon.pid.json"
 		local rc=0
