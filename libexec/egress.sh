@@ -149,7 +149,9 @@ resolve_data_roots
 # shellcheck disable=SC2310 # it has already said why it failed
 riotbox_core_require || exit 1
 
+# shellcheck disable=SC2154 # CONTAINER_CMD comes from bin/riotbox, RIOTBOX_EGRESS_ROOT from mount-projects.sh
 common=(--engine "${CONTAINER_CMD}" --state-root "${RIOTBOX_EGRESS_ROOT}")
+# shellcheck disable=SC2154 # set by egress-lib.sh
 conf=(--system-conf "${EGRESS_SYSTEM_CONF}" --user-conf "${EGRESS_USER_CONF}")
 target=()
 [[ "${session_given}" = 0 ]] || target=(--session "${session}")

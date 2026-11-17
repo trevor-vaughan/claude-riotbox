@@ -3,7 +3,7 @@ module github.com/trevor-vaughan/claude-riotbox
 go 1.26.4
 
 require (
-	github.com/mdp/qrterminal/v3 v3.2.1
+	github.com/mdp/qrterminal/v4 v4.0.0
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
 	golang.org/x/term v0.47.0

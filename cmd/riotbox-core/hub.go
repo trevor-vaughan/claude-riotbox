@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/mdp/qrterminal/v3"
+	"github.com/mdp/qrterminal/v4"
 	"golang.org/x/term"
 
 	"github.com/trevor-vaughan/claude-riotbox/internal/hub"
