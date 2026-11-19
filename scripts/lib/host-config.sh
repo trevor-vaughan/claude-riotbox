@@ -173,7 +173,7 @@ _config_under() {
 config_protect_mounts() {
 	local cfg file parent spec origin src dst opts host field upper rsrc access link dir dest flag elevated="" word prev="" cap why i
 	local -a recs=() fields=() caps=() reach=() reach_src=() reach_dst=()
-	local -A taken=() seen=()
+	local -A taken=() pinned=()
 	CONFIG_PROTECT_FLAGS=()
 	cfg="${XDG_CONFIG_HOME:-${HOME}/.config}/riotbox/config"
 	if [[ "${cfg}" != /* ]]; then
@@ -280,8 +280,8 @@ config_protect_mounts() {
 		for dir in "${CONFIG_WALK_DIRS[@]}"; do
 			[[ "${dir}" == "${src%/}/"* ]] || continue
 			dest="${dst%/}${dir#"${src%/}"}"
-			[[ -z "${taken["${dest}"]:-}" && -z "${seen["${dest}"]:-}" ]] || continue
-			seen["${dest}"]=1
+			[[ -z "${taken["${dest}"]:-}" && -z "${pinned["${dest}"]:-}" ]] || continue
+			pinned["${dest}"]=1
 			if [[ ! -d "${dir}" ]]; then
 				echo "ERROR: ${dir}, on the path to the riotbox config (${cfg}), does not exist, so it cannot be protected under ${src}, and the agent could create it as a link." >&2
 				echo "       Create it yourself, or fix XDG_CONFIG_HOME. See README \"Config file security\"." >&2

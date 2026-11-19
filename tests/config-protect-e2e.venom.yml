@@ -11,6 +11,7 @@ testcases:
     steps:
       - type: exec
         script: |
+          #!/bin/bash
           set -euo pipefail
           if [ "${RIOTBOX_CONFIG_E2E:-}" != 1 ]; then echo "SKIP: run through 'task test:config-e2e'"; echo OK; exit 0; fi
           command -v podman >/dev/null || { echo "FAIL: podman not found" >&2; exit 1; }
