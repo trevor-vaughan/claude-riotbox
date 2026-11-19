@@ -37,25 +37,39 @@ _riotbox_config_why() {
 # riotbox_config_vet — set RIOTBOX_CONFIG_FILES to the resolved paths of the
 # user config then the system config (the precedence the callers document),
 # leaving out a file that does not exist (a dangling link included). Return
-# 1, saying why on stderr, when a present file is not a regular file, or
-# when it, the directory holding its name, or the directory holding the file
-# it resolves to fails _riotbox_config_why: whoever could write any of them
-# could put code in the file, or point its name at their own. Warn when the
-# user config is readable by others: it often holds keys.
+# 1, saying why on stderr, when a present file's path is not absolute or
+# cannot be resolved (_config_walk), when it does not resolve to a regular
+# file, or when that file, the directory holding it, or the directory
+# holding any link on its path fails _riotbox_config_why: whoever could
+# write any of them could put code in the file, or point a name on its path
+# at their own. Warn when the user config is readable by others: it often
+# holds keys. The caller sources after this returns, so a change in between
+# is possible, but only by someone these checks already trust: the user or
+# root.
 riotbox_config_vet() {
-	local file real path why mode
+	local file real path link why mode
+	local -a paths=()
 	RIOTBOX_CONFIG_FILES=()
 	for file in "${XDG_CONFIG_HOME:-${HOME}/.config}/riotbox/config" "${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}/config"; do
 		[[ -e "${file}" ]] || continue
-		if ! real="$(realpath -e -- "${file}" 2>&1)"; then
-			why="cannot be resolved (${real})"
-			path="${file}"
-		elif [[ ! -f "${real}" ]]; then
+		path="${file}"
+		real=""
+		why=""
+		# shellcheck disable=SC2310 # _config_walk's failure is reported here
+		if [[ "${file}" != /* ]]; then
+			why="is not an absolute path (set XDG_CONFIG_HOME or RIOTBOX_SYSCONF_DIR to one)"
+		elif ! _config_walk "${file}"; then
+			why="cannot be resolved (a link loop, or more than 40 links)"
+		elif real="${CONFIG_WALK_FILE}" && [[ ! -f "${real}" ]]; then
 			why="is not a regular file (replace it with one)"
 			path="${real}"
 		else
-			why=""
-			for path in "${real}" "$(realpath -e -- "${file%/*}")" "${real%/*}"; do
+			paths=("${real}" "${real%/*}")
+			for link in "${CONFIG_WALK_LINKS[@]}"; do
+				link="${link%/*}"
+				paths+=("${link:-/}")
+			done
+			for path in "${paths[@]}"; do
 				why="$(_riotbox_config_why "${path}")"
 				[[ -z "${why}" ]] || break
 			done

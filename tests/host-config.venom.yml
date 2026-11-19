@@ -79,6 +79,13 @@ testcases:
           # So could the file it points at, in a group-writable dir.
           fresh; mkdir "${TMP}/dots"; chmod 770 "${TMP}/dots"; mv "${u}" "${TMP}/dots/config"; ln -s "${TMP}/dots/config" "${u}"
           refused "target in g+w dir" "chmod go-w ${TMP}/dots"
+          # A linked config dir, its link in a group-writable dir.
+          fresh; rm -rf "${TMP}/elsewhere"; mkdir "${TMP}/elsewhere"; mv "${d}" "${TMP}/elsewhere/riotbox"; ln -s "${TMP}/elsewhere/riotbox" "${d}"
+          chmod 770 "${XDG_CONFIG_HOME}"
+          refused "dir link in g+w dir" "chmod go-w ${XDG_CONFIG_HOME}"
+          # A relative XDG_CONFIG_HOME would read a file under the current directory.
+          fresh; mkdir -p "${TMP}/rel/riotbox"; : >"${TMP}/rel/riotbox/config"; chmod 600 "${TMP}/rel/riotbox/config"
+          (cd "${TMP}" && XDG_CONFIG_HOME=rel && refused "relative XDG_CONFIG_HOME" "is not an absolute path") || exit 1
           if [ "${EUID}" -eq 0 ]; then
             fresh; chown 65534 "${u}"; refused "foreign owner" "is owned by uid 65534"
             fresh; chown 65534 "${d}"; refused "foreign dir owner" "is owned by uid 65534"
