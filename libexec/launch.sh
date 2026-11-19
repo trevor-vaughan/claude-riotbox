@@ -14,12 +14,16 @@ set -euo pipefail
 # (env wins because := only assigns when unset; XDG wins over /etc because a
 # value it sets first survives the later /etc source). RIOTBOX_SYSCONF_DIR
 # overrides the system dir (default /etc/riotbox) for relocatable installs/tests.
-RIOTBOX_CONFIG_USER="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox/config"
-RIOTBOX_CONFIG_SYSTEM="${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}/config"
-# shellcheck disable=SC1090
-[[ -f "${RIOTBOX_CONFIG_USER}" ]] && source "${RIOTBOX_CONFIG_USER}"
-# shellcheck disable=SC1090,SC1091
-[[ -f "${RIOTBOX_CONFIG_SYSTEM}" ]] && source "${RIOTBOX_CONFIG_SYSTEM}"
+# riotbox_config_vet refuses a config that anyone else could have written.
+# shellcheck source=../scripts/lib/host-config.sh disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/host-config.sh"
+# shellcheck disable=SC2310 # it has already said why it failed
+riotbox_config_vet || exit 1
+for _riotbox_config in "${RIOTBOX_CONFIG_FILES[@]}"; do
+	# shellcheck disable=SC1090
+	source "${_riotbox_config}"
+done
+unset _riotbox_config
 
 # Mutual-exclusion guard for the two container-runtime delegation modes.
 # Fires before any side-effectful work (mount setup, image lookup, podman

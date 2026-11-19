@@ -1,7 +1,7 @@
 name: host config — vetted before sourcing, protected from the agent's mounts
 vars:
   root: "."
-  helpers: "{{.root}}/tests/lib/egress-test-helpers.sh"
+  egress_helpers: "{{.root}}/tests/lib/egress-test-helpers.sh"
 
 # riotbox_config_vet refuses a host config that anyone but the user (or
 # root) could have written: sourcing it would run their code as the user.
@@ -85,6 +85,48 @@ testcases:
           else
             echo "SKIP foreign owner: needs root (task test:as-root -- tests/host-config.venom.yml)"
           fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: launch.sh refuses a writable config, and a config's declare still reaches the launch
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          u="${XDG_CONFIG_HOME}/riotbox/config"
+          # declare at file scope sets globals; sourced inside a function it
+          # would set locals, and the mutual-exclusion guard would not fire.
+          printf 'declare RIOTBOX_NESTED=1 RIOTBOX_SOCKET=1\n' >"${u}"; chmod 600 "${u}"
+          out="$(egress_launch 2>&1)"
+          [[ "${out}" == *"mutually exclusive"* ]] || { echo "BAD: declare did not reach launch.sh: ${out}" >&2; exit 1; }
+          chmod 622 "${u}"
+          rc=0; out="$(egress_launch 2>&1)" || rc=$?
+          [ "${rc}" -ne 0 ] || { echo "BAD: launch went ahead" >&2; exit 1; }
+          [[ "${out}" == *"riotbox will not source ${u}"* ]] || { echo "BAD: ${out}" >&2; exit 1; }
+          [[ "${out}" != *"mutually exclusive"* ]] || { echo "BAD: the refused config was sourced" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: every host config sourcer vets first
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.root}}"
+          files="libexec/launch.sh libexec/hub.sh scripts/preflight.sh scripts/mount-projects.sh"
+          rc=0
+          grep -nE 'source "\$\{(RIOTBOX_CONFIG_(USER|SYSTEM)|_MPS_CONFIG_(USER|SYSTEM)|_PREFLIGHT_CONFIG_(USER|SYSTEM))\}"' ${files} || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "BAD: unvetted config source above (grep rc ${rc})" >&2; exit 1; }
+          for f in ${files}; do
+            grep -q 'riotbox_config_vet || exit 1' "${f}" || { echo "BAD: ${f} does not vet" >&2; exit 1; }
+          done
           echo OK
         assertions:
           - result.code ShouldEqual 0
