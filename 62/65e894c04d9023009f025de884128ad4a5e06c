@@ -1,0 +1,27 @@
+tests/config-protect-e2e.venom.yml
+  s_102237605dd52b::t_9cc4714d8fb6fa 1-37
+libexec/launch.sh
+  s_102237605dd52b::t_9cc4714d8fb6fa 18-19,367-372,425
+tests/host-config.venom.yml
+  s_102237605dd52b::t_1f86724db3b780 230-247
+.taskfiles/test.yml
+  s_102237605dd52b::t_254a754f2ed1bc 97-104
+tests/egress-launch.venom.yml
+  s_102237605dd52b::t_d7505d5fd62cb5 544-545,547-549
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "8540cf11fc7411fae254e181a8be1db1b8b33ae1",
+  "prompts": {},
+  "sessions": {
+    "s_102237605dd52b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8c9ff217-5395-49ed-8ccf-fdd97368c932",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}

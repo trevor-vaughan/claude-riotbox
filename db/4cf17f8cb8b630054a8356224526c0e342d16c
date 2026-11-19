@@ -1,0 +1,27 @@
+README.md
+  s_102237605dd52b::t_407e7ec0e221bd 773,807
+  s_102237605dd52b::t_abd505e994dc83 799
+docs/dev/host-config.md
+  s_102237605dd52b::t_abd505e994dc83 35-37
+  s_102237605dd52b::t_0f7b0f97ce147b 66-70
+scripts/configs/config
+  s_102237605dd52b::t_407e7ec0e221bd 237,243
+THREAT_MODEL.md
+  s_102237605dd52b::t_abd505e994dc83 1633-1634,1643-1644,1660-1669
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "dae5fbe776e254b56a496a2d9063eeeba6cc8a90",
+  "prompts": {},
+  "sessions": {
+    "s_102237605dd52b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8c9ff217-5395-49ed-8ccf-fdd97368c932",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
