@@ -1,0 +1,21 @@
+tests/config-protect-e2e.venom.yml
+  s_a497e8b1ee1b53::t_dd8a5a3cc48296 14
+scripts/lib/host-config.sh
+  s_a497e8b1ee1b53::t_2a81e64be87057 176,283-284
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "91763ca91a682d713f22e7b06ef8c76ff5ec9bca",
+  "prompts": {},
+  "sessions": {
+    "s_a497e8b1ee1b53": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8ce2cda-9e35-47fa-8239-bb49586ec4de",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
