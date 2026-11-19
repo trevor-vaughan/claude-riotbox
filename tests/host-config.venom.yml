@@ -1,0 +1,380 @@
+name: host config — vetted before sourcing, protected from the agent's mounts
+vars:
+  root: "."
+  egress_helpers: "{{.root}}/tests/lib/egress-test-helpers.sh"
+
+# riotbox_config_vet refuses a host config that anyone but the user (or
+# root) could have written: sourcing it would run their code as the user.
+# config_protect_mounts keeps the agent from rewriting the user config
+# through a read-write mount that reaches it (`riotbox ~`).
+
+testcases:
+  - name: riotbox_config_vet lists present files in precedence order and warns on a readable user config
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/host-config.sh"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          u="${XDG_CONFIG_HOME}/riotbox/config" s="${RIOTBOX_SYSCONF_DIR}/config"
+          mkdir -p "${u%/*}" "${RIOTBOX_SYSCONF_DIR}"
+          # Neither file: nothing to source, nothing said.
+          riotbox_config_vet 2>"${TMP}/err" || { echo "BAD: refused with no files" >&2; exit 1; }
+          [ "${#RIOTBOX_CONFIG_FILES[@]}" -eq 0 ] && [ ! -s "${TMP}/err" ] || { echo "BAD: no files: ${RIOTBOX_CONFIG_FILES[*]} $(cat "${TMP}/err")" >&2; exit 1; }
+          # A dangling link is skipped, as the old [[ -f ]] skipped it.
+          ln -s "${TMP}/nowhere" "${u}"
+          riotbox_config_vet 2>"${TMP}/err" && [ "${#RIOTBOX_CONFIG_FILES[@]}" -eq 0 ] || { echo "BAD: dangling link not skipped" >&2; exit 1; }
+          rm "${u}"
+          : >"${u}"; chmod 600 "${u}"; : >"${s}"; chmod 644 "${s}"
+          riotbox_config_vet 2>"${TMP}/err" || { echo "BAD: refused $(cat "${TMP}/err")" >&2; exit 1; }
+          [ "${RIOTBOX_CONFIG_FILES[*]}" = "${u} ${s}" ] || { echo "BAD: files ${RIOTBOX_CONFIG_FILES[*]}" >&2; exit 1; }
+          [ ! -s "${TMP}/err" ] || { echo "BAD: warned on 0600/0644: $(cat "${TMP}/err")" >&2; exit 1; }
+          # A user config others can read is sourced, with a warning.
+          chmod 644 "${u}"
+          riotbox_config_vet 2>"${TMP}/err" || { echo "BAD: refused 0644 user config" >&2; exit 1; }
+          grep -qF "chmod 600 ${u}" "${TMP}/err" || { echo "BAD: no chmod 600 hint: $(cat "${TMP}/err")" >&2; exit 1; }
+          # A link to a good file is accepted; the resolved path is listed.
+          mkdir -p "${TMP}/dots"; chmod 700 "${TMP}/dots"; mv "${u}" "${TMP}/dots/config"; chmod 600 "${TMP}/dots/config"
+          ln -s "${TMP}/dots/config" "${u}"
+          riotbox_config_vet 2>"${TMP}/err" || { echo "BAD: refused a good link: $(cat "${TMP}/err")" >&2; exit 1; }
+          [ "${RIOTBOX_CONFIG_FILES[0]}" = "${TMP}/dots/config" ] || { echo "BAD: link not resolved: ${RIOTBOX_CONFIG_FILES[0]}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: riotbox_config_vet refuses a config, or a directory holding it, that others could write
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/host-config.sh"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          u="${XDG_CONFIG_HOME}/riotbox/config" d="${XDG_CONFIG_HOME}/riotbox"
+          fresh() {
+            rm -rf "${XDG_CONFIG_HOME}" "${RIOTBOX_SYSCONF_DIR}" "${TMP}/dots"
+            mkdir -p "${d}" "${RIOTBOX_SYSCONF_DIR}"; chmod 700 "${d}"
+            : >"${u}"; chmod 600 "${u}"
+          }
+          refused() {
+            local rc=0 err
+            err="$(riotbox_config_vet 2>&1)" || rc=$?
+            [ "${rc}" -eq 1 ] || { echo "BAD: $1 was accepted (rc ${rc})" >&2; exit 1; }
+            [[ "${err}" == *"$2"* ]] || { echo "BAD: $1: unclear message: ${err}" >&2; exit 1; }
+            [[ "${err}" == *'See README "Config file security".'* ]] || { echo "BAD: $1: no README pointer: ${err}" >&2; exit 1; }
+          }
+          fresh; chmod 620 "${u}"; refused "g+w file" "chmod go-w ${u}"
+          fresh; chmod 602 "${u}"; refused "o+w file" "chmod go-w ${u}"
+          fresh; chmod 770 "${d}"; refused "g+w dir" "chmod go-w ${d}"
+          fresh; chmod 1777 "${d}"; refused "sticky o+w dir" "chmod go-w ${d}"
+          fresh; rm "${u}"; mkfifo "${u}"; refused "fifo" "is not a regular file"
+          fresh; rm "${u}"; mkdir "${u}"; refused "directory" "is not a regular file"
+          fresh; : >"${RIOTBOX_SYSCONF_DIR}/config"; chmod 646 "${RIOTBOX_SYSCONF_DIR}/config"
+          refused "o+w system file" "chmod go-w ${RIOTBOX_SYSCONF_DIR}/config"
+          # A link in a group-writable dir could be repointed by the group.
+          fresh; mkdir "${TMP}/dots"; mv "${u}" "${TMP}/dots/config"; ln -s "${TMP}/dots/config" "${u}"; chmod 770 "${d}"
+          refused "link in g+w dir" "chmod go-w ${d}"
+          # So could the file it points at, in a group-writable dir.
+          fresh; mkdir "${TMP}/dots"; chmod 770 "${TMP}/dots"; mv "${u}" "${TMP}/dots/config"; ln -s "${TMP}/dots/config" "${u}"
+          refused "target in g+w dir" "chmod go-w ${TMP}/dots"
+          # A linked config dir, its link in a group-writable dir.
+          fresh; rm -rf "${TMP}/elsewhere"; mkdir "${TMP}/elsewhere"; mv "${d}" "${TMP}/elsewhere/riotbox"; ln -s "${TMP}/elsewhere/riotbox" "${d}"
+          chmod 770 "${XDG_CONFIG_HOME}"
+          refused "dir link in g+w dir" "chmod go-w ${XDG_CONFIG_HOME}"
+          # A hard link is writable through its other name, which no path check sees.
+          fresh; ln "${u}" "${TMP}/other-name"; refused "hard-linked config" "has 2 hard links, so it is writable through its other names (replace it with a copy or a symlink"
+          # A relative XDG_CONFIG_HOME would read a file under the current directory.
+          fresh; mkdir -p "${TMP}/rel/riotbox"; : >"${TMP}/rel/riotbox/config"; chmod 600 "${TMP}/rel/riotbox/config"
+          (cd "${TMP}" && XDG_CONFIG_HOME=rel && refused "relative XDG_CONFIG_HOME" "is not an absolute path") || exit 1
+          if [ "${EUID}" -eq 0 ]; then
+            fresh; chown 65534 "${u}"; refused "foreign owner" "is owned by uid 65534"
+            fresh; chown 65534 "${d}"; refused "foreign dir owner" "is owned by uid 65534"
+          else
+            echo "SKIP foreign owner: needs root (task test:as-root -- tests/host-config.venom.yml)"
+          fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: launch.sh refuses a writable config, and a config's declare still reaches the launch
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          u="${XDG_CONFIG_HOME}/riotbox/config"
+          # declare at file scope sets globals; sourced inside a function it
+          # would set locals, and the mutual-exclusion guard would not fire.
+          printf 'declare RIOTBOX_NESTED=1 RIOTBOX_SOCKET=1\n' >"${u}"; chmod 600 "${u}"
+          out="$(egress_launch 2>&1)"
+          [[ "${out}" == *"mutually exclusive"* ]] || { echo "BAD: declare did not reach launch.sh: ${out}" >&2; exit 1; }
+          chmod 622 "${u}"
+          rc=0; out="$(egress_launch 2>&1)" || rc=$?
+          [ "${rc}" -ne 0 ] || { echo "BAD: launch went ahead" >&2; exit 1; }
+          [[ "${out}" == *"riotbox will not source ${u}"* ]] || { echo "BAD: ${out}" >&2; exit 1; }
+          [[ "${out}" != *"mutually exclusive"* ]] || { echo "BAD: the refused config was sourced" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: every host config sourcer vets first
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          cd "{{.root}}"
+          files="libexec/launch.sh libexec/hub.sh scripts/preflight.sh scripts/mount-projects.sh scripts/detect-mounts.sh"
+          rc=0
+          grep -nE 'source "\$\{(RIOTBOX_CONFIG_(USER|SYSTEM)|_MPS_CONFIG_(USER|SYSTEM)|_PREFLIGHT_CONFIG_(USER|SYSTEM))\}"' ${files} || rc=$?
+          [ "${rc}" -eq 1 ] || { echo "BAD: unvetted config source above (grep rc ${rc})" >&2; exit 1; }
+          for f in ${files}; do
+            grep -q 'riotbox_config_vet || exit 1' "${f}" || { echo "BAD: ${f} does not vet" >&2; exit 1; }
+            # A source of a bare variable, or of a path ending in config, must
+            # be the variable of a loop over RIOTBOX_CONFIG_FILES.
+            loopvars="$(sed -nE 's/.*for ([A-Za-z_]+) in "\$\{RIOTBOX_CONFIG_FILES\[@\]\}".*/\1/p' "${f}")"
+            while IFS= read -r line; do
+              var="$(sed -nE 's/.*source "\$\{([A-Za-z_]+)\}".*/\1/p' <<<"${line}")"
+              [ -n "${var}" ] && grep -qx "${var}" <<<"${loopvars}" && continue
+              echo "BAD: ${f}: unvetted source: ${line}" >&2; exit 1
+            done < <(grep -E 'source "\$\{[A-Za-z_]+\}"|source .*config"' "${f}")
+          done
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: config_protect_mounts pins the config dir under a read-write mount that reaches it, and only then
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/bind-mounts.sh"
+          source "{{.root}}/scripts/lib/host-config.sh"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          H="${TMP}/home"; C="${H}/.config/riotbox"
+          export XDG_CONFIG_HOME="${H}/.config"; unset RIOTBOX_NESTED
+          mkdir -p "${C}" "${TMP}/other"
+          # run <var> <flags>: only that variable is set.
+          run() {
+            PROJECT_VOLUME_FLAGS="" MOUNTS="" CREDFILE_FLAGS="" RIOTBOX_EXTRA_ARGS=""
+            printf -v "$1" '%s' "$2"
+            rc=0; config_protect_mounts 2>"${TMP}/err" || rc=$?
+            err="$(cat "${TMP}/err")"; got=""; for f in "${CONFIG_PROTECT_FLAGS[@]}"; do got+="${f}|"; done
+          }
+          want() {
+            run "$1" "$2"
+            [ "${rc}" -eq 0 ] || { echo "BAD: $1=$2 refused: ${err}" >&2; exit 1; }
+            [ "${got}" = "$3" ] || { echo "BAD: $1=$2"; echo " got  ${got}"; echo " want $3"; exit 1; } >&2
+          }
+          pin() { printf -- '--mount|type=bind,"source=%s","destination=%s"|' "$1" "$2"; }
+          ro()  { printf -- '--mount|type=bind,"source=%s","destination=%s",readonly|' "$1" "$2"; }
+          want PROJECT_VOLUME_FLAGS "-v ${H}:/home/u" "$(pin "${H}/.config" /home/u/.config)$(ro "${C}" /home/u/.config/riotbox)"
+          want MOUNTS "--mount type=bind,source=${H}/.config,destination=/c" "$(ro "${C}" /c/riotbox)"
+          want RIOTBOX_EXTRA_ARGS "-v ${H}:/a -v ${H}:/b" "$(pin "${H}/.config" /a/.config)$(ro "${C}" /a/.config/riotbox)$(pin "${H}/.config" /b/.config)$(ro "${C}" /b/.config/riotbox)"
+          # A pin is skipped where an agent mount already sits.
+          want RIOTBOX_EXTRA_ARGS "-v ${H}:/h -v ${H}/.config:/h/.config:ro" "$(ro "${C}" /h/.config/riotbox)"
+          want RIOTBOX_EXTRA_ARGS "-v ${H}:/h:O" ""
+          want MOUNTS "--mount type=bind,source=${H},destination=/h,readonly=true" ""
+          want PROJECT_VOLUME_FLAGS "-v ${H}:/h:ro -v ${TMP}/other:/o" ""
+          want PROJECT_VOLUME_FLAGS "-v ${C}:/x:ro" ""
+          want PROJECT_VOLUME_FLAGS "-v named:${H}" ""
+          # A destination with a quote is CSV-quoted, as podman reads --mount.
+          want RIOTBOX_EXTRA_ARGS "-v ${H}/.config:/q\"x" "$(printf -- '--mount|type=bind,"source=%s","destination=/q""x/riotbox",readonly|' "${C}")"
+          # A config dir that does not exist yet is created, private, first.
+          rm -rf "${C}"
+          want PROJECT_VOLUME_FLAGS "-v ${TMP}/other:/o" ""
+          [ ! -e "${C}" ] || { echo "BAD: created ${C} for an unrelated mount" >&2; exit 1; }
+          want PROJECT_VOLUME_FLAGS "-v ${H}:/home/u" "$(pin "${H}/.config" /home/u/.config)$(ro "${C}" /home/u/.config/riotbox)"
+          [ "$(stat -c %a "${C}")" = 700 ] || { echo "BAD: ${C} not created 0700" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: config_protect_mounts refuses what a pin cannot protect
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/bind-mounts.sh"
+          source "{{.root}}/scripts/lib/host-config.sh"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          H="${TMP}/home"; C="${H}/.config/riotbox"
+          export XDG_CONFIG_HOME="${H}/.config"; unset RIOTBOX_NESTED
+          mkdir -p "${C}" "${TMP}/other"; : >"${C}/config"
+          run() {
+            PROJECT_VOLUME_FLAGS="" MOUNTS="" CREDFILE_FLAGS="" RIOTBOX_EXTRA_ARGS=""
+            printf -v "$1" '%s' "$2"
+            rc=0; err="$(config_protect_mounts 2>&1)" || rc=$?
+          }
+          ok() { run "$@"; [ "${rc}" -eq 0 ] || { echo "BAD: $1=$2 refused: ${err}" >&2; exit 1; }; }
+          refused() {
+            run "$1" "$2"
+            [ "${rc}" -eq 1 ] || { echo "BAD: $1=$2 allowed" >&2; exit 1; }
+            [[ "${err}" == *"$3"* ]] || { echo "BAD: $1=$2: unclear message: ${err}" >&2; exit 1; }
+            [[ "${err}" == *'See README "Config file security".'* ]] || { echo "BAD: $1=$2: no README pointer: ${err}" >&2; exit 1; }
+          }
+          refused PROJECT_VOLUME_FLAGS "-v ${C}:/x" "project mounts ${C} read-write"
+          refused MOUNTS "-v ${C}/config:/x/config" "mounts.conf mounts ${C}/config read-write"
+          refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/other:/o:O,upperdir=${C}/up,workdir=${TMP}/w" "upperdir=${C}/up"
+          refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/other:/o:O,upperdir=${TMP}/u,workdir=${H}" "workdir=${H}"
+          ok RIOTBOX_EXTRA_ARGS "-v ${TMP}/other:/o:O,upperdir=${TMP}/u,workdir=${TMP}/w"
+          # Nested mode: CAP_SYS_ADMIN could undo any protection.
+          export RIOTBOX_NESTED=1
+          refused PROJECT_VOLUME_FLAGS "-v ${H}:/h" "RIOTBOX_NESTED=1 refuses project mounting ${H}"
+          refused PROJECT_VOLUME_FLAGS "-v ${H}:/h:ro" "RIOTBOX_NESTED=1 refuses project mounting ${H}"
+          refused PROJECT_VOLUME_FLAGS "-v ${C}:/x:ro" "RIOTBOX_NESTED=1 refuses project mounting ${C}"
+          ok PROJECT_VOLUME_FLAGS "-v ${TMP}/other:/o"
+          unset RIOTBOX_NESTED
+          # A link on the config's path inside a read-write mount could be
+          # repointed at a config of the agent's own.
+          mkdir -p "${TMP}/real"; mv "${H}/.config" "${TMP}/real/.config"; ln -s "${TMP}/real/.config" "${H}/.config"
+          refused PROJECT_VOLUME_FLAGS "-v ${H}:/h" "${H}/.config is a link"
+          ok PROJECT_VOLUME_FLAGS "-v ${H}:/h:ro"
+          rm "${H}/.config"; mv "${TMP}/real/.config" "${H}/.config"
+          mkdir -p "${TMP}/dots"; mv "${C}/config" "${TMP}/dots/config"; ln -s "${TMP}/dots/config" "${C}/config"
+          refused PROJECT_VOLUME_FLAGS "-v ${H}:/h" "${C}/config is a link"
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: config_protect_mounts protects the config the host resolves, through every link and ..
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/bind-mounts.sh"
+          source "{{.root}}/scripts/lib/host-config.sh"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          H="${TMP}/home"; C="${H}/.config/riotbox"
+          export XDG_CONFIG_HOME="${H}/.config"; unset RIOTBOX_NESTED
+          mkdir -p "${C}" "${TMP}/other"
+          run() {
+            PROJECT_VOLUME_FLAGS="" MOUNTS="" CREDFILE_FLAGS="" RIOTBOX_EXTRA_ARGS=""
+            printf -v "$1" '%s' "$2"
+            rc=0; config_protect_mounts 2>"${TMP}/err" || rc=$?
+            err="$(cat "${TMP}/err")"; got=""; for f in "${CONFIG_PROTECT_FLAGS[@]}"; do got+="${f}|"; done
+          }
+          want() {
+            run "$1" "$2"
+            [ "${rc}" -eq 0 ] || { echo "BAD: $1=$2 refused: ${err}" >&2; exit 1; }
+            [ "${got}" = "$3" ] || { echo "BAD: $1=$2"; echo " got  ${got}"; echo " want $3"; exit 1; } >&2
+          }
+          refused() {
+            run "$1" "$2"
+            [ "${rc}" -eq 1 ] || { echo "BAD: $1=$2 allowed" >&2; exit 1; }
+            [[ "${err}" == *"$3"* ]] || { echo "BAD: $1=$2: unclear message: ${err}" >&2; exit 1; }
+            [[ "${err}" == *'See README "Config file security".'* ]] || { echo "BAD: $1=$2: no README pointer: ${err}" >&2; exit 1; }
+          }
+          ro() { printf -- '--mount|type=bind,"source=%s","destination=%s",readonly|' "$1" "$2"; }
+          # dotfiles: the config is a link into a dotfiles repo.
+          mkdir -p "${TMP}/dots/riotbox"; : >"${TMP}/dots/riotbox/config"
+          for target in "${TMP}/dots/riotbox/config" ../../../dots/riotbox/config; do
+            rm -f "${C}/config"; ln -s "${target}" "${C}/config"
+            want RIOTBOX_EXTRA_ARGS "-v ${TMP}/dots:/d" "$(ro "${TMP}/dots/riotbox" /d/riotbox)"
+            refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/dots/riotbox:/d" "mounts ${TMP}/dots/riotbox read-write"
+            refused RIOTBOX_EXTRA_ARGS "-v ${TMP}:/t" "${C}/config is a link"
+          done
+          # Two hops: each link, and the directory holding the last target.
+          mkdir -p "${TMP}/a" "${TMP}/b"; : >"${TMP}/b/config"
+          ln -s "${TMP}/b/config" "${TMP}/a/config"; rm "${C}/config"; ln -s "${TMP}/a/config" "${C}/config"
+          refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/a:/a" "${TMP}/a/config is a link"
+          refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/b:/b" "mounts ${TMP}/b read-write"
+          refused RIOTBOX_EXTRA_ARGS "-v ${C}:/c" "${C}/config is a link"
+          rm "${C}/config"
+          # .. pops the directory a link resolved to, as the kernel does.
+          mkdir -p "${H}/proj" "${TMP}/x"; ln -s "${TMP}/x" "${H}/proj/l2"
+          export XDG_CONFIG_HOME="${H}/proj/l2/.."
+          refused RIOTBOX_EXTRA_ARGS "-v ${H}/proj:/p" "${H}/proj/l2 is a link"
+          refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/riotbox:/r" "mounts ${TMP}/riotbox read-write"
+          want RIOTBOX_EXTRA_ARGS "-v ${H}/proj/riotbox:/r" ""
+          # A directory walked through that does not exist cannot be pinned,
+          # and the agent could create it as a link.
+          export XDG_CONFIG_HOME="${H}/gone/.."
+          refused RIOTBOX_EXTRA_ARGS "-v ${H}:/h" "${H}/gone, on the path to the riotbox config"
+          [ ! -e "${H}/gone" ] || { echo "BAD: created ${H}/gone" >&2; exit 1; }
+          # A relative XDG_CONFIG_HOME would make riotbox read a file under
+          # the current directory; the XDG spec says to ignore it.
+          export XDG_CONFIG_HOME=relative/dir
+          refused RIOTBOX_EXTRA_ARGS "" "not absolute"
+          # A link loop is refused, not followed forever.
+          export XDG_CONFIG_HOME="${H}/.config"
+          ln -s config2 "${C}/config"; ln -s config "${C}/config2"
+          refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/other:/o" "more than 40 links"
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: config_protect_mounts treats SYS_ADMIN from RIOTBOX_EXTRA_ARGS as nested, and refuses mounts it cannot read
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/bind-mounts.sh"
+          source "{{.root}}/scripts/lib/host-config.sh"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          H="${TMP}/home"; C="${H}/.config/riotbox"
+          export XDG_CONFIG_HOME="${H}/.config"; unset RIOTBOX_NESTED
+          mkdir -p "${C}" "${TMP}/other"
+          run() {
+            PROJECT_VOLUME_FLAGS="" MOUNTS="" CREDFILE_FLAGS="" RIOTBOX_EXTRA_ARGS=""
+            printf -v "$1" '%s' "$2"
+            rc=0; err="$(config_protect_mounts 2>&1)" || rc=$?
+          }
+          ok() { run "$@"; [ "${rc}" -eq 0 ] || { echo "BAD: $1=$2 refused: ${err}" >&2; exit 1; }; }
+          refused() {
+            run "$1" "$2"
+            [ "${rc}" -eq 1 ] || { echo "BAD: $1=$2 allowed" >&2; exit 1; }
+            [[ "${err}" == *"$3"* ]] || { echo "BAD: $1=$2: unclear message: ${err}" >&2; exit 1; }
+            [[ "${err}" == *'See README "Config file security".'* ]] || { echo "BAD: $1=$2: no README pointer: ${err}" >&2; exit 1; }
+          }
+          for flag in --cap-add=sys_admin "--cap-add CAP_SYS_ADMIN" --cap-add=NET_RAW,ALL --privileged --privileged=true --privileged=1 --privileged=t --privileged=T --privileged=TRUE --privileged=True; do
+            refused RIOTBOX_EXTRA_ARGS "${flag} -v ${H}:/h" "RIOTBOX_EXTRA_ARGS ${flag} refuses RIOTBOX_EXTRA_ARGS mounting ${H}"
+            refused RIOTBOX_EXTRA_ARGS "${flag} -v ${H}:/h:ro" "CAP_SYS_ADMIN"
+            ok RIOTBOX_EXTRA_ARGS "${flag} -v ${TMP}/other:/o"
+          done
+          ok RIOTBOX_EXTRA_ARGS "--cap-add=NET_RAW -v ${H}:/h"
+          # podman parses --privileged with strconv.ParseBool: only these are false.
+          for flag in --privileged=0 --privileged=f --privileged=F --privileged=false --privileged=FALSE --privileged=False; do
+            ok RIOTBOX_EXTRA_ARGS "${flag} -v ${H}:/h"
+          done
+          # podman reads --cap-add as CSV, so a quoted value can name SYS_ADMIN unseen.
+          for flag in '--cap-add="SYS_ADMIN"' '--cap-add=NET_RAW,"sys_admin"' '--cap-add "SYS_ADMIN"'; do
+            refused RIOTBOX_EXTRA_ARGS "${flag} -v ${H}:/h" "its capabilities cannot be checked"
+          done
+          # podman reads these as binds; agent_bind_mounts cannot.
+          refused MOUNTS "--mount type=bind,\"src=${H}\",dst=/h" "mounts.conf has a --mount with a quoted field"
+          refused RIOTBOX_EXTRA_ARGS "--mount \"type=bind\",src=${H},dst=/h" "RIOTBOX_EXTRA_ARGS has a --mount with a quoted field"
+          refused RIOTBOX_EXTRA_ARGS "--mount=type=glob,src=${H}/*,dst=/g" "with type=glob"
+          refused PROJECT_VOLUME_FLAGS "--mount type=volume,dst=/v,volume-opt=o=bind,volume-opt=device=${H}" "project has a --mount with volume-opt"
+          ok RIOTBOX_EXTRA_ARGS "--mount type=bind,src=${TMP}/other,dst=/o"
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: a launch whose project reaches the config dir mounts it read-only
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          RIOTBOX_PROJECTS="${XDG_CONFIG_HOME}" egress_launch >/dev/null 2>"${TMP}/err" || { echo "BAD: launch failed: $(cat "${TMP}/err")" >&2; exit 1; }
+          argv=" $(cat "${CAPTURE}") "
+          [[ "${argv}" == *"\"source=${XDG_CONFIG_HOME}/riotbox\""*",readonly"* ]] || { echo "BAD: no read-only config mount in: ${argv}" >&2; exit 1; }
+          RIOTBOX_PROJECTS="${HOME}/proj" egress_launch >/dev/null 2>&1
+          [[ "$(cat "${CAPTURE}")" != *"source=${XDG_CONFIG_HOME}/riotbox"* ]] || { echo "BAD: protected without a reaching mount" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK

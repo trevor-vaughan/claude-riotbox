@@ -1433,7 +1433,9 @@ egress proxy; without the flag the agent's HTTPS goes out directly.
   `tests/egress-e2e.venom.yml`: no `resolv.conf`, no outside name resolves,
   and no nameserver the agent could try answers, with a positive control.
 - **Policy integrity.** Allowlist files are host-side, mounted read-only into
-  the proxy only; the user config dir reaches the agent read-only. The
+  the proxy only; wherever an agent mount reaches the user config dir
+  (`riotbox ~`), the launch mounts it read-only and refuses what it cannot
+  protect (see [Host config](#host-config-sourced-as-bash)). The
   per-session state root (`riotbox-egress/`, every session's live-reloaded
   `rds.json` and access logs) is writable by the host user, whom the agent
   runs as; wherever an agent mount reaches it (`riotbox ~`, a `mounts.conf`
@@ -1614,6 +1616,57 @@ egress proxy; without the flag the agent's HTTPS goes out directly.
   is refused like a read-write mount. The recorded path lives in the
   session's state dir, which the agent cannot reach (masked if a mount
   would show it).
+
+## Host config (sourced as bash)
+
+`$XDG_CONFIG_HOME/riotbox/config` and `$RIOTBOX_SYSCONF_DIR/config` are
+bash that riotbox sources as the user: from `launch.sh`, `hub.sh`,
+`preflight.sh`, `mount-projects.sh` and `detect-mounts.sh`. Whoever can write
+one runs code as the user, and the agent runs as the user. Two controls
+(`scripts/lib/host-config.sh`, maintainer notes in
+[docs/dev/host-config.md](docs/dev/host-config.md)):
+
+- **Vetted before sourcing.** `riotbox_config_vet` resolves each config the
+  way the kernel does and refuses it when the real file, the directory
+  holding it, or the directory holding any link on its path is owned by
+  someone other than the user or root, or is group/other-writable. It also
+  refuses a non-regular file, a file with other hard links (writable through
+  another name, which no path check sees) and a relative `XDG_CONFIG_HOME`, and warns
+  when the user config is readable by others.
+- **Protected from the agent's mounts.** For a read-write mount above the
+  config's real directory (`riotbox ~`), `config_protect_mounts` pins each
+  directory the path passes through (a bind onto itself, so it cannot be
+  renamed) and mounts the config directory read-only. It refuses a
+  read-write mount of that directory or anything in it, a read-write mount
+  holding a link on the path, an overlay `upperdir`/`workdir` that could
+  hold the path, any reaching mount under `RIOTBOX_NESTED=1`, `--privileged`
+  (unless set false) or `--cap-add` `SYS_ADMIN`/`ALL` or a quoted `--cap-add`
+  value, which cannot be checked (the agent could unmount the pins), a
+  `--mount` it cannot parse (quoted field, `volume-opt`, `type=glob`) and a
+  link loop. Verified on podman by `task test:config-e2e`.
+- **Residual risks.**
+  - The owner/mode checks cover the file, its directory and the directory
+    holding each link on the path, not every ancestor directory.
+  - The vet and the source are separate steps. A change in between is
+    possible only by someone the checks already trust: the user or root.
+  - `--volumes-from`, named volumes and `--rootfs` are not inspected, so
+    they can still expose the config.
+  - Docker accepts the emitted flags in principle; only podman is verified.
+  - The system config directory is out of scope: it is root-owned in a real
+    install, and the mount protection covers the user config only.
+  - With `riotbox ~` read-write the agent can already edit `~/.bashrc` and
+    similar files that run as the user. This is defense in depth for
+    riotbox's own config, not a boundary for the home directory.
+  - TOCTOU: `config_protect_mounts` resolves a mount source, and podman
+    mounts it later. A concurrent session's agent with write access to a
+    parent of that source could swap it for a link in between.
+    `egress_mask_data` and `egress_guard_conf` share the window. Closing it
+    needs passing the resolved sources to podman and verifying `st_dev` and
+    `st_ino` in the container. Not done.
+  - `--pid=host`, or joining another container's PID namespace, in
+    `RIOTBOX_EXTRA_ARGS` may let the agent reach the host's filesystem
+    through `/proc/<pid>/root`, around the pins. This depends on the LSM.
+    Not verified, not refused.
 
 ## Findings
 
@@ -3644,3 +3697,4 @@ excluded from open findings._
 | CT-020 | opencode plugin code (user-configured npm/git) persists across sessions and projects in a named volume and auto-executes on opencode startup | scripts/detect-mounts.sh, agents/opencode/sync-settings.sh | 🟡 Medium   | 🟢 Low    | ⚠️ Risk Accepted     | Plugins are declared by the user in their own `~/.config/opencode/opencode.jsonc` `plugin` array — the same trust the user already extends running opencode on the host; not LLM-installed and not riotbox-injected; opencode runs `bun install` and executes plugin code only inside the disposable container, so a malicious plugin cannot reach the host; The cache is a named volume (`riotbox-cache-opencode`, mounted at `~/.cache/opencode`) and is prunable via `podman volume rm riotbox-cache-opencode` — nothing persists on the host outside it; Integrity is bounded only by what the user pins in each plugin entry (version/git ref), the same supply-chain exposure they accept by listing the plugin (cf. the Claude Code plugin persistence concern); sync-settings.sh deliberately does NOT copy the host's generated `node_modules`/`package.json`/`package-lock.json`/`bun.lock`/`.gitignore` into the per-session config, so host-built native binaries never cross the host→container boundary — the install is rebuilt in-container against the container platform                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | code_review |
 | CT-021 | Arbitrary run-time engine flags via RIOTBOX_EXTRA_ARGS can weaken or disable container isolation (e.g. --privileged, -v /:/host, --security-opt label=disable, --pid=host) | libexec/extra-args.sh, libexec/launch.sh                   | 🔴 Critical | 🟢 Low    | ⚠️ Risk Accepted     | Opt-in only; value comes from trusted config/env, never untrusted input; `extra_args_gate` prints a WARNING and requires `[y/N]` confirmation (default No) on every interactive launch; non-TTY launches abort unless `RIOTBOX_EXTRA_ARGS_ACK=1` is set as an explicit acknowledgment; a bare `--` token is rejected so the launcher's own trailing `-w`/image cannot be turned into positionals; flags are appended after managed flags so the user sees exactly what they added; same trust philosophy as the build-time `CONTAINER_EXTRA_ARGS` escape hatch                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | code_review |
 | CT-022 | Container replaces a mount source or `.projects` in the read-write session dir with a symlink, so the next launch's host-side code follows it to an arbitrary host path, or plants legacy-layout entries for the migration to import as trusted state | scripts/mount-projects.sh, scripts/lib/session-state.sh, agents/*/sync-settings.sh, libexec/remove-session.sh, libexec/reset-session.sh, libexec/list-sessions.sh | 🔴 Critical | 🟢 Low | ✅ Controlled | Every mount source RiotBox creates for a session lives in `~/.local/share/riotbox-state/<key>/`, which is never mounted whole, so the container cannot reach the entry it would have to replace; `ensure_real_dir` replaces a symlink or non-directory at each source; the migration from the legacy in-session paths runs once per entry (recorded in `<state>/.migrated` under `.migrate.lock`), removes planted links without following them, re-checks each moved entry and never merges; every agent sync and the `.projects` write stage out of the container's reach and rename into place, under a per-project `flock`; `.projects` is read with one nofollow, non-blocking, 64 KiB-capped open and printed through the shared terminal sanitiser; session commands act only on directories carrying `.projects`, so the rootless app tree survives `--all`. Residual (see [Session state directory](#session-state-directory)): a running session can make a concurrent launch abort with `changed during sync`; a second launch empties a running opencode session's config copy; a future migration entry gets one import window; a project that is an ancestor of the data dir mounts all of it read-write, with a warning at each launch | tests/session-state.venom.yml, tests/session-commands.venom.yml, tests/sync-claude-settings.venom.yml, tests/agents.venom.yml |
+| CT-023 | Agent rewrites the riotbox host config (bash that riotbox sources as the user) through a read-write mount that reaches it (`riotbox ~`, a dotfiles repo the config links into), or a launcher sources a config another user could write | scripts/lib/host-config.sh, scripts/lib/bind-mounts.sh, libexec/launch.sh, libexec/hub.sh, scripts/preflight.sh, scripts/mount-projects.sh, scripts/detect-mounts.sh | 🔴 Critical | 🟡 Medium | ✅ Controlled | `riotbox_config_vet` refuses a config whose file, directory or link-holding directories are owned by another user or writable by group/other; `config_protect_mounts` pins the directories above the config's real directory and mounts it read-only under a reaching read-write mount, and refuses the mounts it cannot protect (read-write mount of the directory or a link on its path, overlay upperdir/workdir, nested or `CAP_SYS_ADMIN` launches, unparseable `--mount`, link loops). Residual (see [Host config](#host-config-sourced-as-bash)): ancestors beyond those checked, `--volumes-from`/named volumes/`--rootfs`, docker unverified, system config dir out of scope, and under `riotbox ~` the agent can still edit `~/.bashrc` | tests/host-config.venom.yml, tests/bind-mounts.venom.yml, tests/config-protect-e2e.venom.yml |

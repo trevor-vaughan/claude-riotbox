@@ -1,0 +1,73 @@
+name: bind-mounts — the agent's bind mounts and how it may write through them
+vars:
+  root: "."
+
+testcases:
+  - name: bind_mount_access reads ro, overlay and rw as podman does, failing closed to rw
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/bind-mounts.sh"
+          want() {
+            local got; got="$(bind_mount_access "$1")"
+            [ "${got}" = "$2" ] || { echo "BAD: '$1' -> ${got}, want $2" >&2; exit 1; }
+          }
+          want "" rw
+          want "z" rw
+          want "ro" ro
+          want "readonly" ro
+          want "ro=true" ro
+          want "readonly=true" ro
+          want "Z,ro" ro
+          want "ro,rw" rw
+          want "ro,ro=false" rw
+          want "readonly,readonly=false" rw
+          want "rw,ro" rw
+          want "O" overlay
+          want "O,upperdir=/u,workdir=/w" overlay
+          want "O,rw" overlay
+          want "ro=yes" rw
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: agent_bind_mounts still reads every source of the agent's mounts
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/bind-mounts.sh"
+          PROJECT_VOLUME_FLAGS="-v /p:/p:z" MOUNTS="--mount type=bind,source=/m,destination=/dm,readonly" \
+            CREDFILE_FLAGS="-v vol:/v" RIOTBOX_EXTRA_ARGS="--volume=/x:/dx/"
+          got="$(agent_bind_mounts | tr '\0' '|')"
+          want="project|/p|/p|z|1|mounts.conf|/m|/dm|readonly|1|credential files|vol|/v||0|RIOTBOX_EXTRA_ARGS|/x|/dx||1|"
+          [ "${got}" = "${want}" ] || { echo "BAD: ${got}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: mount_unreadable_why flags the --mount values agent_bind_mounts cannot be trusted to read
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/bind-mounts.sh"
+          want() {
+            local got; got="$(mount_unreadable_why "$1")"
+            [ "${got}" = "$2" ] || { echo "BAD: '$1' -> '${got}', want '$2'" >&2; exit 1; }
+          }
+          want 'type=bind,"src=/h",dst=/h' "a quoted field"
+          want '"type=bind",src=/h,dst=/h' "a quoted field"
+          want 'type=volume,src=v,dst=/v,volume-opt=type=none,volume-opt=o=bind,volume-opt=device=/h' "volume-opt"
+          want 'type=glob,src=/h/*,dst=/g' "type=glob"
+          want 'type=bind,src=/h,dst=/h' ""
+          want 'type=bind,src=/h,dst=/h,readonly' ""
+          want 'type=tmpfs,dst=/t' ""
+          want 'src=v,dst=/v' ""
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK

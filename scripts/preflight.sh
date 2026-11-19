@@ -86,13 +86,16 @@ source "${PREFLIGHT_SCRIPT_DIR}/../agents/registry.sh"
 # config is visible both when this file is executed directly and when it is
 # sourced as a library (the venom doctor suites; setup.sh runs it as a
 # subprocess and picks the config up through the direct-execution path).
-_PREFLIGHT_CONFIG_USER="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox/config"
-_PREFLIGHT_CONFIG_SYSTEM="${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}/config"
-# shellcheck disable=SC1090
-[[ -f "${_PREFLIGHT_CONFIG_USER}" ]] && source "${_PREFLIGHT_CONFIG_USER}"
-# shellcheck disable=SC1090,SC1091
-[[ -f "${_PREFLIGHT_CONFIG_SYSTEM}" ]] && source "${_PREFLIGHT_CONFIG_SYSTEM}"
-unset _PREFLIGHT_CONFIG_USER _PREFLIGHT_CONFIG_SYSTEM
+# riotbox_config_vet refuses a config that anyone else could have written.
+# shellcheck source=scripts/lib/host-config.sh disable=SC1091
+source "${PREFLIGHT_SCRIPT_DIR}/lib/host-config.sh"
+# shellcheck disable=SC2310 # it has already said why it failed
+riotbox_config_vet || exit 1
+for _preflight_config in "${RIOTBOX_CONFIG_FILES[@]}"; do
+	# shellcheck disable=SC1090
+	source "${_preflight_config}"
+done
+unset _preflight_config
 
 # ── Output helpers ──────────────────────────────────────────────────────────
 

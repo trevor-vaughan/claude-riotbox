@@ -14,12 +14,18 @@ set -euo pipefail
 # (env wins because := only assigns when unset; XDG wins over /etc because a
 # value it sets first survives the later /etc source). RIOTBOX_SYSCONF_DIR
 # overrides the system dir (default /etc/riotbox) for relocatable installs/tests.
-RIOTBOX_CONFIG_USER="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox/config"
-RIOTBOX_CONFIG_SYSTEM="${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}/config"
-# shellcheck disable=SC1090
-[[ -f "${RIOTBOX_CONFIG_USER}" ]] && source "${RIOTBOX_CONFIG_USER}"
-# shellcheck disable=SC1090,SC1091
-[[ -f "${RIOTBOX_CONFIG_SYSTEM}" ]] && source "${RIOTBOX_CONFIG_SYSTEM}"
+# riotbox_config_vet refuses a config that anyone else could have written.
+# shellcheck source=../scripts/lib/bind-mounts.sh disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/bind-mounts.sh"
+# shellcheck source=../scripts/lib/host-config.sh disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/host-config.sh"
+# shellcheck disable=SC2310 # it has already said why it failed
+riotbox_config_vet || exit 1
+for _riotbox_config in "${RIOTBOX_CONFIG_FILES[@]}"; do
+	# shellcheck disable=SC1090
+	source "${_riotbox_config}"
+done
+unset _riotbox_config
 
 # Mutual-exclusion guard for the two container-runtime delegation modes.
 # Fires before any side-effectful work (mount setup, image lookup, podman
@@ -358,6 +364,12 @@ extra_args_gate || exit 1
 source "$(dirname "${BASH_SOURCE[0]}")/credfile-vars.sh"
 CREDFILE_FLAGS="$(credfile_flags)"
 
+# config_protect_mounts pins the user's riotbox config dir read-only wherever
+# an agent mount reaches it (`riotbox ~`): the agent runs as the user, and
+# the config runs on the host at the next launch.
+# shellcheck disable=SC2310 # it has already said why it failed
+config_protect_mounts || exit 1
+
 # RIOTBOX_EGRESS=1: start this launch's proxy last, after every check
 # that can abort, so an abort leaves nothing to clean up. The one exception
 # is egress_gate_env, which needs the injected names egress_start returns;
@@ -410,6 +422,7 @@ ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${USER_FLAG} ${IN
 	${RIOTBOX_HEADROOM_PROXY_TIMEOUT:+-e RIOTBOX_HEADROOM_PROXY_TIMEOUT="${RIOTBOX_HEADROOM_PROXY_TIMEOUT}"} \
 	${RIOTBOX_EXTRA_ARGS:-} \
 	"${EGRESS_MASK_FLAGS[@]}" \
+	"${CONFIG_PROTECT_FLAGS[@]}" \
 	-w "${WORKDIR}" \
 	"${IMAGE_NAME}" \
 	"$@"

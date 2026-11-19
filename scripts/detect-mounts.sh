@@ -40,18 +40,20 @@ RIOTBOX_SYSCONF_DIR="${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}"
 # runs with stdout redirected to stderr: a stray echo in someone's config
 # stays a diagnostic instead of becoming a container argument. A config that
 # ends on a non-zero status is reported and tolerated rather than killing the
-# launch at launch.sh's `MOUNTS=` assignment with no explanation.
-_dm_source_config() {
-	local file="$1"
-	[[ -f "${file}" ]] || return 0
-	# shellcheck disable=SC1090,SC1091  # user-provided path, resolved at run time
-	if ! { source "${file}"; } >&2; then
-		echo "WARN: ${file}: config exited non-zero; continuing without it" >&2
+# launch at launch.sh's `MOUNTS=` assignment with no explanation. Each file
+# is vetted first (scripts/lib/host-config.sh): riotbox_config_vet reads the
+# same two paths as RIOTBOX_CONFIG_DIR and RIOTBOX_SYSCONF_DIR above.
+# shellcheck source=scripts/lib/host-config.sh disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/lib/host-config.sh"
+# shellcheck disable=SC2310 # it has already said why it failed
+riotbox_config_vet || exit 1
+for _dm_config in "${RIOTBOX_CONFIG_FILES[@]}"; do
+	# shellcheck disable=SC1090
+	if ! { source "${_dm_config}"; } >&2; then
+		echo "WARN: ${_dm_config}: config exited non-zero; continuing without it" >&2
 	fi
-}
-_dm_source_config "${RIOTBOX_CONFIG_DIR}/config"
-_dm_source_config "${RIOTBOX_SYSCONF_DIR}/config"
-unset -f _dm_source_config
+done
+unset _dm_config
 
 # ── Output format ───────────────────────────────────────────────────────────
 OUTPUT_FORMAT="podman"

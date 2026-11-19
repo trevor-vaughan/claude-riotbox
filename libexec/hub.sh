@@ -105,12 +105,17 @@ for name in "${unit_env_names[@]}"; do
 	if [[ -n "${!name:-}" ]]; then caller_env[${name}]="${!name}"; fi
 done
 
-RIOTBOX_CONFIG_USER="${XDG_CONFIG_HOME:-$HOME/.config}/riotbox/config"
-RIOTBOX_CONFIG_SYSTEM="${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}/config"
-# shellcheck disable=SC1090
-[[ -f "${RIOTBOX_CONFIG_USER}" ]] && source "${RIOTBOX_CONFIG_USER}"
-# shellcheck disable=SC1090,SC1091
-[[ -f "${RIOTBOX_CONFIG_SYSTEM}" ]] && source "${RIOTBOX_CONFIG_SYSTEM}"
+# riotbox_config_vet refuses a config that anyone else could have written.
+# shellcheck source=../scripts/lib/host-config.sh disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/host-config.sh"
+# shellcheck disable=SC2310 # it has already said why it failed
+riotbox_config_vet || exit 1
+# shellcheck disable=SC2154 # set by riotbox_config_vet
+for _riotbox_config in "${RIOTBOX_CONFIG_FILES[@]}"; do
+	# shellcheck disable=SC1090
+	source "${_riotbox_config}"
+done
+unset _riotbox_config
 
 # shellcheck source=./anywhere-lib.sh disable=SC1091
 source "$(dirname "${BASH_SOURCE[0]}")/anywhere-lib.sh"

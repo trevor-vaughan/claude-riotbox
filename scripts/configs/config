@@ -194,7 +194,17 @@
 #     unset will ABORT the launcher with `bash: BAR: unbound variable`.
 #     For an optional default, use `FOO=${BAR:-}` or `FOO=${BAR:-fallback}`.
 #   * Command substitution failures inside an assignment (`FOO=$(missing)`)
-#     are NOT caught by `set -e`; the resulting VALUE is empty.
+#     are NOT caught by `set -e`; the resulting VALUE is empty and the launch
+#     goes on without the key. To fail closed, test the value and exit:
+#
+#         _tok="$(pass show work/api-token)" && [[ -n "${_tok}" ]] || { echo "riotbox: could not read work/api-token" >&2; exit 1; }
+#         RIOTBOX_PASSTHROUGH_EXTRA_VARS="
+#             WORK_TOKEN=${_tok}
+#         "
+#
+#     `exit` here ends the riotbox command. The command runs every time
+#     riotbox reads this file: each launch, `riotbox mounts`,
+#     `riotbox doctor` and the hub.
 #   * Values must not contain newlines. For multiline values, define and
 #     export the variable in this file as a separate statement and pass
 #     it by bare name.
@@ -224,12 +234,13 @@
 # Multi-line, mixed forms. NOTE the plain `VAR="..."` assignment (no leading
 # `:`): a multi-line body can't use the `:=` default idiom, so this FORCES the
 # value and overrides anything set in the host environment.
+# _tok="$(cat ~/.secrets/work-api-token)" && [[ -n "${_tok}" ]] || { echo "riotbox: could not read work-api-token" >&2; exit 1; }
 # RIOTBOX_PASSTHROUGH_VARS="
 #     ANTHROPIC_API_KEY
 #     OPENAI_API_KEY
 #     PROJECT_NAME=$(basename "${PWD}")
 #     GIT_BRANCH=$(git -C "${PWD}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
-#     TOKEN=$(cat ~/.secrets/work-api-token)
+#     TOKEN=${_tok}
 #     EDITOR=vim
 # "
 
