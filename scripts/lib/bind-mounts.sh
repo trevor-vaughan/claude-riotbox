@@ -11,6 +11,9 @@
 #                             PROJECT_VOLUME_FLAGS, MOUNTS, CREDFILE_FLAGS,
 #                             RIOTBOX_EXTRA_ARGS (each may be unset).
 #   bind_mount_access <opts>  print ro, overlay or rw for a mount's options
+#   mount_unreadable_why <value>
+#                             print why agent_bind_mounts cannot read a
+#                             --mount value, or nothing
 # ─────────────────────────────────────────────────────────────────────────────
 
 # engine_args_split <args> — print engine flags <args>, split on whitespace
@@ -147,4 +150,29 @@ bind_mount_access() {
 	else
 		echo rw
 	fi
+}
+
+# mount_unreadable_why <--mount value> — print why agent_bind_mounts cannot
+# be trusted to read this --mount value, or nothing: a quoted field (podman
+# reads the value as CSV), volume-opt (a volume's driver options can
+# bind-mount any host path), or type=glob (host paths matched by a pattern).
+mount_unreadable_why() {
+	local field type=""
+	local -a fields=()
+	if [[ "$1" == *'"'* ]]; then
+		echo "a quoted field"
+		return
+	fi
+	IFS=, read -ra fields <<<"$1"
+	for field in "${fields[@]}"; do
+		case "${field}" in
+		type=*) type="${field#type=}" ;;
+		volume-opt=*)
+			echo "volume-opt"
+			return
+			;;
+		*) ;;
+		esac
+	done
+	[[ "${type}" != glob ]] || echo "type=glob"
 }

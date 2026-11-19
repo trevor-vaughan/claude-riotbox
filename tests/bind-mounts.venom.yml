@@ -48,3 +48,26 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring OK
+
+  - name: mount_unreadable_why flags the --mount values agent_bind_mounts cannot be trusted to read
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/bind-mounts.sh"
+          want() {
+            local got; got="$(mount_unreadable_why "$1")"
+            [ "${got}" = "$2" ] || { echo "BAD: '$1' -> '${got}', want '$2'" >&2; exit 1; }
+          }
+          want 'type=bind,"src=/h",dst=/h' "a quoted field"
+          want '"type=bind",src=/h,dst=/h' "a quoted field"
+          want 'type=volume,src=v,dst=/v,volume-opt=type=none,volume-opt=o=bind,volume-opt=device=/h' "volume-opt"
+          want 'type=glob,src=/h/*,dst=/g' "type=glob"
+          want 'type=bind,src=/h,dst=/h' ""
+          want 'type=bind,src=/h,dst=/h,readonly' ""
+          want 'type=tmpfs,dst=/t' ""
+          want 'src=v,dst=/v' ""
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK

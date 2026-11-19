@@ -89,34 +89,30 @@ EGRESS_INJECTED=()
 # current directory, so nothing between the gate and the engine run may
 # change it.
 _egress_mount_why() {
-	local flag="$1" value="$2" origin="${3:-RIOTBOX_EXTRA_ARGS}" field type="" fields=() srcs=() src runtimes=() runtime path forbidden
+	local flag="$1" value="$2" origin="${3:-RIOTBOX_EXTRA_ARGS}" field type="" fields=() srcs=() src runtimes=() runtime path forbidden why
 	if [[ "${flag}" = "--mount" ]]; then
-		# podman reads the value as one CSV record; a quoted field is not
-		# parsed here, so it cannot be checked.
-		if [[ "${value}" == *'"'* ]]; then
-			echo "RIOTBOX_EGRESS=1 refuses ${origin} containing --mount with a quoted field: it cannot be checked for a route around the proxy."
+		why="$(mount_unreadable_why "${value}")"
+		case "${why}" in
+		"") ;;
+		type=glob)
+			echo "RIOTBOX_EGRESS=1 refuses ${origin} containing --mount type=glob: it cannot be checked for a route around the proxy."
 			return 0
-		fi
+			;;
+		*)
+			echo "RIOTBOX_EGRESS=1 refuses ${origin} containing --mount with ${why}: it cannot be checked for a route around the proxy."
+			return 0
+			;;
+		esac
 		IFS=, read -ra fields <<<"${value}"
 		for field in "${fields[@]}"; do
 			case "${field}" in
 			type=*) type="${field#type=}" ;;
 			src=* | source=*) srcs+=("${field#*=}") ;;
-			# A volume's driver options can bind-mount any host path, whatever
-			# the type says.
-			volume-opt=*)
-				echo "RIOTBOX_EGRESS=1 refuses ${origin} containing --mount with volume-opt: it cannot be checked for a route around the proxy."
-				return 0
-				;;
 			*) ;;
 			esac
 		done
 		case "${type}" in
 		bind) ;;
-		glob)
-			echo "RIOTBOX_EGRESS=1 refuses ${origin} containing --mount type=glob: it cannot be checked for a route around the proxy."
-			return 0
-			;;
 		# volume (the default when omitted), image and artifact sources are
 		# names, not host paths; the other types take no source.
 		*) return 0 ;;
