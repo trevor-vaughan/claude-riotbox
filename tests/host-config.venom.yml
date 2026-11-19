@@ -227,3 +227,21 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring OK
+
+  - name: a launch whose project reaches the config dir mounts it read-only
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          RIOTBOX_PROJECTS="${XDG_CONFIG_HOME}" egress_launch >/dev/null 2>"${TMP}/err" || { echo "BAD: launch failed: $(cat "${TMP}/err")" >&2; exit 1; }
+          argv=" $(cat "${CAPTURE}") "
+          [[ "${argv}" == *"\"source=${XDG_CONFIG_HOME}/riotbox\""*",readonly"* ]] || { echo "BAD: no read-only config mount in: ${argv}" >&2; exit 1; }
+          RIOTBOX_PROJECTS="${HOME}/proj" egress_launch >/dev/null 2>&1
+          [[ "$(cat "${CAPTURE}")" != *"source=${XDG_CONFIG_HOME}/riotbox"* ]] || { echo "BAD: protected without a reaching mount" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK

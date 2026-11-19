@@ -1,0 +1,37 @@
+name: config protection — end to end against real podman
+vars:
+  root: "."
+
+# Proves on a real engine that the flags config_protect_mounts emits stop
+# the agent from changing the config dir, and leave the rest writable.
+# Skipped unless RIOTBOX_CONFIG_E2E=1 (task test:config-e2e).
+
+testcases:
+  - name: through a mount of home, the config cannot be written or moved away; the rest stays writable
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          if [ "${RIOTBOX_CONFIG_E2E:-}" != 1 ]; then echo "SKIP: run through 'task test:config-e2e'"; echo OK; exit 0; fi
+          command -v podman >/dev/null || { echo "FAIL: podman not found" >&2; exit 1; }
+          source "{{.root}}/scripts/lib/bind-mounts.sh"
+          source "{{.root}}/scripts/lib/host-config.sh"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          H="${TMP}/home"; export XDG_CONFIG_HOME="${H}/.config"; unset RIOTBOX_NESTED
+          mkdir -p "${H}/.config/riotbox" "${H}/.config/other"; echo original >"${H}/.config/riotbox/config"
+          PROJECT_VOLUME_FLAGS="-v ${H}:/h" MOUNTS="" CREDFILE_FLAGS="" RIOTBOX_EXTRA_ARGS=""
+          config_protect_mounts
+          out="$(podman run --rm --userns=keep-id -v "${H}:/h" "${CONFIG_PROTECT_FLAGS[@]}" docker.io/library/busybox:1.37 sh -c '
+            echo evil >>/h/.config/riotbox/config 2>/dev/null && echo WROTE
+            mv /h/.config /h/.moved 2>/dev/null && echo MOVED-PARENT
+            mv /h/.config/riotbox /h/.config/r2 2>/dev/null && echo MOVED-DIR
+            echo s >/h/.config/other/f && echo sibling-ok
+            touch /h/new && echo home-ok' 2>&1)"
+          echo "${out}"
+          [[ "${out}" != *WROTE* && "${out}" != *MOVED-PARENT* && "${out}" != *MOVED-DIR* ]] || { echo "BAD: the agent changed the config dir" >&2; exit 1; }
+          [[ "${out}" == *sibling-ok* && "${out}" == *home-ok* ]] || { echo "BAD: protection broke ordinary writes" >&2; exit 1; }
+          [ "$(cat "${H}/.config/riotbox/config")" = original ] || { echo "BAD: config changed" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK

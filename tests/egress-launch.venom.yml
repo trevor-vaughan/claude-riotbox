@@ -541,8 +541,12 @@ testcases:
           want /x/riotbox-egress /e
           # Nested mode's CAP_SYS_ADMIN can unmount a mask, so a mount that
           # needs one is refused there, before anything starts.
+          # The config dir sits outside the project here, so this case still
+          # reaches the egress refusal rather than config protection's own.
           CASE="nested riotbox ~"; rm -f "${CAPTURE}"; : >"${FAKE_ENGINE_LOG}"
-          rc=0; out="$(RIOTBOX_EGRESS=1 RIOTBOX_NESTED=1 RIOTBOX_PROJECTS="${HOME}" egress_launch 2>&1)" || rc=$?
+          OUTSIDE_CONFIG="$(mktemp -d)"
+          rc=0; out="$(RIOTBOX_EGRESS=1 RIOTBOX_NESTED=1 XDG_CONFIG_HOME="${OUTSIDE_CONFIG}" RIOTBOX_PROJECTS="${HOME}" egress_launch 2>&1)" || rc=$?
+          rm -rf "${OUTSIDE_CONFIG}"
           [ "${rc}" -eq 1 ] || { echo "BAD: ${CASE}: exited ${rc}: ${out}" >&2; exit 1; }
           [[ "${out}" == *"ERROR: RIOTBOX_EGRESS=1 with RIOTBOX_NESTED=1 refuses project mounting ${HOME}"* ]] ||
             { echo "BAD: ${CASE}: unclear message: ${out}" >&2; exit 1; }
