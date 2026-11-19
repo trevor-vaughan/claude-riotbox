@@ -1,0 +1,91 @@
+name: host config — vetted before sourcing, protected from the agent's mounts
+vars:
+  root: "."
+  helpers: "{{.root}}/tests/lib/egress-test-helpers.sh"
+
+# riotbox_config_vet refuses a host config that anyone but the user (or
+# root) could have written: sourcing it would run their code as the user.
+# config_protect_mounts keeps the agent from rewriting the user config
+# through a read-write mount that reaches it (`riotbox ~`).
+
+testcases:
+  - name: riotbox_config_vet lists present files in precedence order and warns on a readable user config
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/host-config.sh"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          u="${XDG_CONFIG_HOME}/riotbox/config" s="${RIOTBOX_SYSCONF_DIR}/config"
+          mkdir -p "${u%/*}" "${RIOTBOX_SYSCONF_DIR}"
+          # Neither file: nothing to source, nothing said.
+          riotbox_config_vet 2>"${TMP}/err" || { echo "BAD: refused with no files" >&2; exit 1; }
+          [ "${#RIOTBOX_CONFIG_FILES[@]}" -eq 0 ] && [ ! -s "${TMP}/err" ] || { echo "BAD: no files: ${RIOTBOX_CONFIG_FILES[*]} $(cat "${TMP}/err")" >&2; exit 1; }
+          # A dangling link is skipped, as the old [[ -f ]] skipped it.
+          ln -s "${TMP}/nowhere" "${u}"
+          riotbox_config_vet 2>"${TMP}/err" && [ "${#RIOTBOX_CONFIG_FILES[@]}" -eq 0 ] || { echo "BAD: dangling link not skipped" >&2; exit 1; }
+          rm "${u}"
+          : >"${u}"; chmod 600 "${u}"; : >"${s}"; chmod 644 "${s}"
+          riotbox_config_vet 2>"${TMP}/err" || { echo "BAD: refused $(cat "${TMP}/err")" >&2; exit 1; }
+          [ "${RIOTBOX_CONFIG_FILES[*]}" = "${u} ${s}" ] || { echo "BAD: files ${RIOTBOX_CONFIG_FILES[*]}" >&2; exit 1; }
+          [ ! -s "${TMP}/err" ] || { echo "BAD: warned on 0600/0644: $(cat "${TMP}/err")" >&2; exit 1; }
+          # A user config others can read is sourced, with a warning.
+          chmod 644 "${u}"
+          riotbox_config_vet 2>"${TMP}/err" || { echo "BAD: refused 0644 user config" >&2; exit 1; }
+          grep -qF "chmod 600 ${u}" "${TMP}/err" || { echo "BAD: no chmod 600 hint: $(cat "${TMP}/err")" >&2; exit 1; }
+          # A link to a good file is accepted; the resolved path is listed.
+          mkdir -p "${TMP}/dots"; chmod 700 "${TMP}/dots"; mv "${u}" "${TMP}/dots/config"; chmod 600 "${TMP}/dots/config"
+          ln -s "${TMP}/dots/config" "${u}"
+          riotbox_config_vet 2>"${TMP}/err" || { echo "BAD: refused a good link: $(cat "${TMP}/err")" >&2; exit 1; }
+          [ "${RIOTBOX_CONFIG_FILES[0]}" = "${TMP}/dots/config" ] || { echo "BAD: link not resolved: ${RIOTBOX_CONFIG_FILES[0]}" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: riotbox_config_vet refuses a config, or a directory holding it, that others could write
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/host-config.sh"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          export XDG_CONFIG_HOME="${TMP}/xdg" RIOTBOX_SYSCONF_DIR="${TMP}/etc"
+          u="${XDG_CONFIG_HOME}/riotbox/config" d="${XDG_CONFIG_HOME}/riotbox"
+          fresh() {
+            rm -rf "${XDG_CONFIG_HOME}" "${RIOTBOX_SYSCONF_DIR}" "${TMP}/dots"
+            mkdir -p "${d}" "${RIOTBOX_SYSCONF_DIR}"; chmod 700 "${d}"
+            : >"${u}"; chmod 600 "${u}"
+          }
+          refused() {
+            local rc=0 err
+            err="$(riotbox_config_vet 2>&1)" || rc=$?
+            [ "${rc}" -eq 1 ] || { echo "BAD: $1 was accepted (rc ${rc})" >&2; exit 1; }
+            [[ "${err}" == *"$2"* ]] || { echo "BAD: $1: unclear message: ${err}" >&2; exit 1; }
+            [[ "${err}" == *'See README "Config file security".'* ]] || { echo "BAD: $1: no README pointer: ${err}" >&2; exit 1; }
+          }
+          fresh; chmod 620 "${u}"; refused "g+w file" "chmod go-w ${u}"
+          fresh; chmod 602 "${u}"; refused "o+w file" "chmod go-w ${u}"
+          fresh; chmod 770 "${d}"; refused "g+w dir" "chmod go-w ${d}"
+          fresh; chmod 1777 "${d}"; refused "sticky o+w dir" "chmod go-w ${d}"
+          fresh; rm "${u}"; mkfifo "${u}"; refused "fifo" "is not a regular file"
+          fresh; rm "${u}"; mkdir "${u}"; refused "directory" "is not a regular file"
+          fresh; : >"${RIOTBOX_SYSCONF_DIR}/config"; chmod 646 "${RIOTBOX_SYSCONF_DIR}/config"
+          refused "o+w system file" "chmod go-w ${RIOTBOX_SYSCONF_DIR}/config"
+          # A link in a group-writable dir could be repointed by the group.
+          fresh; mkdir "${TMP}/dots"; mv "${u}" "${TMP}/dots/config"; ln -s "${TMP}/dots/config" "${u}"; chmod 770 "${d}"
+          refused "link in g+w dir" "chmod go-w ${d}"
+          # So could the file it points at, in a group-writable dir.
+          fresh; mkdir "${TMP}/dots"; chmod 770 "${TMP}/dots"; mv "${u}" "${TMP}/dots/config"; ln -s "${TMP}/dots/config" "${u}"
+          refused "target in g+w dir" "chmod go-w ${TMP}/dots"
+          if [ "${EUID}" -eq 0 ]; then
+            fresh; chown 65534 "${u}"; refused "foreign owner" "is owned by uid 65534"
+            fresh; chown 65534 "${d}"; refused "foreign dir owner" "is owned by uid 65534"
+          else
+            echo "SKIP foreign owner: needs root (task test:as-root -- tests/host-config.venom.yml)"
+          fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
