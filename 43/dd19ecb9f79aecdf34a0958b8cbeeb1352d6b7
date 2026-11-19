@@ -1,0 +1,27 @@
+THREAT_MODEL.md
+  s_463985fbd635b6::t_50995efd2583c7 1220-1226,1273-1279
+tests/anywhere.venom.yml
+  s_463985fbd635b6::t_6298c12aa1bdc4 848,856-859,863,868,872,879,886-887,890,893-896
+  s_463985fbd635b6::t_50995efd2583c7 902-903
+README.md
+  s_463985fbd635b6::t_419b2f54b0d149 330-334
+container/anywhere.sh
+  s_463985fbd635b6::t_50995efd2583c7 32-34
+  s_463985fbd635b6::t_042b0378cfc19e 62-68,97-99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "43dd19ecb9f79aecdf34a0958b8cbeeb1352d6b7",
+  "prompts": {},
+  "sessions": {
+    "s_463985fbd635b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ae5333a8-4dbb-4c8e-9db6-922304518d40",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
