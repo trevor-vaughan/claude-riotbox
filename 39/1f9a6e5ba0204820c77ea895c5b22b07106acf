@@ -1,0 +1,27 @@
+scripts/lib/bind-mounts.sh
+  s_102237605dd52b::t_037fa0370e445c 1-150
+tests/bind-mounts.venom.yml
+  s_102237605dd52b::t_315900bb17c9a8 1-50
+docs/dev/egress.md
+  s_102237605dd52b::t_037fa0370e445c 228,615
+libexec/egress-lib.sh
+  s_102237605dd52b::t_4ec0b2b80007a7 352,379-380
+  s_102237605dd52b::t_6713e6a2b03895 346-348
+  s_102237605dd52b::t_037fa0370e445c 66-68,179,196-197,266,285-286,356-357
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "1e3ded475c8bc46f1992271f518ced1b49cd4e5d",
+  "prompts": {},
+  "sessions": {
+    "s_102237605dd52b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8c9ff217-5395-49ed-8ccf-fdd97368c932",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
