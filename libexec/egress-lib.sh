@@ -63,6 +63,9 @@
 #                 agent_call (agents/registry.sh).
 # ─────────────────────────────────────────────────────────────────────────────
 
+# shellcheck source=../scripts/lib/bind-mounts.sh disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/../scripts/lib/bind-mounts.sh"
+
 RIOTBOX_EGRESS_DEFAULT_IMAGE="docker.io/envoyproxy/envoy:distroless-v1.40.1@sha256:48a8c5ec92d9775d5483e32fbb2d6775439bdf957c1602d47afb90644526c093"
 EGRESS_SYSTEM_CONF="${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}/egress.conf"
 EGRESS_USER_CONF="${XDG_CONFIG_HOME:-${HOME}/.config}/riotbox/egress.conf"
@@ -151,57 +154,6 @@ _egress_mount_why() {
 	done
 }
 
-# _egress_split_args <args> — print engine flags <args>, split on whitespace
-# as launch.sh splits them into the run command, as NUL-terminated records
-# in the order podman reads them: `w<word>` for each word; for each mount,
-# `m<flag>` (-v, --volume or --mount) followed by its value; for each
-# -e/--env, `e<value>`; for each --secret, `s<value>`; and for each --pid,
-# `p<value>`. A word that is a flag's value is also printed as a
-# word, so a check of words still sees it. Grouped short flags are read as
-# podman parses them: its boolean ones (-d -i -P -q -t) are skipped; a v or
-# an e then takes the rest of the word, less one =, or else the next word.
-# Any other letter takes the rest as its own value.
-_egress_split_args() {
-	local args="$1" arg flag="" short
-	# shellcheck disable=SC2086 # split as launch.sh splits it into the run command
-	for arg in ${args}; do
-		case "${flag}" in
-		"") ;;
-		-e | --env) printf 'e%s\0' "${arg}" ;;
-		--secret) printf 's%s\0' "${arg}" ;;
-		--pid) printf 'p%s\0' "${arg}" ;;
-		*) printf 'm%s\0%s\0' "${flag}" "${arg}" ;;
-		esac
-		flag=""
-		printf 'w%s\0' "${arg}"
-		case "${arg}" in
-		--volume | --mount | --env | --secret | --pid) flag="${arg}" ;;
-		--volume=* | --mount=*) printf 'm%s\0%s\0' "${arg%%=*}" "${arg#*=}" ;;
-		--env=*) printf 'e%s\0' "${arg#*=}" ;;
-		--secret=*) printf 's%s\0' "${arg#*=}" ;;
-		--pid=*) printf 'p%s\0' "${arg#*=}" ;;
-		--*) ;;
-		-?*)
-			short="${arg#-}"
-			while [[ "${short}" == [diPqt]* ]]; do short="${short:1}"; done
-			if [[ "${short}" == [ev]* ]]; then
-				flag="-${short:0:1}"
-				short="${short:1}"
-				short="${short#=}"
-				if [[ -n "${short}" ]]; then
-					case "${flag}" in
-					-e) printf 'e%s\0' "${short}" ;;
-					*) printf 'm-v\0%s\0' "${short}" ;;
-					esac
-					flag=""
-				fi
-			fi
-			;;
-		*) ;;
-		esac
-	done
-}
-
 # _egress_env_why <origin> <value> [protected-name...] — print why an engine
 # -e/--env <value> from <origin> is refused, or nothing: NAME=VALUE for a
 # protected name (a key the proxy injects) would replace the placeholder the
@@ -224,7 +176,7 @@ _egress_env_why() {
 # protection from a route around the proxy is that it has no NET_ADMIN and
 # no other network; these flags could change either, and a mount or a host
 # root (--rootfs, --volumes-from) could hand it a host engine socket. <args>
-# is read as _egress_split_args reads it, as the engine will read it. With
+# is read as engine_args_split reads it, as the engine will read it. With
 # protected names (the keys the proxy injects), an -e/--env setting one
 # (_egress_env_why), any --env-file, any --secret of type=env and a --pid
 # other than private are refused too.
@@ -241,8 +193,8 @@ _egress_args_why() {
 	# or a namespace path) the agent, running as the same uid, could read
 	# them from /proc/<pid>/environ.
 	pid_why="RIOTBOX_EGRESS=1 refuses ${origin} sharing a PID namespace (--pid other than private) while the proxy injects keys: the agent could read a key from a host process's environment."
-	# shellcheck disable=SC2312 # _egress_split_args only prints
-	mapfile -d '' -t recs < <(_egress_split_args "${args}")
+	# shellcheck disable=SC2312 # engine_args_split only prints
+	mapfile -d '' -t recs < <(engine_args_split "${args}")
 	for ((i = 0; i < ${#recs[@]}; i++)); do
 		rec="${recs[i]}"
 		case "${rec}" in
@@ -304,60 +256,6 @@ egress_gate_mounts() {
 	return 1
 }
 
-# _egress_bind_mounts — print each bind mount of the agent's mounts
-# (PROJECT_VOLUME_FLAGS, MOUNTS, CREDFILE_FLAGS, RIOTBOX_EXTRA_ARGS, read as
-# _egress_split_args reads them) as five NUL-terminated fields: where it
-# came from, its source, its container destination without trailing
-# slashes, its options (the -v options; for --mount, the fields other than
-# type, source and destination, comma-joined in order), and 1 when the
-# source is a host path (a -v source starting with / or ., or any --mount
-# type=bind source) or 0 (a -v volume name). A -v without a destination
-# (an anonymous volume) and a --mount of any other type are skipped. The source and the
-# destination may be empty (`-v /a:`, `-v :/x`, a --mount without source=):
-# callers must check.
-_egress_bind_mounts() {
-	local spec origin rec value src dst opts host type field i
-	local -a recs fields
-	for spec in "PROJECT_VOLUME_FLAGS:project" "MOUNTS:mounts.conf" "CREDFILE_FLAGS:credential files" "RIOTBOX_EXTRA_ARGS:RIOTBOX_EXTRA_ARGS"; do
-		origin="${spec#*:}"
-		spec="${spec%%:*}"
-		# shellcheck disable=SC2312 # _egress_split_args only prints
-		mapfile -d '' -t recs < <(_egress_split_args "${!spec:-}")
-		for ((i = 0; i < ${#recs[@]}; i++)); do
-			rec="${recs[i]}"
-			[[ "${rec}" == m* ]] || continue
-			i=$((i + 1))
-			value="${recs[i]}"
-			src=""
-			dst=""
-			opts=""
-			host=1
-			if [[ "${rec}" == m--mount ]]; then
-				type=volume
-				IFS=, read -ra fields <<<"${value}"
-				for field in "${fields[@]}"; do
-					case "${field}" in
-					type=*) type="${field#type=}" ;;
-					src=* | source=*) src="${field#*=}" ;;
-					dst=* | dest=* | destination=* | target=*) dst="${field#*=}" ;;
-					*) opts="${opts:+${opts},}${field}" ;;
-					esac
-				done
-				[[ "${type}" == bind ]] || continue
-			else
-				[[ "${value}" == *:* ]] || continue
-				src="${value%%:*}"
-				dst="${value#*:}"
-				[[ "${dst}" != *:* ]] || opts="${dst#*:}"
-				dst="${dst%%:*}"
-				[[ "${src}" == /* || "${src}" == .* ]] || host=0
-			fi
-			while [[ "${dst}" == */ && "${dst}" != / ]]; do dst="${dst%/}"; done
-			printf '%s\0%s\0%s\0%s\0%s\0' "${origin}" "${src}" "${dst}" "${opts}" "${host}"
-		done
-	done
-}
-
 # egress_mask_data — set EGRESS_MASK_FLAGS to an empty tmpfs over every
 # container path through which an agent mount reaches RIOTBOX_EGRESS_ROOT;
 # return 1, saying why, when a mount is a file in it or, with
@@ -365,7 +263,7 @@ _egress_bind_mounts() {
 # host user, so a mount of the root, of a directory above it (`riotbox ~`)
 # or of a directory holding it through a link would let the agent rewrite
 # its own proxy's rds.json, which Envoy reloads live, and read every
-# session's access log. Mounts are read as _egress_split_args reads them,
+# session's access log. Mounts are read as engine_args_split reads them,
 # from PROJECT_VOLUME_FLAGS, MOUNTS, CREDFILE_FLAGS and RIOTBOX_EXTRA_ARGS,
 # after egress_gate and egress_gate_mounts have refused what they cannot
 # check. A bind mount of host source S at container path D reaches the
@@ -384,8 +282,8 @@ egress_mask_data() {
 	local -A seen=()
 	EGRESS_MASK_FLAGS=()
 	root="$(realpath -m -- "${RIOTBOX_EGRESS_ROOT}")"
-	# shellcheck disable=SC2312 # _egress_bind_mounts only prints
-	mapfile -d '' -t recs < <(_egress_bind_mounts)
+	# shellcheck disable=SC2312 # agent_bind_mounts only prints
+	mapfile -d '' -t recs < <(agent_bind_mounts)
 	for ((i = 0; i + 4 < ${#recs[@]}; i += 5)); do
 		origin="${recs[i]}" src="${recs[i + 1]}" dst="${recs[i + 2]}" opts="${recs[i + 3]}" host="${recs[i + 4]}"
 		# An overlay's upperdir and workdir are host dirs podman writes to
@@ -445,17 +343,18 @@ egress_mask_data() {
 # the agent keeps CAP_SYS_ADMIN and could remount read-only as read-write,
 # so any reaching mount is refused. A mount reaches the file when the real
 # path of its source is the file or a directory above it. Mounts are read as
-# _egress_bind_mounts reads them; options are classified failing closed
-# (anything not recognised as read-only or overlay is read-write).
+# agent_bind_mounts reads them; options are classified by bind_mount_access,
+# failing closed (anything not recognised as read-only or overlay is
+# read-write).
 # An overlay upperdir or workdir holding the file is refused as well, in
 # every mode: podman writes there.
 egress_guard_conf() {
-	local origin src dst opts host field real conf i ro overlay
+	local origin src dst opts host field real conf i access
 	local -a recs fields
 	[[ -n "${RIOTBOX_EGRESS_CONF:-}" ]] || return 0
 	conf="$(realpath -m -- "${RIOTBOX_EGRESS_CONF}")"
-	# shellcheck disable=SC2312 # _egress_bind_mounts only prints
-	mapfile -d '' -t recs < <(_egress_bind_mounts)
+	# shellcheck disable=SC2312 # agent_bind_mounts only prints
+	mapfile -d '' -t recs < <(agent_bind_mounts)
 	for ((i = 0; i + 4 < ${#recs[@]}; i += 5)); do
 		origin="${recs[i]}" src="${recs[i + 1]}" dst="${recs[i + 2]}" opts="${recs[i + 3]}" host="${recs[i + 4]}"
 		# An overlay's upperdir and workdir are host dirs podman writes to,
@@ -477,22 +376,8 @@ egress_guard_conf() {
 			echo "       Keep the file outside the agent's mounts, or run without RIOTBOX_NESTED=1. See README \"Egress proxy\"." >&2
 			return 1
 		fi
-		ro=0 overlay=0
-		IFS=, read -ra fields <<<"${opts}"
-		for field in "${fields[@]}"; do
-			case "${field}" in
-			ro | readonly | ro=true | readonly=true) ro=1 ;;
-			O) overlay=1 ;;
-			*) ;;
-			esac
-		done
-		for field in "${fields[@]}"; do
-			case "${field}" in
-			rw | ro=false | readonly=false) ro=0 ;;
-			*) ;;
-			esac
-		done
-		[[ "${ro}" = 1 || "${overlay}" = 1 ]] && continue
+		access="$(bind_mount_access "${opts}")"
+		[[ "${access}" == rw ]] || continue
 		echo "ERROR: RIOTBOX_EGRESS_CONF refuses ${origin} mounting ${src} read-write: it holds ${RIOTBOX_EGRESS_CONF}, and the agent could replace that file with one that lets it reach more." >&2
 		echo "       Keep the file outside the agent's read-write mounts, or mount it read-only (:ro). See README \"Egress proxy\"." >&2
 		return 1

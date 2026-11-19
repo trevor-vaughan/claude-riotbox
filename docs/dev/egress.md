@@ -225,7 +225,7 @@ minutes would cut a quiet model stream).
    own egress.conf (`RIOTBOX_EGRESS_CONF`) must not be writable by the agent:
    `egress_guard_conf` refuses the launch when a read-write agent mount
    reaches it (the same mount walk as `egress_mask_data`,
-   `_egress_bind_mounts`), and refuses any reaching mount in nested mode, so
+   `agent_bind_mounts`), and refuses any reaching mount in nested mode, so
    the agent cannot add allows that the user's next reload would apply. An
    overlay `upperdir` or `workdir` that holds the file is refused too, in
    every mode, as podman writes there. A
@@ -612,7 +612,7 @@ networks are unsupported in egress mode with injected keys.
 `egress_start` (it needs `EGRESS_INJECTED`, the names whose returned
 value is the placeholder) and fails the launch, through the EXIT trap
 that removes the proxy, when `RIOTBOX_EXTRA_ARGS` holds `-e`/`--env
-NAME=…` for an injected name (every spelling `_egress_split_args` parses,
+NAME=…` for an injected name (every spelling `engine_args_split` parses,
 grouped short flags included), any `--env-file`, or any `--secret` with
 `type=env` (its target defaults to the secret's name, so any could set a
 key). Each would replace the placeholder with a value of the user's
