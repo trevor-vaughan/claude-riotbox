@@ -1,0 +1,20 @@
+README.md
+  h_4db53f42b9be42 773,799,807
+THREAT_MODEL.md
+  h_4db53f42b9be42 1633-1634,1643-1644,1660-1669
+docs/dev/host-config.md
+  h_4db53f42b9be42 35-37,66-70
+scripts/configs/config
+  h_4db53f42b9be42 237,243
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8bb5dd84c3172042a775116dbd307e77434f742e",
+  "prompts": {},
+  "humans": {
+    "h_4db53f42b9be42": {
+      "author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
