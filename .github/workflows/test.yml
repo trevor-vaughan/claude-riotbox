@@ -112,6 +112,9 @@ jobs:
       - name: Egress proxy end-to-end (host podman)
         run: task test:egress-e2e MODE=llm
 
+      - name: Config protection end-to-end (host podman)
+        run: task test:config-e2e MODE=llm
+
       - name: Run Go suites (LLM-readable copy of failures)
         if: failure() && steps.tests.outcome == 'failure'
         run: task go:test MODE=llm
