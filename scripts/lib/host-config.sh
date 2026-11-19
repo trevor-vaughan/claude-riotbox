@@ -39,15 +39,16 @@ _riotbox_config_why() {
 # leaving out a file that does not exist (a dangling link included). Return
 # 1, saying why on stderr, when a present file's path is not absolute or
 # cannot be resolved (_config_walk), when it does not resolve to a regular
-# file, or when that file, the directory holding it, or the directory
-# holding any link on its path fails _riotbox_config_why: whoever could
-# write any of them could put code in the file, or point a name on its path
-# at their own. Warn when the user config is readable by others: it often
+# file, when that file has other hard links (writable through another name,
+# which no path check sees), or when that file, the directory holding it, or
+# the directory holding any link on its path fails _riotbox_config_why:
+# whoever could write any of them could put code in the file, or point a
+# name on its path at their own. Warn when the user config is readable by others: it often
 # holds keys. The caller sources after this returns, so a change in between
 # is possible, but only by someone these checks already trust: the user or
 # root.
 riotbox_config_vet() {
-	local file real path link why mode
+	local file real path link why mode nlink
 	local -a paths=()
 	RIOTBOX_CONFIG_FILES=()
 	for file in "${XDG_CONFIG_HOME:-${HOME}/.config}/riotbox/config" "${RIOTBOX_SYSCONF_DIR:-/etc/riotbox}/config"; do
@@ -55,13 +56,16 @@ riotbox_config_vet() {
 		path="${file}"
 		real=""
 		why=""
-		# shellcheck disable=SC2310 # _config_walk's failure is reported here
+		# shellcheck disable=SC2310 # _config_walk's failure, in the elif below, is reported here
 		if [[ "${file}" != /* ]]; then
 			why="is not an absolute path (set XDG_CONFIG_HOME or RIOTBOX_SYSCONF_DIR to one)"
 		elif ! _config_walk "${file}"; then
 			why="cannot be resolved (a link loop, or more than 40 links)"
 		elif real="${CONFIG_WALK_FILE}" && [[ ! -f "${real}" ]]; then
 			why="is not a regular file (replace it with one)"
+			path="${real}"
+		elif nlink="$(stat -c '%h' -- "${real}")" && ((nlink > 1)); then
+			why="has ${nlink} hard links, so it is writable through its other names (replace it with a copy or a symlink)"
 			path="${real}"
 		else
 			paths=("${real}" "${real%/*}")
@@ -159,11 +163,12 @@ _config_under() {
 # loop; a --mount that agent_bind_mounts cannot read (mount_unreadable_why);
 # an overlay upperdir or workdir in P or reaching F (podman writes there); a
 # mount reaching F when the agent gets CAP_SYS_ADMIN, which could remove a
-# pin (RIOTBOX_NESTED=1, or --privileged or --cap-add SYS_ADMIN or ALL in
-# RIOTBOX_EXTRA_ARGS); a read-write mount holding a link met, which the
-# agent could repoint, or P or anything in it; and a walked directory under
-# a read-write mount that does not exist and cannot be pinned. Read-only
-# and overlay mounts need no pins (bind_mount_access).
+# pin (RIOTBOX_NESTED=1, or --privileged unless given a false ParseBool
+# spelling, or --cap-add SYS_ADMIN or ALL, or any quoted --cap-add value,
+# which cannot be read, in RIOTBOX_EXTRA_ARGS); a read-write mount holding
+# a link met, which the agent could repoint, or P or anything in it; and a
+# walked directory under a read-write mount that does not exist and cannot
+# be pinned. Read-only and overlay mounts need no pins (bind_mount_access).
 # shellcheck disable=SC2154 # agent_bind_mounts reads launch.sh's flags
 config_protect_mounts() {
 	local cfg file parent spec origin src dst opts host field upper rsrc access link dir dest flag elevated="" word prev="" cap why i
@@ -210,11 +215,13 @@ config_protect_mounts() {
 		word="${recs[i]#w}"
 		cap=""
 		case "${word}" in
-		--privileged | --privileged=true) elevated="RIOTBOX_EXTRA_ARGS ${word}" ;;
+		--privileged=0 | --privileged=f | --privileged=F | --privileged=false | --privileged=FALSE | --privileged=False) ;;
+		--privileged | --privileged=*) elevated="RIOTBOX_EXTRA_ARGS ${word}" ;;
 		--cap-add=*) cap="${word#*=}" flag="${word}" ;;
 		*) [[ "${prev}" != --cap-add ]] || cap="${word}" flag="--cap-add ${word}" ;;
 		esac
 		prev="${word}"
+		[[ "${cap}" != *'"'* ]] || elevated="RIOTBOX_EXTRA_ARGS ${flag} (its capabilities cannot be checked: podman reads the value as CSV, and a quote can hide SYS_ADMIN)"
 		IFS=, read -ra caps <<<"${cap^^}"
 		for cap in "${caps[@]}"; do
 			[[ "${cap#CAP_}" != SYS_ADMIN && "${cap#CAP_}" != ALL ]] || elevated="RIOTBOX_EXTRA_ARGS ${flag}"

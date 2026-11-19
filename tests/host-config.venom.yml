@@ -83,6 +83,8 @@ testcases:
           fresh; rm -rf "${TMP}/elsewhere"; mkdir "${TMP}/elsewhere"; mv "${d}" "${TMP}/elsewhere/riotbox"; ln -s "${TMP}/elsewhere/riotbox" "${d}"
           chmod 770 "${XDG_CONFIG_HOME}"
           refused "dir link in g+w dir" "chmod go-w ${XDG_CONFIG_HOME}"
+          # A hard link is writable through its other name, which no path check sees.
+          fresh; ln "${u}" "${TMP}/other-name"; refused "hard-linked config" "has 2 hard links, so it is writable through its other names (replace it with a copy or a symlink"
           # A relative XDG_CONFIG_HOME would read a file under the current directory.
           fresh; mkdir -p "${TMP}/rel/riotbox"; : >"${TMP}/rel/riotbox/config"; chmod 600 "${TMP}/rel/riotbox/config"
           (cd "${TMP}" && XDG_CONFIG_HOME=rel && refused "relative XDG_CONFIG_HOME" "is not an absolute path") || exit 1
@@ -334,13 +336,20 @@ testcases:
             [[ "${err}" == *"$3"* ]] || { echo "BAD: $1=$2: unclear message: ${err}" >&2; exit 1; }
             [[ "${err}" == *'See README "Config file security".'* ]] || { echo "BAD: $1=$2: no README pointer: ${err}" >&2; exit 1; }
           }
-          for flag in --cap-add=sys_admin "--cap-add CAP_SYS_ADMIN" --cap-add=NET_RAW,ALL --privileged --privileged=true; do
+          for flag in --cap-add=sys_admin "--cap-add CAP_SYS_ADMIN" --cap-add=NET_RAW,ALL --privileged --privileged=true --privileged=1 --privileged=t --privileged=T --privileged=TRUE --privileged=True; do
             refused RIOTBOX_EXTRA_ARGS "${flag} -v ${H}:/h" "RIOTBOX_EXTRA_ARGS ${flag} refuses RIOTBOX_EXTRA_ARGS mounting ${H}"
             refused RIOTBOX_EXTRA_ARGS "${flag} -v ${H}:/h:ro" "CAP_SYS_ADMIN"
             ok RIOTBOX_EXTRA_ARGS "${flag} -v ${TMP}/other:/o"
           done
           ok RIOTBOX_EXTRA_ARGS "--cap-add=NET_RAW -v ${H}:/h"
-          ok RIOTBOX_EXTRA_ARGS "--privileged=false -v ${H}:/h"
+          # podman parses --privileged with strconv.ParseBool: only these are false.
+          for flag in --privileged=0 --privileged=f --privileged=F --privileged=false --privileged=FALSE --privileged=False; do
+            ok RIOTBOX_EXTRA_ARGS "${flag} -v ${H}:/h"
+          done
+          # podman reads --cap-add as CSV, so a quoted value can name SYS_ADMIN unseen.
+          for flag in '--cap-add="SYS_ADMIN"' '--cap-add=NET_RAW,"sys_admin"' '--cap-add "SYS_ADMIN"'; do
+            refused RIOTBOX_EXTRA_ARGS "${flag} -v ${H}:/h" "its capabilities cannot be checked"
+          done
           # podman reads these as binds; agent_bind_mounts cannot.
           refused MOUNTS "--mount type=bind,\"src=${H}\",dst=/h" "mounts.conf has a --mount with a quoted field"
           refused RIOTBOX_EXTRA_ARGS "--mount \"type=bind\",src=${H},dst=/h" "RIOTBOX_EXTRA_ARGS has a --mount with a quoted field"
