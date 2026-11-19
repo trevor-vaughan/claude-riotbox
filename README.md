@@ -770,7 +770,7 @@ Drop executable scripts at `~/.config/riotbox/startup_scripts/*.sh` to run arbit
 mkdir -p ~/.config/riotbox/startup_scripts
 cat > ~/.config/riotbox/startup_scripts/10-register-ca.sh << 'EOF'
 #!/usr/bin/env bash
-# CA file is sourced from the riotbox config dir (bind-mounted read-write).
+# CA file is sourced from the riotbox config dir (bind-mounted read-only).
 sudo trust anchor --store ~/.config/riotbox/internal-ca.crt
 EOF
 chmod +x ~/.config/riotbox/startup_scripts/10-register-ca.sh
@@ -796,7 +796,7 @@ All RiotBox paths follow the [XDG Base Directory Specification](https://specific
 
 `~/.config/riotbox/config` (and `/etc/riotbox/config`) is bash that riotbox runs as you each time it reads it: every launch, `riotbox mounts`, `riotbox doctor`, the hub. Whoever can write it runs commands as you, and the agent runs as you too, so riotbox guards it two ways.
 
-- **Vetting.** Before reading a config, riotbox resolves its path as the kernel would and refuses it when the real file, the directory holding it, or the directory holding any link on the path is owned by someone other than you or root, or is writable by group or other. It also refuses a config that is not a regular file and a relative `XDG_CONFIG_HOME`. The error says how to fix it (`chmod go-w`, `chown`). It warns when your own config is readable by others, as it often holds keys (`chmod 600`). The checks cover those paths only, not every ancestor directory.
+- **Vetting.** Before reading a config, riotbox resolves its path as the kernel would and refuses it when the real file, the directory holding it, or the directory holding any link on the path is owned by someone other than you or root, or is writable by group or other. It also refuses a config that is not a regular file, a config with other hard links (replace it with a copy or a symlink), and a relative `XDG_CONFIG_HOME`. The error says how to fix it (`chmod go-w`, `chown`). It warns when your own config is readable by others, as it often holds keys (`chmod 600`). The checks cover those paths only, not every ancestor directory.
 - **Mount protection.** With a read-write mount above the config's real directory (`riotbox ~`), the launch mounts that directory read-only in the session and pins each directory above it so the agent cannot rename one and recreate the path. A config you manage as a dotfile link (`~/.config/riotbox/config -> ~/dotfiles/riotbox/config`) is protected where it really lives.
 
 The launch refuses instead:
@@ -804,7 +804,7 @@ The launch refuses instead:
 - a read-write mount of the config directory or of anything in it;
 - a read-write mount holding a link on the config's path, since the agent could repoint it. For a dotfile-managed config, mount home read-only (`:ro`) or keep the link outside the mount;
 - an overlay `upperdir` or `workdir` that could hold the path;
-- any mount reaching the config when the agent could unmount the protection: `RIOTBOX_NESTED=1`, or `--privileged` or `--cap-add` `SYS_ADMIN`/`ALL` in `RIOTBOX_EXTRA_ARGS`;
+- any mount reaching the config when the agent could unmount the protection: `RIOTBOX_NESTED=1`, or `--privileged` (unless set false), `--cap-add` `SYS_ADMIN`/`ALL`, or a quoted `--cap-add` value (it cannot be checked) in `RIOTBOX_EXTRA_ARGS`;
 - a `--mount` it cannot check: a quoted field, `volume-opt` or `type=glob`. Write it as `-v`, or as `type=bind,source=…,destination=…` without quotes;
 - a link loop on the path.
 

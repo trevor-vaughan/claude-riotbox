@@ -234,12 +234,13 @@
 # Multi-line, mixed forms. NOTE the plain `VAR="..."` assignment (no leading
 # `:`): a multi-line body can't use the `:=` default idiom, so this FORCES the
 # value and overrides anything set in the host environment.
+# _tok="$(cat ~/.secrets/work-api-token)" && [[ -n "${_tok}" ]] || { echo "riotbox: could not read work-api-token" >&2; exit 1; }
 # RIOTBOX_PASSTHROUGH_VARS="
 #     ANTHROPIC_API_KEY
 #     OPENAI_API_KEY
 #     PROJECT_NAME=$(basename "${PWD}")
 #     GIT_BRANCH=$(git -C "${PWD}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
-#     TOKEN=$(cat ~/.secrets/work-api-token)
+#     TOKEN=${_tok}
 #     EDITOR=vim
 # "
 

@@ -1630,7 +1630,8 @@ one runs code as the user, and the agent runs as the user. Two controls
   way the kernel does and refuses it when the real file, the directory
   holding it, or the directory holding any link on its path is owned by
   someone other than the user or root, or is group/other-writable. It also
-  refuses a non-regular file and a relative `XDG_CONFIG_HOME`, and warns
+  refuses a non-regular file, a file with other hard links (writable through
+  another name, which no path check sees) and a relative `XDG_CONFIG_HOME`, and warns
   when the user config is readable by others.
 - **Protected from the agent's mounts.** For a read-write mount above the
   config's real directory (`riotbox ~`), `config_protect_mounts` pins each
@@ -1639,7 +1640,8 @@ one runs code as the user, and the agent runs as the user. Two controls
   read-write mount of that directory or anything in it, a read-write mount
   holding a link on the path, an overlay `upperdir`/`workdir` that could
   hold the path, any reaching mount under `RIOTBOX_NESTED=1`, `--privileged`
-  or `--cap-add` `SYS_ADMIN`/`ALL` (the agent could unmount the pins), a
+  (unless set false) or `--cap-add` `SYS_ADMIN`/`ALL` or a quoted `--cap-add`
+  value, which cannot be checked (the agent could unmount the pins), a
   `--mount` it cannot parse (quoted field, `volume-opt`, `type=glob`) and a
   link loop. Verified on podman by `task test:config-e2e`.
 - **Residual risks.**
@@ -1655,6 +1657,16 @@ one runs code as the user, and the agent runs as the user. Two controls
   - With `riotbox ~` read-write the agent can already edit `~/.bashrc` and
     similar files that run as the user. This is defense in depth for
     riotbox's own config, not a boundary for the home directory.
+  - TOCTOU: `config_protect_mounts` resolves a mount source, and podman
+    mounts it later. A concurrent session's agent with write access to a
+    parent of that source could swap it for a link in between.
+    `egress_mask_data` and `egress_guard_conf` share the window. Closing it
+    needs passing the resolved sources to podman and verifying `st_dev` and
+    `st_ino` in the container. Not done.
+  - `--pid=host`, or joining another container's PID namespace, in
+    `RIOTBOX_EXTRA_ARGS` may let the agent reach the host's filesystem
+    through `/proc/<pid>/root`, around the pins. This depends on the LSM.
+    Not verified, not refused.
 
 ## Findings
 

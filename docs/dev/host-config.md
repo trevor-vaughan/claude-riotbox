@@ -32,6 +32,9 @@ it and sources no config path except through a loop over
   holding every link on the path**. A link in a group-writable directory
   lets its writer repoint it at a config of their own, so the target's
   directory alone is not enough.
+- It refuses a real file with a link count above 1 (`stat -c %h`): the
+  other name is writable by whoever owns its directory, and no check on
+  this path sees that directory.
 - Check-then-source is one race window. Every path checked is owned by the
   user or root and not group/other-writable, so only they could win it.
 - Ancestors above those directories are not checked (a writable `/home`
@@ -60,8 +63,11 @@ are final. It sets `CONFIG_PROTECT_FLAGS`.
   `--mount` that `mount_unreadable_why` flags (quoted field, `volume-opt`,
   `type=glob`); a relative config path or a link loop; a walked directory
   that does not exist and cannot be pinned.
-- **Elevated launches.** With `RIOTBOX_NESTED=1`, `--privileged` or
-  `--cap-add` `SYS_ADMIN`/`ALL` in `RIOTBOX_EXTRA_ARGS`, the agent could
+- **Elevated launches.** With `RIOTBOX_NESTED=1`, `--privileged` (any
+  value but a `strconv.ParseBool` false: podman parses it so), `--cap-add`
+  `SYS_ADMIN`/`ALL`, or a quoted `--cap-add` value (podman reads it as CSV,
+  so a quote can hide `SYS_ADMIN`; refused as unreadable) in
+  `RIOTBOX_EXTRA_ARGS`, the agent could
   unmount a pin, so any mount reaching `F` is refused, read-only ones too.
   This mirrors `egress_guard_conf` in `libexec/egress-lib.sh`.
 - **Flags.** Emitted as `--mount type=bind,"source=…","destination=…"` with
