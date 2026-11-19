@@ -1,12 +1,12 @@
-tests/config-protect-e2e.venom.yml
-  s_a497e8b1ee1b53::t_dd8a5a3cc48296 14
 scripts/lib/host-config.sh
   s_a497e8b1ee1b53::t_2a81e64be87057 176,283-284
+tests/config-protect-e2e.venom.yml
+  s_a497e8b1ee1b53::t_dd8a5a3cc48296 14
 ---
 {
   "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "91763ca91a682d713f22e7b06ef8c76ff5ec9bca",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "05d621a3c6753459f2f6284f098c602c6e478dba",
   "prompts": {},
   "sessions": {
     "s_a497e8b1ee1b53": {
