@@ -131,3 +131,99 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring OK
+
+  - name: config_protect_mounts pins the config dir under a read-write mount that reaches it, and only then
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/bind-mounts.sh"
+          source "{{.root}}/scripts/lib/host-config.sh"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          H="${TMP}/home"; C="${H}/.config/riotbox"
+          export XDG_CONFIG_HOME="${H}/.config"; unset RIOTBOX_NESTED
+          mkdir -p "${C}" "${TMP}/other"
+          # run <var> <flags>: only that variable is set.
+          run() {
+            PROJECT_VOLUME_FLAGS="" MOUNTS="" CREDFILE_FLAGS="" RIOTBOX_EXTRA_ARGS=""
+            printf -v "$1" '%s' "$2"
+            rc=0; config_protect_mounts 2>"${TMP}/err" || rc=$?
+            err="$(cat "${TMP}/err")"; got=""; for f in "${CONFIG_PROTECT_FLAGS[@]}"; do got+="${f}|"; done
+          }
+          want() {
+            run "$1" "$2"
+            [ "${rc}" -eq 0 ] || { echo "BAD: $1=$2 refused: ${err}" >&2; exit 1; }
+            [ "${got}" = "$3" ] || { echo "BAD: $1=$2"; echo " got  ${got}"; echo " want $3"; exit 1; } >&2
+          }
+          pin() { printf -- '--mount|type=bind,"source=%s","destination=%s"|' "$1" "$2"; }
+          ro()  { printf -- '--mount|type=bind,"source=%s","destination=%s",readonly|' "$1" "$2"; }
+          want PROJECT_VOLUME_FLAGS "-v ${H}:/home/u" "$(pin "${H}/.config" /home/u/.config)$(ro "${C}" /home/u/.config/riotbox)"
+          want MOUNTS "--mount type=bind,source=${H}/.config,destination=/c" "$(ro "${C}" /c/riotbox)"
+          want RIOTBOX_EXTRA_ARGS "-v ${H}:/a -v ${H}:/b" "$(pin "${H}/.config" /a/.config)$(ro "${C}" /a/.config/riotbox)$(pin "${H}/.config" /b/.config)$(ro "${C}" /b/.config/riotbox)"
+          # A pin is skipped where an agent mount already sits.
+          want RIOTBOX_EXTRA_ARGS "-v ${H}:/h -v ${H}/.config:/h/.config:ro" "$(ro "${C}" /h/.config/riotbox)"
+          want RIOTBOX_EXTRA_ARGS "-v ${H}:/h:O" ""
+          want MOUNTS "--mount type=bind,source=${H},destination=/h,readonly=true" ""
+          want PROJECT_VOLUME_FLAGS "-v ${H}:/h:ro -v ${TMP}/other:/o" ""
+          want PROJECT_VOLUME_FLAGS "-v ${C}:/x:ro" ""
+          want PROJECT_VOLUME_FLAGS "-v named:${H}" ""
+          # A destination with a quote is CSV-quoted, as podman reads --mount.
+          want RIOTBOX_EXTRA_ARGS "-v ${H}/.config:/q\"x" "$(printf -- '--mount|type=bind,"source=%s","destination=/q""x/riotbox",readonly|' "${C}")"
+          # A config dir that does not exist yet is created, private, first.
+          rm -rf "${C}"
+          want PROJECT_VOLUME_FLAGS "-v ${TMP}/other:/o" ""
+          [ ! -e "${C}" ] || { echo "BAD: created ${C} for an unrelated mount" >&2; exit 1; }
+          want PROJECT_VOLUME_FLAGS "-v ${H}:/home/u" "$(pin "${H}/.config" /home/u/.config)$(ro "${C}" /home/u/.config/riotbox)"
+          [ "$(stat -c %a "${C}")" = 700 ] || { echo "BAD: ${C} not created 0700" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: config_protect_mounts refuses what a pin cannot protect
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.root}}/scripts/lib/bind-mounts.sh"
+          source "{{.root}}/scripts/lib/host-config.sh"
+          TMP="$(realpath "$(mktemp -d)")"; trap 'rm -rf "${TMP}"' EXIT
+          H="${TMP}/home"; C="${H}/.config/riotbox"
+          export XDG_CONFIG_HOME="${H}/.config"; unset RIOTBOX_NESTED
+          mkdir -p "${C}" "${TMP}/other"; : >"${C}/config"
+          run() {
+            PROJECT_VOLUME_FLAGS="" MOUNTS="" CREDFILE_FLAGS="" RIOTBOX_EXTRA_ARGS=""
+            printf -v "$1" '%s' "$2"
+            rc=0; err="$(config_protect_mounts 2>&1)" || rc=$?
+          }
+          ok() { run "$@"; [ "${rc}" -eq 0 ] || { echo "BAD: $1=$2 refused: ${err}" >&2; exit 1; }; }
+          refused() {
+            run "$1" "$2"
+            [ "${rc}" -eq 1 ] || { echo "BAD: $1=$2 allowed" >&2; exit 1; }
+            [[ "${err}" == *"$3"* ]] || { echo "BAD: $1=$2: unclear message: ${err}" >&2; exit 1; }
+            [[ "${err}" == *'See README "Config file security".'* ]] || { echo "BAD: $1=$2: no README pointer: ${err}" >&2; exit 1; }
+          }
+          refused PROJECT_VOLUME_FLAGS "-v ${C}:/x" "project mounts ${C} read-write"
+          refused MOUNTS "-v ${C}/config:/x/config" "mounts.conf mounts ${C}/config read-write"
+          refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/other:/o:O,upperdir=${C}/up,workdir=${TMP}/w" "upperdir=${C}/up"
+          refused RIOTBOX_EXTRA_ARGS "-v ${TMP}/other:/o:O,upperdir=${TMP}/u,workdir=${H}" "workdir=${H}"
+          ok RIOTBOX_EXTRA_ARGS "-v ${TMP}/other:/o:O,upperdir=${TMP}/u,workdir=${TMP}/w"
+          # Nested mode: CAP_SYS_ADMIN could undo any protection.
+          export RIOTBOX_NESTED=1
+          refused PROJECT_VOLUME_FLAGS "-v ${H}:/h" "RIOTBOX_NESTED=1 refuses project mounting ${H}"
+          refused PROJECT_VOLUME_FLAGS "-v ${H}:/h:ro" "RIOTBOX_NESTED=1 refuses project mounting ${H}"
+          refused PROJECT_VOLUME_FLAGS "-v ${C}:/x:ro" "RIOTBOX_NESTED=1 refuses project mounting ${C}"
+          ok PROJECT_VOLUME_FLAGS "-v ${TMP}/other:/o"
+          unset RIOTBOX_NESTED
+          # A link on the config's path inside a read-write mount could be
+          # repointed at a config of the agent's own.
+          mkdir -p "${TMP}/real"; mv "${H}/.config" "${TMP}/real/.config"; ln -s "${TMP}/real/.config" "${H}/.config"
+          refused PROJECT_VOLUME_FLAGS "-v ${H}:/h" "${H}/.config is a link"
+          ok PROJECT_VOLUME_FLAGS "-v ${H}:/h:ro"
+          rm "${H}/.config"; mv "${TMP}/real/.config" "${H}/.config"
+          mkdir -p "${TMP}/dots"; mv "${C}/config" "${TMP}/dots/config"; ln -s "${TMP}/dots/config" "${C}/config"
+          refused PROJECT_VOLUME_FLAGS "-v ${H}:/h" "${C}/config is a link"
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
