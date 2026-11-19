@@ -217,6 +217,7 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         git \
         git-lfs \
         make \
+        rsync \
         gcc \
         gcc-c++ \
         ncurses \
