@@ -90,7 +90,9 @@ minutes would cut a quiet model stream).
      is a volume name. A `--mount` is read as one CSV record: only
      `type=bind` has a host source (`src=`/`source=`); `volume-opt=` (which
      can bind any host path), `type=glob` and any `"` are refused as
-     uncheckable.
+     uncheckable (`mount_unreadable_why` in `scripts/lib/bind-mounts.sh`,
+     which `config_protect_mounts` shares; see
+     [host-config.md](host-config.md)).
    - A host source is refused when, resolved with `realpath -m`, it is a Unix
      socket, or is a directory (or a path that does not exist yet, which
      podman would create as one) that is, lies under, or is an ancestor of a

@@ -748,7 +748,7 @@ Weigh `:rw` before you use it. The agent in the container is autonomous, and a r
 Two guard rails apply:
 
 - `RIOTBOX_READONLY=1` overrides every `:rw` entry back to read-only and lists the downgraded paths on stderr, so a read-only session is read-only everywhere.
-- A `:rw` entry that resolves to your home directory, any ancestor of it, or `/` is refused with a warning. That covers `~/`, `.`, `./`, `..` and `/` — a writable mount of any of them would hand the agent the run of your host.
+- A `:rw` entry that resolves to your home directory, any ancestor of it, or `/` is refused with a warning. That covers `~/`, `.`, `./`, `..` and `/` — a writable mount of any of them would hand the agent the run of your host. A project mount of home (`riotbox ~`) is a different case: the launch protects your riotbox config under it (see [Config file security](#config-file-security)).
 
 Entries in your file are **added to** the system ones in `/etc/riotbox/mounts.conf`, not merged with them. Listing a path the system file already mounts produces two mounts of the same container destination, which podman rejects outright — so a user entry cannot re-mount a system entry at a different mode.
 
@@ -791,6 +791,36 @@ All RiotBox paths follow the [XDG Base Directory Specification](https://specific
 |-------------------|---------------------------|---------------------------|
 | `XDG_CONFIG_HOME` | `~/.config/riotbox/`      | `mounts.conf`, `config`   |
 | `XDG_DATA_HOME`   | `~/.local/share/riotbox/`, `~/.local/share/riotbox-state/` | Session dirs and git backups; per-session state mounted into the container |
+
+### Config file security
+
+`~/.config/riotbox/config` (and `/etc/riotbox/config`) is bash that riotbox runs as you each time it reads it: every launch, `riotbox mounts`, `riotbox doctor`, the hub. Whoever can write it runs commands as you, and the agent runs as you too, so riotbox guards it two ways.
+
+- **Vetting.** Before reading a config, riotbox resolves its path as the kernel would and refuses it when the real file, the directory holding it, or the directory holding any link on the path is owned by someone other than you or root, or is writable by group or other. It also refuses a config that is not a regular file and a relative `XDG_CONFIG_HOME`. The error says how to fix it (`chmod go-w`, `chown`). It warns when your own config is readable by others, as it often holds keys (`chmod 600`). The checks cover those paths only, not every ancestor directory.
+- **Mount protection.** With a read-write mount above the config's real directory (`riotbox ~`), the launch mounts that directory read-only in the session and pins each directory above it so the agent cannot rename one and recreate the path. A config you manage as a dotfile link (`~/.config/riotbox/config -> ~/dotfiles/riotbox/config`) is protected where it really lives.
+
+The launch refuses instead:
+
+- a read-write mount of the config directory or of anything in it;
+- a read-write mount holding a link on the config's path, since the agent could repoint it. For a dotfile-managed config, mount home read-only (`:ro`) or keep the link outside the mount;
+- an overlay `upperdir` or `workdir` that could hold the path;
+- any mount reaching the config when the agent could unmount the protection: `RIOTBOX_NESTED=1`, or `--privileged` or `--cap-add` `SYS_ADMIN`/`ALL` in `RIOTBOX_EXTRA_ARGS`;
+- a `--mount` it cannot check: a quoted field, `volume-opt` or `type=glob`. Write it as `-v`, or as `type=bind,source=…,destination=…` without quotes;
+- a link loop on the path.
+
+With `riotbox ~` read-write the agent can already edit `~/.bashrc` and similar files. This protects riotbox's own config; it does not make your home directory safe to share. `--volumes-from`, named volumes and `--rootfs` are not inspected, and only podman is verified. [docs/dev/host-config.md](docs/dev/host-config.md) has the details.
+
+**Make a missing secret stop the launch.** A failed or empty command substitution leaves the variable empty and the launch goes on without it. Test the value and `exit`:
+
+```sh
+# ~/.config/riotbox/config
+_tok="$(pass show work/api-token)" && [[ -n "${_tok}" ]] || { echo "riotbox: could not read work/api-token" >&2; exit 1; }
+RIOTBOX_PASSTHROUGH_EXTRA_VARS="
+    WORK_TOKEN=${_tok}
+"
+```
+
+`exit` ends the riotbox command, and the config runs every time riotbox reads it, so `pass` runs on `riotbox mounts` and `riotbox doctor` too.
 
 ## Session state directory
 
