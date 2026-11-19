@@ -127,12 +127,20 @@ testcases:
         script: |
           set -uo pipefail
           cd "{{.root}}"
-          files="libexec/launch.sh libexec/hub.sh scripts/preflight.sh scripts/mount-projects.sh"
+          files="libexec/launch.sh libexec/hub.sh scripts/preflight.sh scripts/mount-projects.sh scripts/detect-mounts.sh"
           rc=0
           grep -nE 'source "\$\{(RIOTBOX_CONFIG_(USER|SYSTEM)|_MPS_CONFIG_(USER|SYSTEM)|_PREFLIGHT_CONFIG_(USER|SYSTEM))\}"' ${files} || rc=$?
           [ "${rc}" -eq 1 ] || { echo "BAD: unvetted config source above (grep rc ${rc})" >&2; exit 1; }
           for f in ${files}; do
             grep -q 'riotbox_config_vet || exit 1' "${f}" || { echo "BAD: ${f} does not vet" >&2; exit 1; }
+            # A source of a bare variable, or of a path ending in config, must
+            # be the variable of a loop over RIOTBOX_CONFIG_FILES.
+            loopvars="$(sed -nE 's/.*for ([A-Za-z_]+) in "\$\{RIOTBOX_CONFIG_FILES\[@\]\}".*/\1/p' "${f}")"
+            while IFS= read -r line; do
+              var="$(sed -nE 's/.*source "\$\{([A-Za-z_]+)\}".*/\1/p' <<<"${line}")"
+              [ -n "${var}" ] && grep -qx "${var}" <<<"${loopvars}" && continue
+              echo "BAD: ${f}: unvetted source: ${line}" >&2; exit 1
+            done < <(grep -E 'source "\$\{[A-Za-z_]+\}"|source .*config"' "${f}")
           done
           echo OK
         assertions:
