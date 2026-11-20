@@ -654,7 +654,7 @@ RiotBox ships a more complete default script with a Unicode progress bar and col
 
 The mount set comes from two scripts, applied in this order:
 
-1. **`scripts/detect-mounts.sh`** — always-on mounts that don't depend on a project: `~/bin`, `~/.config/riotbox/`, and the named cache volumes. Uses an allowlist (only paths listed in the script are mounted).
+1. **`scripts/detect-mounts.sh`** — always-on mounts that don't depend on a project: `~/bin` and the named cache volumes. Uses an allowlist (only paths listed in the script are mounted).
 2. **`scripts/mount-projects.sh`** — per-launch mounts: the project bind, the session directory mount, the state-directory mounts (headroom, git-ai, overlay), and the per-agent contributions from `agents/<name>/manifest.sh::host_sync` (credentials nest, opencode config copy and auth, Pi config copy and auth, host plugins, host `~/.claude/{skills,agents,…}` copies, statusline script copy).
 
 Run `riotbox mounts [project ...]` to print the projected mount set — it lists the always-on group, the project + session group, and a static enumeration of what the agent host_sync hooks would add at launch.
@@ -663,7 +663,7 @@ Run `riotbox mounts [project ...]` to print the projected mount set — it lists
 
 | Host path            | Container path       | How                          |
 |----------------------|----------------------|------------------------------|
-| `~/.config/riotbox/` | `~/.config/riotbox/` | bind mount (read-only, `:z`) |
+| `~/.config/riotbox/` | `~/.config/riotbox/` | copy made for each launch (read-only, `:z`), removed when the launch ends; added by `launch.sh` |
 | `~/bin`              | `~/bin`              | bind mount (read-only, `:z`) |
 | named cache volumes  | `~/.npm`, `~/.cargo/registry`, … | named volumes (rw)     |
 
@@ -2901,7 +2901,7 @@ Non-interactive callers (`riotbox run`, CI, scripts) never block on the prompt: 
 | `~/.claude.json`                         | file copy into session dir   | Each container gets a writable snapshot       |
 | opencode and Pi auth files (`~/.local/share/opencode/auth.json`, `~/.pi/agent/auth.json`, `~/.pi/agent/mcp-auth.json`) | bind mount (RW), when present | Token refreshes write back; mounted whichever `--agent` runs |
 | Pi config allowlist (`~/.pi/agent/`)     | file copy into state dir     | See [Pi config](#pi-config); nothing flows back |
-| RiotBox config (`~/.config/riotbox/`)    | bind mount (`:z`)            | `plugins.conf`, `config`, `mounts.conf`, `egress.conf` |
+| RiotBox config (`~/.config/riotbox/`)    | per-launch copy (read-only, `:z`) | `plugins.conf`, `config`, `mounts.conf`, `egress.conf`; changes never reach the host |
 | Host plugins (`~/.claude/plugins/`)      | read-only bind mount         | Merged into session at startup                |
 | User scripts (`~/bin`)                   | read-only bind mount         | Available but not writable                    |
 | User-defined mounts                      | read-only bind mount by default | From `~/.config/riotbox/mounts.conf`; per-entry `:rw` opt-in |

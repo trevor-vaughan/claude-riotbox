@@ -395,6 +395,38 @@ if [[ "${RIOTBOX_EGRESS:-}" = "1" ]]; then
 	egress_gate_env || exit 1
 fi
 
+# The riotbox config dir: the container reads plugins.conf and
+# startup_scripts/ from ~/.config/riotbox, and a nested riotbox its config.
+# It gets a copy made for this launch, never the directory: the host runs
+# config, mounts.conf and egress.conf as the user, and a read-only bind is
+# undone by an agent with CAP_SYS_ADMIN (RIOTBOX_NESTED=1). Each launch has
+# its own copy, removed on exit, so no launch reads a copy another session
+# could have changed. A dry run makes no state dir, so it mounts none.
+CONFIG_COPY_FLAGS=()
+CONFIG_COPY_DIR=""
+config_copy_src="${XDG_CONFIG_HOME:-${HOME}/.config}/riotbox"
+_config_copy_on_exit() {
+	local rc=$?
+	[[ -z "${CONFIG_COPY_DIR}" ]] || rm -rf -- "${CONFIG_COPY_DIR}"
+	if [[ "${RIOTBOX_EGRESS:-}" = "1" ]]; then
+		_egress_on_exit "${rc}"
+	fi
+	exit "${rc}"
+}
+if [[ -d "${config_copy_src}" && "${RIOTBOX_DRY_RUN:-0}" != "1" ]]; then
+	CONFIG_COPY_DIR="$(mktemp -d "${RIOTBOX_STATE_DIR}/riotbox-config.XXXXXX")" || exit 1
+	# Replaces egress_start's EXIT trap, which _config_copy_on_exit runs.
+	trap _config_copy_on_exit EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
+	if ! cp -a -- "${config_copy_src}/." "${CONFIG_COPY_DIR}/"; then
+		echo "ERROR: could not copy ${config_copy_src} for the container; nothing was started." >&2
+		echo "       Make every entry in it readable by you, or move out what the container should not see." >&2
+		exit 1
+	fi
+	CONFIG_COPY_FLAGS=(-v "${CONFIG_COPY_DIR}:/home/llm/.config/riotbox:ro,z")
+fi
+
 # shellcheck disable=SC2086,SC2248  # intentional word splitting for multi-flag vars
 # shellcheck disable=SC2154  # IMAGE_NAME is required env — set by the caller (riotbox CLI)
 ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${USER_FLAG} ${INIT_FLAG} \
@@ -408,6 +440,7 @@ ${CONTAINER_CMD} run --rm -it --log-driver=none ${USERNS_FLAG} ${USER_FLAG} ${IN
 	${SOCKET_FLAGS} \
 	${PROJECT_VOLUME_FLAGS} \
 	${MOUNTS} \
+	"${CONFIG_COPY_FLAGS[@]}" \
 	${PASSTHROUGH_FLAGS} \
 	${CREDFILE_FLAGS} \
 	-e SESSION_ID="${SESSION_ID}" \

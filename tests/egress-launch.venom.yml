@@ -734,6 +734,29 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring OK
 
+  # Outside a dry run the launch also mounts a per-launch copy of the riotbox
+  # config dir, whose EXIT trap replaces egress_start's and must still run it.
+  - name: with a riotbox config copy, the agent's exit status and the proxy teardown both survive
+    steps:
+      - type: exec
+        script: |
+          set -uo pipefail
+          source "{{.egress_helpers}}"
+          TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
+          egress_test_env "${TMP}"
+          mkdir -p "${XDG_CONFIG_HOME}/riotbox"; chmod 700 "${XDG_CONFIG_HOME}" "${XDG_CONFIG_HOME}/riotbox"
+          printf 'plug\n' > "${XDG_CONFIG_HOME}/riotbox/plugins.conf"
+          FAKE_AGENT_EXIT=3 RIOTBOX_EGRESS=1 RIOTBOX_PROJECTS="${HOME}/proj" ROOT_DIR="${EGRESS_REPO_ROOT}" \
+            IMAGE_NAME=riotbox bash "${EGRESS_REPO_ROOT}/libexec/launch.sh" bash; rc=$?
+          [ "${rc}" -eq 3 ] || { echo "BAD: exit ${rc}, want 3" >&2; exit 1; }
+          grep -q -- ':/home/llm/.config/riotbox:ro,z' "${CAPTURE}" || { echo "BAD: no config copy mounted: $(cat "${CAPTURE}")" >&2; exit 1; }
+          grep -q '^rm --force --ignore ' "${FAKE_ENGINE_LOG}" || { echo "BAD: no teardown" >&2; exit 1; }
+          [ -z "$(find "${TMP}" -name 'riotbox-config.*' 2>/dev/null)" ] || { echo "BAD: the config copy was left behind" >&2; exit 1; }
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
   - name: a failed teardown warns and still exits with the agent's status
     steps:
       - type: exec

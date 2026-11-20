@@ -113,9 +113,10 @@ emit_mount() {
 FUNCTIONAL_MOUNTS=(
 	# User scripts and tools
 	"bin"
-	# RiotBox config (plugins.conf, etc.)
-	".config/riotbox"
 )
+# ~/.config/riotbox is not bound here: launch.sh mounts a per-launch copy of
+# it (see "The riotbox config dir" there), because a read-only bind of the
+# real directory is undone by an agent with CAP_SYS_ADMIN.
 
 # ── Auth tokens ───────────────────────────────────────────────────────────────
 # Credentials (~/.claude/.credentials.json) are bind-mounted RW by

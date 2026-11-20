@@ -417,13 +417,14 @@ egress_gate() {
 }
 
 # _egress_on_exit — the EXIT trap: remove this launch's egress proxy, keeping
-# launch.sh's exit status. INT, TERM and HUP are ignored first; INT and HUP
-# stay ignored in egress-down, so a second Ctrl-C cannot cut the teardown
-# short. Go does not keep an inherited ignored TERM, so a TERM still stops
-# egress-down and leaves the proxy for the next launch's sweep.
+# launch.sh's exit status ($?, or $1 when another EXIT trap calls it). INT,
+# TERM and HUP are ignored first; INT and HUP stay ignored in egress-down, so
+# a second Ctrl-C cannot cut the teardown short. Go does not keep an
+# inherited ignored TERM, so a TERM still stops egress-down and leaves the
+# proxy for the next launch's sweep.
 # shellcheck disable=SC2154 # set by launch.sh, which sources this file
 _egress_on_exit() {
-	local rc=$?
+	local rc="${1:-$?}"
 	trap '' INT TERM HUP
 	if ! "${RIOTBOX_CORE}" egress-down --engine "${CONTAINER_CMD}" --state-root "${RIOTBOX_EGRESS_ROOT}" -- "${CONTAINER_NAME}"; then
 		echo "WARNING: the egress proxy of ${CONTAINER_NAME} was not fully removed; the next launch retries." >&2
