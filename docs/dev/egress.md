@@ -118,7 +118,8 @@ minutes would cut a quiet model stream).
      a hostile config.
 3. **The agent cannot change its allowlist.** Policy files live on the host
    and are mounted read-only into Envoy only. `~/.config/riotbox`, where the
-   user `egress.conf` normally lives, is mounted into the agent read-only.
+   user `egress.conf` normally lives, reaches the agent only as a copy made
+   for that launch.
    The per-session state root (`RIOTBOX_EGRESS_ROOT`, below) holds every
    session's `rds.json`, which Envoy reloads live, and is writable by the
    host user, whom the agent runs as (keep-id). A mount that reaches it

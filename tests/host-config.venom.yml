@@ -378,3 +378,99 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring OK
+
+  # The container gets a per-launch copy of ~/.config/riotbox, never the real
+  # directory: a read-only bind of the real one is undone by an agent with
+  # CAP_SYS_ADMIN (RIOTBOX_NESTED=1), which could then rewrite the config the
+  # host runs as the user.
+  - name: launch.sh mounts a per-launch copy of the riotbox config dir, never the dir, and removes the copy afterwards
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(realpath "$(mktemp -d)")"; trap 'chmod -R u+rwX "${TMP}" 2>/dev/null; rm -rf "${TMP}"' EXIT
+          C="${TMP}/.config/riotbox"
+          mkdir -p "${TMP}/etc" "${TMP}/data" "${TMP}/proj" "${C}/startup_scripts"
+          chmod 700 "${TMP}/.config" "${C}"
+          printf 'RIOTBOX_X=1\n' > "${C}/config"; chmod 600 "${C}/config"
+          printf 'plug\n' > "${C}/plugins.conf"
+          printf '#!/bin/sh\n' > "${C}/startup_scripts/a.sh"; chmod +x "${C}/startup_scripts/a.sh"
+          ln -s plugins.conf "${C}/link"
+          # The engine records the -v that targets ~/.config/riotbox and, while
+          # "running", compares its source with the real dir.
+          cat > "${TMP}/fake-cmd" <<'FAKE'
+          #!/usr/bin/env bash
+          [ "$1" = run ] || exit 0
+          printf '%s\n' "$*" > "${CAPTURE}"
+          prev=""
+          for a in "$@"; do
+            if [ "${prev}" = -v ] && [[ "${a}" == *:/home/llm/.config/riotbox:* ]]; then
+              src="${a%%:/home/llm/.config/riotbox:*}"
+              printf '%s\n' "${src}" > "${CAPTURE}.src"
+              diff -r --no-dereference "${REAL}" "${src}" > "${CAPTURE}.diff" 2>&1 && echo same > "${CAPTURE}.cmp" || echo differ > "${CAPTURE}.cmp"
+            fi
+            prev="${a}"
+          done
+          FAKE
+          chmod +x "${TMP}/fake-cmd"
+          export CAPTURE="${TMP}/argv" REAL="${C}"
+          for nested in 1 ""; do
+            rm -f "${CAPTURE}"*
+            rc=0
+            RIOTBOX_NESTED="${nested}" RIOTBOX_PROJECTS="${TMP}/proj" RIOTBOX_DATA_DIR="${TMP}/data" \
+            XDG_DATA_HOME="${TMP}/data" RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/.config" HOME="${TMP}" \
+            ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+              bash "{{.riotbox_dir}}/libexec/launch.sh" bash > "${TMP}/out" 2>&1 || rc=$?
+            [ "${rc}" -eq 0 ] || { echo "BAD: NESTED=${nested:-unset}: launch failed: $(cat "${TMP}/out")"; exit 1; }
+            argv="$(cat "${CAPTURE}")"
+            [[ "${argv}" != *"${C}:"* ]] || { echo "BAD: NESTED=${nested:-unset}: the real config dir is mounted: ${argv}"; exit 1; }
+            [ -s "${CAPTURE}.src" ] || { echo "BAD: NESTED=${nested:-unset}: no mount at ~/.config/riotbox: ${argv}"; exit 1; }
+            [[ "${argv}" == *"$(cat "${CAPTURE}.src"):/home/llm/.config/riotbox:ro,z"* ]] || { echo "BAD: NESTED=${nested:-unset}: the copy is not mounted read-only: ${argv}"; exit 1; }
+            [ "$(cat "${CAPTURE}.cmp")" = same ] || { echo "BAD: NESTED=${nested:-unset}: the copy differs: $(cat "${CAPTURE}.diff")"; exit 1; }
+            [ ! -e "$(cat "${CAPTURE}.src")" ] || { echo "BAD: NESTED=${nested:-unset}: the copy outlived the launch"; exit 1; }
+          done
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK
+
+  - name: launch.sh mounts no riotbox config copy when there is no config dir, and refuses one it cannot copy
+    steps:
+      - type: exec
+        script: |
+          set -euo pipefail
+          TMP="$(realpath "$(mktemp -d)")"; trap 'chmod -R u+rwX "${TMP}" 2>/dev/null; rm -rf "${TMP}"' EXIT
+          mkdir -p "${TMP}/etc" "${TMP}/data" "${TMP}/proj" "${TMP}/.config"
+          chmod 700 "${TMP}/.config"
+          cat > "${TMP}/fake-cmd" <<'FAKE'
+          #!/usr/bin/env bash
+          [ "$1" = run ] || exit 0
+          printf '%s\n' "$*" > "${CAPTURE}"
+          FAKE
+          chmod +x "${TMP}/fake-cmd"
+          export CAPTURE="${TMP}/argv"
+          unset RIOTBOX_NESTED
+          launch() {
+            rc=0
+            RIOTBOX_PROJECTS="${TMP}/proj" RIOTBOX_DATA_DIR="${TMP}/data" \
+            XDG_DATA_HOME="${TMP}/data" RIOTBOX_SYSCONF_DIR="${TMP}/etc" XDG_CONFIG_HOME="${TMP}/.config" HOME="${TMP}" \
+            ROOT_DIR="{{.riotbox_dir}}" CONTAINER_CMD="${TMP}/fake-cmd" IMAGE_NAME=riotbox \
+              bash "{{.riotbox_dir}}/libexec/launch.sh" bash > "${TMP}/out" 2>&1 || rc=$?
+          }
+          launch
+          [ "${rc}" -eq 0 ] || { echo "BAD: launch without a config dir failed: $(cat "${TMP}/out")"; exit 1; }
+          [[ "$(cat "${CAPTURE}")" != *"/home/llm/.config/riotbox"* ]] || { echo "BAD: a config mount with no config dir: $(cat "${CAPTURE}")"; exit 1; }
+          if [ "$(id -u)" -ne 0 ]; then
+            rm -f "${CAPTURE}"
+            mkdir -p "${TMP}/.config/riotbox"; chmod 700 "${TMP}/.config/riotbox"
+            printf 'x\n' > "${TMP}/.config/riotbox/plugins.conf"; chmod 000 "${TMP}/.config/riotbox/plugins.conf"
+            launch
+            [ "${rc}" -ne 0 ] || { echo "BAD: an unreadable entry did not stop the launch"; exit 1; }
+            [ ! -e "${CAPTURE}" ] || { echo "BAD: the engine ran without the config copy"; exit 1; }
+            grep -q "could not copy" "${TMP}/out" || { echo "BAD: no reason given: $(cat "${TMP}/out")"; exit 1; }
+            [ -z "$(find "${TMP}/data" -name 'riotbox-config.*' 2>/dev/null)" ] || { echo "BAD: a partial copy was left behind"; exit 1; }
+          fi
+          echo OK
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring OK

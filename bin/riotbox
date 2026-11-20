@@ -429,6 +429,9 @@ mounts)
 		"${SCRIPTS}/mount-projects.sh" --format=triple |
 		while IFS= read -r line; do echo "  ${line}"; done
 	echo ""
+	echo "RiotBox config — added at launch by launch.sh (not shown above):"
+	echo "  ~/.config/riotbox/ → copy made for each launch (riotbox-state/<session>/riotbox-config.*, RO), removed when it ends"
+	echo ""
 	echo "Agent host_sync — added at launch by the selected --agent (not shown above):"
 	echo "  ~/.claude/.credentials.json → session-nested credentials (RW bind)"
 	echo "  ~/.claude.json → session-dir copy"
