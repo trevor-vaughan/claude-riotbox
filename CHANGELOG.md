@@ -5,6 +5,90 @@ generated from [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org); do not edit it by hand — run
 `task release:bump` instead.
 
+## [0.8.0] - 2026-11-20
+
+### 🚀 Features
+
+- *(egress)* Put the agent behind a per-session Envoy egress proxy
+- *(egress)* Inject provider API keys at the proxy
+- *(egress)* Add OS mirror plugins and more allowlist groups
+- *(launch)* Warn before starting inside a linked git worktree
+- *(session)* Add filters to session-reset all and skip unsafe sessions
+- *(git-ai)* Show per-store progress on a terminal
+- *(context-mode)* [**breaking**] Migrate to context-mode 2.x on Node 24
+- *(opencode)* [**breaking**] Move the image to OpenCode 2
+- *(checkpoints)* Add backups listing and backup-prune commands
+- *(egress)* Let egress.conf [inject] rows add or replace provider keys
+- *(egress)* Allow plain HTTP with http:// entries and allow_plain
+- *(egress)* Allow port ranges and every port
+- *(egress)* Reach host-loopback services such as ssh -L forwards
+- *(egress)* RIOTBOX_EGRESS_CONF gives a session its own egress.conf
+- *(anywhere)* Drive sessions from a phone with Yep Anywhere
+- *(anywhere)* Riotbox hub lists every running session on one page
+- *(hub)* Add `riotbox hub`, one entry point for every anywhere session
+- *(hub)* Draw the hub link as a QR code on a terminal
+- *(config)* Vet host config files before sourcing them
+- *(config)* Vet the host config in every sourcer
+- *(config)* Pin the config dir under agent mounts that reach it
+- *(launch)* Protect the riotbox config dir from the agent's mounts
+- *(checkpoint)* Add RIOTBOX_CHECKPOINT=0 to skip checkpoints
+
+### 🐛 Bug Fixes
+
+- *(egress)* Run the proxy and agent without a pod
+- *(egress)* Run e2e venom scripts under bash, not the host's /bin/sh
+- *(release)* Declare the MIT license in rpm and deb metadata
+- *(git-ai)* Drop stale daemon sockets from the private store copy
+- *(overlay)* List overlays whose folder name starts with a dot
+- *(overlay)* List dot-keyed sessions and keep caller shell options
+- Find sessions and projects whose names start with a dot
+- *(checkpoint)* Ask before checkpointing through an enclosing repo
+- *(security)* Scrub URL-embedded credentials from staged tool configs
+- *(egress)* Mask the egress root under a --mount spelled dest=
+- *(anywhere)* Allow the bind address past Yep Anywhere's Host check
+- *(anywhere)* Never generate a password --setup-auth rejects
+- *(anywhere)* Warn on every spelling of a wildcard bind
+- *(hub)* List a session only where it really publishes Yep Anywhere
+- *(hub)* Say how to open the link printed for a wildcard bind
+- *(anywhere)* Refuse malformed IPv6 before canonicalising it
+- *(anywhere)* Install the openssl CLI Yep Anywhere needs for TLS
+- *(anywhere)* Keep the launch banner in view
+- *(hub)* Name an address this host lacks, before printing a link
+- *(lint)* Satisfy shellcheck 0.11 (SC2329, SC2154)
+- *(config)* Protect the config the host resolves, not the path as written
+- *(config)* Vet the directory holding every link on the config's path
+- *(config)* Vet the host config in detect-mounts.sh
+- *(config)* Close privileged/cap-add spellings and hard-linked configs
+- *(config)* Unbreak CI shellcheck and config e2e on the runner
+- *(config)* Mount a per-launch copy of the riotbox config dir
+
+### 💼 Other
+
+- *(containerfile)* Install sourcemeta jsonschema, drop python3-jsonschema
+- *(containerfile)* Install shfmt and go-global-update tools
+
+### 🚜 Refactor
+
+- *(egress)* Move bind-mount parsing to scripts/lib/bind-mounts.sh
+- *(mounts)* Share the unreadable --mount check
+
+### 📚 Documentation
+
+- *(anywhere)* Passwords and certificates are per project set
+- *(anywhere)* Record the trial run and what it settled
+- *(config)* Document config vetting, mount protection and fail-closed secrets
+- *(config)* Correct the config dir mount note, fail-closed example, new residuals
+
+### 🧪 Testing
+
+- *(egress)* Parse the echo from stdout, not curl's combined output
+- *(egress)* Track floating tags instead of digest pins for e2e images
+
+### ⚙️ Miscellaneous Tasks
+
+- Run the test job on Ubuntu 26.04
+- Run the config protection end-to-end suite
+
 ## [0.7.1] - 2026-10-23
 
 ### 🚀 Features
