@@ -24,6 +24,9 @@ set -euo pipefail
 #
 # Required env: ROOT_DIR
 # Optional env: RIOTBOX_PROJECTS (space-separated project paths; defaults to CWD)
+#               RIOTBOX_CHECKPOINT (0=skip every project, with a warning that
+#                                 QUIET does not suppress; anything else
+#                                 checkpoints)
 #               RIOTBOX_GIT_INIT (1=init non-git dirs, 0=never, unset=prompt on
 #                                 an interactive terminal, default Yes)
 #               RIOTBOX_CHECKPOINT_QUIET (1=suppress the large-untracked-set
@@ -36,6 +39,16 @@ set -euo pipefail
 
 source "${ROOT_DIR}/scripts/mount-projects.sh"
 resolve_projects "${RIOTBOX_PROJECTS:-}"
+
+# Only an exact 0 opts out, so a typo fails safe. Like the skipped-large-file
+# report, this is not gated on RIOTBOX_CHECKPOINT_QUIET: it names projects the
+# agent gets read-write with no undo.
+if [[ "${RIOTBOX_CHECKPOINT:-}" = "0" ]]; then
+	for dir in "${PROJECT_DIRS[@]}"; do
+		echo "  WARNING: ${dir}: skipped (RIOTBOX_CHECKPOINT=0) — no checkpoint protection!" >&2
+	done
+	exit 0
+fi
 
 # Managed exclude block — exact content; markers are the stable identity.
 #

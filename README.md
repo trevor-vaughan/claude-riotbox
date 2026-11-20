@@ -2633,6 +2633,12 @@ RiotBox includes several layers of protection, but none are foolproof:
   ```
 
   A skipped file **is not protected**: it stays on disk in the project the agent is handed read-write, and no copy of it exists in the checkpoint or the backup. Set `RIOTBOX_SNAPSHOT_MAX_MB` to change the threshold (for example `RIOTBOX_SNAPSHOT_MAX_MB=500`), or `git add` the file so it is tracked and therefore always captured.
+- **Turning checkpoints off**: `RIOTBOX_CHECKPOINT=0` skips the checkpoint for every project in that launch: no snapshot, no backup, and no `git init` offer. It is meant for projects too large to snapshot on each launch; the first backup of a repo copies all of its objects. The agent then works on the project **with no undo**, so every launch says so on stderr, even with `RIOTBOX_CHECKPOINT_QUIET=1`. Only `0` turns it off; any other value still checkpoints.
+
+  ```
+  RIOTBOX_CHECKPOINT=0 riotbox ~/src/huge-monorepo
+    WARNING: /home/me/src/huge-monorepo: skipped (RIOTBOX_CHECKPOINT=0) — no checkpoint protection!
+  ```
 - **Git guardrails**: Inside the container, `receive.denyNonFastForwards` and `receive.denyDeletes` are enabled to prevent the most destructive git operations.
 - **Container isolation**: The agent can't access your SSH keys, cloud credentials, or anything outside the mounted directories.
 
