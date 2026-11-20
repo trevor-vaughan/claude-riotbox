@@ -1,65 +1,67 @@
-docs/dev/agent-contract.md
-  s_463985fbd635b6::t_e15f46cd1265b8 355
-tests/lib/headroom-fakes.sh
-  s_463985fbd635b6::t_e15f46cd1265b8 178
-agents/claude/headroom-exec.sh
-  s_463985fbd635b6::t_fb3b01a6c150b6 59
-  s_463985fbd635b6::t_e15f46cd1265b8 20-21,26,30,34,36,43,46,49,70,112,141
-container/agent-wrapper.sh
-  s_463985fbd635b6::t_e15f46cd1265b8 52
-agents/lib/headroom-proxy.sh
-  s_463985fbd635b6::t_e15f46cd1265b8 15-16,22,25,30,44-45,59,106-108,110-111
-tests/headroom-opencode.venom.yml
-  s_463985fbd635b6::t_e15f46cd1265b8 49,253,255
-.taskfiles/scripts/release-bump.sh
-  s_463985fbd635b6::t_4493aef7ac3d8e 21
-Containerfile
-  s_463985fbd635b6::t_4493aef7ac3d8e 876,1040,1134,1192-1194,1228-1230,1376-1377,1592
-  s_463985fbd635b6::t_ce8a56fcc4f967 1189
-  s_463985fbd635b6::t_e15f46cd1265b8 834
-  s_463985fbd635b6::t_0ee5894a3dbe6f 1618
-agents/opencode/headroom-exec.sh
-  s_463985fbd635b6::t_6b0cdba05250fe 42
-  s_463985fbd635b6::t_2fafd6bb5ada88 47-49
-  s_463985fbd635b6::t_e15f46cd1265b8 40
-container/opencode/smoke.sh
-  s_463985fbd635b6::t_e15f46cd1265b8 46
-container/plugin-setup.sh
-  s_463985fbd635b6::t_4cb0b28f129738 102
-tests/headroom-claude.venom.yml
-  s_463985fbd635b6::t_e15f46cd1265b8 11,309,333
-docs/dev/context-mode.md
-  s_463985fbd635b6::t_4cb0b28f129738 76,195,212,570
 tests/lib/fake-headroom-listener.py
   s_463985fbd635b6::t_e15f46cd1265b8 9
+container/yepanywhere-package-lock.json
+  s_463985fbd635b6::t_87372636c02da9 9,22-24,30-37,46-48,59-61,72-74,78-80,88-90,94-96,104-106,110-112,120-122,126-128,136-138,149-151,183-185,202-204,207,210,324-326,343-345,362-364,381-383,400-402,419-421,438-440,457-459,476-478,501-503,526-528,551-553,576-578,601-603,626-628,651-653,1466-1468,1621-1623,1653-1655,1790-1793,1820-1822,1862-1864,2006-2008,2150-2152,2422-2424,2617-2619,2816-2818,2829-2832,2871-2873,3140-3142,3145,3168-3170,3201-3203,3206,3460-3462,3481-3483,3487,3489,3494-3495,3498
+agents/claude/headroom-exec.sh
+  s_463985fbd635b6::t_e15f46cd1265b8 20-21,26,30,34,36,43,46,49,70,112,141
+  s_463985fbd635b6::t_fb3b01a6c150b6 59
 tests/headroom.venom.yml
   s_463985fbd635b6::t_e15f46cd1265b8 229,231,233
 tests/Containerfile.test
   s_463985fbd635b6::t_4493aef7ac3d8e 64-65,123-125
-README.md
-  s_463985fbd635b6::t_4493aef7ac3d8e 3011,3016
-  s_463985fbd635b6::t_4cb0b28f129738 3192,3197
-  s_463985fbd635b6::t_ce8a56fcc4f967 258
-container/context-mode-setup.sh
-  s_463985fbd635b6::t_4cb0b28f129738 172
+container/agent-wrapper.sh
+  s_463985fbd635b6::t_e15f46cd1265b8 52
+agents/opencode/headroom-exec.sh
+  s_463985fbd635b6::t_6b0cdba05250fe 42
+  s_463985fbd635b6::t_2fafd6bb5ada88 47-49
+  s_463985fbd635b6::t_e15f46cd1265b8 40
+container/context-mode-package-lock.json
+  s_463985fbd635b6::t_d7cb6db8042f64 9,13-15
+tests/headroom-opencode.venom.yml
+  s_463985fbd635b6::t_e15f46cd1265b8 49,253,255
+.taskfiles/scripts/release-bump.sh
+  s_463985fbd635b6::t_4493aef7ac3d8e 21
 container/pi/package.json
   s_463985fbd635b6::t_4493aef7ac3d8e 7
+container/context-mode-setup.sh
+  s_463985fbd635b6::t_4cb0b28f129738 172
 container/anywhere.sh
   s_463985fbd635b6::t_0ee5894a3dbe6f 15
+docs/dev/agent-contract.md
+  s_463985fbd635b6::t_e15f46cd1265b8 355
+container/opencode/smoke.sh
+  s_463985fbd635b6::t_e15f46cd1265b8 46
+tests/headroom-claude.venom.yml
+  s_463985fbd635b6::t_e15f46cd1265b8 11,309,333
+agents/lib/headroom-proxy.sh
+  s_463985fbd635b6::t_e15f46cd1265b8 15-16,22,25,30,44-45,59,106-108,110-111
+container/plugin-setup.sh
+  s_463985fbd635b6::t_4cb0b28f129738 102
+container/pi/package-lock.json
+  s_463985fbd635b6::t_8498ed376e4c58 13,106-108,114,146-148
+Containerfile
+  s_463985fbd635b6::t_0ee5894a3dbe6f 1618
+  s_463985fbd635b6::t_e15f46cd1265b8 834
+  s_463985fbd635b6::t_4493aef7ac3d8e 876,1040,1134,1192-1194,1228-1230,1376-1377,1592
+  s_463985fbd635b6::t_ce8a56fcc4f967 1189
 THREAT_MODEL.md
   s_463985fbd635b6::t_4cb0b28f129738 789
   s_463985fbd635b6::t_cf19b8b9990efa 1221-1222
-container/context-mode-package-lock.json
-  s_463985fbd635b6::t_d7cb6db8042f64 9,13-15
-container/pi/package-lock.json
-  s_463985fbd635b6::t_8498ed376e4c58 13,106-108,114,146-148
-container/yepanywhere-package-lock.json
-  s_463985fbd635b6::t_87372636c02da9 9,22-24,30-37,46-48,59-61,72-74,78-80,88-90,94-96,104-106,110-112,120-122,126-128,136-138,149-151,183-185,202-204,207,210,324-326,343-345,362-364,381-383,400-402,419-421,438-440,457-459,476-478,501-503,526-528,551-553,576-578,601-603,626-628,651-653,1466-1468,1621-1623,1653-1655,1790-1793,1820-1822,1862-1864,2006-2008,2150-2152,2422-2424,2617-2619,2816-2818,2829-2832,2871-2873,3140-3142,3145,3168-3170,3201-3203,3206,3460-3462,3481-3483,3487,3489,3494-3495,3498
+  s_463985fbd635b6::t_1c26d1580928ab 1220
+  s_463985fbd635b6::t_a39cbcd3a6cc7d 1223-1225
+tests/lib/headroom-fakes.sh
+  s_463985fbd635b6::t_e15f46cd1265b8 178
+README.md
+  s_463985fbd635b6::t_4cb0b28f129738 3197
+  s_463985fbd635b6::t_4493aef7ac3d8e 3016
+  s_463985fbd635b6::t_ce8a56fcc4f967 258
+docs/dev/context-mode.md
+  s_463985fbd635b6::t_4cb0b28f129738 76,195,212,570
 ---
 {
   "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "90fcd1e055592189e59ac4150e1be759748d9f9b",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "051ea9bf38bf707429bb6b4aeec6454f4b410e05",
   "prompts": {},
   "sessions": {
     "s_463985fbd635b6": {
