@@ -43,7 +43,7 @@
 #     $OPENCODE_CONFIG_DIR/plugins/; headroom's is the _dist DIRECTORY inside
 #     the headroom wheel, named in OPENCODE_CONFIG_CONTENT's "plugin" array.
 #     V2 skips a configured plugin FILE (core/src/config/plugin/source.ts:155),
-#     and headroom 0.43.0 configures the directory for exactly that reason
+#     and headroom 0.44.0 configures the directory for exactly that reason
 #     (providers/opencode/runtime.py:114, headroom_opencode_plugin_path).
 #
 # How the driver reaches headroom's plugin. `headroom wrap opencode` builds

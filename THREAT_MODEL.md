@@ -786,7 +786,7 @@ pins 1.x honoured, and RiotBox exports none of them. `~/.context-mode` is a
 read-write bind mount of the session's `<state-dir>/context-mode`: the store
 carries the same sensitivity as a session transcript, outlives the container,
 and goes with `riotbox session-reset` or `session-remove`. Only that mount
-places it. 2.1.4 also takes `CONTEXT_MODE_DATA_DIR` as its whole data root, so
+places it. 2.2.1 also takes `CONTEXT_MODE_DATA_DIR` as its whole data root, so
 `context_mode_setup` unsets any value that reached the container before an
 agent starts. Context Mode's 1.x stores are left in place in the session's
 other mounts, unread, until the user deletes them. Upstream prunes on its own
@@ -1217,12 +1217,13 @@ Design and the upstream gaps: `docs/dev/decisions/yep-anywhere.md`.
   password is 24 random alphanumerics (~143 bits), generated on first use,
   printed once to the launching terminal (the container runs with
   `--log-driver=none`) and kept in clear in a host file (Password custody,
-  below). It is passed to
-  `yepanywhere --setup-auth` as an argument, the only way 0.11.0 accepts it,
-  so for the second or so that command runs, a local user who can list the
-  host's processes (no `hidepid`) can read it from `/proc/<pid>/cmdline`.
-  That happens on first use or after a reset only (a launch that finds a
-  non-empty `auth.json` and a password it did not just make skips it).
+  below). It reaches `yepanywhere --setup-auth` in `YEP_AUTH_PASSWORD`, not
+  on the argv, so it is never in the world-readable `/proc/<pid>/cmdline`;
+  `/proc/<pid>/environ` is readable only by the same user and root, who can
+  read the host password file anyway. Yep Anywhere removes the variable from
+  its own environment. `--setup-auth` runs on first use or after a reset only
+  (a launch that finds a non-empty `auth.json` and a password it did not just
+  make skips it).
   The certificate is not issued by anything the phone trusts, so the first
   connection is trust-on-first-use; a network attacker
   present at that moment can intercept it. The data directory is a state-dir
@@ -1269,8 +1270,13 @@ Design and the upstream gaps: `docs/dev/decisions/yep-anywhere.md`.
   (integrity hashes for all of its npm dependencies), installed with
   `--ignore-scripts`. The same limit as the other lockfiles applies: it
   catches bytes changing after review, not a release that was already bad.
-- **Outbound traffic.** None at start. Features the user opens can contact
-  `updates.yepanywhere.com`, `push.yepanywhere.com`, `api.github.com`, and,
+- **Peer API.** Yep Anywhere's server-to-server `/v0` API (0.13.0) starts
+  disabled: the launch sets `YEP_PEER_API_ENABLED=false` unless the caller
+  set it, which also locks the toggle in its settings to that value.
+- **Outbound traffic.** None at start. The update check against
+  `updates.yepanywhere.com` is off (`YEP_UPDATE_CHECK=false`; the image pins
+  the release). Features the user opens can contact
+  `push.yepanywhere.com`, `api.github.com`, and,
   only if remote access is configured in its settings, the
   `relay.yepanywhere.com` relay. Do not enable remote access if the session
   must stay on the local network.

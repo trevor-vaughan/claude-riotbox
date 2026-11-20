@@ -37,15 +37,16 @@
 # HEADROOM_MEMORY_DB_PATH (~/.headroom/memory.db, the state-dir mount),
 # which `headroom proxy` reads as its --memory-db-path. Without --memory,
 # `wrap opencode` touches the CWD nowhere (its only $PWD writes are under
-# `if memory:`, cli/wrap.py:8654, 8730).
+# `if memory:`, cli/wrap.py:8959, 9035).
 #
-# The delegated flags, all load-bearing:
+# The delegated flags, load-bearing unless noted:
 #   --no-proxy    we started the proxy; without this upstream starts a second
 #                 one and terminates it when the launch returns
 #   --no-mcp      skips registering headroom's MCP server, which is a config
 #                 write we do not need — matches the pre-delegation behavior
-#   --no-serena   Serena MCP registration downloads at session start, which
-#                 violates offline-after-build
+#   --no-serena   belt-and-braces: Serena MCP registration downloads at session
+#                 start, which violates offline-after-build. Redundant since
+#                 headroom 0.44.0 (code-memory defaults to none, cli/wrap.py:1258-1260)
 #
 # Degraded mode (spawn failure, readiness timeout): warn on stderr and exec
 # opencode unwrapped — headroom is an optimization layer, never a reason to

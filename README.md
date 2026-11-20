@@ -255,7 +255,7 @@ Pi core tracks the latest release, like opencode and Claude Code: each image bui
 
 | Extension | Provides |
 |---|---|
-| `pi-subagents@0.85.0` | `subagent` tool — delegate work to child agents |
+| `pi-subagents@0.89.1` | `subagent` tool — delegate work to child agents |
 | `@juicesharp/rpiv-ask-user-question@2.15.0` | `ask_user_question` tool — structured questions instead of guesses |
 | `@juicesharp/rpiv-todo@2.15.0` | `todo` tool and `/todos` |
 
@@ -327,6 +327,11 @@ and errors, so the banner stays in view; the full log is
   [the decision record](docs/dev/decisions/yep-anywhere.md#open-items).
 - **Stay local.** Yep Anywhere has an optional remote-access relay; leave it
   off in its settings if traffic must stay on your network.
+- **Server connections are off.** Yep Anywhere's peer API, for linking two
+  Yep Anywhere servers, starts disabled and its settings toggle is locked. To
+  use it, set `YEP_PEER_API_ENABLED=true` and add it to
+  `RIOTBOX_PASSTHROUGH_EXTRA_VARS`. Update checks are always off; the image
+  pins the release.
 - **Not with** `RIOTBOX_EGRESS=1` (planned: a sidecar) or `RIOTBOX_NETWORK=none`.
 
 ### Several sessions: `riotbox hub`
@@ -3008,7 +3013,7 @@ Two cases make the suggestion fall back to a plain patch bump, each printing why
 The task needs `git-cliff` on `PATH` and stops with install instructions when it is missing:
 
 ```sh
-cargo install git-cliff --version 2.13.1
+cargo install git-cliff --version 2.14.2
 ```
 
 Each run regenerates `CHANGELOG.md` in full rather than prepending to it. The release commit itself is skipped by a `cliff.toml` commit parser, so regenerating later reproduces the same file.
@@ -3189,7 +3194,7 @@ cat ~/.claude/debug/latest
 **Check**:
 
 - **Did the support land?** The signal differs per agent, and on Claude it changed in this release.
-  - **`--agent=claude`** — there is no `[context-mode]` startup line any more, because riotbox no longer writes Claude's wiring. The plugin registration prints instead, on stdout: `  [plugins] Context Mode 2.1.4 registered at /home/llm/.riotbox/context-mode-plugin/v2.1.4.` **Do not read that line, or its absence, as the answer.** It is printed only by a call that changed the registry, and how often that happens depends on your host: with no `context-mode` under `~/.claude/plugins` it prints on the first run and then goes quiet, while with one mounted the host merge overwrites the entry every start and the line prints on every run — twice on the first. The definitive negative signal is on stderr instead: `  [context-mode] WARN: no Context Mode plugin is installed and enabled in this session`. To check a quiet session directly, look for the plugin: `riotbox run "/context-mode:ctx-doctor"`, or `jq '.plugins["context-mode@context-mode"]' ~/.local/share/riotbox/<session>/.claude/plugins/installed_plugins.json`.
+  - **`--agent=claude`** — there is no `[context-mode]` startup line any more, because riotbox no longer writes Claude's wiring. The plugin registration prints instead, on stdout: `  [plugins] Context Mode 2.2.1 registered at /home/llm/.riotbox/context-mode-plugin/v2.2.1.` **Do not read that line, or its absence, as the answer.** It is printed only by a call that changed the registry, and how often that happens depends on your host: with no `context-mode` under `~/.claude/plugins` it prints on the first run and then goes quiet, while with one mounted the host merge overwrites the entry every start and the line prints on every run — twice on the first. The definitive negative signal is on stderr instead: `  [context-mode] WARN: no Context Mode plugin is installed and enabled in this session`. To check a quiet session directly, look for the plugin: `riotbox run "/context-mode:ctx-doctor"`, or `jq '.plugins["context-mode@context-mode"]' ~/.local/share/riotbox/<session>/.claude/plugins/installed_plugins.json`.
   - **`--agent=opencode`** — unchanged: `  [context-mode] opencode plugin shim wired at <path>.` on stderr.
   - **`--agent=pi`** — `  [context-mode] pi package wired in /home/llm/.pi/agent/settings.json.` on stderr.
 
