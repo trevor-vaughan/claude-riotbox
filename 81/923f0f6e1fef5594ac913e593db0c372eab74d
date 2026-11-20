@@ -1,0 +1,24 @@
+tests/checkpoint-snapshot.venom.yml
+  s_463985fbd635b6::t_af75da93fe2c4a 1425-1490
+README.md
+  s_463985fbd635b6::t_6447e43d39f6c6 2636-2641
+libexec/checkpoint.sh
+  s_463985fbd635b6::t_6447e43d39f6c6 27-29
+  s_463985fbd635b6::t_4bb84cd4072b88 43-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ff22800b818cb1f3fcea4477455d23223b58bad7",
+  "prompts": {},
+  "sessions": {
+    "s_463985fbd635b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ae5333a8-4dbb-4c8e-9db6-922304518d40",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
