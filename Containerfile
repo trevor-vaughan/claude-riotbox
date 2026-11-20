@@ -242,6 +242,7 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
         xz \
         which \
         procps-ng \
+        tmux \
         findutils \
         diffutils \
         jq \
