@@ -1,15 +1,15 @@
-libexec/checkpoint.sh
-  s_463985fbd635b6::t_4bb84cd4072b88 43-52
-  s_463985fbd635b6::t_6447e43d39f6c6 27-29
-README.md
-  s_463985fbd635b6::t_6447e43d39f6c6 2631-2636,2636-2641
 tests/checkpoint-snapshot.venom.yml
   s_463985fbd635b6::t_af75da93fe2c4a 1425-1490
+README.md
+  s_463985fbd635b6::t_6447e43d39f6c6 2636-2641
+libexec/checkpoint.sh
+  s_463985fbd635b6::t_6447e43d39f6c6 27-29
+  s_463985fbd635b6::t_4bb84cd4072b88 43-52
 ---
 {
   "schema_version": "authorship/3.0.0",
-  "git_ai_version": "1.7.6",
-  "base_commit_sha": "c23184fdf82f50341b891a075d7e507d3357c4b8",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ff22800b818cb1f3fcea4477455d23223b58bad7",
   "prompts": {},
   "sessions": {
     "s_463985fbd635b6": {
