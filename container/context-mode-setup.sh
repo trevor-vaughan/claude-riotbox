@@ -169,7 +169,7 @@ context_mode_setup() {
 	local agent="${RIOTBOX_AGENT:-claude}"
 	local other store found=()
 
-	# 2.1.4 reads CONTEXT_MODE_DATA_DIR as its whole data root, so a value that
+	# 2.2.1 reads CONTEXT_MODE_DATA_DIR as its whole data root, so a value that
 	# reached the container — a passthrough entry, an extra -e — would move
 	# every store off the ~/.context-mode session mount without a word. The
 	# mount is the only placement RiotBox relies on. Cleared before the

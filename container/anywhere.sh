@@ -12,7 +12,7 @@
 # npm package — a different Claude Code than the image's, and one that skips
 # the RiotBox wrapper (container/agent-wrapper.sh) and the flags it injects.
 # Yep Anywhere reads CLAUDE_CODE_EXECUTABLE before falling back to that bundle,
-# and with it set never falls back (packages/server/src/sdk/providers/claude.ts
+# and with it set never falls back (packages/server/src/sdk/providers/claude-executable.ts
 # upstream), so the wrapper is what runs. The image build also deletes the
 # bundled binaries, so a regression there fails a session rather than quietly
 # running unwrapped.
@@ -29,9 +29,9 @@
 # and passes it in RIOTBOX_ANYWHERE_PASSWORD, with RIOTBOX_ANYWHERE_PASSWORD_NEW=1
 # when it has just been made. It goes to `yepanywhere --setup-auth` (which
 # stores only a bcrypt hash, in ~/.yep-anywhere/auth.json, and keeps existing
-# logins) only when new or when auth.json is missing or empty: the value is on
-# that command's argv, which any host user can read in /proc, so it is kept
-# off the argv of the ordinary launch. It is printed here only when new.
+# logins) only when new or when auth.json is missing or empty, in
+# YEP_AUTH_PASSWORD rather than on the argv any host user can read in /proc.
+# It is printed here only when new.
 # ~/.yep-anywhere is a state-dir mount (scripts/mount-projects.sh), so the
 # hash and the self-signed certificate survive to the next session of the
 # same projects — the phone accepts the certificate once, not every launch.
@@ -59,6 +59,13 @@ export CLAUDE_CODE_EXECUTABLE="${claude_wrapper}"
 unset CLAUDE_CODE_PATH
 export YEP_DATA_DIR="${YEP_DATA}"
 unset YEP_PROFILE
+# Peer connections (server-to-server /v0 API) are a 0.13.0 feature RiotBox
+# does not use, so they start off; a caller that sets the variable still wins.
+# Once set, Yep Anywhere's own toggle is locked to it.
+export YEP_PEER_API_ENABLED="${YEP_PEER_API_ENABLED:-false}"
+# The image pins the release; an update notice would only point at one the
+# image cannot take, and the check calls updates.yepanywhere.com.
+export YEP_UPDATE_CHECK=false
 # The bind address the host publishes on (libexec/anywhere-lib.sh). Without
 # it Yep Anywhere's Host-header check refuses API calls addressed to anything
 # but localhost, a private IPv4 address or *.ts.net.
@@ -87,7 +94,9 @@ if [[ -z "${RIOTBOX_ANYWHERE_PASSWORD:-}" ]]; then
 fi
 password="${RIOTBOX_ANYWHERE_PASSWORD}"
 if [[ "${RIOTBOX_ANYWHERE_PASSWORD_NEW:-0}" = "1" ]] || [[ ! -s "${YEP_DATA}/auth.json" ]]; then
-	if ! "${YEP_BIN}" --setup-auth "${password}" >/dev/null 2>&1; then
+	# A bare --setup-auth reads YEP_AUTH_PASSWORD, which keeps the password out
+	# of /proc/<pid>/cmdline; Yep Anywhere removes it from its own environment.
+	if ! YEP_AUTH_PASSWORD="${password}" "${YEP_BIN}" --setup-auth >/dev/null 2>&1; then
 		echo "ERROR: yepanywhere --setup-auth failed; no password was set." >&2
 		exit 1
 	fi

@@ -845,7 +845,7 @@ testcases:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
-  - name: container/anywhere.sh applies the given password once, points Claude at the wrapper, and serves TLS on the fixed port
+  - name: container/anywhere.sh applies the given password once off the argv, points Claude at the wrapper, and serves TLS on the fixed port
     steps:
       - type: exec
         script: |
@@ -853,47 +853,54 @@ testcases:
           TMP="$(mktemp -d)"; trap 'rm -rf "${TMP}"' EXIT
           mkdir -p "${TMP}/home/.riotbox/bin"
           printf '#!/usr/bin/env bash\nexit 0\n' > "${TMP}/home/.riotbox/bin/claude"
-          # Stub yepanywhere: --setup-auth records the password and writes
-          # auth.json the way the real one does; a serve records its argv and
-          # the variables anywhere.sh is responsible for.
+          # Stub yepanywhere: --setup-auth records its argument count and the
+          # password it was given in the environment, and writes auth.json the
+          # way the real one does; a serve records its argv and the variables
+          # anywhere.sh is responsible for.
           cat > "${TMP}/yep" <<'STUB'
           #!/usr/bin/env bash
           if [ "$1" = "--setup-auth" ]; then
-            printf '%s\n' "$2" >> "${LOG}/passwords"
+            printf '%s|%s\n' "$#" "${YEP_AUTH_PASSWORD:-unset}" >> "${LOG}/passwords"
             printf '{"hash":"x"}\n' > "${YEP_DATA_DIR}/auth.json"
             exit 0
           fi
           printf '%s\n' "$*" > "${LOG}/serve-argv"
+          printf '%s %s\n' "${YEP_PEER_API_ENABLED:-unset}" "${YEP_UPDATE_CHECK:-unset}" > "${LOG}/yep-switches"
           printf '%s\n' "${CLAUDE_CODE_EXECUTABLE:-unset}" > "${LOG}/claude-exe"
           printf '%s\n' "${CLAUDE_CODE_PATH:-unset}" > "${LOG}/claude-path"
           printf '%s\n' "${ALLOWED_HOSTS:-unset}" > "${LOG}/allowed-hosts"
-          printf '%s|%s\n' "${RIOTBOX_ANYWHERE_PASSWORD:-unset}" "${RIOTBOX_ANYWHERE_PASSWORD_NEW:-unset}" > "${LOG}/serve-env"
+          printf '%s|%s|%s\n' "${RIOTBOX_ANYWHERE_PASSWORD:-unset}" "${RIOTBOX_ANYWHERE_PASSWORD_NEW:-unset}" "${YEP_AUTH_PASSWORD:-unset}" > "${LOG}/serve-env"
           STUB
           chmod +x "${TMP}/yep" "${TMP}/home/.riotbox/bin/claude"
           export LOG="${TMP}" HOME="${TMP}/home" RIOTBOX_YEP_BIN="${TMP}/yep"
           export RIOTBOX_ANYWHERE_URL=https://100.64.1.2:8443 RIOTBOX_ANYWHERE_HOST=100.64.1.2 CLAUDE_CODE_PATH=/somewhere/else
           pw=Abcdefgh12345678Abcdefgh
           first="$(RIOTBOX_ANYWHERE_PASSWORD="${pw}" RIOTBOX_ANYWHERE_PASSWORD_NEW=1 bash "{{.riotbox_dir}}/container/anywhere.sh")"
-          [ "$(cat "${TMP}/passwords")" = "${pw}" ] || { echo "BAD: --setup-auth got: $(cat "${TMP}/passwords")"; exit 1; }
+          [ "$(cat "${TMP}/passwords")" = "1|${pw}" ] || { echo "BAD: --setup-auth wants a bare flag and YEP_AUTH_PASSWORD, got argc|env: $(cat "${TMP}/passwords")"; exit 1; }
           echo "${first}" | grep -q "Password: *${pw}$" || { echo "BAD: password not shown: ${first}"; exit 1; }
           echo "${first}" | grep -q "https://100.64.1.2:8443" || { echo "BAD: URL not shown: ${first}"; exit 1; }
           [ "$(cat "${TMP}/serve-argv")" = "--host 0.0.0.0 --port 3400 --https-self-signed" ] || { echo "BAD: serve argv: $(cat "${TMP}/serve-argv")"; exit 1; }
           [ "$(cat "${TMP}/claude-exe")" = "${TMP}/home/.riotbox/bin/claude" ] || { echo "BAD: CLAUDE_CODE_EXECUTABLE=$(cat "${TMP}/claude-exe")"; exit 1; }
           [ "$(cat "${TMP}/claude-path")" = unset ] || { echo "BAD: CLAUDE_CODE_PATH survived"; exit 1; }
           [ "$(cat "${TMP}/allowed-hosts")" = 100.64.1.2 ] || { echo "BAD: ALLOWED_HOSTS=$(cat "${TMP}/allowed-hosts")"; exit 1; }
-          [ "$(cat "${TMP}/serve-env")" = "unset|unset" ] || { echo "BAD: the server (and the agents it starts) inherited the password: $(cat "${TMP}/serve-env")"; exit 1; }
+          [ "$(cat "${TMP}/serve-env")" = "unset|unset|unset" ] || { echo "BAD: the server (and the agents it starts) inherited the password: $(cat "${TMP}/serve-env")"; exit 1; }
+          [ "$(cat "${TMP}/yep-switches")" = "false false" ] || { echo "BAD: peer API and update check must default off, got: $(cat "${TMP}/yep-switches")"; exit 1; }
           [ "$(stat -c %a "${TMP}/home/.yep-anywhere")" = 700 ] || { echo "BAD: data dir mode"; exit 1; }
           second="$(RIOTBOX_ANYWHERE_PASSWORD="${pw}" RIOTBOX_ANYWHERE_PASSWORD_NEW=0 bash "{{.riotbox_dir}}/container/anywhere.sh")"
-          [ "$(wc -l < "${TMP}/passwords")" = 1 ] || { echo "BAD: second launch put the password on an argv again"; exit 1; }
+          [ "$(wc -l < "${TMP}/passwords")" = 1 ] || { echo "BAD: second launch ran --setup-auth again"; exit 1; }
           echo "${second}" | grep -q "Password: *${pw}" && { echo "BAD: second launch printed the password"; exit 1; }
           echo "${second}" | grep -q "unchanged" || { echo "BAD: second launch: ${second}"; exit 1; }
+          # The peer API is only defaulted off, so a caller can turn it back on;
+          # update checks stay off whatever the caller set.
+          YEP_PEER_API_ENABLED=true YEP_UPDATE_CHECK=true RIOTBOX_ANYWHERE_PASSWORD="${pw}" RIOTBOX_ANYWHERE_PASSWORD_NEW=0 bash "{{.riotbox_dir}}/container/anywhere.sh" >/dev/null
+          [ "$(cat "${TMP}/yep-switches")" = "true false" ] || { echo "BAD: with both preset true, got: $(cat "${TMP}/yep-switches")"; exit 1; }
           echo "OK"
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "OK"
 
-  # --setup-auth takes the password as an argument, which any host user can read
-  # in /proc while it runs; the ordinary launch must not run it.
+  # --setup-auth rewrites auth.json; the ordinary launch, with a password it
+  # did not just make and an auth.json in place, must not run it.
   - name: container/anywhere.sh runs --setup-auth only for a new password or a missing or empty auth.json
     steps:
       - type: exec

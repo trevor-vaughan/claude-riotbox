@@ -18,7 +18,7 @@ set -euo pipefail
 
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 GIT_CLIFF="${GIT_CLIFF:-git-cliff}"
-GIT_CLIFF_VERSION="2.13.1"
+GIT_CLIFF_VERSION="2.14.2"
 SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
 
 die() {

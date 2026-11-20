@@ -831,7 +831,7 @@ RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 # The smoke test then runs the proxy the way a session does — `headroom
 # proxy --memory --no-learn`, offline, HEADROOM_MEMORY_DB_PATH set, in a
 # throwaway HOME — and waits for /livez to answer as headroom
-# (proxy/server.py:4437-4452) and for its log to say the memory backend came
+# (proxy/server.py:4573-4588) and for its log to say the memory backend came
 # up at that path with the ONNX embedder ("Memory: Initialized LocalBackend at
 # <db> (embedder: onnx)", proxy/memory_handler.py:408-411) and that the
 # embedder then really encoded something ("Memory: embedder warm-up encode
@@ -873,7 +873,7 @@ RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 # an image-wide ENV: in a session the canary is what catches a degraded ONNX
 # runtime before live traffic depends on it, which is the whole reason it
 # exists. tests/headroom.venom.yml pins both halves of that.
-ARG HEADROOM_VERSION=0.43.0
+ARG HEADROOM_VERSION=0.44.0
 # DL3001: the `kill` stops the smoke test's own background proxy, not a
 # service in the image.
 # hadolint ignore=DL3001
@@ -1037,7 +1037,7 @@ RUN bash -o pipefail -c '\
 #
 # The trailing npm cache strip is the one "Why every npm layer empties
 # /home/llm/.npm" explains.
-ARG PI_NODE=24.22.2
+ARG PI_NODE=24.22.3
 ENV RIOTBOX_PI_DIR=/home/llm/.riotbox/pi
 COPY --chown=llm:llm container/pi/ /tmp/riotbox-pi/
 RUN bash -o pipefail -c '\
@@ -1131,7 +1131,7 @@ RUN bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && claud
 # config" mkdir, and NPM_CONFIG_CACHE is pinned to it by the "Tool configs"
 # block. Dropping it from that mkdir list fails the first npm layer instead of
 # silently skipping the strip, which is the behaviour to keep.
-ARG CODEGRAPH_VERSION=1.6.2
+ARG CODEGRAPH_VERSION=1.6.3
 RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
     CODEGRAPH_NO_DOWNLOAD=1 codegraph version && \
     codegraph telemetry off && \
@@ -1186,12 +1186,12 @@ RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
 # untranslated (x86_64, aarch64) rather than venom's sed to amd64/arm64, and
 # each arm sets upstream's asset name beside the digest that goes with it, so
 # the two cannot drift apart. And BUN_VERSION is bare where VENOM_VERSION
-# carries a leading v — `bun --version` prints 1.4.4, so the bare form is what
+# carries a leading v — `bun --version` prints 1.4.5, so the bare form is what
 # the check at the end can compare against, and the URL puts the v back as part
 # of the bun-v${BUN_VERSION} tag.
-ARG BUN_VERSION=1.4.4
-ARG BUN_SHA256_AMD64=e0446eb55995772eb9894bebae9a6be368d985a8b9271ee124486f9946eedd76
-ARG BUN_SHA256_ARM64=baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e
+ARG BUN_VERSION=1.4.5
+ARG BUN_SHA256_AMD64=dcb23a18a1c2fff12d57bcef696dbbb42eb67fde29f43816ecb595459a24c463
+ARG BUN_SHA256_ARM64=18656a3bf0ea5641f5796ae4213b75255579a70a0fded2f337933785568cdf84
 RUN bash -o pipefail -c '\
     set -e; \
     case "$(uname -m)" in \
@@ -1225,9 +1225,9 @@ RUN bash -o pipefail -c '\
 #   3. Update JSONSCHEMA_VERSION + JSONSCHEMA_SHA256_AMD64 + JSONSCHEMA_SHA256_ARM64
 # JSONSCHEMA_VERSION is bare: it is both the asset's name and what
 # `jsonschema version` prints, which the check at the end compares.
-ARG JSONSCHEMA_VERSION=17.3.2
-ARG JSONSCHEMA_SHA256_AMD64=ff660a20e5c9273742d5d73de9da2cffbdb91208293f90a8c3ea64a09ad7ed69
-ARG JSONSCHEMA_SHA256_ARM64=f8ede4a0b7e26e024d791c6c1af7e8d3d1c444a88dfc901cfb9d3f04825ec643
+ARG JSONSCHEMA_VERSION=17.3.3
+ARG JSONSCHEMA_SHA256_AMD64=2b2f91d5b429ee8f440d11c0413a24d6acc1406d209989fb618e39f4ff1157ed
+ARG JSONSCHEMA_SHA256_ARM64=5e1f1324511fec432f33333ce1d6ca2f827a678c611657feac3670d81ebce608
 RUN bash -o pipefail -c '\
     set -e; \
     case "$(uname -m)" in \
@@ -1373,8 +1373,8 @@ RUN bash -o pipefail -c '\
 #
 # The trailing npm cache strip is the one "Why every npm layer empties
 # /home/llm/.npm" explains. It runs last, after the probes.
-ARG CONTEXT_MODE_NODE=24.22.2
-ARG CONTEXT_MODE_VERSION=2.1.4
+ARG CONTEXT_MODE_NODE=24.22.3
+ARG CONTEXT_MODE_VERSION=2.2.1
 ENV RIOTBOX_CM_PLUGIN_DIR=/home/llm/.riotbox/context-mode-plugin
 COPY --chown=llm:llm container/context-mode-package-lock.json \
     /tmp/context-mode-package-lock.json
@@ -1589,7 +1589,7 @@ RUN bash /tmp/riotbox-opencode-smoke.sh /home/llm/.riotbox && \
 # opens can reach updates.yepanywhere.com (version check), push.yepanywhere.com
 # (push notifications), api.github.com (issue links) and the relay
 # (relay.yepanywhere.com, only if remote access is set up in its settings).
-ARG YEPANYWHERE_VERSION=0.11.0
+ARG YEPANYWHERE_VERSION=0.13.0
 COPY --chown=llm:llm container/yepanywhere-package-lock.json \
     /tmp/yepanywhere-package-lock.json
 RUN bash -o pipefail -c '\
@@ -1615,7 +1615,7 @@ RUN bash -o pipefail -c '\
     yep_left="$(find "${YEP_ROOT}/node_modules" -path "*claude-agent-sdk-*" -name claude -type f)"; \
     [ -z "${yep_left}" ] || { \
         echo "a bundled Claude binary survived the delete — the SDK could run it instead of the wrapper: ${yep_left}" >&2; exit 1; }; \
-    grep -q "process.env.CLAUDE_CODE_EXECUTABLE" "${YEP_PKG}/dist/sdk/providers/claude.js" || { \
+    grep -q "process.env.CLAUDE_CODE_EXECUTABLE" "${YEP_PKG}/dist/sdk/providers/claude-executable.js" || { \
         echo "yepanywhere ${YEPANYWHERE_VERSION} no longer reads CLAUDE_CODE_EXECUTABLE — container/anywhere.sh could not point it at the RiotBox wrapper" >&2; exit 1; }; \
     printf "%s\n" \
         "#!/usr/bin/env bash" \

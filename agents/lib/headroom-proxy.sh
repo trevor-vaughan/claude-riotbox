@@ -12,22 +12,22 @@
 # `wrap claude --memory` creates .headroom/ there, `wrap claude
 # --project-settings` (the default through 0.40.0) writes
 # .claude/settings.local.json, its lock and a SessionStart hook (headroom
-# 0.43.0 cli/wrap.py:6187, 6171, 6403, 1964), and `wrap opencode --memory`
-# appends to AGENTS.md (cli/wrap.py:8654).
+# 0.44.0 cli/wrap.py:6338, 6321, 6636, 2075), and `wrap opencode --memory`
+# appends to AGENTS.md (cli/wrap.py:8959).
 #
 # The proxy runs with --memory --no-learn:
 #   --memory     cross-session memory. Its DB is HEADROOM_MEMORY_DB_PATH,
 #                which the agent wrapper sets to ~/.headroom/memory.db, the
 #                session's state-dir mount; unset, headroom keeps it in
-#                $PWD/.headroom (proxy/server.py:1464-1468).
+#                $PWD/.headroom (proxy/server.py:1535-1539).
 #   --no-learn   the traffic learner writes what it learns into the project
 #                (CLAUDE.local.md for Claude, learn/writer.py:574-581;
-#                AGENTS.md for opencode, learn/plugins/opencode.py:124-130),
+#                AGENTS.md for opencode, learn/plugins/opencode.py:204-210),
 #                and no flag or env var points it anywhere else: only
 #                `headroom learn --target` sets a writer target
 #                (cli/learn.py:254), and the proxy's learner never does
 #                (memory/traffic_learner.py:715). --no-learn wins over any
-#                --learn (cli/proxy.py:1624).
+#                --learn (cli/proxy.py:1680).
 #
 # Sets on source:
 #   HEADROOM_PROXY_PORT     ${HEADROOM_PORT:-8787}; after headroom_proxy_select,
@@ -41,8 +41,8 @@
 #   headroom_proxy_is_headroom <port>
 #     Exit 0 when a healthy headroom proxy answers on 127.0.0.1:<port>:
 #     GET /livez returns "service":"headroom-proxy" and "status":"healthy"
-#     (proxy/server.py:4437-4452). /livez, not /health or /readyz, because
-#     those probe the upstream API first (server.py:4454-4469). Anything else
+#     (proxy/server.py:4573-4588). /livez, not /health or /readyz, because
+#     those probe the upstream API first (server.py:4590-4605). Anything else
 #     listening there — a dev server such as wrangler, which also defaults to
 #     8787 — must never get the agent's API traffic and credentials.
 #
@@ -56,7 +56,7 @@
 #     shell for the port chosen. A port is reused only when it answers as
 #     headroom AND ${HEADROOM_PROXY_RUN_DIR}/proxy.<port> records the same launch
 #     config and names a live process with the same start time: the proxy
-#     fixes its upstream when it starts (proxy/server.py:7400), so a proxy
+#     fixes its upstream when it starts (proxy/server.py:7558), so a proxy
 #     started for another provider would send this agent's requests, and
 #     its credentials, to the wrong endpoint. A headroom proxy without such
 #     a record was not started here and is passed over too. Otherwise the
@@ -103,12 +103,12 @@ HEADROOM_PROXY_ARGS=()
 _HEADROOM_PROXY_LOCK_FD=""
 # Env that decides where the proxy sends traffic or how; a proxy keeps the
 # values it started with, so they are part of its launch config.
-# Each is read by headroom 0.43.0 at proxy start: the provider targets
-# (proxy/server.py:7400-7423, providers/registry.py:138-139), the outbound
-# proxy (HEADROOM_HTTP_PROXY, server.py:7461, and the standard *_PROXY
+# Each is read by headroom 0.44.0 at proxy start: the provider targets
+# (proxy/server.py:7558-7584, providers/registry.py:146-147), the outbound
+# proxy (HEADROOM_HTTP_PROXY, server.py:7623, and the standard *_PROXY
 # variables httpx honours, upstream_pinning.py:48), the listen host
-# (HEADROOM_HOST, server.py:7397) and the client token the proxy requires
-# (HEADROOM_PROXY_TOKEN, cli/proxy.py:1600).
+# (HEADROOM_HOST, server.py:7555) and the client token the proxy requires
+# (HEADROOM_PROXY_TOKEN, cli/proxy.py:1656).
 _HEADROOM_PROXY_ROUTING_ENV=(ANTHROPIC_TARGET_API_URL OPENAI_TARGET_API_URL VERTEX_TARGET_API_URL
 	BEDROCK_TARGET_API_URL GEMINI_TARGET_API_URL CLOUDCODE_TARGET_API_URL
 	HEADROOM_HTTP2 HEADROOM_MODE HEADROOM_BACKEND HEADROOM_REGION HEADROOM_ANYLLM_PROVIDER

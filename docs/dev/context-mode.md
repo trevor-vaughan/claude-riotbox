@@ -73,7 +73,7 @@ The hook set at 2.x is `PreToolUse`, `PostToolUse`, `SessionStart` and
 
 Three consequences worth knowing before debugging a session:
 
-- **The tree is registered, not copied.** It is 6.2 MB at 2.1.4 and `~/.claude`
+- **The tree is registered, not copied.** It is 6.6 MB at 2.2.1 and `~/.claude`
   is a per-session-key bind mount of a host directory, so a copy would pay that
   disk once per project set. The registry entry names the image path and the
   tree is read in place, which also means a rebuild at a new version moves it —
@@ -192,7 +192,7 @@ concurrent runs share it, and `riotbox session-reset` removes it with the state
 dir. No `entries` pair in `internal/migrate` feeds it: it has no older location
 to import from.
 
-Placement rests on the mount alone. 2.1.4 also reads `CONTEXT_MODE_DATA_DIR` as
+Placement rests on the mount alone. 2.2.1 also reads `CONTEXT_MODE_DATA_DIR` as
 a full override of the data root, so a value that reached the container — a
 passthrough entry, an extra `-e` — would move every store off the mount without
 a word. `context_mode_setup` unsets it first, before the feature check, and the
@@ -209,7 +209,7 @@ sit in session mounts, so they persist; an enabled session prints one
 
 ## Which tools are actually intercepted
 
-At 2.1.4 the staged plugin's `hooks/claude-code.json` routes `PreToolUse` for
+At 2.2.1 the staged plugin's `hooks/claude-code.json` routes `PreToolUse` for
 
 `Bash`, `PowerShell`, `Read`, `Grep`, `WebFetch`, `Write`, `Edit`,
 `NotebookEdit` and the plugin's own `ctx_*` tools,
@@ -567,7 +567,7 @@ wire verb printed one; there is no wire verb. The equivalent signal now comes
 from the registration, on stdout during plugin setup:
 
 ```text
-  [plugins] Context Mode 2.1.4 registered at /home/llm/.riotbox/context-mode-plugin/v2.1.4.
+  [plugins] Context Mode 2.2.1 registered at /home/llm/.riotbox/context-mode-plugin/v2.2.1.
 ```
 
 It is printed only by a call that actually changed something. **How often that
