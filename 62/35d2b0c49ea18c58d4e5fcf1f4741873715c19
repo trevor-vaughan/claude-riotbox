@@ -1,0 +1,38 @@
+scripts/detect-mounts.sh
+  s_463985fbd635b6::t_953b93167ce756 117-119
+README.md
+  s_463985fbd635b6::t_fc90c0d4c2a17c 657,666,2904
+tests/host-config.venom.yml
+  s_463985fbd635b6::t_010e570e602bdc 381-391,393,395-420,422-425,427-442,445-451,453-455,457-464,467-476
+  s_463985fbd635b6::t_953b93167ce756 452
+  s_463985fbd635b6::t_dcd16516cc1ed5 392,394,421,426,443-444,456,465-466
+docs/dev/egress.md
+  s_463985fbd635b6::t_fc90c0d4c2a17c 121-122
+tests/egress-launch.venom.yml
+  s_463985fbd635b6::t_96b58e002ae0ba 737-759
+libexec/egress-lib.sh
+  s_463985fbd635b6::t_65d28f4dbca780 422-424
+  s_463985fbd635b6::t_483096057838ee 427
+  s_463985fbd635b6::t_dce78cc6b4ce6c 420-421
+libexec/launch.sh
+  s_463985fbd635b6::t_953b93167ce756 398-411,413-429,443
+  s_463985fbd635b6::t_483096057838ee 412
+bin/riotbox
+  s_463985fbd635b6::t_fc90c0d4c2a17c 432-434
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ad9113fcfd43983d1f576f7cd0ed61acdff1c67f",
+  "prompts": {},
+  "sessions": {
+    "s_463985fbd635b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ae5333a8-4dbb-4c8e-9db6-922304518d40",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
