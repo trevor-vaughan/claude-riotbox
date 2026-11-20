@@ -2,7 +2,7 @@ libexec/checkpoint.sh
   s_463985fbd635b6::t_4bb84cd4072b88 43-52
   s_463985fbd635b6::t_6447e43d39f6c6 27-29
 README.md
-  s_463985fbd635b6::t_6447e43d39f6c6 2631-2636
+  s_463985fbd635b6::t_6447e43d39f6c6 2631-2636,2636-2641
 tests/checkpoint-snapshot.venom.yml
   s_463985fbd635b6::t_af75da93fe2c4a 1425-1490
 ---
