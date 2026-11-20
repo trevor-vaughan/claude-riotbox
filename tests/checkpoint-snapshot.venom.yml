@@ -1422,3 +1422,69 @@ testcases:
         assertions:
           - result.code ShouldEqual 0
           - result.systemout ShouldContainSubstring "notes_rewrite_backed_up_ok=true"
+
+  # RIOTBOX_CHECKPOINT=0 is the opt-out for projects too large to snapshot.
+  # It drops the only undo for an agent's damage, so the skip is reported on
+  # every launch, and RIOTBOX_CHECKPOINT_QUIET does not hide it.
+  - name: RIOTBOX_CHECKPOINT=0 skips the snapshot and the backup, and says so even when quiet
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_staged_and_unstaged
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          status_before="$(git -C "${REPO_DIR}" status --porcelain)"
+          out="$(ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+                 RIOTBOX_CHECKPOINT=0 RIOTBOX_CHECKPOINT_QUIET=1 \
+                 bash "{{.riotbox_dir}}/libexec/checkpoint.sh" 2>&1)" && rc=0 || rc=$?
+          echo "${out}"; echo "rc=${rc}"
+          [ "${rc}" -eq 0 ] || { echo "BAD: rc=${rc}"; exit 1; }
+          [ -z "$(git -C "${REPO_DIR}" for-each-ref refs/riotbox/checkpoints)" ] || { echo "BAD: a checkpoint ref was written"; exit 1; }
+          [ ! -e "${XDG_DATA_HOME}/riotbox/backups" ] || { echo "BAD: a backup was written"; exit 1; }
+          [ "${status_before}" = "$(git -C "${REPO_DIR}" status --porcelain)" ] || { echo "BAD: worktree changed"; exit 1; }
+          echo "skip_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "skip_ok=true"
+          - result.systemout ShouldContainSubstring "RIOTBOX_CHECKPOINT=0"
+          - result.systemout ShouldContainSubstring "no checkpoint protection"
+
+  - name: RIOTBOX_CHECKPOINT=0 does not git-init a project even with RIOTBOX_GIT_INIT=1
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_workdir
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          echo data > "${WORK_DIR}/file.txt"
+          ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${WORK_DIR}" \
+            RIOTBOX_CHECKPOINT=0 RIOTBOX_GIT_INIT=1 \
+            bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1 || { echo "BAD: non-zero exit"; exit 1; }
+          [ ! -e "${WORK_DIR}/.git" ] || { echo "BAD: the project was git-initialised"; exit 1; }
+          echo "no_init_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "no_init_ok=true"
+
+  # Only an explicit 0 turns protection off; a typo or another spelling must
+  # fail safe and still snapshot.
+  - name: RIOTBOX_CHECKPOINT values other than 0 still snapshot
+    steps:
+      - type: exec
+        script: |
+          source "{{.helpers}}"
+          init_test_repo_staged_and_unstaged
+          trap 'rm -rf "${TEST_DIR}"' EXIT
+          for v in 1 false off; do
+            ROOT_DIR="{{.riotbox_dir}}" RIOTBOX_PROJECTS="${REPO_DIR}" \
+              RIOTBOX_CHECKPOINT="${v}" RIOTBOX_CHECKPOINT_QUIET=1 \
+              bash "{{.riotbox_dir}}/libexec/checkpoint.sh" >/dev/null 2>&1 || { echo "BAD: ${v}: non-zero exit"; exit 1; }
+            n="$(git -C "${REPO_DIR}" for-each-ref refs/riotbox/checkpoints | wc -l)"
+            [ "${n}" -ge 1 ] || { echo "BAD: RIOTBOX_CHECKPOINT=${v} skipped the snapshot"; exit 1; }
+            git -C "${REPO_DIR}" for-each-ref --format='%(refname)' refs/riotbox/checkpoints | xargs -r -n1 git -C "${REPO_DIR}" update-ref -d
+            sleep 1
+          done
+          echo "fail_safe_ok=true"
+        assertions:
+          - result.code ShouldEqual 0
+          - result.systemout ShouldContainSubstring "fail_safe_ok=true"
