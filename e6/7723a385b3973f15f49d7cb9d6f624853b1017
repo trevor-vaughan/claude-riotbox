@@ -1,0 +1,14 @@
+Containerfile
+  h_4db53f42b9be42 245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e67723a385b3973f15f49d7cb9d6f624853b1017",
+  "prompts": {},
+  "humans": {
+    "h_4db53f42b9be42": {
+      "author": "Trevor Vaughan <peiriannydd@gmail.com>"
+    }
+  }
+}
