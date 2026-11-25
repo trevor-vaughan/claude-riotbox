@@ -1,0 +1,127 @@
+.github/workflows/test.yml
+  s_e2e46cb0672f9a::t_7683d4b02b7241 16,20,55,59
+README.md
+  s_e2e46cb0672f9a::t_de574e10610949 258
+container/agent-wrapper.sh
+  s_e2e46cb0672f9a::t_00bd706f06e35b 52
+container/context-mode-hooks-expected.json
+  s_e2e46cb0672f9a::t_5266ee5de937a1 5-7
+docs/dev/agent-contract.md
+  s_e2e46cb0672f9a::t_00bd706f06e35b 355
+tests/headroom-claude.venom.yml
+  s_e2e46cb0672f9a::t_99cd540d1aaa4c 11,309,333
+THREAT_MODEL.md
+  s_e2e46cb0672f9a::t_27f394b530b125 789
+go.mod
+  s_e2e46cb0672f9a::t_a434e0f83fd781 7,9,488
+container/plugin-setup.sh
+  s_e2e46cb0672f9a::t_27f394b530b125 102
+tests/headroom-opencode.venom.yml
+  s_e2e46cb0672f9a::t_00bd706f06e35b 253
+  s_e2e46cb0672f9a::t_99cd540d1aaa4c 256
+tests/context-mode.venom.yml
+  s_e2e46cb0672f9a::t_2b6ba52fffa6c9 1427-1428
+tests/headroom.venom.yml
+  s_e2e46cb0672f9a::t_00bd706f06e35b 229
+  s_e2e46cb0672f9a::t_99cd540d1aaa4c 231,233
+tests/lib/headroom-fakes.sh
+  s_e2e46cb0672f9a::t_99cd540d1aaa4c 178-179
+docs/dev/context-mode.md
+  s_e2e46cb0672f9a::t_9b08b31a03a2c0 217-219
+  s_e2e46cb0672f9a::t_27f394b530b125 76,195,212,571
+  s_e2e46cb0672f9a::t_b35997b2829ed9 69
+  s_e2e46cb0672f9a::t_b8c7403e5527c8 302
+agents/opencode/headroom-exec.sh
+  s_e2e46cb0672f9a::t_99cd540d1aaa4c 40
+  s_e2e46cb0672f9a::t_00bd706f06e35b 49
+tests/lib/fake-headroom-listener.py
+  s_e2e46cb0672f9a::t_00bd706f06e35b 9
+container/context-mode-setup.sh
+  s_e2e46cb0672f9a::t_27f394b530b125 172
+.github/workflows/release.yml
+  s_e2e46cb0672f9a::t_7683d4b02b7241 18,22,68,73,99-100,110,122
+Containerfile
+  s_e2e46cb0672f9a::t_de574e10610949 1135,1378,1593
+  s_e2e46cb0672f9a::t_99cd540d1aaa4c 835,837
+  s_e2e46cb0672f9a::t_28d359dbd205de 839-840
+  s_e2e46cb0672f9a::t_f52a96c45cd474 877
+container/opencode/smoke.sh
+  s_e2e46cb0672f9a::t_99cd540d1aaa4c 47
+  s_e2e46cb0672f9a::t_00bd706f06e35b 46
+  s_e2e46cb0672f9a::t_f52a96c45cd474 53
+agents/claude/headroom-exec.sh
+  s_e2e46cb0672f9a::t_f52a96c45cd474 46
+  s_e2e46cb0672f9a::t_00bd706f06e35b 20
+  s_e2e46cb0672f9a::t_99cd540d1aaa4c 21,26,30,34,36,43,49,59,70,112,141
+container/pi/package.json
+  s_e2e46cb0672f9a::t_4a192ead75606f 7
+agents/lib/headroom-proxy.sh
+  s_e2e46cb0672f9a::t_00bd706f06e35b 15,106
+  s_e2e46cb0672f9a::t_99cd540d1aaa4c 16,22,30,44-45,59,107-108,111
+container/context-mode-package-lock.json
+  s_e2e46cb0672f9a::t_a7fc1e6ba01fc8 9,13-15
+container/pi/package-lock.json
+  s_e2e46cb0672f9a::t_2f6830d8c3b284 13,106-108
+container/yepanywhere-package-lock.json
+  s_e2e46cb0672f9a::t_9393a08e290321 9,22-24,30-37,46-48,59-61,72-74,88-90,104-106,120-122,136-138,149-151,183-185,202-204,1653-1655,1862-1864,2608-2610,3187-3189,3481-3483,3487
+go.sum
+  s_e2e46cb0672f9a::t_9da9ada461e782 1280-1281,1841-1842,1849-1850
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "33c01e15cb826096e1d6bc5da9be00752952581f",
+  "prompts": {},
+  "sessions": {
+    "s_e2e46cb0672f9a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fdc84114-2f8b-44f2-a2d1-8bee5a82fa3d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+README.md
+  s_e2e46cb0672f9a::t_f80030f9bffb7f 3203
+docs/dev/riotbox-core.md
+  s_e2e46cb0672f9a::t_c9d94010497171 455
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "e6638c916be1c7948f8d51792a162e71252bb18d",
+  "prompts": {},
+  "sessions": {
+    "s_e2e46cb0672f9a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fdc84114-2f8b-44f2-a2d1-8bee5a82fa3d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
+
+THREAT_MODEL.md
+  s_e2e46cb0672f9a::t_b213eb4ae9a7b2 3040
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "3daed9d6961f025923af05c82ffda3ae69ea4edd",
+  "prompts": {},
+  "sessions": {
+    "s_e2e46cb0672f9a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fdc84114-2f8b-44f2-a2d1-8bee5a82fa3d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
