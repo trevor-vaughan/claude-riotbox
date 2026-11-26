@@ -1424,8 +1424,8 @@ testcases:
           jq -e . "${expected}" > /dev/null \
             || { echo "FAIL: ${expected} is not readable JSON"; exit 1; }
           events="$(jq -r 'keys | join(",")' "${expected}")"
-          [ "${events}" = "PostToolUse,PreToolUse,SessionStart,UserPromptSubmit" ] \
-            || { echo "FAIL: ${expected} names events '${events}', want PostToolUse,PreToolUse,SessionStart,UserPromptSubmit"; exit 1; }
+          [ "${events}" = "PostToolUse,PostToolUseFailure,PreToolUse,SessionStart,UserPromptSubmit" ] \
+            || { echo "FAIL: ${expected} names events '${events}', want PostToolUse,PostToolUseFailure,PreToolUse,SessionStart,UserPromptSubmit"; exit 1; }
           [ "$(jq -r 'map_values(type) | to_entries | map(select(.value != "array")) | length' "${expected}")" = 0 ] \
             || { echo "FAIL: ${expected} has an event whose value is not an array of matchers"; exit 1; }
           [ "$(jq -r '[.[][] | select(type != "string" and type != "null")] | length' "${expected}")" = 0 ] \

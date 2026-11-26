@@ -4,7 +4,7 @@
   "private": true,
   "description": "Pi extensions RiotBox installs into the image. Pi core floats and is installed separately; see the Pi block in the Containerfile.",
   "dependencies": {
-    "pi-subagents": "0.89.1",
+    "pi-subagents": "0.90.0",
     "@juicesharp/rpiv-ask-user-question": "2.15.0",
     "@juicesharp/rpiv-todo": "2.15.0"
   },

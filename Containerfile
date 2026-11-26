@@ -832,12 +832,12 @@ RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 # The smoke test then runs the proxy the way a session does — `headroom
 # proxy --memory --no-learn`, offline, HEADROOM_MEMORY_DB_PATH set, in a
 # throwaway HOME — and waits for /livez to answer as headroom
-# (proxy/server.py:4573-4588) and for its log to say the memory backend came
+# (proxy/server.py:4724-4739) and for its log to say the memory backend came
 # up at that path with the ONNX embedder ("Memory: Initialized LocalBackend at
-# <db> (embedder: onnx)", proxy/memory_handler.py:408-411) and that the
+# <db> (embedder: onnx)", proxy/memory_handler.py:431-434) and that the
 # embedder then really encoded something ("Memory: embedder warm-up encode
-# complete", :2147). The first line is logged before the model loads, and a
-# failed warm-up only logs "Memory: embedder warm-up failed" (:2150) and
+# complete", :2186). The first line is logged before the model loads, and a
+# failed warm-up only logs "Memory: embedder warm-up failed" (:2189) and
 # carries on, so the smoke fails on that line at once. That proves the
 # pre-warmed model cache and the memory path end to end, and a pin that
 # regresses the embedder to the torch default (excluded here) fails THIS layer
@@ -874,7 +874,7 @@ RUN echo "LLM CLI tools cache key: ${LLM_TOOL_UPDATE}"
 # an image-wide ENV: in a session the canary is what catches a degraded ONNX
 # runtime before live traffic depends on it, which is the whole reason it
 # exists. tests/headroom.venom.yml pins both halves of that.
-ARG HEADROOM_VERSION=0.44.0
+ARG HEADROOM_VERSION=0.45.0
 # DL3001: the `kill` stops the smoke test's own background proxy, not a
 # service in the image.
 # hadolint ignore=DL3001
@@ -1132,7 +1132,7 @@ RUN bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash && claud
 # config" mkdir, and NPM_CONFIG_CACHE is pinned to it by the "Tool configs"
 # block. Dropping it from that mkdir list fails the first npm layer instead of
 # silently skipping the strip, which is the behaviour to keep.
-ARG CODEGRAPH_VERSION=1.6.3
+ARG CODEGRAPH_VERSION=1.6.4
 RUN npm install -g "@colbymchenry/codegraph@${CODEGRAPH_VERSION}" && \
     CODEGRAPH_NO_DOWNLOAD=1 codegraph version && \
     codegraph telemetry off && \
@@ -1375,7 +1375,7 @@ RUN bash -o pipefail -c '\
 # The trailing npm cache strip is the one "Why every npm layer empties
 # /home/llm/.npm" explains. It runs last, after the probes.
 ARG CONTEXT_MODE_NODE=24.22.3
-ARG CONTEXT_MODE_VERSION=2.2.1
+ARG CONTEXT_MODE_VERSION=2.2.4
 ENV RIOTBOX_CM_PLUGIN_DIR=/home/llm/.riotbox/context-mode-plugin
 COPY --chown=llm:llm container/context-mode-package-lock.json \
     /tmp/context-mode-package-lock.json
@@ -1590,7 +1590,7 @@ RUN bash /tmp/riotbox-opencode-smoke.sh /home/llm/.riotbox && \
 # opens can reach updates.yepanywhere.com (version check), push.yepanywhere.com
 # (push notifications), api.github.com (issue links) and the relay
 # (relay.yepanywhere.com, only if remote access is set up in its settings).
-ARG YEPANYWHERE_VERSION=0.13.0
+ARG YEPANYWHERE_VERSION=0.14.0
 COPY --chown=llm:llm container/yepanywhere-package-lock.json \
     /tmp/yepanywhere-package-lock.json
 RUN bash -o pipefail -c '\

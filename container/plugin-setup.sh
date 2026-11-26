@@ -99,7 +99,7 @@ context_mode_staged_version() {
 # Register the image-staged Context Mode plugin against this session's plugin
 # registry, without copying it.
 #
-# The staged tree is ~7 MB at context-mode 2.2.1 and ~/.claude is a bind mount
+# The staged tree is ~7 MB at context-mode 2.2.4 and ~/.claude is a bind mount
 # of the host session directory, so a copy would cost that much host disk per
 # project-set key. The
 # registry entry names the image path instead, and the tree is read in place.

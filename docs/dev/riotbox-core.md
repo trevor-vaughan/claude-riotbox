@@ -452,7 +452,7 @@ The steps are the ones in [README § Releasing](../../README.md#releasing):
   the job lists:
   - SHA-pinned actions: `checkout`, `setup-go` (which downloads the Go
     toolchain), `cosign-installer` and `attest-build-provenance`;
-  - the syft release tarball (v1.55.0), fetched with `curl` and checked
+  - the syft release tarball (v1.57.2), fetched with `curl` and checked
     against a sha256 hard-coded in the workflow;
   - `.taskfiles/scripts/changelog-section.sh` from this repository, for the
     release notes;
