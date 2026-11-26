@@ -1,7 +1,7 @@
 # Keeps the SHA-pinned actions and the go.mod pins (including the
 # GoReleaser, Ginkgo and golangci-lint tool block) current. The "chore"
-# prefix with scope yields "chore(deps): …", which cliff.toml leaves out
-# of CHANGELOG.md.
+# prefix with scope yields "chore(deps): …", which cliff.toml files under
+# Miscellaneous Tasks in CHANGELOG.md.
 version: 2
 updates:
   - package-ecosystem: github-actions

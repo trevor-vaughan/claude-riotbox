@@ -92,7 +92,6 @@ commit_parsers = [
     # than the branch, but the ones written before that change are still in
     # history and would show up in every regenerated changelog.
     { message = "^checkpoint", skip = true },
-    { message = "^chore\\(deps.*\\)", skip = true },
     { message = "^chore\\(pr\\)", skip = true },
     { message = "^chore\\(pull\\)", skip = true },
     { message = "^chore|^ci", group = "<!-- 7 -->⚙️ Miscellaneous Tasks" },
