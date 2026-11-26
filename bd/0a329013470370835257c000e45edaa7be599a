@@ -1,64 +1,64 @@
-.github/workflows/release.yml
-  s_e0e9ba435328fa::t_40344fb1417dd8 18,22,68,73,99-100,110,122
-.github/workflows/test.yml
-  s_e0e9ba435328fa::t_49f46fe861d122 16,20,55,59
-Containerfile
-  s_e0e9ba435328fa::t_7acc10fd09fab4 835,837,839-840,877,1135,1378,1593
-README.md
-  s_e0e9ba435328fa::t_691b0ed348ca0c 258,3203
-THREAT_MODEL.md
-  s_e0e9ba435328fa::t_f0b7b2b642c86b 789,3040
-agents/claude/headroom-exec.sh
-  s_e0e9ba435328fa::t_92362156e93ede 20-21,26,30,34,36,43,46,49,59,70,112,141
-agents/lib/headroom-proxy.sh
-  s_e0e9ba435328fa::t_fca499b28fe469 15-16,22,30,44-45,59,106-108,111
-agents/opencode/headroom-exec.sh
-  s_e0e9ba435328fa::t_684e6959088630 40,49
-container/agent-wrapper.sh
-  s_e0e9ba435328fa::t_5f988b609a7cb9 52
-container/context-mode-hooks-expected.json
-  s_e0e9ba435328fa::t_5d347405c25757 5-7
-container/context-mode-package-lock.json
-  s_e0e9ba435328fa::t_32e1d4a6688b35 9,13-15
-container/context-mode-setup.sh
-  s_e0e9ba435328fa::t_a0f818a31b3a6a 172
-container/opencode/smoke.sh
-  s_e0e9ba435328fa::t_34a4eabecff360 46-47,53
-container/pi/package-lock.json
-  s_e0e9ba435328fa::t_c3abb0d5005fdb 13,106-108
-container/pi/package.json
-  s_e0e9ba435328fa::t_2b1c401ecf5f7a 7
+tests/headroom.venom.yml
+  s_e0e9ba435328fa::t_9a4b1341d67f98 229,231,233
+tests/lib/headroom-fakes.sh
+  s_e0e9ba435328fa::t_8b9062c0d75550 178-179
 container/plugin-setup.sh
   s_e0e9ba435328fa::t_6c0c48082ab395 102
+tests/headroom-claude.venom.yml
+  s_e0e9ba435328fa::t_38d7c612a085d9 11,309,333
+agents/lib/headroom-proxy.sh
+  s_e0e9ba435328fa::t_fca499b28fe469 15-16,22,30,44-45,59,106-108,111
+docs/dev/context-mode.md
+  s_e0e9ba435328fa::t_2d1729c43bba6c 69,76,195,212,217-219,302,571
 container/yepanywhere-package-lock.json
   s_e0e9ba435328fa::t_8bd23674be86b1 9,22-24,30-37,46-48,59-61,72-74,88-90,104-106,120-122,136-138,149-151,183-185,202-204,1653-1655,1862-1864,2608-2610,3187-3189,3481-3483,3487
 docs/dev/agent-contract.md
   s_e0e9ba435328fa::t_4454f562cfc22e 355
-docs/dev/context-mode.md
-  s_e0e9ba435328fa::t_2d1729c43bba6c 69,76,195,212,217-219,302,571
+container/pi/package.json
+  s_e0e9ba435328fa::t_2b1c401ecf5f7a 7
+container/opencode/smoke.sh
+  s_e0e9ba435328fa::t_34a4eabecff360 46-47,53
+THREAT_MODEL.md
+  s_e0e9ba435328fa::t_f0b7b2b642c86b 789,3040
+.github/workflows/test.yml
+  s_e0e9ba435328fa::t_49f46fe861d122 16,20,55,59
+go.sum
+  s_e0e9ba435328fa::t_caf6b3c9bf0af6 1280-1281,1841-1842,1849-1850
+Containerfile
+  s_e0e9ba435328fa::t_7acc10fd09fab4 835,837,839-840,877,1135,1378,1593
+tests/lib/fake-headroom-listener.py
+  s_e0e9ba435328fa::t_1f88367ab1f563 9
+tests/headroom-opencode.venom.yml
+  s_e0e9ba435328fa::t_2d91e7fd43001c 253,256
+container/agent-wrapper.sh
+  s_e0e9ba435328fa::t_5f988b609a7cb9 52
+agents/claude/headroom-exec.sh
+  s_e0e9ba435328fa::t_92362156e93ede 20-21,26,30,34,36,43,46,49,59,70,112,141
+container/context-mode-hooks-expected.json
+  s_e0e9ba435328fa::t_5d347405c25757 5-7
+container/context-mode-setup.sh
+  s_e0e9ba435328fa::t_a0f818a31b3a6a 172
+.github/workflows/release.yml
+  s_e0e9ba435328fa::t_40344fb1417dd8 18,22,68,73,99-100,110,122
+README.md
+  s_e0e9ba435328fa::t_691b0ed348ca0c 258,3203
+container/pi/package-lock.json
+  s_e0e9ba435328fa::t_c3abb0d5005fdb 13,106-108
+container/context-mode-package-lock.json
+  s_e0e9ba435328fa::t_32e1d4a6688b35 9,13-15
+tests/context-mode.venom.yml
+  s_e0e9ba435328fa::t_c2a1316c2dcc57 1427-1428
 docs/dev/riotbox-core.md
   s_e0e9ba435328fa::t_a2b396c7052947 455
 go.mod
   s_e0e9ba435328fa::t_b9d206a7bbc77a 7,9,488
-go.sum
-  s_e0e9ba435328fa::t_caf6b3c9bf0af6 1280-1281,1841-1842,1849-1850
-tests/context-mode.venom.yml
-  s_e0e9ba435328fa::t_c2a1316c2dcc57 1427-1428
-tests/headroom-claude.venom.yml
-  s_e0e9ba435328fa::t_38d7c612a085d9 11,309,333
-tests/headroom-opencode.venom.yml
-  s_e0e9ba435328fa::t_2d91e7fd43001c 253,256
-tests/headroom.venom.yml
-  s_e0e9ba435328fa::t_9a4b1341d67f98 229,231,233
-tests/lib/fake-headroom-listener.py
-  s_e0e9ba435328fa::t_1f88367ab1f563 9
-tests/lib/headroom-fakes.sh
-  s_e0e9ba435328fa::t_8b9062c0d75550 178-179
+agents/opencode/headroom-exec.sh
+  s_e0e9ba435328fa::t_684e6959088630 40,49
 ---
 {
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.7.5",
-  "base_commit_sha": "9340b9000fd4436eb8aa44d720b190752829d512",
+  "base_commit_sha": "bd0a329013470370835257c000e45edaa7be599a",
   "prompts": {},
   "sessions": {
     "s_e0e9ba435328fa": {
