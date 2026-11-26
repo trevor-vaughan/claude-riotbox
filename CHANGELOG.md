@@ -5,6 +5,16 @@ generated from [Conventional Commits](https://www.conventionalcommits.org) by
 [git-cliff](https://git-cliff.org); do not edit it by hand — run
 `task release:bump` instead.
 
+## [0.8.1] - 2026-11-26
+
+### 💼 Other
+
+- *(changelog)* List chore(deps) commits in the changelog
+
+### ⚙️ Miscellaneous Tasks
+
+- *(deps)* Bump the pinned toolchain and agent dependencies
+
 ## [0.8.0] - 2026-11-20
 
 ### 🚀 Features
@@ -86,8 +96,10 @@ generated from [Conventional Commits](https://www.conventionalcommits.org) by
 
 ### ⚙️ Miscellaneous Tasks
 
+- *(deps)* Bump the pinned toolchain and agent dependencies
 - Run the test job on Ubuntu 26.04
 - Run the config protection end-to-end suite
+- *(deps)* Bump the pinned toolchain and agent dependencies
 
 ## [0.7.1] - 2026-10-23
 
@@ -210,6 +222,7 @@ generated from [Conventional Commits](https://www.conventionalcommits.org) by
 
 ### ⚙️ Miscellaneous Tasks
 
+- *(deps)* Bump pinned Containerfile toolchain to latest
 - *(lint)* Raise shellcheck to -S info -o all
 
 ## [0.5.1] - 2026-08-23
