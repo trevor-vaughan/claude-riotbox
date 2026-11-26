@@ -66,14 +66,14 @@ interpreter, and leaves the tree at
 server both come from the plugin's own manifests.
 
 The hook set at 2.x is `PreToolUse`, `PostToolUse`, `SessionStart` and
-`UserPromptSubmit`, every one running `hook.mjs --agent claude-code`. 1.x's
+`UserPromptSubmit`, plus `PostToolUseFailure` since 2.2.2, every one running `hook.mjs --agent claude-code`. 1.x's
 `PreCompact` and `Stop` are gone. What the plugin adds over the CLI is the
 `/context-mode:*` slash commands, which are the skills under `skills/`
 (`ctx-doctor`, `ctx-stats`, `ctx-upgrade`).
 
 Three consequences worth knowing before debugging a session:
 
-- **The tree is registered, not copied.** It is 6.6 MB at 2.2.1 and `~/.claude`
+- **The tree is registered, not copied.** It is 6.6 MB at 2.2.4 and `~/.claude`
   is a per-session-key bind mount of a host directory, so a copy would pay that
   disk once per project set. The registry entry names the image path and the
   tree is read in place, which also means a rebuild at a new version moves it —
@@ -192,7 +192,7 @@ concurrent runs share it, and `riotbox session-reset` removes it with the state
 dir. No `entries` pair in `internal/migrate` feeds it: it has no older location
 to import from.
 
-Placement rests on the mount alone. 2.2.1 also reads `CONTEXT_MODE_DATA_DIR` as
+Placement rests on the mount alone. 2.2.4 also reads `CONTEXT_MODE_DATA_DIR` as
 a full override of the data root, so a value that reached the container — a
 passthrough entry, an extra `-e` — would move every store off the mount without
 a word. `context_mode_setup` unsets it first, before the feature check, and the
@@ -209,13 +209,14 @@ sit in session mounts, so they persist; an enabled session prints one
 
 ## Which tools are actually intercepted
 
-At 2.2.1 the staged plugin's `hooks/claude-code.json` routes `PreToolUse` for
+At 2.2.4 the staged plugin's `hooks/claude-code.json` routes `PreToolUse` for
 
 `Bash`, `PowerShell`, `Read`, `Grep`, `WebFetch`, `Write`, `Edit`,
 `NotebookEdit` and the plugin's own `ctx_*` tools,
 
-and `PostToolUse` for the same set plus every MCP tool. **`WebSearch`, `Glob`
-and `Agent` are not in either**, so no hook fires for them and their output
+and `PostToolUse` for the same set plus every MCP tool. `PostToolUseFailure`
+takes the `PreToolUse` set, so a failed call from another MCP server fires no
+hook. **`WebSearch`, `Glob` and `Agent` are not in any of them**, so no hook fires for them and their output
 lands in the transcript in full.
 
 **The build asserts that list, against a committed expectation.** RiotBox used to
@@ -298,7 +299,7 @@ in, but only for some calls. Two columns carry the bytes: `sandbox_bytes` is
 what the call produced and `returned_bytes` is what the model received.
 
 - **Shell commands, edits and tool errors.** The `PostToolUse` hook writes the
-  row. For a shell command, `returned_bytes` is the replacement text when the
+  row, and `PostToolUseFailure` writes the `toolerr` row for a call that failed. For a shell command, `returned_bytes` is the replacement text when the
   hook replaced the output.
 - **`ctx_*` calls.** The MCP server writes the row.
 - **Everything else gets no row.** Upstream's `journalKind`
@@ -567,7 +568,7 @@ wire verb printed one; there is no wire verb. The equivalent signal now comes
 from the registration, on stdout during plugin setup:
 
 ```text
-  [plugins] Context Mode 2.2.1 registered at /home/llm/.riotbox/context-mode-plugin/v2.2.1.
+  [plugins] Context Mode 2.2.4 registered at /home/llm/.riotbox/context-mode-plugin/v2.2.4.
 ```
 
 It is printed only by a call that actually changed something. **How often that

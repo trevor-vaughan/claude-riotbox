@@ -352,7 +352,7 @@ emitting `headroom wrap <tool>` directly for every tool checked so far:
 --project-settings` (the default through 0.40.0) writes
 `.claude/settings.local.json`, lock, marker and owner files and a
 `SessionStart` hook there, and `wrap opencode --memory` appends to
-`AGENTS.md` (headroom 0.44.0). So the verb emits an executable helper
+`AGENTS.md` (headroom 0.45.0). So the verb emits an executable helper
 co-located in your agent's directory, followed by the caller args verbatim:
 
 ```bash

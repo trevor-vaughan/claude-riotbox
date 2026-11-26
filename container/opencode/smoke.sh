@@ -43,14 +43,14 @@
 #     $OPENCODE_CONFIG_DIR/plugins/; headroom's is the _dist DIRECTORY inside
 #     the headroom wheel, named in OPENCODE_CONFIG_CONTENT's "plugin" array.
 #     V2 skips a configured plugin FILE (core/src/config/plugin/source.ts:155),
-#     and headroom 0.44.0 configures the directory for exactly that reason
-#     (providers/opencode/runtime.py:114, headroom_opencode_plugin_path).
+#     and headroom 0.45.0 configures the directory for exactly that reason
+#     (providers/opencode/runtime.py:115, headroom_opencode_plugin_path).
 #
 # How the driver reaches headroom's plugin. `headroom wrap opencode` builds
 # OPENCODE_CONFIG_CONTENT and runs opencode with the args after `--`. It adds
 # `--standalone` only to the interactive launches (root TUI, `run`, `mini`)
 # and leaves management subcommands such as `service` alone
-# (runtime.py:40 and :75, with_opencode_standalone). So the driver starts the
+# (runtime.py:41 and :76, with_opencode_standalone). So the driver starts the
 # background service THROUGH wrap (`... -- service start`): the service
 # inherits exactly the environment wrap builds for a session, and nothing of
 # headroom's is reproduced here. Polling then uses the plain binary, whose

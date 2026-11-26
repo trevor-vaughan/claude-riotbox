@@ -255,7 +255,7 @@ Pi core tracks the latest release, like opencode and Claude Code: each image bui
 
 | Extension | Provides |
 |---|---|
-| `pi-subagents@0.89.1` | `subagent` tool — delegate work to child agents |
+| `pi-subagents@0.90.0` | `subagent` tool — delegate work to child agents |
 | `@juicesharp/rpiv-ask-user-question@2.15.0` | `ask_user_question` tool — structured questions instead of guesses |
 | `@juicesharp/rpiv-todo@2.15.0` | `todo` tool and `/todos` |
 
@@ -3200,7 +3200,7 @@ cat ~/.claude/debug/latest
 **Check**:
 
 - **Did the support land?** The signal differs per agent, and on Claude it changed in this release.
-  - **`--agent=claude`** — there is no `[context-mode]` startup line any more, because riotbox no longer writes Claude's wiring. The plugin registration prints instead, on stdout: `  [plugins] Context Mode 2.2.1 registered at /home/llm/.riotbox/context-mode-plugin/v2.2.1.` **Do not read that line, or its absence, as the answer.** It is printed only by a call that changed the registry, and how often that happens depends on your host: with no `context-mode` under `~/.claude/plugins` it prints on the first run and then goes quiet, while with one mounted the host merge overwrites the entry every start and the line prints on every run — twice on the first. The definitive negative signal is on stderr instead: `  [context-mode] WARN: no Context Mode plugin is installed and enabled in this session`. To check a quiet session directly, look for the plugin: `riotbox run "/context-mode:ctx-doctor"`, or `jq '.plugins["context-mode@context-mode"]' ~/.local/share/riotbox/<session>/.claude/plugins/installed_plugins.json`.
+  - **`--agent=claude`** — there is no `[context-mode]` startup line any more, because riotbox no longer writes Claude's wiring. The plugin registration prints instead, on stdout: `  [plugins] Context Mode 2.2.4 registered at /home/llm/.riotbox/context-mode-plugin/v2.2.4.` **Do not read that line, or its absence, as the answer.** It is printed only by a call that changed the registry, and how often that happens depends on your host: with no `context-mode` under `~/.claude/plugins` it prints on the first run and then goes quiet, while with one mounted the host merge overwrites the entry every start and the line prints on every run — twice on the first. The definitive negative signal is on stderr instead: `  [context-mode] WARN: no Context Mode plugin is installed and enabled in this session`. To check a quiet session directly, look for the plugin: `riotbox run "/context-mode:ctx-doctor"`, or `jq '.plugins["context-mode@context-mode"]' ~/.local/share/riotbox/<session>/.claude/plugins/installed_plugins.json`.
   - **`--agent=opencode`** — unchanged: `  [context-mode] opencode plugin shim wired at <path>.` on stderr.
   - **`--agent=pi`** — `  [context-mode] pi package wired in /home/llm/.pi/agent/settings.json.` on stderr.
 

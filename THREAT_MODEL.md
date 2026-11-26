@@ -786,7 +786,7 @@ pins 1.x honoured, and RiotBox exports none of them. `~/.context-mode` is a
 read-write bind mount of the session's `<state-dir>/context-mode`: the store
 carries the same sensitivity as a session transcript, outlives the container,
 and goes with `riotbox session-reset` or `session-remove`. Only that mount
-places it. 2.2.1 also takes `CONTEXT_MODE_DATA_DIR` as its whole data root, so
+places it. 2.2.4 also takes `CONTEXT_MODE_DATA_DIR` as its whole data root, so
 `context_mode_setup` unsets any value that reached the container before an
 agent starts. Context Mode's 1.x stores are left in place in the session's
 other mounts, unread, until the user deletes them. Upstream prunes on its own
@@ -3037,7 +3037,7 @@ document the behaviour.
 - **CVE ID:** N/A
 - **Locations:**
   - `/workspace/.github/workflows/test.yml:16` — `uses:
-    actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1` (now
+    actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1` (now
     pinned to a commit SHA; also line 55)
   - `/workspace/.github/workflows/test.yml:43` — `sudo sh -c 'curl -sL
     https://taskfile.dev/install.sh | sh -s -- -b /usr/local/bin'`
