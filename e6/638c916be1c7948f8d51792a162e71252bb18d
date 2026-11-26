@@ -1,0 +1,21 @@
+README.md
+  s_e2e46cb0672f9a::t_f80030f9bffb7f 3203
+docs/dev/riotbox-core.md
+  s_e2e46cb0672f9a::t_c9d94010497171 455
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "e6638c916be1c7948f8d51792a162e71252bb18d",
+  "prompts": {},
+  "sessions": {
+    "s_e2e46cb0672f9a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fdc84114-2f8b-44f2-a2d1-8bee5a82fa3d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
