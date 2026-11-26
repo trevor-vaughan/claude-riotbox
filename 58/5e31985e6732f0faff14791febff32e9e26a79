@@ -1,0 +1,19 @@
+.github/dependabot.yml
+  s_0c69e3efe644b9::t_de936415b469b2 3-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "585e31985e6732f0faff14791febff32e9e26a79",
+  "prompts": {},
+  "sessions": {
+    "s_0c69e3efe644b9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9d5ef5b6-fc8b-49d8-875a-6d6564953b59",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "LLM (riotbox) <llm@riotbox>"
+    }
+  }
+}
